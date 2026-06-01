@@ -29,7 +29,7 @@ import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
@@ -89,6 +89,10 @@ const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
+  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+}
 
 function isIMessagePluginPayloadAttachment(attachment: {
   original_path?: string | null;
@@ -894,15 +898,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     let directTypingController:
       | Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0]
       | undefined;
-    const directToolTypingOptions = !decision.isGroup
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const shouldStartToolTyping =
+      !decision.isGroup &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const directToolTypingOptions = shouldStartToolTyping
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
-          // dispatch forward this callback even when verbose progress is off.
-          // Keep this direct-DM-only so group typing still follows core
-          // mention/renderable-text policy. Route through the core typing
-          // controller so dispatcher cleanup owns the matching stop callback.
+          // dispatch forward this callback even when verbose progress is off;
+          // allowProgress covers message_tool_only source delivery. Keep this on
+          // the direct instant/default path so configured typingMode values still
+          // decide when typing can begin.
           suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing) => {
             directTypingController = typing;
             typingReplyOptions.onTypingController?.(typing);

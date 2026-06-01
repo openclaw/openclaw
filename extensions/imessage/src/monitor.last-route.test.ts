@@ -17,6 +17,7 @@ type DispatchInboundMessageParams = {
   ctx: MsgContext;
   replyOptions?: {
     suppressDefaultToolProgressMessages?: boolean;
+    allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     onReplyStart?: () => Promise<void> | void;
     onTypingCleanup?: () => void;
     onTypingController?: (typing: {
@@ -157,6 +158,7 @@ describe("iMessage monitor last-route updates", () => {
     });
     dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       let active = false;
       let runComplete = false;
       let dispatchIdle = false;
@@ -262,6 +264,89 @@ describe("iMessage monitor last-route updates", () => {
       );
     });
   });
+
+  it.each(["never", "message", "thinking"] as const)(
+    "does not start direct tool typing when typingMode is %s",
+    async (typingMode) => {
+      setCachedIMessagePrivateApiStatus("imsg", {
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        rpcMethods: ["watch.subscribe", "send", "typing"],
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+        expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+        expect(
+          params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
+        ).toBeUndefined();
+        expect(params.replyOptions?.onToolStart).toBeUndefined();
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      });
+
+      let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+      const client = {
+        request: vi.fn(async (method: string) => {
+          if (method === "watch.subscribe") {
+            return { subscription: 1 };
+          }
+          if (method === "typing") {
+            throw new Error("typing should not start from tool activity");
+          }
+          throw new Error(`unexpected imsg method ${method}`);
+        }),
+        waitForClose: vi.fn(async () => {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 8,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "run a long script",
+                is_group: false,
+                created_at: new Date().toISOString(),
+              },
+            },
+          });
+          await Promise.resolve();
+          await Promise.resolve();
+        }),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async (params) => {
+        if (!params?.onNotification) {
+          throw new Error("expected iMessage notification handler");
+        }
+        onNotification = params.onNotification;
+        return client as never;
+      });
+
+      await monitorIMessageProvider({
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
+              sendReadReceipts: false,
+            },
+          },
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main", typingMode },
+        } as never,
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+      expect(client.request).not.toHaveBeenCalledWith(
+        "typing",
+        expect.objectContaining({ typing: true }),
+        expect.anything(),
+      );
+    },
+  );
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
     const runtimeErrorMock = vi.fn();
