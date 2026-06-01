@@ -22,7 +22,7 @@ vi.mock("../agents/models-config.js", () => ({
 }));
 
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
-  resolveModel: (...args: unknown[]) => resolveModelMock(...args),
+  resolveModel: () => resolveModelMock(),
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
