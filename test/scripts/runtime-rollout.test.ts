@@ -4,6 +4,7 @@ import {
   outcomeFromTenantImageResponse,
   tenantIdsFromFlyApps,
   tenantImageRequestBody,
+  tenantImageRequestHeaders,
 } from "../../scripts/runtime-rollout.mjs";
 
 describe("scripts/runtime-rollout", () => {
@@ -40,6 +41,20 @@ describe("scripts/runtime-rollout", () => {
     });
     expect(body).not.toHaveProperty("mode");
     expect(body).not.toHaveProperty("binary");
+  });
+
+  it("adds tenant token header only when direct fallback token is present", () => {
+    expect(tenantImageRequestHeaders("api-password")).toEqual({
+      Authorization: "Bearer api-password",
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    });
+    expect(tenantImageRequestHeaders("api-password", " tenant-dev-token ")).toEqual({
+      Authorization: "Bearer api-password",
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Tenant-Token": "tenant-dev-token",
+    });
   });
 
   it("buckets tenant image endpoint responses", () => {

@@ -25,11 +25,24 @@ export function tenantIdsFromFlyApps(body, prefix = TENANT_APP_PREFIX) {
       tenantIds.add(tenantId);
     }
   }
-  return [...tenantIds].toSorted();
+  return [...tenantIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function tenantImageRequestBody(image) {
   return JSON.stringify({ image });
+}
+
+export function tenantImageRequestHeaders(apiPassword, tenantDevToken = "") {
+  const headers = {
+    Authorization: `Bearer ${apiPassword}`,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  const trimmedTenantDevToken = tenantDevToken.trim();
+  if (trimmedTenantDevToken) {
+    headers["X-Tenant-Token"] = trimmedTenantDevToken;
+  }
+  return headers;
 }
 
 export function outcomeFromTenantImageResponse(response) {
@@ -178,14 +191,18 @@ async function detectSuperseded() {
   };
 }
 
-async function rollTenantDirectly({ base, tenantId, image, apiPassword, timeoutMs, attempts }) {
+async function rollTenantDirectly({
+  base,
+  tenantId,
+  image,
+  apiPassword,
+  tenantDevToken,
+  timeoutMs,
+  attempts,
+}) {
   const response = await request("POST", tenantImageUrl(base, tenantId), {
     timeoutMs,
-    headers: {
-      Authorization: `Bearer ${apiPassword}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
+    headers: tenantImageRequestHeaders(apiPassword, tenantDevToken),
     body: tenantImageRequestBody(image),
   });
   const outcome = outcomeFromTenantImageResponse(response);
@@ -208,6 +225,7 @@ async function runPerTenantFallback({
   base,
   image,
   apiPassword,
+  tenantDevToken,
   flyToken,
   flyOrgSlug,
   flyApiBase,
@@ -246,6 +264,7 @@ async function runPerTenantFallback({
       tenantId,
       image,
       apiPassword,
+      tenantDevToken,
       timeoutMs,
       attempts,
     });
@@ -367,6 +386,7 @@ export async function runRollout() {
   const fallbackAfterTransients = envInt("ROLLOUT_FALLBACK_AFTER_TRANSIENTS", 2);
   const timeoutMs = envInt("ROLLOUT_CURL_MAX_TIME", 180) * 1000;
   const flyToken = process.env.FLY_API_TOKEN?.trim();
+  const tenantDevToken = process.env.ROCKIELAB_TENANT_DEV_TOKEN?.trim() || "";
   const flyOrgSlug = process.env.FLY_ORG_SLUG?.trim() || DEFAULT_FLY_ORG_SLUG;
   const flyApiBase = process.env.FLY_MACHINES_API?.trim() || DEFAULT_FLY_MACHINES_API;
   const attempts = [];
@@ -440,6 +460,7 @@ export async function runRollout() {
           base,
           image,
           apiPassword,
+          tenantDevToken,
           flyToken,
           flyOrgSlug,
           flyApiBase,

@@ -286,6 +286,7 @@ jobs:
       ADMIN_TOKEN: ${{ secrets.ROCKIELAB_ADMIN_TOKEN }}
       API_PASSWORD: ${{ secrets.ROCKIELAB_API_PASSWORD }}
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      ROCKIELAB_TENANT_DEV_TOKEN: ${{ secrets.ROCKIELAB_TENANT_DEV_TOKEN }}
       IMAGE_TAG: ghcr.io/saml212/rockielab-runtime-multitenant:${{ github.sha }}
       ROLLOUT_ARTIFACT_DIR: .artifacts/runtime-rollout
       ROLLOUT_MAX_ATTEMPTS: "5"
@@ -315,6 +316,7 @@ jobs:
               echo "ROCKIELAB_ADMIN_TOKEN: must match the api host's env"
               echo "ROCKIELAB_API_PASSWORD: must match OPEN_NOTEBOOK_PASSWORD on the api host"
               echo "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback after Cloudflare 524s"
+              echo "ROCKIELAB_TENANT_DEV_TOKEN: optional tenant image-route token for per-tenant fallback"
             } >> $GITHUB_STEP_SUMMARY
             {
               echo "# Cross-tenant rollout skipped"
