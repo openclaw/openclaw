@@ -143,7 +143,6 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
       reject(error);
       controller.abort(error);
     }, timeoutMs);
-    timer.unref?.();
   });
   try {
     const operation = params.run(controller.signal);

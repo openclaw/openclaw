@@ -625,7 +625,7 @@ describe("kitchen-sink RPC process sampling", () => {
       platform: "linux",
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
@@ -650,7 +650,7 @@ describe("kitchen-sink RPC process sampling", () => {
       posixCommandLineNeedles: ["gateway", "--port", "19080"],
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",

@@ -1,29 +1,38 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const lazyState = vi.hoisted(() => ({
+const lazyState = {
   loads: 0,
   startCalls: [] as unknown[][],
   resetCalls: 0,
-}));
+};
 
-vi.mock("./server.impl.js", () => {
-  lazyState.loads += 1;
-  return {
-    startGatewayServer: vi.fn(async (...args: unknown[]) => {
-      lazyState.startCalls.push(args);
-      return { close: vi.fn(async () => undefined) };
-    }),
-    resetModelCatalogCacheForTest: vi.fn(() => {
-      lazyState.resetCalls += 1;
-    }),
-  };
-});
+function mockServerImpl() {
+  vi.doMock("./server.impl.js", () => {
+    lazyState.loads += 1;
+    return {
+      startGatewayServer: vi.fn(async (...args: unknown[]) => {
+        lazyState.startCalls.push(args);
+        return { close: vi.fn(async () => undefined) };
+      }),
+      resetModelCatalogCacheForTest: vi.fn(() => {
+        lazyState.resetCalls += 1;
+      }),
+    };
+  });
+}
 
 describe("gateway server boundary", () => {
   beforeEach(() => {
     lazyState.loads = 0;
     lazyState.startCalls = [];
     lazyState.resetCalls = 0;
+    vi.resetModules();
+    mockServerImpl();
+  });
+
+  afterEach(() => {
+    vi.doUnmock("./server.impl.js");
+    vi.resetModules();
   });
 
   it("lazy-loads server.impl on demand", async () => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   modelProviderConfigBatchJson,
   readPositiveIntEnv,
@@ -21,6 +21,7 @@ import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-s
 import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/linux-smoke.ts";
 import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/macos-smoke.ts";
 import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
@@ -601,10 +602,15 @@ if (isPrlctl) {
   it("clears phase timers and applies phase deadlines to guest commands", () => {
     const phaseRunner = readFileSync(TS_PATHS.phaseRunner, "utf8");
     const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
+    const parallelsVm = readFileSync(TS_PATHS.parallelsVm, "utf8");
+    const snapshots = readFileSync(TS_PATHS.snapshots, "utf8");
 
     expect(phaseRunner).toContain("clearTimeout(timer)");
     expect(phaseRunner).toContain("remainingTimeoutMs");
     expect(guestTransports).toContain("this.phases.remainingTimeoutMs");
+    expect(parallelsVm).toContain("PRLCTL_STATUS_TIMEOUT_MS");
+    expect(parallelsVm).toContain("probeTimeoutMs");
+    expect(snapshots).toContain("SNAPSHOT_LIST_TIMEOUT_MS");
 
     for (const scriptPath of OS_TS_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
@@ -612,6 +618,45 @@ if (isPrlctl) {
       expect(script, scriptPath).toContain("PhaseRunner");
       expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
+    }
+
+    const linux = readFileSync(TS_PATHS.linux, "utf8");
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+    expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(macos).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
+  });
+
+  it("streams full phase logs to disk while bounding the failure tail", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-phase-"));
+    const phaseRunner = new PhaseRunner(runDir, 128);
+    const writes: string[] = [];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+
+    try {
+      await expect(
+        phaseRunner.phase("noisy", 30, () => {
+          phaseRunner.append(`old-${"x".repeat(256)}`);
+          phaseRunner.append("recent failure");
+          throw new Error("phase failed");
+        }),
+      ).rejects.toThrow("phase failed");
+
+      const logText = readFileSync(join(runDir, "noisy.log"), "utf8");
+      expect(logText).toContain("old-");
+      expect(logText).toContain("recent failure");
+      const stderr = writes.join("");
+      expect(stderr).toContain("phase log tail truncated");
+      expect(stderr).toContain("recent failure");
+      expect(stderr).not.toContain(`old-${"x".repeat(200)}`);
+    } finally {
+      stderrWrite.mockRestore();
+      rmSync(runDir, { force: true, recursive: true });
     }
   });
 

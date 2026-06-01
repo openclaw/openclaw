@@ -652,22 +652,29 @@ function prepareHelloScopedComposerRestore(host: GatewayHost) {
 async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
+  const agentsListBeforeStartup = host.agentsList;
   const initialRefresh = refreshBeforeAgents
-    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).catch(
-        (err: unknown) => {
-          initialRefreshError = normalizeStartupRefreshError(err);
-        },
-      )
+    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0], {
+        chatStartup: true,
+      }).catch((err: unknown) => {
+        initialRefreshError = normalizeStartupRefreshError(err);
+      })
     : Promise.resolve();
   let refreshAfterAgents = !refreshBeforeAgents;
   let agentsError: Error | undefined;
+  await initialRefresh;
+  if (refreshBeforeAgents && host.agentsList && host.agentsList !== agentsListBeforeStartup) {
+    if (initialRefreshError) {
+      throw initialRefreshError;
+    }
+    return;
+  }
   try {
     await loadAgents(host as unknown as AgentsState);
     refreshAfterAgents = fallbackUnconfiguredSessionSelection(host) || refreshAfterAgents;
   } catch (err: unknown) {
     agentsError = normalizeStartupRefreshError(err);
   }
-  await initialRefresh;
   if (refreshAfterAgents) {
     await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
   } else if (initialRefreshError) {

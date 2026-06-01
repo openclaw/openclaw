@@ -306,6 +306,22 @@ describe("bundled plugin install/uninstall probe", () => {
     });
   });
 
+  it("adds channel-prefixed env activation markers for runtime smoke startup", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+
+    expect(
+      runtimeSmoke.withManifestChannelActivationEnv({ TELEGRAM_RUNTIME_SMOKE: "kept" }, [
+        "clickclack",
+        "nextcloud-talk",
+        "telegram",
+      ]),
+    ).toMatchObject({
+      CLICKCLACK_RUNTIME_SMOKE: "1",
+      NEXTCLOUD_TALK_RUNTIME_SMOKE: "1",
+      TELEGRAM_RUNTIME_SMOKE: "kept",
+    });
+  });
+
   it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
@@ -427,6 +443,110 @@ describe("bundled plugin install/uninstall probe", () => {
         process.kill(descendantPid, "SIGKILL");
       }
     }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects package-manager grandchildren under runtime gateways",
+    async () => {
+      const runtimeSmoke = await importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS: "50",
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS: "1000",
+      });
+      const root = makePackageRoot();
+      const entrypoint = path.join(root, "dist", "gateway-with-package-manager-grandchild.js");
+      const logPath = path.join(root, "gateway-package-manager.log");
+      const packageManagerPidPath = path.join(root, "package-manager.pid");
+      const packageManagerScript = "setInterval(() => {}, 1000);";
+      const helperScript = [
+        "import childProcess from 'node:child_process';",
+        "import fs from 'node:fs';",
+        `const child = childProcess.spawn(process.execPath, ["-e", ${JSON.stringify(
+          packageManagerScript,
+        )}], { argv0: "pnpm", stdio: "ignore" });`,
+        `fs.writeFileSync(${JSON.stringify(packageManagerPidPath)}, String(child.pid));`,
+        "process.on('SIGTERM', () => { child.kill('SIGTERM'); process.exit(0); });",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      fs.writeFileSync(
+        entrypoint,
+        [
+          "import childProcess from 'node:child_process';",
+          "if (process.argv[2] === 'gateway') {",
+          `  childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            helperScript,
+          )}], { stdio: "ignore" });`,
+          "  process.on('SIGTERM', () => process.exit(0));",
+          "  setInterval(() => {}, 1000);",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const child = runtimeSmoke.startGateway({
+        entrypoint,
+        env: {},
+        logPath,
+        port: 19007,
+        skipChannels: true,
+      });
+      let packageManagerPid: number | undefined;
+      try {
+        await waitForFile(packageManagerPidPath, 1000);
+        packageManagerPid = Number(fs.readFileSync(packageManagerPidPath, "utf8"));
+        expect(pidIsAlive(packageManagerPid)).toBe(true);
+
+        await expect(runtimeSmoke.assertNoPackageManagerChildren(child.pid)).rejects.toThrow(
+          /package manager descendant process still running/u,
+        );
+      } finally {
+        await runtimeSmoke.stopGateway(child);
+        if (packageManagerPid !== undefined && pidIsAlive(packageManagerPid)) {
+          process.kill(packageManagerPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it("finds package-manager descendants recursively in process snapshots", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const runtimeSmokeSource = fs.readFileSync(runtimeSmokePath, "utf8");
+    const longWrapperPath = `/tmp/${"nested/".repeat(40)}pnpm.cjs`;
+
+    const descendants = runtimeSmoke.findPackageManagerDescendants(
+      [
+        " 100 1 node gateway",
+        " 101 100 sh -c helper",
+        " 102 101 /usr/local/bin/pnpm install",
+        " 103 100 /usr/bin/npm-helper",
+        " 104 1 yarn install",
+        " 105 101 node /opt/pnpm.cjs install",
+        ` 106 101 node ${longWrapperPath} install`,
+      ].join("\n"),
+      100,
+    );
+
+    expect(runtimeSmokeSource).toContain('["-ww", "-eo", "pid=,ppid=,args="]');
+    expect(
+      descendants.toSorted((left: { pid: number }, right: { pid: number }) => left.pid - right.pid),
+    ).toEqual([
+      { args: "/usr/local/bin/pnpm install", pid: 102, ppid: 101 },
+      { args: "/usr/bin/npm-helper", pid: 103, ppid: 100 },
+      { args: "node /opt/pnpm.cjs install", pid: 105, ppid: 101 },
+      { args: `node ${longWrapperPath} install`, pid: 106, ppid: 101 },
+    ]);
+    expect(
+      runtimeSmoke.findPackageManagerDescendants(
+        [
+          " 100 1 node gateway",
+          " 101 100 sh -c helper",
+          " 102 101 /usr/local/bin/pnpm install",
+          " 103 100 /usr/bin/npm-helper",
+          " 104 1 yarn install",
+        ].join("\n"),
+        100,
+      ),
+    ).not.toContainEqual({ args: "yarn install", pid: 104, ppid: 1 });
   });
 
   it.runIf(process.platform !== "win32")(
