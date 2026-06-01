@@ -1524,9 +1524,9 @@ async function injectTtsAuthProfileApiKey(params: {
       : {}),
     apiKey: auth.apiKey,
   };
-  const nextTts: Record<string, unknown> = { ...tts };
+  const nextTts = { ...tts };
   if (existingProviderConfig?.container === "direct") {
-    nextTts[providerConfigKey] = nextProviderConfig;
+    (nextTts as Record<string, unknown>)[providerConfigKey] = nextProviderConfig;
   } else {
     providers[providerConfigKey] = nextProviderConfig;
     nextTts.providers = providers;

@@ -345,7 +345,8 @@ vi.mock("../tts/tts.js", () => ({
   getTtsProvider: vi.fn(() => "openai"),
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
-  resolveTtsConfig: mocks.resolveTtsConfig as typeof import("../tts/tts.js").resolveTtsConfig,
+  resolveTtsConfig:
+    mocks.resolveTtsConfig as unknown as typeof import("../tts/tts.js").resolveTtsConfig,
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
   setTtsPersona: mocks.setTtsPersona as typeof import("../tts/tts.js").setTtsPersona,
