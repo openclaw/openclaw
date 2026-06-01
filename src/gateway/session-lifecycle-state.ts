@@ -66,6 +66,9 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
 
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
   const phase = resolveLifecyclePhase(event);
+  // Funnel lifecycle metadata through the shared terminal-outcome classifier so
+  // persisted session rows use the same timeout/cancel/failure semantics as run
+  // cleanup and reporting.
   const terminal = buildAgentRunTerminalOutcome({
     status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
     error: event.data?.error,
@@ -134,6 +137,8 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   if (phase === "start") {
     const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
     const updatedAt = startedAt ?? existing?.updatedAt;
+    // A new start clears terminal fields from any prior run under the row while
+    // preserving a valid timestamp if this event omitted one.
     return {
       updatedAt,
       status: "running",
@@ -147,6 +152,9 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
+  // End/error events may arrive without a start timestamp after reconnects or
+  // reset races; keep existing runtime data rather than fabricating negative or
+  // NaN durations.
   return {
     updatedAt,
     status: resolveTerminalStatus(params.event),
