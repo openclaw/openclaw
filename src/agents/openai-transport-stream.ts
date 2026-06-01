@@ -771,11 +771,22 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
   }
-  const record = error as { code?: unknown; message?: unknown };
-  if (record.code === "invalid_encrypted_content") {
-    return true;
-  }
-  return typeof record.message === "string" && record.message.includes("invalid_encrypted_content");
+  const record = error as { code?: unknown; type?: unknown; message?: unknown };
+  const code =
+    typeof record.code === "string"
+      ? record.code
+      : typeof record.type === "string"
+        ? record.type
+        : "";
+  const message = typeof record.message === "string" ? record.message : "";
+  return (
+    code === "invalid_encrypted_content" ||
+    code === "thinking_signature_invalid" ||
+    /invalid_encrypted_content/i.test(message) ||
+    /thinking_signature_invalid/i.test(message) ||
+    /encrypted content .*could not be (?:verified|decrypted|parsed)/i.test(message) ||
+    /encrypted content could not be decrypted or parsed/i.test(message)
+  );
 }
 
 function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
@@ -809,13 +820,41 @@ function stripEncryptedContentFields(value: unknown): { value: unknown; changed:
 function stripResponsesRequestEncryptedContent(
   params: OpenAIResponsesRequestParams,
 ): OpenAIResponsesRequestParams {
-  const stripped = stripEncryptedContentFields(params.input);
-  if (!stripped.changed) {
+  const input = params.input;
+  if (!Array.isArray(input)) {
+    const stripped = stripEncryptedContentFields(input);
+    if (!stripped.changed) {
+      return params;
+    }
+    return {
+      ...params,
+      input: stripped.value as ResponseInput,
+    };
+  }
+
+  let changed = false;
+  const sanitizedInput: ResponseInput = [];
+  for (const item of input) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      if (record.type === "reasoning" && "encrypted_content" in record) {
+        changed = true;
+        continue;
+      }
+      const stripped = stripEncryptedContentFields(record);
+      changed ||= stripped.changed;
+      sanitizedInput.push(stripped.value as ResponseInputItem);
+      continue;
+    }
+    sanitizedInput.push(item);
+  }
+
+  if (!changed) {
     return params;
   }
   return {
     ...params,
-    input: stripped.value as ResponseInput,
+    input: sanitizedInput,
   };
 }
 
