@@ -278,8 +278,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      defaultAgentId: "ops",
       deferredMethods: ["agents.list", "chat.history"],
       historyMessages: [],
+      sessionKey: "global",
     });
 
     try {
@@ -296,7 +298,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
       expect(params.message).toBe(prompt);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe("global");
+      expect(params.agentId).toBe("ops");
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
@@ -308,7 +311,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        agentId: "ops",
+        sessionKey: "global",
         state: "delta",
       });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
