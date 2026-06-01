@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
 import {
   buildCommitmentExtractionPrompt,
@@ -147,7 +147,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   if (!timer) {
     timer = setTimer(() => {
       timer = null;
-      void drainCommitmentExtractionQueue().catch((err) => {
+      void drainCommitmentExtractionQueue().catch((err: unknown) => {
         log.warn("commitment extraction failed", { error: String(err) });
       });
     }, resolved.extraction.debounceMs);

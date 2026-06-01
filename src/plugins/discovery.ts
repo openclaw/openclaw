@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -943,7 +943,7 @@ function discoverInDirectory(params: {
     }
     params.visitedDirectories?.add(resolvedDir);
   }
-  let entries: fs.Dirent[] = [];
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(params.dir, { withFileTypes: true });
   } catch (err) {
@@ -1420,7 +1420,6 @@ function discoverFromPath(params: {
       ...(params.managedPluginDirs ? { managedPluginDirs: params.managedPluginDirs } : {}),
       ...(params.skipRootDirKeys ? { skipRootDirKeys: params.skipRootDirKeys } : {}),
     });
-    return;
   }
 }
 

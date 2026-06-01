@@ -5,12 +5,15 @@ const TSDOWN_PACKAGE_NAMES = [
   "llm-core",
   "llm-runtime",
   "markdown-core",
+  "media-core",
   "media-generation-core",
   "media-understanding-common",
   "model-catalog-core",
   "net-policy",
+  "normalization-core",
   "speech-core",
   "terminal-core",
+  "acp-core",
 ];
 
 export const TSDOWN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_NAMES.map(packageOutputRoot);

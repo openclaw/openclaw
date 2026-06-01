@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => {
       gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
     })),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
-      Boolean(config.auth?.profiles?.["openai-codex:default"]),
+      Boolean(config.auth?.profiles?.["openai:default"]),
     ),
     setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
   };
@@ -502,8 +502,8 @@ describe("runConfigureWizard", () => {
     setupBaseWizardState({
       auth: {
         profiles: {
-          "openai-codex:default": {
-            provider: "openai-codex",
+          "openai:default": {
+            provider: "openai",
             mode: "oauth",
           },
         },
@@ -528,8 +528,8 @@ describe("runConfigureWizard", () => {
     setupBaseWizardState({
       auth: {
         profiles: {
-          "openai-codex:default": {
-            provider: "openai-codex",
+          "openai:default": {
+            provider: "openai",
             mode: "oauth",
           },
         },

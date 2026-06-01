@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { asDateTimestampMs, timestampMsToIsoString } from "../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { writeJson } from "./json-files.js";

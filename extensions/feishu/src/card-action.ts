@@ -3,7 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
@@ -170,6 +170,7 @@ async function dispatchSyntheticCommand(params: {
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   botOpenId?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   accountId?: string;
   chatType?: "p2p" | "group";
 }): Promise<void> {
@@ -184,6 +185,7 @@ async function dispatchSyntheticCommand(params: {
     event: buildSyntheticMessageEvent(params.event, params.command, resolvedChatType),
     botOpenId: params.botOpenId,
     runtime: params.runtime,
+    channelRuntime: params.channelRuntime,
     accountId: params.accountId,
   });
 }
@@ -342,6 +344,7 @@ export async function handleFeishuCardAction(params: {
   event: FeishuCardActionEvent;
   botOpenId?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   accountId?: string;
 }): Promise<void> {
   const { cfg, event, runtime, accountId } = params;
@@ -465,6 +468,7 @@ export async function handleFeishuCardAction(params: {
           account,
           botOpenId: params.botOpenId,
           runtime,
+          channelRuntime: params.channelRuntime,
           accountId,
           chatType: envelope.c?.t,
         });
@@ -495,6 +499,7 @@ export async function handleFeishuCardAction(params: {
       account,
       botOpenId: params.botOpenId,
       runtime,
+      channelRuntime: params.channelRuntime,
       accountId,
     });
     completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });

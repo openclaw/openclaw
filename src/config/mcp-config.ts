@@ -133,6 +133,59 @@ export async function updateConfiguredMcpServerTools(params: {
   };
 }
 
+export async function updateConfiguredMcpServer(params: {
+  name: string;
+  update: (server: Record<string, unknown>) => Record<string, unknown>;
+}): Promise<ConfigMcpWriteResult> {
+  const name = params.name.trim();
+  if (!name) {
+    return { ok: false, path: "", error: "MCP server name is required." };
+  }
+
+  const loaded = await listConfiguredMcpServers();
+  if (!loaded.ok) {
+    return loaded;
+  }
+  if (!Object.hasOwn(loaded.mcpServers, name)) {
+    return {
+      ok: true,
+      path: loaded.path,
+      config: loaded.config,
+      mcpServers: loaded.mcpServers,
+      updated: false,
+    };
+  }
+
+  const next = structuredClone(loaded.config);
+  const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+  servers[name] = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+  next.mcp = {
+    ...next.mcp,
+    servers,
+  };
+
+  const validated = validateConfigObjectWithPlugins(next);
+  if (!validated.ok) {
+    const issue = validated.issues[0];
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `Config invalid after MCP configure (${issue.path}: ${issue.message}).`,
+    };
+  }
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: loaded.baseHash,
+  });
+  return {
+    ok: true,
+    path: loaded.path,
+    config: validated.config,
+    mcpServers: servers,
+    updated: true,
+  };
+}
+
 export async function setConfiguredMcpServer(params: {
   name: string;
   server: unknown;

@@ -121,12 +121,14 @@ async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number
 
 describe("startCodexAttemptThread", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     clearSharedCodexAppServerClient();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     clearSharedCodexAppServerClient();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -146,7 +148,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    const { harness, run } = startThreadWithHarness(1_100);
+    const { harness, run } = startThreadWithHarness(200);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -155,9 +157,13 @@ describe("startCodexAttemptThread", () => {
     await waitForThreadStart(harness);
 
     const error = await runError;
+    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
+      interval: 1,
+      timeout: 2_000,
+    });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("codex app-server startup timed out");
-    expect(harness.process.stdin.destroyed).toBe(true);
+    expect(harness.stdinDestroyed).toBe(true);
   });
 
   it("clears the shared app-server when cancellation abandons an in-flight thread request", async () => {

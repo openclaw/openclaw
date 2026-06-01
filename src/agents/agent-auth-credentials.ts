@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { asDateTimestampMs } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
 
 type AgentApiKeyCredential = { type: "api_key"; key: string };

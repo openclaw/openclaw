@@ -381,7 +381,7 @@ describe("runEmbeddedAgent", () => {
       },
       auth: {
         order: {
-          openai: ["openai-codex:work", "openai:backup"],
+          openai: ["openai:work", "openai:backup"],
         },
       },
     };
@@ -410,7 +410,7 @@ describe("runEmbeddedAgent", () => {
 
     expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
       1,
-      "openai-codex",
+      "openai",
       "mock-1",
       agentDir,
       cfg,
@@ -419,7 +419,7 @@ describe("runEmbeddedAgent", () => {
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 
   it("resolves transport-owned OpenAI Codex runs against the runtime provider first", async () => {
@@ -451,7 +451,7 @@ describe("runEmbeddedAgent", () => {
       },
     };
     resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) => {
-      if (provider === "openai-codex" && modelId === "gpt-5.5") {
+      if (provider === "openai" && modelId === "gpt-5.5") {
         return createResolvedEmbeddedRunnerModel(provider, modelId);
       }
       return {
@@ -488,7 +488,7 @@ describe("runEmbeddedAgent", () => {
 
     expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
       1,
-      "openai-codex",
+      "openai",
       "gpt-5.5",
       agentDir,
       cfg,
@@ -498,7 +498,81 @@ describe("runEmbeddedAgent", () => {
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
+  });
+
+  it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {
+    const sessionFile = nextSessionFile();
+    const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const openAIProvider = baseConfig.models?.providers?.openai;
+    if (!openAIProvider) {
+      throw new Error("expected OpenAI provider test config");
+    }
+    const cfg = {
+      ...baseConfig,
+      models: {
+        providers: {
+          openai: {
+            ...openAIProvider,
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.3-codex": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    resolveModelAsyncMock.mockResolvedValueOnce(
+      createResolvedEmbeddedRunnerModel("openai", "gpt-5.3-codex"),
+    );
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "codex-static-catalog",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "gpt-5.3-codex",
+      timeoutMs: 5_000,
+      agentDir,
+      agentHarnessId: "codex",
+      runId: nextRunId("codex-static-catalog"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openai",
+      "gpt-5.3-codex",
+      agentDir,
+      cfg,
+      expect.objectContaining({
+        skipAgentDiscovery: true,
+        allowBundledStaticCatalogFallback: true,
+        preferBundledStaticCatalogTransport: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(
+      (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
+    ).toBe("openai");
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {

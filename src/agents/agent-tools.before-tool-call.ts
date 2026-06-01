@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import {
@@ -24,9 +25,12 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
-import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
+import {
+  getTrustedToolPolicyDiagnosticEntries,
+  hasTrustedToolPolicies,
+  runTrustedToolPolicies,
+} from "../plugins/trusted-tool-policy.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -35,7 +39,6 @@ import {
   type PluginHookToolKind,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { addTimerTimeoutGraceMs } from "../shared/number-coercion.js";
 import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
@@ -72,7 +75,10 @@ export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): b
   if (err === signal.reason) {
     return true;
   }
-  return err instanceof Error && err.name === "AbortError";
+  return (
+    err instanceof Error &&
+    (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))
+  );
 }
 
 export type HookContext = {
@@ -160,21 +166,9 @@ export type BeforeToolCallPolicyDiagnosticState = {
 };
 
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
-  const trustedToolPolicies = (getActivePluginRegistry()?.trustedToolPolicies ?? []).map(
-    (entry) => {
-      const policy = {
-        id: entry.policy.id,
-        pluginId: entry.pluginId,
-      } as BeforeToolCallPolicyDiagnosticState["trustedToolPolicies"][number];
-      if (entry.pluginName) {
-        policy.pluginName = entry.pluginName;
-      }
-      return policy;
-    },
-  );
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
-    trustedToolPolicies,
+    trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(),
   };
 }
 
@@ -409,7 +403,7 @@ function notifyPluginApprovalResolution(
     return;
   }
   try {
-    void Promise.resolve(onResolution(resolution)).catch((err) => {
+    void Promise.resolve(onResolution(resolution)).catch((err: unknown) => {
       log.warn(`plugin onResolution callback failed: ${String(err)}`);
     });
   } catch (err) {
@@ -465,10 +459,7 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
-      requestResult ?? {},
-      "decision",
-    );
+    const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
     let decision: string | null | undefined;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
@@ -500,10 +491,10 @@ async function requestPluginToolApproval(params: {
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
           if (params.signal!.aborted) {
-            reject(params.signal!.reason);
+            reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
             return;
           }
-          onAbort = () => reject(params.signal!.reason);
+          onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
           params.signal!.addEventListener("abort", onAbort, { once: true });
         });
         try {
@@ -1335,3 +1326,17 @@ export const testing = {
   isPlainObject,
 };
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value, { cause: value });
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

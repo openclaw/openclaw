@@ -6,21 +6,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import {
-  normalizeStringEntries,
-  normalizeTrimmedStringList,
-  uniqueStrings,
-} from "../shared/string-normalization.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
@@ -221,7 +221,7 @@ async function listInstalledPluginDirs(params: {
   if (!st.ok || !st.isDir) {
     return { extensionsDir, pluginDirs: [] };
   }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
     params.onReadError?.(err);
     return [];
   });
@@ -891,7 +891,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
       dirPath: pluginPath,
       includeFiles: forcedScanEntries,
       summaryCache: params.summaryCache,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       findings.push({
         checkId: "plugins.code_safety.scan_failed",
         severity: "warn",
@@ -971,7 +971,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       const summary = await getCodeSafetySummary({
         dirPath: skillDir,
         summaryCache: params.summaryCache,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",

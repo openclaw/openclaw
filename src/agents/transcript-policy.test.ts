@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
@@ -24,7 +25,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           "mistral",
           "moonshot",
           "openai",
-          "openai-codex",
+          "openai",
           "opencode",
           "opencode-go",
           "ollama",
@@ -132,7 +133,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 toolCallIdMode: "strict9",
               };
             case "openai":
-            case "openai-codex":
               return {
                 sanitizeMode: "images-only",
                 sanitizeToolCallIds: context?.modelApi === "openai-completions",
@@ -228,6 +228,24 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+  }
+
+  function makeOpenAiCompatibleReasoningModel(
+    overrides: Partial<ProviderRuntimeModel> = {},
+  ): ProviderRuntimeModel {
+    return {
+      id: "qwen3.6-27b",
+      name: "Qwen3.6 27B",
+      provider: "custom-openai-proxy",
+      api: "openai-completions",
+      baseUrl: "https://example.invalid",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      ...overrides,
+    };
   }
 
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
@@ -346,7 +364,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
-  it("strips historical reasoning for strict OpenAI-compatible providers", () => {
+  it("strips historical reasoning for strict OpenAI-compatible providers by default", () => {
     const policy = resolveTranscriptPolicy({
       provider: "custom-openai-proxy",
       modelId: "qwen3.6-27b",
@@ -360,6 +378,17 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "openai-responses",
     });
     expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it("preserves historical reasoning for strict OpenAI-compatible models with reasoning metadata", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel({ reasoning: true }),
+    });
+
+    expect(policy.dropReasoningFromHistory).toBe(false);
   });
 
   it.each([
@@ -487,6 +516,28 @@ describe("resolveTranscriptPolicy", () => {
 
     expect(defaultPolicy.dropThinkingBlocks).toBe(false);
     expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
+  });
+
+  it("does not reuse cached OpenAI-compatible policies across reasoning metadata changes", () => {
+    const config = {} as OpenClawConfig;
+
+    const defaultPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel(),
+    });
+    const reasoningPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel({ reasoning: true }),
+    });
+
+    expect(defaultPolicy.dropReasoningFromHistory).toBe(true);
+    expect(reasoningPolicy.dropReasoningFromHistory).toBe(false);
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {

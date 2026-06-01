@@ -512,7 +512,10 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["manifest/catalog execution policy", "runtime selection"],
     diagnostics: ["agent runtime compatibility warning"],
-    tests: ["src/plugins/provider-runtime.test.ts", "src/web/provider-runtime-shared.test.ts"],
+    tests: [
+      "src/plugins/provider-runtime.test.ts",
+      "packages/web-content-core/src/provider-runtime-shared.test.ts",
+    ],
   },
   {
     code: "generated-bundled-channel-config-fallback",
@@ -565,7 +568,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "state-managed `plugins/installs.json` install ledger",
+    replacement: "shared SQLite `installed_plugin_index` install ledger",
     docsPath: "/cli/plugins#registry",
     surfaces: ["plugins.installs authored config", "plugin install/update migration"],
     diagnostics: ["config write migration warning", "doctor registry migration"],

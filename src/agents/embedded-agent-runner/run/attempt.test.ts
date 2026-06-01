@@ -942,7 +942,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -977,7 +978,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1024,7 +1026,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1074,7 +1077,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1138,7 +1142,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     await secondStream.result();
@@ -3282,7 +3287,7 @@ describe("buildAfterTurnRuntimeContext", () => {
           sessionId: "session-123",
           config: {} as OpenClawConfig,
           skillsSnapshot: undefined,
-          provider: "openai-codex",
+          provider: "openai",
           modelId: "gpt-5.4",
           thinkLevel: "off",
           reasoningLevel: "on",
@@ -3320,7 +3325,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3332,7 +3337,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
   });
 
@@ -3354,7 +3359,7 @@ describe("buildAfterTurnRuntimeContext", () => {
           },
         } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3371,7 +3376,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     // compaction model in the runtime context.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    // Auth profile dropped because provider changed from openai-codex to openrouter.
+    // Auth profile dropped because provider changed from openai to openrouter.
     expect(legacy.authProfileId).toBeUndefined();
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -3393,7 +3398,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3409,7 +3414,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
 
     expect(legacy.authProfileId).toBe("openai:p1");
-    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
     expect(legacy.workspaceDir).toBe("/tmp/workspace");
     expect(legacy.cwd).toBe("/tmp/task-repo");
@@ -3437,7 +3442,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3469,7 +3474,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         senderId: "user-123",
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",

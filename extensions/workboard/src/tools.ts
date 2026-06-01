@@ -189,9 +189,7 @@ export function createWorkboardTools(params: {
   context?: OpenClawPluginToolContext;
   store?: WorkboardStore;
 }): AnyAgentTool[] {
-  const store =
-    params.store ??
-    WorkboardStore.open((options) => params.api.runtime.state.openKeyedStore(options));
+  const store = params.store ?? WorkboardStore.openSqlite();
   const ownerId = contextOwner(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
@@ -979,7 +977,7 @@ export function createWorkboardTools(params: {
       name: "workboard_dispatch",
       label: "Workboard Dispatch",
       description:
-        "Nudge Workboard dependency promotion and reclaim expired claims or timed-out runs.",
+        "Run one Workboard dispatcher pass: promote unblocked cards, reclaim expired claims, and block timed-out runs.",
       parameters: Type.Object({}, { additionalProperties: false }),
       execute: async () => {
         const result = await store.dispatch();

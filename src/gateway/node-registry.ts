@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
   addTimerTimeoutGraceMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -479,7 +479,7 @@ export class NodeRegistry {
     }
     const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
-    let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
+    let match: { key: string; event: AuthorizedSystemRunEvent } | null;
     if (params.runId) {
       match = this.matchAuthorizedSystemRunEvent({
         nodeId: params.nodeId,

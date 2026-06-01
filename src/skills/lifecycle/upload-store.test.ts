@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createSkillUploadStore,
   MAX_ACTIVE_SKILL_UPLOADS,
@@ -60,6 +60,33 @@ async function expectMissingPath(targetPath: string): Promise<void> {
 }
 
 describe("skill upload store", () => {
+  let activeUploadLimitError: unknown;
+
+  beforeAll(async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-store-"));
+    try {
+      const store = createSkillUploadStore({ rootDir });
+      for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i += 1) {
+        await store.begin({
+          kind: "skill-archive",
+          slug: `active-${i}`,
+          sizeBytes: 1,
+        });
+      }
+      try {
+        await store.begin({
+          kind: "skill-archive",
+          slug: "too-many",
+          sizeBytes: 1,
+        });
+      } catch (err) {
+        activeUploadLimitError = err;
+      }
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     tempDirs = [];
   });
@@ -253,22 +280,8 @@ describe("skill upload store", () => {
   });
 
   it("limits active uploads", async () => {
-    const rootDir = await makeTempDir();
-    const store = createSkillUploadStore({ rootDir });
-    for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i += 1) {
-      await store.begin({
-        kind: "skill-archive",
-        slug: `active-${i}`,
-        sizeBytes: 1,
-      });
-    }
-
     await expectUploadError(
-      store.begin({
-        kind: "skill-archive",
-        slug: "too-many",
-        sizeBytes: 1,
-      }),
+      Promise.reject(toLintErrorObject(activeUploadLimitError, "Non-Error rejection")),
       "too many active skill uploads",
     );
   });
@@ -407,7 +420,9 @@ describe("skill upload store", () => {
       slug: "sweep-trigger",
       sizeBytes: 1,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
@@ -454,7 +469,9 @@ describe("skill upload store", () => {
       sizeBytes: archive.length,
       idempotencyKey: "same-upload",
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
@@ -464,3 +481,17 @@ describe("skill upload store", () => {
     await expectMissingPath(path.join(rootDir, committed.uploadId));
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

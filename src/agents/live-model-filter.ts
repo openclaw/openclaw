@@ -1,8 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
-import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 
 type ModelRef = {
@@ -19,7 +19,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
-  "minimax/minimax-m2.7",
+  "minimax/minimax-m3",
   "openai/gpt-5.5",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
@@ -28,13 +28,14 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "xai/grok-4.3",
   "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/glm-5p1",
-  "minimax-portal/minimax-m2.7",
+  "minimax-portal/minimax-m3",
 ] as const;
 
 const SMALL_LIVE_MODEL_PRIORITY = [
   "lmstudio/qwen/qwen3.5-9b",
   "vllm/qwen/qwen3-8b",
   "sglang/qwen/qwen3-8b",
+  "ollama/gemma3:4b",
   "openrouter/qwen/qwen3.5-9b",
   "openrouter/z-ai/glm-5.1",
   "openrouter/z-ai/glm-5",
@@ -139,9 +140,6 @@ function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
 }
 
 function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean {
-  if (provider === "openai-codex") {
-    return true;
-  }
   if (!isOpenAiFamilyLiveModel(provider, id)) {
     return false;
   }

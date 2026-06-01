@@ -56,6 +56,17 @@ let manifestInstallTemplateDir = "";
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install");
 let previousNpmGlobalConfig: string | undefined;
 let npmGlobalConfigPath = "";
+let archiveDepsInstallCase: {
+  commandRun: Parameters<typeof runCommandWithTimeout> | undefined;
+  result: Awaited<ReturnType<typeof installPluginFromArchive>>;
+};
+let scopedArchiveInstallCase: {
+  duplicate: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  first: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  stateDir: string;
+  updated: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  updatedVersion: string | undefined;
+};
 const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
   {
     outName: "traversal.tgz",
@@ -81,6 +92,34 @@ const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
     packageJson: {
       name: "@openclaw/nope",
       version: "0.0.1",
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "archive-with-deps.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "archive-with-deps",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+      dependencies: { "left-pad": "1.3.0" },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "voice-call-0.0.1.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "voice-call-0.0.2.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.2",
+      openclaw: { extensions: ["./dist/index.js"] },
     } as Record<string, unknown>,
   },
 ];
@@ -650,6 +689,73 @@ beforeAll(async () => {
       }),
     ),
   );
+
+  const run = vi.mocked(runCommandWithTimeout);
+  run.mockReset();
+  mockSuccessfulCommandRun(run);
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
+  archiveDepsInstallCase = {
+    result: await installArchivePackageAndReturnResult({
+      packageJson: {
+        name: "archive-with-deps",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "left-pad": "1.3.0" },
+      },
+      outName: "archive-with-deps.tgz",
+      withDistIndex: true,
+    }),
+    commandRun: firstMockCall(run) as Parameters<typeof runCommandWithTimeout> | undefined,
+  };
+
+  const stateDir = suiteTempRootTracker.makeTempDir();
+  const archiveV1 = await ensureDynamicArchiveTemplate({
+    outName: "voice-call-0.0.1.tgz",
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    },
+    withDistIndex: true,
+  });
+  const archiveV2 = await ensureDynamicArchiveTemplate({
+    outName: "voice-call-0.0.2.tgz",
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.2",
+      openclaw: { extensions: ["./dist/index.js"] },
+    },
+    withDistIndex: true,
+  });
+
+  const extensionsDir = path.join(stateDir, "extensions");
+  const first = await installPluginFromArchive({
+    archivePath: archiveV1,
+    extensionsDir,
+  });
+  const duplicate = await installPluginFromArchive({
+    archivePath: archiveV1,
+    extensionsDir,
+  });
+  const updated = await installPluginFromArchive({
+    archivePath: archiveV2,
+    extensionsDir,
+    mode: "update",
+  });
+  const updatedVersion = updated.ok
+    ? (
+        JSON.parse(fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8")) as {
+          version?: string;
+        }
+      ).version
+    : undefined;
+  scopedArchiveInstallCase = {
+    duplicate,
+    first,
+    stateDir,
+    updated,
+    updatedVersion,
+  };
 });
 
 beforeEach(() => {
@@ -665,21 +771,9 @@ beforeEach(() => {
 
 describe("installPluginFromArchive", () => {
   it("installs package archive runtime dependencies", async () => {
-    const result = await installArchivePackageAndReturnResult({
-      packageJson: {
-        name: "archive-with-deps",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-      },
-      outName: "archive-with-deps.tgz",
-      withDistIndex: true,
-    });
+    const { commandRun, result } = archiveDepsInstallCase;
 
     expect(result.ok).toBe(true);
-    const commandRun = firstMockCall(vi.mocked(runCommandWithTimeout)) as
-      | Parameters<typeof runCommandWithTimeout>
-      | undefined;
     expect(commandRun?.[0]).toContain("npm");
     expect(commandRun?.[0]).toContain("install");
     const commandOptions = commandRun?.[1];
@@ -690,55 +784,20 @@ describe("installPluginFromArchive", () => {
   });
 
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const archiveV1 = await ensureDynamicArchiveTemplate({
-      outName: "voice-call-0.0.1.tgz",
-      packageJson: {
-        name: "@openclaw/voice-call",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-      },
-      withDistIndex: true,
-    });
-    const archiveV2 = await ensureDynamicArchiveTemplate({
-      outName: "voice-call-0.0.2.tgz",
-      packageJson: {
-        name: "@openclaw/voice-call",
-        version: "0.0.2",
-        openclaw: { extensions: ["./dist/index.js"] },
-      },
-      withDistIndex: true,
-    });
+    const { duplicate, first, stateDir, updated, updatedVersion } = scopedArchiveInstallCase;
 
-    const extensionsDir = path.join(stateDir, "extensions");
-    const first = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
     expectSuccessfulArchiveInstall({ result: first, stateDir, pluginId: "@openclaw/voice-call" });
 
-    const duplicate = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
     expect(duplicate.ok).toBe(false);
     if (!duplicate.ok) {
       expect(duplicate.error).toContain("already exists");
     }
 
-    const updated = await installPluginFromArchive({
-      archivePath: archiveV2,
-      extensionsDir,
-      mode: "update",
-    });
     expect(updated.ok).toBe(true);
     if (!updated.ok) {
       return;
     }
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8"),
-    ) as { version?: string };
-    expect(manifest.version).toBe("0.0.2");
+    expect(updatedVersion).toBe("0.0.2");
   });
 
   it("rejects native plugin zip archives without openclaw.plugin.json", async () => {
@@ -3973,6 +4032,32 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
     expect(fs.existsSync(path.join(result.targetDir, "node_modules", "is-number"))).toBe(true);
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("replaces a copied local openclaw package with the host peer symlink", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const fakeHostRoot = suiteTempRootTracker.makeTempDir();
+    resolveRootMock.mockReturnValue(fakeHostRoot);
+
+    writePluginWithPeerDeps(pluginDir, { openclaw: "*" });
+    fs.mkdirSync(path.join(pluginDir, "node_modules", "openclaw"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "node_modules", "openclaw", "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.5.31" }),
+      "utf-8",
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(true);
+    expect(warnings).toHaveLength(0);
+    if (!result.ok) {
+      return;
+    }
+
+    const symlinkPath = path.join(result.targetDir, "node_modules", "openclaw");
+    expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
   });
 
   it("does not create a symlink when peerDependencies is empty", async () => {

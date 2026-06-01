@@ -1,3 +1,4 @@
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
@@ -8,7 +9,6 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/ty
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";

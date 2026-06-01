@@ -1,9 +1,9 @@
 import type { SlashCommand } from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const TRACE_LEVELS = ["on", "off"];

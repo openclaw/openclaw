@@ -1,7 +1,9 @@
 import {
+  buildSkillWorkshopPromptSection,
   embeddedAgentLog,
   formatErrorMessage,
   isActiveHarnessContextEngine,
+  SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
@@ -241,6 +243,7 @@ export async function startOrResumeThread(params: {
   environmentSelection?: CodexTurnEnvironmentParams[];
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+  signal?: AbortSignal;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   // Thread lifecycle spans are useful when profiling startup churn, but normal
   // turns should not pay Date.now/span-array overhead while resuming threads.
@@ -273,6 +276,22 @@ export async function startOrResumeThread(params: {
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+  const throwIfAborted = () => {
+    if (!params.signal?.aborted) {
+      return;
+    }
+    const reason = params.signal.reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const error = new Error(
+      typeof reason === "string" && reason.length > 0
+        ? reason
+        : "codex app-server thread lifecycle aborted",
+    );
+    error.name = "AbortError";
+    throw error;
+  };
   if (binding?.threadId && params.nativeCodeModeEnabled === false) {
     embeddedAgentLog.debug(
       "codex app-server native tool surface disabled for turn; starting transient thread",
@@ -444,9 +463,10 @@ export async function startOrResumeThread(params: {
         );
         const response = assertCodexThreadResumeResponse(
           await lifecycleTiming.measure("thread_resume_request", () =>
-            params.client.request("thread/resume", resumeParams),
+            params.client.request("thread/resume", resumeParams, { signal: params.signal }),
           ),
         );
+        throwIfAborted();
         const boundAuthProfileId = authProfileId;
         const fallbackModelProvider = resolveCodexAppServerModelProvider({
           provider: params.params.provider,
@@ -568,7 +588,7 @@ export async function startOrResumeThread(params: {
   );
   const threadStartResponse = await lifecycleTiming.measure("thread_start_request", async () => {
     try {
-      return await params.client.request("thread/start", startParams);
+      return await params.client.request("thread/start", startParams, { signal: params.signal });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
         throw new CodexThreadStartRequestError(error);
@@ -577,6 +597,7 @@ export async function startOrResumeThread(params: {
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
+  throwIfAborted();
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -1151,6 +1172,7 @@ export function buildDeveloperInstructions(
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
+    buildSkillWorkshopInstruction(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
@@ -1174,6 +1196,18 @@ function buildDeferredDynamicToolManifest(
     return undefined;
   }
   return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
+}
+
+function buildSkillWorkshopInstruction(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string | undefined {
+  const hasSkillWorkshop = (dynamicTools ?? []).some(
+    (tool) => tool.name.trim() === SKILL_WORKSHOP_TOOL_NAME,
+  );
+  if (!hasSkillWorkshop) {
+    return undefined;
+  }
+  return buildSkillWorkshopPromptSection().join("\n");
 }
 
 function buildVisibleReplyInstruction(
@@ -1223,16 +1257,13 @@ export function resolveCodexAppServerModelProvider(params: {
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (normalizedLower === "openai" || normalizedLower === "openai-codex")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && normalizedLower === "openai") {
     // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
     // native provider id, not a public OpenAI API-key choice. Omit the override
     // so app-server keeps its configured provider/auth pair for this session.
     return undefined;
   }
-  return normalizedLower === "openai-codex" ? "openai" : normalized;
+  return normalizedLower === "openai" ? "openai" : normalized;
 }
 
 // Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the

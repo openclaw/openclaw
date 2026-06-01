@@ -1,3 +1,10 @@
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -5,13 +12,6 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import {
-  MAX_DATE_TIMESTAMP_MS,
-  asDateTimestampMs,
-  isFutureDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,

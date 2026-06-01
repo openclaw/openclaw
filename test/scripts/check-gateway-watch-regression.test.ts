@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendBoundedWatchLog,
   hasGatewayReadyLog,
+  parseArgs,
+  runTimedWatch,
   shouldRefreshBuildStampForRestoredArtifacts,
   stopTimedWatchChild,
   updateWatchBuildDetection,
@@ -18,6 +20,13 @@ import {
 } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 describe("check-gateway-watch-regression", () => {
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--window-ms", "1500", "--skip-build"])).toMatchObject({
+      skipBuild: true,
+      windowMs: 1500,
+    });
+  });
+
   it("recognizes current and legacy gateway ready logs", () => {
     expect(hasGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)")).toBe(true);
     expect(hasGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(true);
@@ -123,5 +132,58 @@ describe("check-gateway-watch-regression", () => {
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
     expect(child.stderr.destroy).toHaveBeenCalledOnce();
     expect(child.unref).toHaveBeenCalledOnce();
+  });
+
+  it("removes the isolated watch home after spawn failures", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-output-"));
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      stdout: EventEmitter;
+    };
+    child.stderr = new EventEmitter();
+    child.stdout = new EventEmitter();
+    const sleep = vi.fn(() => new Promise<never>(() => {}));
+    const stopChild = vi.fn(
+      () =>
+        new Promise<never>(() => {
+          // Spawn failures must win before cleanup waits for a child that never started.
+        }),
+    );
+    const waitForGatewayReady = vi.fn(async () => false);
+
+    try {
+      const result = await runTimedWatch(
+        {
+          readySettleMs: 0,
+          readyTimeoutMs: 0,
+          sigkillGraceMs: 1,
+          windowMs: 0,
+        },
+        outputDir,
+        {
+          allocateLoopbackPort: async () => 19042,
+          spawn: () => {
+            process.nextTick(() => {
+              child.emit("error", new Error("spawn failed"));
+            });
+            return child;
+          },
+          sleep,
+          stopTimedWatchChild: stopChild,
+          waitForGatewayReady,
+        },
+      );
+
+      const isolatedHomeDir = fs
+        .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
+        .trim();
+      expect(result.spawnError).toBe("spawn failed");
+      expect(fs.existsSync(isolatedHomeDir)).toBe(false);
+      expect(fs.existsSync(path.join(outputDir, "watch.home.txt"))).toBe(true);
+      expect(waitForGatewayReady).not.toHaveBeenCalled();
+      expect(stopChild).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 });

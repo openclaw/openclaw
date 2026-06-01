@@ -1,12 +1,12 @@
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";

@@ -28,7 +28,7 @@ import {
   maybeCompactAgentHarnessSession,
   resolveAgentHarnessPolicy,
 } from "../harness/selection.js";
-import { isOpenAICodexProvider, isOpenAIProvider } from "../openai-codex-routing.js";
+import { isOpenAIProvider } from "../openai-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -295,7 +295,7 @@ export async function compactEmbeddedAgentSession(
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
-      let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
+      let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
       let checkpointSnapshotRetained = false;
       try {
         // When the context engine owns compaction, its compact() implementation
@@ -363,8 +363,21 @@ export async function compactEmbeddedAgentSession(
               currentTokenCount: params.currentTokenCount,
               compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
               customInstructions: params.customInstructions,
-              force: params.trigger === "manual",
-              runtimeContext,
+              force:
+                params.force === true ||
+                params.forcePreflight === true ||
+                params.preflightRequired === true ||
+                params.trigger === "manual",
+              runtimeContext: {
+                ...runtimeContext,
+                forceReason:
+                  params.forcePreflight === true || params.preflightRequired === true
+                    ? "preflight_required"
+                    : params.trigger === "manual"
+                      ? "manual"
+                      : undefined,
+                preflightCompactionTrigger: params.preflightCompactionTrigger,
+              },
             },
             resolveCompactionTimeoutMs(params.config),
             params.abortSignal,
@@ -516,9 +529,6 @@ function shouldAttemptNativeHarnessCompaction(params: {
   contextProvider?: string;
   selectedHarnessRuntime?: string | null;
 }): boolean {
-  if (isOpenAICodexProvider(params.provider)) {
-    return true;
-  }
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.selectedHarnessRuntime);
   if (!selectedRuntime || selectedRuntime === "auto" || selectedRuntime === "openclaw") {
     return false;

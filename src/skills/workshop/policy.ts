@@ -1,6 +1,6 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/types.js";
-import { asNullableRecord } from "../../shared/record-coerce.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 
 const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set(["apply", "reject", "quarantine"]);

@@ -98,7 +98,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as {
+        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -127,7 +127,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(
       (
-        mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as {
+        mockedRunEmbeddedAttempt.mock.calls[1][0] as {
           suppressNextUserMessagePersistence?: boolean;
         }
       ).suppressNextUserMessagePersistence,
@@ -287,7 +287,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
               fallbacks: ["anthropic/claude-opus-4-6"],
             },
           },

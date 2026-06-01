@@ -1,5 +1,11 @@
 import { execFile } from "node:child_process";
 import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -32,17 +38,11 @@ import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
-import { isRecord } from "../../shared/record-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
@@ -178,7 +178,7 @@ function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(command.command, command.args, (error) => {
       if (error) {
-        reject(error);
+        reject(toErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -199,7 +199,7 @@ function formatConfigOpenError(error: unknown): string {
 }
 
 function hasOwnRecordValue(value: unknown, key: string): boolean {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
+  return isRecord(value) && Object.hasOwn(value, key);
 }
 
 function stripBundledProviderRuntimeDefaults(params: {
@@ -218,6 +218,7 @@ function stripBundledProviderRuntimeDefaults(params: {
 
   let nextProviders: Record<string, unknown> | undefined;
   for (const [providerId, provider] of Object.entries(models.providers)) {
+    // Runtime overlays can materialize empty defaults that should not become persisted config.
     if (!isBuiltInModelProviderOverlayId(providerId) || !isRecord(provider)) {
       continue;
     }
@@ -277,6 +278,7 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
+  // Validate against runtime shape, but write the source-shaped config the operator submitted.
   const projectedValidationCandidate = snapshot.valid
     ? applyMergePatch(
         projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
@@ -387,6 +389,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
     configSchemaResponseCache = null;
   }
 
+  // Plugin schema loading is process-local; short caching avoids repeated UI lookups per render.
   const response = loadGatewayRuntimeConfigSchema();
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
   if (expiresAtMs !== undefined) {
@@ -525,6 +528,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+      // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
     });
     const schemaPatch = loadSchemaWithPlugins();

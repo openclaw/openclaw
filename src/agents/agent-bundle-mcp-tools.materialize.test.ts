@@ -24,6 +24,7 @@ function makeToolRuntime(
     result?: CallToolResult;
     resultText?: string;
     diagnostics?: readonly McpToolCatalogDiagnostic[];
+    supportsParallelToolCalls?: boolean;
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
@@ -52,6 +53,7 @@ function makeToolRuntime(
           serverName,
           launchSummary: serverName,
           toolCount: tools.length,
+          supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
         },
       },
       tools,
@@ -65,6 +67,7 @@ function makeToolRuntime(
           serverName,
           launchSummary: serverName,
           toolCount: tools.length,
+          supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
         },
       },
       tools,
@@ -86,13 +89,32 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-    expect(getPluginToolMeta(runtime.tools[0])?.pluginId).toBe("bundle-mcp");
+    expect(runtime.tools[0].executionMode).toBe("sequential");
+    expect(getPluginToolMeta(runtime.tools[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "bundleProbe",
+        safeServerName: "bundleProbe",
+        toolName: "bundle_probe",
+        operation: "tool",
+      },
+    });
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
     expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
     });
+  });
+
+  it("marks MCP tools parallel only when the server advertises parallel support", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        supportsParallelToolCalls: true,
+      }),
+    });
+
+    expect(runtime.tools[0].executionMode).toBe("parallel");
   });
 
   it("keeps structuredContent visible when MCP tools also return text content", async () => {
@@ -145,9 +167,9 @@ describe("createBundleMcpToolRuntime", () => {
   it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
     const diagnostics = [
       {
-        serverName: "dofbot",
-        safeServerName: "dofbot",
-        launchSummary: "node dofbot-mcp.mjs",
+        serverName: "fuzzplugin",
+        safeServerName: "fuzzplugin",
+        launchSummary: "node fuzzplugin-mcp.mjs",
         message: 'tools[0].inputSchema.type expected "object"',
       },
     ];

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import {
@@ -19,7 +20,6 @@ import { resolveStableSessionEndTranscript } from "../../gateway/session-transcr
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
@@ -97,7 +97,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
-    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });
   }
@@ -109,7 +109,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       cfg: params.cfg,
       resumedFrom: params.previousEntry.sessionId,
     });
-    void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+    void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
@@ -206,6 +206,47 @@ afterEach(() => {
 });
 
 describe("setup-registry module loader", () => {
+  let windowsSourceTransformCase: {
+    expectedFilename: string;
+    filename: unknown;
+    options: Record<string, unknown>;
+  };
+
+  beforeAll(async () => {
+    resetRegistryJitiMocks();
+    vi.resetModules();
+    const module = await import("./setup-registry.js");
+    module.setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
+    module.clearPluginSetupRegistryCache();
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
+
+    try {
+      withMockedWindowsPlatform(() => {
+        module.resolvePluginSetupRegistry({
+          workspaceDir: pluginRoot,
+          env: {},
+        });
+      });
+    } finally {
+      restoreVersions();
+    }
+
+    windowsSourceTransformCase = {
+      expectedFilename: pathToFileURL(path.join(pluginRoot, "setup-api.js"), {
+        windows: true,
+      }).href,
+      filename: mockArg(mocks.createJiti, 0, 0),
+      options: requireRecord(mockArg(mocks.createJiti, 0, 1)),
+    };
+    module.setPluginSetupRegistryModuleLoaderFactoryForTest(undefined);
+  });
+
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
@@ -222,30 +263,8 @@ describe("setup-registry module loader", () => {
   });
 
   it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    const restoreVersions = forceNodeRuntimeVersionsForTest();
-
-    try {
-      withMockedWindowsPlatform(() => {
-        resolvePluginSetupRegistry({
-          workspaceDir: pluginRoot,
-          env: {},
-        });
-      });
-    } finally {
-      restoreVersions();
-    }
-
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mockArg(mocks.createJiti, 0, 0)).toBe(
-      pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
-    );
-    expect(requireRecord(mockArg(mocks.createJiti, 0, 1)).tryNative).toBe(true);
+    expect(windowsSourceTransformCase.filename).toBe(windowsSourceTransformCase.expectedFilename);
+    expect(windowsSourceTransformCase.options.tryNative).toBe(true);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {
@@ -462,7 +481,7 @@ describe("setup-registry module loader", () => {
         {
           id: "openai",
           rootDir: pluginRoot,
-          providerAuthAliases: { "openai-codex": "openai" },
+          providerAuthAliases: { openai: "openai" },
           setup: {
             providers: [{ id: "openai" }],
             requiresRuntime: true,
@@ -484,7 +503,7 @@ describe("setup-registry module loader", () => {
           }) {
             api.registerProvider({
               id: "openai",
-              aliases: ["openai-codex"],
+              aliases: ["openai"],
               label: "OpenAI",
               auth: [],
             });
@@ -493,9 +512,7 @@ describe("setup-registry module loader", () => {
       });
     });
 
-    const provider = requireRecord(
-      resolvePluginSetupProvider({ provider: "openai-codex", env: {} }),
-    );
+    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
     expect(provider.id).toBe("openai");
     expect(provider.label).toBe("OpenAI");
   });

@@ -122,8 +122,8 @@ describe("AgentRuntimePlan", () => {
       modelApi: "openai-responses",
       harnessId: "codex",
       harnessRuntime: "codex",
-      authProfileProvider: "openai-codex",
-      sessionAuthProfileId: "openai-codex:work",
+      authProfileProvider: "openai",
+      sessionAuthProfileId: "openai:work",
       config: {},
       workspaceDir: "/tmp/openclaw-runtime-plan",
       model: {
@@ -135,7 +135,7 @@ describe("AgentRuntimePlan", () => {
     expect(plan.auth.providerForAuth).toBe("openai");
     expect(plan.auth.authProfileProviderForAuth).toBe("openai");
     expect(plan.auth.harnessAuthProvider).toBe("openai");
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
     expect(plan.delivery.isSilentPayload({ text: "NO_REPLY\n\nNO_REPLY" })).toBe(true);
     expect(plan.delivery.isSilentPayload({ text: '{"action":"NO_REPLY"}' })).toBe(true);
     expect(
@@ -230,19 +230,16 @@ describe("AgentRuntimePlan", () => {
       modelApi: "openai-responses",
       harnessId: "codex",
       harnessRuntime: "codex",
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       authProfileMode: "oauth",
-      sessionAuthProfileId: "openai-codex:work",
-      sessionAuthProfileCandidateIds: ["openai-codex:work", "openai:backup"],
+      sessionAuthProfileId: "openai:work",
+      sessionAuthProfileCandidateIds: ["openai:work", "openai:backup"],
       config: {},
       workspaceDir: "/tmp/openclaw-runtime-plan",
     });
 
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
-    expect(plan.auth.forwardedAuthProfileCandidateIds).toEqual([
-      "openai-codex:work",
-      "openai:backup",
-    ]);
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
+    expect(plan.auth.forwardedAuthProfileCandidateIds).toEqual(["openai:work", "openai:backup"]);
   });
 
   it("forwards OpenAI OAuth profiles into the Codex harness auth slot", () => {
@@ -269,15 +266,15 @@ describe("AgentRuntimePlan", () => {
       modelApi: "openai-responses",
       harnessId: "openclaw",
       harnessRuntime: "openclaw",
-      authProfileProvider: "openai-codex",
-      sessionAuthProfileId: "openai-codex:work",
+      authProfileProvider: "openai",
+      sessionAuthProfileId: "openai:work",
       config: {},
       workspaceDir: "/tmp/openclaw-runtime-plan",
     });
 
     expect(plan.auth.providerForAuth).toBe("openai");
     expect(plan.auth.authProfileProviderForAuth).toBe("openai");
-    expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
   });
 
   it("resolves follow-up routes with the prepared provider handle", () => {

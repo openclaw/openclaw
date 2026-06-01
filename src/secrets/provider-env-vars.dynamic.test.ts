@@ -134,8 +134,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
-  it("lets openai-codex bootstrap from Codex app-server API-key env", () => {
-    expect(resolveProviderAuthEnvVarCandidates()["openai-codex"]).toEqual([
+  it("lets openai bootstrap from Codex app-server API-key env", () => {
+    expect(resolveProviderAuthEnvVarCandidates()["openai"]).toEqual([
       "CODEX_API_KEY",
       "OPENAI_API_KEY",
     ]);

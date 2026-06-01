@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClient } from "../gateway/client.js";
 import {
   ensureExecApprovals,
@@ -23,8 +25,6 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -265,9 +265,9 @@ async function handleSystemWhich(params: SystemWhichParams, env?: Record<string,
   const bins = normalizeStringEntries(params.bins);
   const found: Record<string, string> = {};
   for (const bin of bins) {
-    const path = resolveExecutable(bin, env);
-    if (path) {
-      found[bin] = path;
+    const pathLocal = resolveExecutable(bin, env);
+    if (pathLocal) {
+      found[bin] = pathLocal;
     }
   }
   return { bins: found };

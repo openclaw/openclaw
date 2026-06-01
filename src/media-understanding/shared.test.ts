@@ -1,5 +1,8 @@
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { VERSION } from "../version.js";
 
 const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
@@ -157,6 +160,20 @@ describe("provider operation deadlines", () => {
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("caps oversized provider poll waits without an operation deadline", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const wait = waitProviderOperationPollInterval({
+      deadline: createProviderOperationDeadline({ label: "video generation" }),
+      pollIntervalMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
     await expect(wait).resolves.toBeUndefined();
   });
 

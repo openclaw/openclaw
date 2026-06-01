@@ -2,7 +2,7 @@ import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
@@ -91,10 +91,15 @@ export async function promoteAuthProfileInOrder(params: {
   agentDir?: string;
   provider: string;
   profileId: string;
+  createIfMissing?: boolean;
+  createFromOrder?: string[];
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    ...(params.createFromOrder
+      ? { saveOptions: { preserveOrderProfileIds: params.createFromOrder } }
+      : {}),
     updater: (store) => {
       const profile = store.profiles[params.profileId];
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
@@ -106,7 +111,20 @@ export async function promoteAuthProfileInOrder(params: {
         normalizeProviderId(providerKey);
       const existing = store.order?.[orderKey];
       if (!existing || existing.length === 0) {
-        return false;
+        if (!params.createIfMissing) {
+          return false;
+        }
+        const providerProfiles = dedupeProfileIds(
+          params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey),
+        );
+        const next = dedupeProfileIds([
+          params.profileId,
+          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
+        ]);
+        store.order = { ...store.order, [orderKey]: next };
+        return true;
       }
       const next = dedupeProfileIds([
         params.profileId,

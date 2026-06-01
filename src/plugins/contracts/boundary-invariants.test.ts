@@ -3,7 +3,7 @@ import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
@@ -275,6 +275,22 @@ function collectTypedHookNames(source: string): string[] {
 }
 
 describe("plugin contract boundary invariants", () => {
+  let bundledCapabilityMetadataOffenders: string[];
+
+  beforeAll(() => {
+    const files = listTsFiles("src");
+    bundledCapabilityMetadataOffenders = files.filter((file) => {
+      if (
+        file === "src/plugins/contracts/boundary-invariants.test.ts" ||
+        file.endsWith(".contract.test.ts") ||
+        file.endsWith("-capability-metadata.test.ts")
+      ) {
+        return false;
+      }
+      return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
+    });
+  });
+
   it("lists boundary invariant source files without walking roots in-process", () => {
     try {
       expectNoReaddirSyncDuring(() => {
@@ -291,18 +307,7 @@ describe("plugin contract boundary invariants", () => {
   });
 
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
-    const files = listTsFiles("src");
-    const offenders = files.filter((file) => {
-      if (
-        file === "src/plugins/contracts/boundary-invariants.test.ts" ||
-        file.endsWith(".contract.test.ts") ||
-        file.endsWith("-capability-metadata.test.ts")
-      ) {
-        return false;
-      }
-      return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
-    });
-    expect(offenders).toStrictEqual([]);
+    expect(bundledCapabilityMetadataOffenders).toStrictEqual([]);
   });
 
   it("keeps the bundled contract inventory out of non-test runtime code", () => {

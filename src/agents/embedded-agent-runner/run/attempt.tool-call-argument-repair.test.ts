@@ -107,7 +107,8 @@ async function runToolCallRepairCase(params: {
       }),
   });
 
-  for await (const item of stream) {
+  for await (const ignoredItem of stream) {
+    void ignoredItem;
     // drain
   }
   const result = await stream.result();
@@ -191,8 +192,8 @@ describe("shouldRepairMalformedToolCallArguments", () => {
   it("enables the repair for Codex and Azure Responses transports", () => {
     expect(
       shouldRepairMalformedToolCallArguments({
-        provider: "openai-codex",
-        modelApi: "openai-codex-responses",
+        provider: "openai",
+        modelApi: "openai-chatgpt-responses",
       }),
     ).toBe(true);
     expect(
@@ -207,7 +208,7 @@ describe("shouldRepairMalformedToolCallArguments", () => {
 describe("openai-completions malformed tool-call argument repair", () => {
   it.each([
     ["openai-completions", "sglang"],
-    ["openai-codex-responses", "openai-codex"],
+    ["openai-chatgpt-responses", "openai"],
     ["azure-openai-responses", "azure-openai-responses"],
   ])(
     "repairs fragmented %s function-call args before tool execution",
@@ -256,7 +257,8 @@ describe("openai-completions malformed tool-call argument repair", () => {
           }),
       });
 
-      for await (const item of stream) {
+      for await (const ignoredItem of stream) {
+        void ignoredItem;
         // drain
       }
       const result = await stream.result();

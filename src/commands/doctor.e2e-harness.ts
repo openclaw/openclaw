@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
@@ -222,9 +222,18 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugin-state/state.sqlite",
       hasLegacy: false,
     },
+    pluginInstallIndex: {
+      sourcePath: "/tmp/state/plugins/installs.json",
+      hasLegacy: false,
+    },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
+      hasLegacy: false,
+    },
+    deliveryQueues: {
+      outboundPath: "/tmp/state/delivery-queue",
+      sessionPath: "/tmp/state/session-delivery-queue",
       hasLegacy: false,
     },
     channelPlans: {
@@ -591,6 +600,14 @@ beforeEach(() => {
   serviceUninstall.mockReset().mockResolvedValue(undefined);
   serviceReadCommand.mockReset().mockResolvedValue(null);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
+  autoMigrateLegacyStateDir.mockReset().mockResolvedValue({
+    migrated: false,
+    skipped: false,
+    changes: [],
+    warnings: [],
+  });
+  autoMigrateLegacyState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
+  autoMigrateLegacyTaskStateSidecars.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;

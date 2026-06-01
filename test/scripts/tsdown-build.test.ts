@@ -101,7 +101,7 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: { NODE_OPTIONS: "--max-old-space-size=8192" },
+        env: { NODE_OPTIONS: "--max-old-space-size=12288" },
       },
     });
   });
@@ -110,11 +110,11 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("raises inherited lower tsdown heap settings to the build default", () => {
@@ -125,7 +125,7 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("raises split inherited lower tsdown heap settings to the build default", () => {
@@ -136,7 +136,7 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
@@ -154,7 +154,7 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
@@ -207,7 +207,7 @@ describe("resolveTsdownBuildInvocation", () => {
         shell: false,
         windowsVerbatimArguments: undefined,
         env: {
-          NODE_OPTIONS: "--max-old-space-size=8192",
+          NODE_OPTIONS: "--max-old-space-size=12288",
           OPENCLAW_BUILD_ALL_NO_PNPM: "1",
         },
       },
@@ -318,6 +318,39 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(pluginSdkPackageFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(packageSourceFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("removes CLI startup metadata during default tsdown clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-default-");
+    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
+    await fsPromises.mkdir(path.dirname(metadataFile), { recursive: true });
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+
+    cleanTsdownOutputRoots({ cwd: rootDir });
+
+    await expectPathMissing(metadataFile);
+  });
+
+  it("preserves CLI startup metadata across opted-in build-all tsdown clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-");
+    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
+    const staleFile = path.join(rootDir, "dist", "stale.js");
+    const nestedStaleFile = path.join(rootDir, "dist", "nested", "stale.js");
+    await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+    await fsPromises.writeFile(staleFile, "stale\n");
+    await fsPromises.writeFile(nestedStaleFile, "stale\n");
+
+    cleanTsdownOutputRoots({
+      cwd: rootDir,
+      env: { OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1" },
+    });
+
+    await expect(fsPromises.readFile(metadataFile, "utf8")).resolves.toBe(
+      '{"generatedBy":"test"}\n',
+    );
+    await expectPathMissing(staleFile);
+    await expectPathMissing(nestedStaleFile);
   });
 
   it("preserves existing package declarations when tsdown DTS output is skipped", async () => {

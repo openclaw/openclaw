@@ -79,7 +79,7 @@ const ZAI_GLM5_CASE = {
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai-codex"],
+    handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai"],
   });
 }
 

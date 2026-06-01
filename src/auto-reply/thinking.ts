@@ -32,16 +32,16 @@ export type {
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
   resolveProviderThinkingProfile,
   resolveProviderXHighThinking,
 } from "../plugins/provider-thinking.js";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
 export type ThinkingLevelOption = {
   id: ThinkLevel;

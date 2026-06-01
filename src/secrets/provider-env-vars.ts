@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -15,12 +16,10 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-  openai: ["OPENAI_API_KEY"],
-  "openai-codex": ["CODEX_API_KEY", "OPENAI_API_KEY"],
+  openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -439,13 +438,13 @@ export function getProviderEnvVars(
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
   return uniqueStrings([
-    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-    ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
+    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
+    ...Object.values(resolveProviderEnvVars(params)).flat(),
   ]);
 }
 
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys));
+  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
 }
 
 export function omitEnvKeysCaseInsensitive(

@@ -17,9 +17,10 @@ selection, OpenClaw dynamic tools, approvals, media delivery, and the visible
 transcript mirror.
 
 The normal setup uses canonical OpenAI model refs such as `openai/gpt-5.5`.
-Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
-under `auth.order.openai`; older `openai-codex:*` profiles and
-`auth.order.openai-codex` entries remain supported for existing installs.
+Do not configure legacy Codex GPT refs. Put OpenAI agent auth order
+under `auth.order.openai`; older legacy Codex auth profile ids and
+legacy Codex auth order entries are legacy state repaired by
+`openclaw doctor --fix`.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled while leaving code-mode-only off by default.
@@ -122,8 +123,8 @@ harness options in OpenClaw config, and use the CLI only for Codex auth:
 
 Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 `auth.order.openai` for subscription-first/API-key-backup ordering. Existing
-`openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
-do not write new `openai-codex/gpt-*` model refs.
+legacy Codex auth profile ids and legacy Codex auth order are doctor-only
+legacy state; do not write new legacy Codex GPT refs.
 
 Do not set `compaction.model` or `compaction.provider` on Codex-backed agents.
 Codex compacts through its native app-server thread state, so OpenClaw ignores
@@ -195,7 +196,7 @@ the harness and account. If `/status` is surprising, see
 Keep provider refs and runtime policy separate:
 
 - Use `openai/gpt-*` for OpenAI agent turns through Codex.
-- Do not use `openai-codex/gpt-*` in config. Run `openclaw doctor --fix` to
+- Do not use legacy Codex GPT refs in config. Run `openclaw doctor --fix` to
   repair legacy refs and stale session route pins.
 - `agentRuntime.id: "codex"` is optional for normal OpenAI auto mode, but useful
   when a deployment should fail closed if Codex is unavailable.
@@ -223,13 +224,13 @@ Common command routing:
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*` plus enabled `codex` plugin                             | `/status` shows `Runtime: OpenAI Codex` | Recommended path                      |
 | Fail closed if Codex is unavailable                  | Provider or model `agentRuntime.id: "codex"`                           | Turn fails instead of embedded fallback | Use for Codex-only deployments        |
 | Direct OpenAI API-key traffic through OpenClaw       | Provider or model `agentRuntime.id: "openclaw"` and normal OpenAI auth | `/status` shows OpenClaw runtime        | Use only when OpenClaw is intentional |
-| Legacy config                                        | `openai-codex/gpt-*`                                                   | `openclaw doctor --fix` rewrites it     | Do not write new config this way      |
+| Legacy config                                        | legacy Codex GPT refs                                                  | `openclaw doctor --fix` rewrites it     | Do not write new config this way      |
 | ACP/acpx Codex adapter                               | ACP `sessions_spawn({ runtime: "acp" })`                               | ACP task/session status                 | Separate from native Codex harness    |
 
 `agents.defaults.imageModel` follows the same prefix split. Use `openai/gpt-*`
 for the normal OpenAI route and `codex/gpt-*` only when image understanding
 should run through a bounded Codex app-server turn. Do not use
-`openai-codex/gpt-*`; doctor rewrites that legacy prefix to `openai/gpt-*`.
+legacy Codex GPT refs; doctor rewrites that legacy prefix to `openai/gpt-*`.
 
 ## Deployment patterns
 
@@ -392,6 +393,9 @@ In `tools.exec.mode: "auto"`, OpenClaw does not preserve legacy unsafe Codex
 legacy `plugins.entries.codex.config.appServer.mode: "guardian"` preset still
 works, but `tools.exec.mode: "auto"` is the normalized OpenClaw surface.
 
+For the mode-level comparison with host exec approvals and ACPX permissions,
+see [Permission modes](/tools/permission-modes).
+
 For every app-server field, auth order, environment isolation, discovery, and
 timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference).
 
@@ -445,7 +449,7 @@ Auth is selected in this order:
 
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older
-   `openai-codex:*` profile ids and `auth.order.openai-codex`.
+   legacy Codex auth profile ids and legacy Codex auth order.
 2. The app-server's existing account in that agent's Codex home.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
@@ -522,7 +526,7 @@ Supported top-level Codex plugin fields:
 | -------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
 | `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. |
 | `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.              |
-| `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.           |
+| `codexPlugins`             | disabled       | Native Codex plugin/app support for configured first-party Codex plugins.                |
 
 Supported `appServer` fields:
 
@@ -654,6 +658,11 @@ For migration eligibility, app inventory, destructive action policy,
 elicitations, and native plugin diagnostics, see
 [Native Codex plugins](/plugins/codex-native-plugins).
 
+OpenAI-side app and plugin access is controlled by the signed-in Codex account
+and, for Business and Enterprise/Edu workspaces, workspace app controls. See
+[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
+for OpenAI's account and workspace-control overview.
+
 ## Computer Use
 
 Computer Use is covered in its own setup guide:
@@ -705,7 +714,7 @@ Ask affected collaborators to run this read-only command on their OpenClaw host:
 
 ```bash
 (
-  pattern='openai/gpt-5\.[45]|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|openai-codex|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
 
   if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
     grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
@@ -729,7 +738,7 @@ Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
 `No API key` result. A corrected run should show the OpenAI OAuth
 path instead of a plain OpenAI API-key failure.
 
-**Legacy `openai-codex/*` config remains:** run `openclaw doctor --fix`.
+**Legacy Codex model refs config remains:** run `openclaw doctor --fix`.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
@@ -778,6 +787,7 @@ provider refs stay on their normal provider path in `auto` mode.
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Model providers](/concepts/model-providers)
 - [OpenAI provider](/providers/openai)
+- [OpenAI Codex help](https://help.openai.com/en/collections/14937394-codex)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Plugin hooks](/plugins/hooks)
 - [Diagnostics export](/gateway/diagnostics)

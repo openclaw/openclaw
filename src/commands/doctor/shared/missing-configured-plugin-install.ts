@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../../../channels/config-presence.js";
-import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
+import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
@@ -50,7 +51,6 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import {
@@ -86,8 +86,9 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "requires compiled runtime output",
 ] as const;
 const VERSION_BOUND_RUNTIME_PLUGIN_IDS = new Set(["codex"]);
-const OPENCLAW_UNCORRECTED_STABLE_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)$/;
 const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
+const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
+  /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
 
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
@@ -177,7 +178,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEn
     return ids;
   }
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(cfg));
-  const candidateChannelIds = listChannelPluginCatalogEntries({
+  const candidateChannelIds = listRawChannelPluginCatalogEntries({
     env,
     excludeWorkspace: true,
   }).map((entry) => entry.id);
@@ -239,7 +240,7 @@ function collectDownloadableInstallCandidates(params: {
     params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg, params.env);
   const candidates = new Map<string, DownloadableInstallCandidate>();
 
-  for (const entry of listChannelPluginCatalogEntries({
+  for (const entry of listRawChannelPluginCatalogEntries({
     env: params.env,
     excludeWorkspace: true,
   })) {
@@ -563,7 +564,7 @@ function betaCompanionMatchesCurrentStableVersion(params: {
   currentVersion: string;
 }): boolean {
   const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
-  const currentBase = OPENCLAW_UNCORRECTED_STABLE_VERSION_RE.exec(params.currentVersion)?.[1];
+  const currentBase = OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(params.currentVersion)?.[1];
   return Boolean(installedBase && currentBase && installedBase === currentBase);
 }
 

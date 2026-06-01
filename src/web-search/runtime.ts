@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -19,11 +24,6 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -332,23 +332,23 @@ export function resolveWebSearchDefinition(
         search: toolConfig as WebSearchConfig | undefined,
         sandboxed,
       }),
-    resolveAutoProviderId: ({ config, toolConfig, providers }) =>
+    resolveAutoProviderId: ({ config: configResult, toolConfig, providers: providersValue }) =>
       resolveWebSearchProviderId({
-        config,
+        config: configResult,
         agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
-        providers,
+        providers: providersValue,
       }),
-    resolveFallbackProviderId: ({ config, toolConfig, providers }) =>
+    resolveFallbackProviderId: ({ config: configValue, toolConfig, providers: providersLocal }) =>
       resolveWebSearchProviderId({
-        config,
+        config: configValue,
         agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
-        providers,
-      }) || providers[0]?.id,
-    createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
+        providers: providersLocal,
+      }) || providersLocal[0]?.id,
+    createTool: ({ provider, config: configLocal, toolConfig, runtimeMetadata }) =>
       provider.createTool({
-        config,
+        config: configLocal,
         agentDir: options?.agentDir,
         searchConfig: toolConfig,
         runtimeMetadata,

@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -23,7 +24,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -658,7 +658,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
             attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
           }
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (attempt < maxRetries) {
             log.warn(`main-session restart recovery failed: ${String(err)}`);
             attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);

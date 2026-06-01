@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
@@ -15,8 +15,14 @@ function createFetchFixture(payload: unknown): typeof fetch {
 }
 
 describe("scanOpenRouterModels", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("lists free models without probing", async () => {
@@ -72,6 +78,28 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.image.skipped).toBe(true);
   });
 
+  it("drops out-of-range OpenRouter created_at timestamps", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/free-invalid-created:free",
+          name: "Free Invalid Created",
+          context_length: 16_384,
+          supported_parameters: [],
+          modality: "text",
+          created_at: 8_640_000_000_000_001,
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.createdAtMs).toBeNull();
+  });
+
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
@@ -86,6 +114,7 @@ describe("scanOpenRouterModels", () => {
   });
 
   it("applies the scan timeout to the OpenRouter catalog request", async () => {
+    vi.useFakeTimers();
     const fetchImpl: typeof fetch = async (_input, init) =>
       await new Promise<Response>((_resolve, reject) => {
         const signal = typeof init === "object" && init ? init.signal : undefined;
@@ -98,13 +127,16 @@ describe("scanOpenRouterModels", () => {
         });
       });
 
-    await expect(
+    const scan = expect(
       scanOpenRouterModels({
         fetchImpl,
         probe: false,
         timeoutMs: 1,
       }),
     ).rejects.toThrow(/catalog aborted/);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await scan;
   });
 
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {

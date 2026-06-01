@@ -73,6 +73,7 @@ describe("Zalo inbound timestamp normalization", () => {
 
     expect(inboundTimestamp("1764000000abc")).toBe(1_700_000_000_000);
     expect(inboundTimestamp("9007199254740993")).toBe(1_700_000_000_000);
+    expect(inboundTimestamp(8_640_000_000_000_001)).toBe(1_700_000_000_000);
   });
 });
 

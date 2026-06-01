@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { note } from "../../packages/terminal-core/src/note.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
@@ -12,7 +13,6 @@ import { updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
@@ -15,7 +16,6 @@ import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -736,6 +736,30 @@ function renameMappedProfileIdKeys(
   return changed;
 }
 
+function canonicalizeOpenAILastGood(
+  record: Record<string, unknown>,
+  profileIdMap: Map<string, string>,
+): boolean {
+  let changed = false;
+  const legacyValue = record[LEGACY_OPENAI_CODEX_PROVIDER_ID];
+  const canonicalValue = record[OPENAI_PROVIDER_ID];
+  if (legacyValue !== undefined) {
+    delete record[LEGACY_OPENAI_CODEX_PROVIDER_ID];
+    changed = true;
+    if (canonicalValue === undefined && typeof legacyValue === "string") {
+      record[OPENAI_PROVIDER_ID] = profileIdMap.get(legacyValue) ?? legacyValue;
+    }
+  }
+  if (typeof record[OPENAI_PROVIDER_ID] === "string") {
+    const mapped = profileIdMap.get(record[OPENAI_PROVIDER_ID]);
+    if (mapped) {
+      record[OPENAI_PROVIDER_ID] = mapped;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function maybeRepairOpenAICodexAuthConfig(
   cfg: OpenClawConfig,
   options?: { profileIdMap?: ReadonlyMap<string, string> },
@@ -796,10 +820,13 @@ function resolveOpenAICodexAuthStoreRepair(
   const usageChanged = isRecord(raw.usageStats)
     ? renameMappedProfileIdKeys(raw.usageStats, rewrite.profileIdMap)
     : false;
+  const lastGoodChanged = isRecord(raw.lastGood)
+    ? canonicalizeOpenAILastGood(raw.lastGood, rewrite.profileIdMap)
+    : false;
   if (rewrite.profileIdMap.size > 0) {
     replaceMappedProfileId(raw, rewrite.profileIdMap);
   }
-  const changed = rewrite.changed || orderChanged || usageChanged;
+  const changed = rewrite.changed || orderChanged || usageChanged || lastGoodChanged;
   return changed
     ? {
         authPath: candidate.authPath,

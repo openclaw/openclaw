@@ -157,7 +157,7 @@ vi.mock("../acp/runtime/errors.js", () => ({
     error instanceof Error ? error : new Error(String(error)),
 }));
 
-vi.mock("../acp/runtime/session-identifiers.js", () => ({
+vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
   resolveAcpSessionCwd: () => "/tmp",
 }));
 
@@ -330,6 +330,7 @@ vi.mock("../utils/message-channel.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   clearAutoFallbackPrimaryProbeSelection: vi.fn(),
   entryMatchesAutoFallbackPrimaryProbe: () => true,
+  hasLegacyAutoFallbackWithoutOrigin: () => false,
   hasSessionAutoModelFallbackProvenance: () => false,
   listAgentEntries: () => [],
   listAgentIds: () => ["default"],
@@ -372,6 +373,7 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => {
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const buildAllowedModelSet = ({
     cfg,
     catalog,
@@ -397,7 +399,7 @@ vi.mock("./model-selection.js", () => {
               ? entry.models
                   .filter(
                     (model): model is Record<string, unknown> =>
-                      !!model && typeof model === "object",
+                      Boolean(model) && typeof model === "object",
                   )
                   .map((model) => {
                     const id = typeof model.id === "string" ? model.id : "";
@@ -439,7 +441,6 @@ vi.mock("./model-selection.js", () => {
       allowAny: false,
     };
   };
-
   return {
     buildAllowedModelSet,
     createModelVisibilityPolicy: (params: {
@@ -487,7 +488,8 @@ vi.mock("./model-selection.js", () => {
         Array.isArray(entry?.models)
           ? entry.models
               .filter(
-                (model): model is Record<string, unknown> => !!model && typeof model === "object",
+                (model): model is Record<string, unknown> =>
+                  Boolean(model) && typeof model === "object",
               )
               .map((model) => {
                 const id = typeof model.id === "string" ? model.id : "";
@@ -535,7 +537,9 @@ vi.mock("./model-selection.js", () => {
       return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
     modelKey: (p: string, m: string) => `${p}/${m}`,
-    normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
+    normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
@@ -609,8 +613,11 @@ vi.mock("./model-visibility-policy.js", () => ({
         const fallback = allowedCatalog[0];
         return fallback ? { provider: fallback.provider, model: fallback.id } : null;
       },
-      visibleCatalog: ({ catalog }: { catalog: Array<{ provider: string; id: string }> }) =>
-        catalog,
+      visibleCatalog: ({
+        catalog: catalogLocal,
+      }: {
+        catalog: Array<{ provider: string; id: string }>;
+      }) => catalogLocal,
     };
   },
 }));
@@ -618,7 +625,7 @@ vi.mock("./model-visibility-policy.js", () => ({
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
+    provider.trim().toLowerCase() === "codex-cli" ? "openai" : provider.trim().toLowerCase(),
 }));
 
 vi.mock("../skills/discovery/agent-filter.js", () => ({
@@ -700,6 +707,7 @@ beforeAll(async () => {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  sessionId?: string;
   run: (provider: string, model: string) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
@@ -965,6 +973,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const secondCall = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
     expect(secondCall.provider).toBe("openai");
     expect(secondCall.model).toBe("gpt-5.4");
+    expect(secondCall.sessionId).toBe("session-1");
 
     const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
@@ -1108,14 +1117,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it("keeps explicit-agent global keys literal before command routing", () => {
+  it("scopes explicit-agent sentinel store keys before command routing", () => {
     expect(
       agentCommandTesting.resolveExplicitAgentCommandSessionKey({
         rawExplicitSessionKey: "global",
         agentIdOverride: "work",
         cfg: {},
       }),
-    ).toBe("global");
+    ).toBe("agent:work:global");
     expect(
       agentCommandTesting.resolveExplicitAgentCommandSessionKey({
         rawExplicitSessionKey: "main",
@@ -2052,7 +2061,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       updatedAt: Date.now(),
       providerOverride: "codex-cli",
       modelOverride: "gpt-5.4",
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
@@ -2068,9 +2077,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     state.authProfileStoreMock = {
       profiles: {
-        "openai-codex:work": {
+        "openai:work": {
           type: "api_key",
-          provider: "openai-codex",
+          provider: "openai",
           key: "sk-test",
         },
       },

@@ -268,7 +268,7 @@ describe("openclaw channel mcp server", () => {
 
       test("emits Claude channel and permission notifications", async () => {
         const sessionKey = "agent:main:main";
-        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
+        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null | undefined;
         try {
           const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
           const permissionNotifications: Array<{
@@ -489,14 +489,10 @@ describe("openclaw channel mcp server", () => {
 
       (
         bridge as unknown as {
-          pendingClaudePermissions: Map<string, Record<string, unknown>>;
+          pendingClaudePermissions: Map<string, number>;
           server: { server: { notification: ReturnType<typeof vi.fn> } };
         }
-      ).pendingClaudePermissions.set("abcde", {
-        toolName: "Bash",
-        description: "run npm test",
-        inputPreview: '{"cmd":"npm test"}',
-      });
+      ).pendingClaudePermissions.set("abcde", Date.now());
       (
         bridge as unknown as {
           server: { server: { notification: ReturnType<typeof vi.fn> } };

@@ -23,6 +23,10 @@ function expectedClawHubInstallSpec(spec: string): string {
   }).installSpec;
 }
 
+function currentOpenClawReleaseBase(): string {
+  return VERSION.replace(/-(?:alpha|beta)\.[1-9]\d*$/u, "");
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -108,6 +112,7 @@ function writeLegacyNpmDeclarationStub(params: {
 
 vi.mock("../../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
 vi.mock("../../../plugins/installed-plugin-index-records.js", () => ({
@@ -1855,6 +1860,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("does not refresh a converged beta Codex runtime plugin on the second doctor pass", async () => {
+    const codexBetaVersion = `${currentOpenClawReleaseBase()}-beta.4`;
     const installDir = makeTempDir();
     fs.writeFileSync(
       path.join(installDir, "package.json"),
@@ -1897,11 +1903,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       ok: true,
       pluginId: "codex",
       targetDir: installDir,
-      version: `${VERSION}-beta.4`,
+      version: codexBetaVersion,
       npmResolution: {
         name: "@openclaw/codex",
-        version: `${VERSION}-beta.4`,
-        resolvedSpec: `@openclaw/codex@${VERSION}-beta.4`,
+        version: codexBetaVersion,
+        resolvedSpec: `@openclaw/codex@${codexBetaVersion}`,
         integrity: "sha512-new-codex-beta",
         resolvedAt: "2026-05-01T00:00:00.000Z",
       },
@@ -1945,10 +1951,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       source: "npm",
       spec: "@openclaw/codex",
       installPath: installDir,
-      version: `${VERSION}-beta.4`,
+      version: codexBetaVersion,
       resolvedName: "@openclaw/codex",
-      resolvedVersion: `${VERSION}-beta.4`,
-      resolvedSpec: `@openclaw/codex@${VERSION}-beta.4`,
+      resolvedVersion: codexBetaVersion,
+      resolvedSpec: `@openclaw/codex@${codexBetaVersion}`,
     });
 
     mocks.installPluginFromNpmSpec.mockClear();
@@ -1958,7 +1964,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       plugins: [
         {
           id: "codex",
-          packageVersion: `${VERSION}-beta.4`,
+          packageVersion: codexBetaVersion,
           providers: ["codex"],
         },
       ],
@@ -1968,7 +1974,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           "codex",
           {
             id: "codex",
-            packageVersion: `${VERSION}-beta.4`,
+            packageVersion: codexBetaVersion,
             providers: ["codex"],
           },
         ],

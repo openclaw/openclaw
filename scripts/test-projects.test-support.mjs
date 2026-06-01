@@ -90,6 +90,22 @@ const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CODEX_VITEST_CONFIG = "test/vitest/vitest.extension-codex.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_EXTRA_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_LIGHT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_SUPPORT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts";
+const EXTENSION_CODEX_APP_SERVER_RUNTIME_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-runtime.config.ts";
+const EXTENSION_CODEX_APP_SERVER_SUPPORT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-support.config.ts";
+const EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-tools.config.ts";
+const EXTENSION_CODEX_SURFACE_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-surface.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -148,6 +164,14 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_CODEX_VITEST_CONFIG, 168],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_VITEST_CONFIG, 168],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_EXTRA_VITEST_CONFIG, 118],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_LIGHT_VITEST_CONFIG, 82],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_SUPPORT_VITEST_CONFIG, 80],
+  [EXTENSION_CODEX_APP_SERVER_RUNTIME_VITEST_CONFIG, 88],
+  [EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG, 78],
+  [EXTENSION_CODEX_APP_SERVER_SUPPORT_VITEST_CONFIG, 72],
+  [EXTENSION_CODEX_SURFACE_VITEST_CONFIG, 68],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -403,6 +427,63 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
+  [
+    "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "src/agents/agent-bundle-mcp-runtime.test.ts",
+      "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+    [
+      "src/agents/agent-bundle-mcp-runtime.test.ts",
+      "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/mcp-channels-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-observability.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/mcp-channels-docker-client.ts",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/docker-e2e-plan.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
+  ],
+  [
+    "scripts/mcp-code-mode-gateway-e2e.ts",
+    [
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
+  ],
   ["scripts/dependency-changes-report.mjs", ["test/scripts/dependency-changes-report.test.ts"]],
   [
     "scripts/dependency-ownership-surface-report.mjs",
@@ -523,6 +604,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/docker-build-helper.test.ts", "test/scripts/openclaw-test-state.test.ts"],
   ],
   ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
+    ["test/scripts/plugin-lifecycle-probe.test.ts"],
+  ],
+  [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
+    ["test/scripts/plugin-lifecycle-probe.test.ts"],
+  ],
   [
     "scripts/e2e/release-media-memory-docker.sh",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/release-media-memory-scenario.test.ts"],
@@ -755,6 +844,12 @@ const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
+const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "vitest.config.ts",
+  DEFAULT_VITEST_CONFIG,
+  ...Object.values(VITEST_CONFIG_BY_KIND),
+  ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
+]);
 const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -914,7 +1009,13 @@ function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
   }
-  return isGlobTarget(arg) || isFileLikeTarget(arg) || isExistingPathTarget(arg, cwd);
+  const relative = toRepoRelativeTarget(arg, cwd);
+  return (
+    isGlobTarget(arg) ||
+    isFileLikeTarget(arg) ||
+    isVitestConfigPathLikeTarget(relative) ||
+    isExistingPathTarget(arg, cwd)
+  );
 }
 
 function toRepoRelativeTarget(arg, cwd) {
@@ -1043,7 +1144,10 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const unmatched = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (resolveVitestConfigTargetKind(relative)) {
+    if (
+      resolveVitestConfigTargetKind(relative) ||
+      (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
+    ) {
       continue;
     }
     const kind = classifyTarget(targetArg, cwd);
@@ -1274,7 +1378,7 @@ function findDirectImportersWithGitGrep(cwd, importedFile, fileSet) {
       if (file === importedFile || !fileSet.has(file) || importers.includes(file)) {
         continue;
       }
-      let source = "";
+      let source;
       try {
         source = fs.readFileSync(path.join(cwd, file), "utf8");
       } catch {
@@ -1315,8 +1419,7 @@ function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
   const seen = new Set(queue);
   const targets = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
+  for (const current of queue) {
     const importers = findDirectImportersWithGitGrep(cwd, current, fileSet);
     if (importers === null) {
       return null;
@@ -1350,7 +1453,7 @@ function getImportGraph(cwd) {
   );
 
   for (const file of files) {
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(path.join(cwd, file), "utf8");
     } catch {
@@ -1386,8 +1489,7 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
   const seen = new Set(queue);
   const targets = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
+  for (const current of queue) {
     for (const importer of reverseImports.get(current) ?? []) {
       if (seen.has(importer)) {
         continue;
@@ -1405,6 +1507,16 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
 
 function resolveVitestConfigTargetKind(relative) {
   return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(relative) ?? null;
+}
+
+function isVitestConfigPathLikeTarget(relative) {
+  return (
+    relative === "vitest.config.ts" || /^test\/vitest\/vitest\..+\.config\.ts$/u.test(relative)
+  );
+}
+
+function isVitestConfigFileTarget(relative) {
+  return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
@@ -2011,6 +2123,24 @@ export function buildVitestRunPlans(
     ];
   }
 
+  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
+  const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
+    toRepoRelativeTarget(targetArg, cwd),
+  );
+  if (explicitConfigTargets.every(isVitestConfigFileTarget)) {
+    if (watchMode && explicitConfigTargets.length > 1) {
+      throw new Error(
+        "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
+      );
+    }
+    return explicitConfigTargets.map((config) => ({
+      config,
+      forwardedArgs: nonTargetArgs,
+      includePatterns: null,
+      watchMode,
+    }));
+  }
+
   const groupedTargets = new Map();
   for (const targetArg of activeTargetArgs) {
     const kind = classifyTarget(targetArg, cwd);
@@ -2040,7 +2170,6 @@ export function buildVitestRunPlans(
     );
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
   const orderedKinds = [
     "unitFast",
     "unitFastFakeTimers",
@@ -2255,7 +2384,8 @@ function hasConservativeVitestWorkerBudget(env) {
   return workerBudget !== null && workerBudget <= 1;
 }
 
-export function resolveParallelFullSuiteConcurrency(specCount, env, hostInfo) {
+export function resolveParallelFullSuiteConcurrency(specCount, envInput, hostInfo) {
+  let env = envInput;
   env ??= process.env;
   const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
   if (override !== null) {
@@ -2357,6 +2487,9 @@ export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
 
 export function shouldRetryVitestNoOutputTimeout(env = process.env) {
   const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  if (value === undefined && isCiLikeEnv(env)) {
+    return false;
+  }
   return !["0", "false", "no", "off"].includes(value ?? "");
 }
 

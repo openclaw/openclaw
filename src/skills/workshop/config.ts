@@ -1,5 +1,5 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { asNullableRecord } from "../../shared/record-coerce.js";
 
 export type SkillWorkshopConfig = {
   autonomous: {

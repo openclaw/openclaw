@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   buildAllowedModelSetWithFallbacks,
@@ -8,7 +9,6 @@ import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   modelKey,

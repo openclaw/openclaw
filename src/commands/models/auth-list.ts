@@ -1,3 +1,4 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -8,9 +9,8 @@ import {
   type AuthProfileStore,
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { timestampMsToIsoString } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
@@ -32,19 +32,12 @@ function resolveProviderFilter(rawProvider: string | undefined): {
   externalCliProvider: string | undefined;
   matches: (profile: AuthProfileSummary) => boolean;
 } {
-  const provider = rawProvider?.trim() ? normalizeProviderId(rawProvider) : undefined;
+  const provider = rawProvider?.trim() ? resolveProviderIdForAuth(rawProvider) : undefined;
   if (!provider) {
     return {
       provider: undefined,
       externalCliProvider: undefined,
       matches: () => true,
-    };
-  }
-  if (provider === "openai") {
-    return {
-      provider,
-      externalCliProvider: "openai",
-      matches: (profile) => profile.provider === "openai" || profile.provider === "openai-codex",
     };
   }
   return {
@@ -86,7 +79,7 @@ function summarizeProfile(params: {
   const disabledUntil = formatTimestamp(params.usage?.disabledUntil);
   return {
     id: params.profileId,
-    provider: normalizeProviderId(params.profile.provider),
+    provider: resolveProviderIdForAuth(params.profile.provider),
     type: params.profile.type,
     label: resolveAuthProfileDisplayLabel({
       cfg: params.cfg,

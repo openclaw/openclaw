@@ -53,7 +53,7 @@ describe("provider public artifacts", () => {
       JSON.stringify({
         id: "openai",
         configSchema: { type: "object" },
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
       }),
     );
     fs.writeFileSync(
@@ -90,7 +90,7 @@ describe("provider public artifacts", () => {
         typeof import("./provider-public-artifacts.js")
       >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias");
 
-      const surface = resolvePolicySurface("openai-codex");
+      const surface = resolvePolicySurface("openai");
 
       expect(surface?.resolveThinkingProfile).toBeTypeOf("function");
       expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
@@ -100,7 +100,7 @@ describe("provider public artifacts", () => {
       expect(
         surface
           ?.resolveThinkingProfile?.({
-            provider: "openai-codex",
+            provider: "openai",
             modelId: "gpt-5.5",
           })
           ?.levels.map((level) => level.id),
@@ -108,7 +108,7 @@ describe("provider public artifacts", () => {
       expect(
         surface
           ?.resolveThinkingProfile?.({
-            provider: "openai-codex",
+            provider: "openai",
             modelId: "gpt-4.1",
           })
           ?.levels.map((level) => level.id),
@@ -148,7 +148,7 @@ describe("provider public artifacts", () => {
       typeof import("./provider-public-artifacts.js")
     >(import.meta.url, "./provider-public-artifacts.js?scope=provider-auth-alias");
 
-    const surface = resolvePolicySurface("openai-codex", {
+    const surface = resolvePolicySurface("openai", {
       manifestRegistry: {
         plugins: [
           {
@@ -159,7 +159,7 @@ describe("provider public artifacts", () => {
             origin: "bundled",
             manifestPath: "/tmp/openai/openclaw.plugin.json",
             providers: ["openai"],
-            providerAuthAliases: { "openai-codex": "openai" },
+            providerAuthAliases: { openai: "openai" },
             rootDir: "/tmp/openai",
             skills: [],
             source: "/tmp/openai/index.js",
@@ -168,10 +168,8 @@ describe("provider public artifacts", () => {
       },
     });
 
-    expect(
-      surface?.resolveThinkingProfile?.({ provider: "openai-codex", modelId: "gpt-5.5" }),
-    ).toEqual({
-      levels: [{ id: "openai-codex" }],
+    expect(surface?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
+      levels: [{ id: "openai" }],
     });
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",

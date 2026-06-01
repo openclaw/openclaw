@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -9,7 +10,6 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
 } from "../../gateway/server-methods/types.js";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnv } from "../../test-utils/env.js";
 import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
 import {

@@ -270,9 +270,21 @@ describe("runReplyAgent heartbeat followup guard", () => {
       runOverrides: { sessionId: "stale-session" },
       sessionStore,
     });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 1, output: 1 },
+        },
+      },
+    });
 
     const pending = run();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
@@ -1142,7 +1154,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       responseUsage: "tokens",
     };
@@ -1177,7 +1189,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           model: "gemini-2.5-flash",
           attempts: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               model: "gpt-5.5",
               error: "codex app-server attempt timed out",
               reason: "timeout",
@@ -1202,7 +1214,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
 
-      expect(sessionEntry.modelProvider).toBe("openai-codex");
+      expect(sessionEntry.modelProvider).toBe("openai");
       expect(sessionEntry.model).toBe("gpt-5.5");
       expect(sessionEntry.providerOverride).toBeUndefined();
       expect(sessionEntry.modelOverride).toBeUndefined();
@@ -1211,7 +1223,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
       expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
       const persistedStore = JSON.parse(await readFile(storePath, "utf-8"));
-      expect(persistedStore.main.modelProvider).toBe("openai-codex");
+      expect(persistedStore.main.modelProvider).toBe("openai");
       expect(persistedStore.main.model).toBe("gpt-5.5");
       expect(persistedStore.main.providerOverride).toBeUndefined();
       expect(persistedStore.main.modelOverride).toBeUndefined();
@@ -1230,7 +1242,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
     };
     const sessionStore = { main: sessionEntry };
@@ -1253,7 +1265,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         model: "gemini-2.5-flash",
         attempts: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.5",
             error: "codex app-server attempt timed out",
             reason: "timeout",
@@ -1280,7 +1292,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     expect(payload?.isError).toBe(true);
     expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
-    expect(sessionEntry.modelProvider).toBe("openai-codex");
+    expect(sessionEntry.modelProvider).toBe("openai");
     expect(sessionEntry.model).toBe("gpt-5.5");
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
@@ -1404,8 +1416,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1435,7 +1447,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       expect(payload?.isError).toBe(true);
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
@@ -1451,8 +1463,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1482,7 +1494,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       expect(payload?.isError).toBe(true);
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
@@ -1493,7 +1505,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "lmstudio",
@@ -1507,7 +1519,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     const { run } = createMinimalRun({
       runOverrides: {
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
       },
       sessionEntry,
@@ -1523,7 +1535,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(payload?.isError).toBe(true);
     expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-    expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+    expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
     expect(payload?.text).toContain("no visible reply");
   });
 
@@ -1538,8 +1550,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1593,8 +1605,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1627,7 +1639,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       expect(payload?.isError).toBe(true);
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1643,8 +1655,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1694,8 +1706,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1745,8 +1757,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {
@@ -1792,8 +1804,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("openai-codex", "gpt-5.5"),
-          provider: "openai-codex",
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
           model: "gpt-5.5",
           attempts: [
             {

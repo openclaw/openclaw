@@ -80,7 +80,9 @@ async function flushAsyncWarmup() {
     return;
   }
   await Promise.resolve();
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   await Promise.resolve();
 }
 
@@ -158,7 +160,7 @@ describe("lookupContextTokens", () => {
     mockContextModuleDeps(() => ({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
           },
         },

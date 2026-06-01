@@ -1253,7 +1253,7 @@ describe("provider-runtime", () => {
 
   it("keeps OpenAI plugin personality fallback for OpenAI-family GPT-5 providers", () => {
     const contribution = resolveProviderSystemPromptContribution({
-      provider: "openai-codex",
+      provider: "openai",
       config: {
         plugins: {
           entries: {
@@ -1262,7 +1262,7 @@ describe("provider-runtime", () => {
         },
       },
       context: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         promptMode: "full",
       } as never,
@@ -1453,8 +1453,12 @@ describe("provider-runtime", () => {
         auth: [],
         matchesContextOverflowError: ({ errorMessage }) =>
           /\bcontent_filter\b.*\btoo long\b/i.test(errorMessage),
-        classifyFailoverReason: ({ errorMessage }) =>
-          /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined,
+        classifyFailoverReason: ({ errorMessage, code, status }) => {
+          if (status === 403 && code === "PROVIDER_QUOTA_EXHAUSTED") {
+            return "billing";
+          }
+          return /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined;
+        },
       },
     ]);
 
@@ -1476,6 +1480,69 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBe("rate_limit");
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          errorMessage: "Forbidden",
+          status: 403,
+          code: "PROVIDER_QUOTA_EXHAUSTED",
+        },
+      }),
+    ).toBe("billing");
+  });
+
+  it("falls back to all failover hooks when a provider owner cannot be resolved", () => {
+    const classifyFailoverReason = vi.fn(({ errorMessage }) =>
+      /\bconcurrency limit breached\b/i.test(errorMessage) ? "rate_limit" : undefined,
+    );
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "together",
+        label: "Together",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-together",
+        context: {
+          provider: "my-together",
+          errorMessage: "concurrency limit breached",
+        },
+      }),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason).toHaveBeenCalledWith({
+      provider: "my-together",
+      errorMessage: "concurrency limit breached",
+    });
+  });
+
+  it("does not broad-scan failover hooks for unresolved providers with structured descriptors", () => {
+    const classifyFailoverReason = vi.fn(() => "overloaded" as const);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "mantle",
+        label: "Mantle",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-openai-compatible",
+        context: {
+          provider: "my-openai-compatible",
+          status: 403,
+          errorMessage: "service unavailable",
+        },
+      }),
+    ).toBeUndefined();
+    expect(classifyFailoverReason).not.toHaveBeenCalled();
   });
 
   it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {
@@ -1756,7 +1823,7 @@ describe("provider-runtime", () => {
           shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
           }),
           formatApiKey: (cred) =>
             cred.type === "oauth" ? JSON.stringify({ token: cred.access }) : "",
@@ -2052,7 +2119,7 @@ describe("provider-runtime", () => {
       }),
     ).toEqual({
       ...MODEL,
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
     });
 
     expect(
@@ -2247,6 +2314,35 @@ describe("provider-runtime", () => {
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["ollama-spark", "ollama"]);
   });
 
+  it("does not treat core transport apis as custom provider plugin owners", () => {
+    const openaiPlugin: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      hookAliases: ["openai-responses"],
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    resolvePluginProvidersMock.mockReturnValue([openaiPlugin]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "tui-pty-mock",
+      config: {
+        models: {
+          providers: {
+            "tui-pty-mock": {
+              api: "openai-responses",
+              baseUrl: "http://127.0.0.1:64087/v1",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toBeUndefined();
+    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
+  });
+
   it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
     const qwenPlugin: ProviderPlugin = {
       id: "qwen",
@@ -2263,7 +2359,7 @@ describe("provider-runtime", () => {
         models: {
           providers: {
             modelstudio: {
-              api: "openai-completions",
+              api: "dashscope",
               baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
               models: [],
             },
@@ -2275,7 +2371,7 @@ describe("provider-runtime", () => {
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
       "modelstudio",
-      "openai-completions",
+      "dashscope",
     ]);
   });
 
@@ -2344,7 +2440,7 @@ describe("provider-runtime", () => {
             { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
             { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
             { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+            { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
           ],
         },
       }),

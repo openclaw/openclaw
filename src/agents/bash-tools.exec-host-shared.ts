@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -15,7 +16,6 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
-import { resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
@@ -439,7 +439,7 @@ export async function sendExecApprovalFollowupResult(
           idempotencyKey: runtimeHandoff.idempotencyKey,
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

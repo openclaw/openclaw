@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
@@ -46,11 +51,6 @@ import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,
@@ -292,14 +292,13 @@ export async function initSessionState(params: {
         `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
     );
   }
-  let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
   let sessionId: string | undefined;
   let isNewSession = false;
   let bodyStripped: string | undefined;
-  let systemSent = false;
-  let abortedLastRun = false;
+  let systemSent;
+  let abortedLastRun;
   let resetTriggered = false;
 
   let persistedThinking: string | undefined;
@@ -391,7 +390,7 @@ export async function initSessionState(params: {
   // Canonicalize so the written key matches what all read paths produce.
   // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
   // agent may differ, causing key mismatch and orphaned sessions (#29683).
-  sessionKey = canonicalizeMainSessionAlias({
+  const sessionKey: string | undefined = canonicalizeMainSessionAlias({
     cfg,
     agentId,
     sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
@@ -858,8 +857,8 @@ export async function initSessionState(params: {
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",
-      onError: (error, sessionId) => {
-        log.warn(`failed to dispose bundle MCP runtime for session ${sessionId}`, {
+      onError: (error, sessionIdLocal) => {
+        log.warn(`failed to dispose bundle MCP runtime for session ${sessionIdLocal}`, {
           error: String(error),
         });
       },

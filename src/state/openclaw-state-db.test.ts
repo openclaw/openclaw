@@ -132,7 +132,10 @@ describe("openclaw state database", () => {
     process.env["OPENCLAW_STATE_DIR"] = stateDir;
     try {
       expect(
-        readCronRunLogEntriesSync(path.join(stateDir, "cron", "runs", "legacy-job.jsonl")),
+        readCronRunLogEntriesSync({
+          storePath: path.join(stateDir, "cron", "jobs.json"),
+          jobId: "legacy-job",
+        }),
       ).toMatchObject([{ action: "finished", jobId: "legacy-job", ts: 12345 }]);
     } finally {
       if (previousStateDir === undefined) {

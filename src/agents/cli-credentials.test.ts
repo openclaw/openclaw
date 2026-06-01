@@ -350,7 +350,7 @@ describe("cli credentials", () => {
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
-      provider: "openai-codex",
+      provider: "openai",
       expires: expSeconds * 1000,
       idToken: "keychain-id-token",
     });
@@ -380,7 +380,7 @@ describe("cli credentials", () => {
 
     expectFields(creds, {
       refresh: "keychain-refresh",
-      provider: "openai-codex",
+      provider: "openai",
       expires: fallbackExpiry,
     });
   });
@@ -436,7 +436,7 @@ describe("cli credentials", () => {
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
-      provider: "openai-codex",
+      provider: "openai",
       expires: expSeconds * 1000,
       idToken: "file-id-token",
     });
@@ -497,7 +497,7 @@ describe("cli credentials", () => {
 
       expectFields(creds, {
         refresh: "file-refresh",
-        provider: "openai-codex",
+        provider: "openai",
         expires: Math.floor(mtimeMs) + 60 * 60 * 1000,
       });
     } finally {
@@ -532,7 +532,7 @@ describe("cli credentials", () => {
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(execSyncMock).not.toHaveBeenCalled();
   });
@@ -568,7 +568,7 @@ describe("cli credentials", () => {
     expectFields(withKeychain, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
@@ -615,12 +615,12 @@ describe("cli credentials", () => {
     expectFields(withKeychain, {
       refresh: "keychain-refresh",
       expires: keychainExpiry * 1000,
-      provider: "openai-codex",
+      provider: "openai",
     });
     expectFields(withoutPrompt, {
       refresh: "file-refresh",
       expires: fileExpiry * 1000,
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });

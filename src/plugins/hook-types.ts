@@ -319,7 +319,7 @@ export type PluginHookLlmOutputEvent = {
    * Fully resolved provider/model ref used for the call.
    *
    * This intentionally keeps the provider prefix so operator tooling can
-   * distinguish e.g. openai-codex/gpt-5.4 from codex/gpt-5.4 even when display
+   * distinguish e.g. openai/gpt-5.4 from codex/gpt-5.4 even when display
    * names collapse to just the model id.
    */
   resolvedRef?: string;
@@ -410,6 +410,9 @@ export type PluginHookBeforeDispatchEvent = {
   channel?: string;
   sessionKey?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -420,6 +423,9 @@ export type PluginHookBeforeDispatchContext = {
   conversationId?: string;
   sessionKey?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
 };
 
 export type PluginHookBeforeDispatchResult = {
@@ -441,6 +447,8 @@ export type PluginHookReplyDispatchEvent = {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   shouldSendToolSummaries: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;

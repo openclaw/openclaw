@@ -22,5 +22,5 @@ export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
-} from "./types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type { OpenClawProviderIndexProvider } from "./provider-index/index.js";

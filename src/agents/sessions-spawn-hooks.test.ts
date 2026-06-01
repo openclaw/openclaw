@@ -282,7 +282,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({
       label: "research",
-      model: "openai-codex/gpt-5.4",
+      model: "openai/gpt-5.4",
       runTimeoutSeconds: 1,
       thread: true,
       agentAccountId: "work",
@@ -296,8 +296,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       {
         status: "accepted",
         runId: "run-1",
-        resolvedModel: "openai-codex/gpt-5.4",
-        resolvedProvider: "openai-codex",
+        resolvedModel: "openai/gpt-5.4",
+        resolvedProvider: "openai",
       },
       "spawn result",
     );
@@ -341,8 +341,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         label: "research",
         mode: "session",
         threadRequested: true,
-        resolvedModel: "openai-codex/gpt-5.4",
-        resolvedProvider: "openai-codex",
+        resolvedModel: "openai/gpt-5.4",
+        resolvedProvider: "openai",
       },
       "spawned event",
     );

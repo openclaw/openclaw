@@ -366,7 +366,7 @@ describe("resolveModelAuthMode", () => {
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "token",
         refresh: "refresh",
         expires: Date.now() + 60_000,

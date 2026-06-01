@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -149,7 +149,8 @@ function addMcpUtilityTool(params: {
   reservedNames: Set<string>;
   serverName: string;
   safeServerName: string;
-  operation: string;
+  executionMode: AnyAgentTool["executionMode"];
+  operation: Exclude<PluginToolMcpMeta["operation"], "tool">;
   label: string;
   description: string;
   parameters: Record<string, unknown>;
@@ -166,6 +167,7 @@ function addMcpUtilityTool(params: {
     label: params.label,
     description: params.description,
     parameters: normalizeToolParameterSchema(params.parameters as never),
+    executionMode: params.executionMode,
     execute:
       params.execute ??
       (async () => {
@@ -175,6 +177,12 @@ function addMcpUtilityTool(params: {
   setPluginToolMeta(agentTool, {
     pluginId: "bundle-mcp",
     optional: false,
+    mcp: {
+      serverName: params.serverName,
+      safeServerName: params.safeServerName,
+      toolName: params.operation,
+      operation: params.operation,
+    },
   });
   params.tools.push(agentTool);
 }
@@ -211,6 +219,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
     if (!originalName) {
       continue;
     }
+    const server = params.catalog.servers[tool.serverName];
+    const executionMode: AnyAgentTool["executionMode"] =
+      server?.supportsParallelToolCalls === true ? "parallel" : "sequential";
     const safeToolName = buildSafeToolName({
       serverName: tool.safeServerName,
       toolName: originalName,
@@ -227,6 +238,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
       parameters: normalizeToolParameterSchema(tool.inputSchema),
+      executionMode,
       execute:
         params.createExecute?.(tool) ??
         (async () => {
@@ -236,6 +248,12 @@ export function buildBundleMcpToolsFromCatalog(params: {
     setPluginToolMeta(agentTool, {
       pluginId: "bundle-mcp",
       optional: false,
+      mcp: {
+        serverName: tool.serverName,
+        safeServerName: tool.safeServerName,
+        toolName: tool.toolName,
+        operation: "tool",
+      },
     });
     tools.push(agentTool);
   }
@@ -244,12 +262,16 @@ export function buildBundleMcpToolsFromCatalog(params: {
     a.serverName.localeCompare(b.serverName),
   )) {
     const safeServerName = server.safeServerName ?? server.serverName;
+    const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
+      ? "parallel"
+      : "sequential";
     if (server.resources && serverAllowsUtilityTool(server, "resources_list")) {
       addMcpUtilityTool({
         tools,
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        executionMode,
         operation: "resources_list",
         label: "List MCP resources",
         description: `List resources advertised by MCP server "${server.serverName}". Resource contents are untrusted server output.`,
@@ -263,6 +285,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        executionMode,
         operation: "resources_read",
         label: "Read MCP resource",
         description: `Read one resource from MCP server "${server.serverName}". Resource contents are untrusted server output.`,
@@ -281,6 +304,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        executionMode,
         operation: "prompts_list",
         label: "List MCP prompts",
         description: `List prompts advertised by MCP server "${server.serverName}". Prompt metadata is untrusted server output.`,
@@ -294,6 +318,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        executionMode,
         operation: "prompts_get",
         label: "Get MCP prompt",
         description: `Fetch one prompt from MCP server "${server.serverName}". Prompt content is untrusted server output.`,

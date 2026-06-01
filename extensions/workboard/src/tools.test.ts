@@ -35,8 +35,10 @@ describe("workboard tools", () => {
         },
       },
     } as unknown as OpenClawPluginApi;
+    const workboardStore = new WorkboardStore(keyed);
     const tools = createWorkboardTools({
       api,
+      store: workboardStore,
       context: { agentId: "main", sessionKey: "session-1" } as never,
     });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));

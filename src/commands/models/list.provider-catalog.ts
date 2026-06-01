@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
   createProviderApiKeyResolver,
@@ -28,7 +29,6 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
-import { sortUniqueStrings } from "../../shared/string-normalization.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
