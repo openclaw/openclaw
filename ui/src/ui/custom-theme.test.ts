@@ -124,6 +124,30 @@ describe("custom theme import helpers", () => {
     });
   });
 
+  it("accepts short built-in tweakcn theme names (regression for #88987)", () => {
+    // Built-in tweakcn themes like "claude" (6), "zinc" (4), "slate" (5)
+    // must pass the ID validator despite being shorter than 8 characters.
+    expect(
+      normalizeTweakcnThemeUrl("https://tweakcn.com/themes/claude"),
+    ).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(
+      normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/zinc"),
+    ).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/zinc",
+      fetchUrl: "https://tweakcn.com/r/themes/zinc",
+      themeId: "zinc",
+    });
+    expect(normalizeTweakcnThemeUrl("slate")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/slate",
+      fetchUrl: "https://tweakcn.com/r/themes/slate",
+      themeId: "slate",
+    });
+  });
+
   it("maps a tweakcn payload into a normalized imported theme record", () => {
     const imported = createImportedTheme();
 
