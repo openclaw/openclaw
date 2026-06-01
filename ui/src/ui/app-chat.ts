@@ -1398,6 +1398,7 @@ export async function handleSendChat(
       cancelPendingSendBeforeRequest(host, queued, {
         previousDraft: cleared.previousDraft,
         previousAttachments: cleared.previousAttachments,
+        restoreComposer: host.sessionKey === submittedSessionKey,
       });
       return;
     }

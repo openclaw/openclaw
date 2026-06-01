@@ -1589,6 +1589,34 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
   });
 
+  it("does not restore a failed model-wait send into a different session", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send from session a",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    host.chatQueueBySession = { "agent:main": [...host.chatQueue] };
+    host.chatQueue = [];
+    host.sessionKey = "agent:other";
+    host.chatMessage = "";
+
+    switchUpdate.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatQueueBySession?.["agent:main"]).toBeUndefined();
+  });
+
   it("does not flush model-wait sends before the model picker update finishes", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
