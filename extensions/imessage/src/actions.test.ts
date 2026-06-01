@@ -10,8 +10,15 @@ const runtimeMock = vi.hoisted(() => ({
   resolveIMessageMessageId: vi.fn((id: string) => id),
   resolveChatGuidForTarget: vi.fn(),
   sendReaction: vi.fn(),
+  editMessage: vi.fn(),
+  unsendMessage: vi.fn(),
   sendRichMessage: vi.fn(),
   sendAttachment: vi.fn(),
+  renameGroup: vi.fn(),
+  setGroupIcon: vi.fn(),
+  addParticipant: vi.fn(),
+  removeParticipant: vi.fn(),
+  leaveGroup: vi.fn(),
 }));
 
 const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
@@ -60,13 +67,17 @@ vi.mock("./monitor-reply-cache.js", async () => {
 
 const { imessageMessageActions } = await import("./actions.js");
 
-function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
+function cfg(
+  actions?: Record<string, boolean | undefined>,
+  imessage?: Record<string, unknown>,
+): OpenClawConfig {
   return {
     channels: {
       imessage: {
         cliPath: "imsg",
         dbPath: "/tmp/messages.db",
         actions,
+        ...imessage,
       },
     },
   } as OpenClawConfig;
@@ -87,8 +98,15 @@ describe("imessage message actions", () => {
     runtimeMock.resolveIMessageMessageId.mockImplementation((id: string) => id);
     runtimeMock.resolveChatGuidForTarget.mockReset();
     runtimeMock.sendReaction.mockReset();
+    runtimeMock.editMessage.mockReset();
+    runtimeMock.unsendMessage.mockReset();
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
+    runtimeMock.renameGroup.mockReset();
+    runtimeMock.setGroupIcon.mockReset();
+    runtimeMock.addParticipant.mockReset();
+    runtimeMock.removeParticipant.mockReset();
+    runtimeMock.leaveGroup.mockReset();
     rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
@@ -437,6 +455,332 @@ describe("imessage message actions", () => {
       timestamp: expect.any(Number),
       isFromMe: true,
     });
+  });
+
+  it("blocks reply when the group target is not allowlisted", async () => {
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_identifier:allowed-thread"],
+        }),
+        params: {
+          chatIdentifier: "blocked-thread",
+          messageId: "message-guid",
+          text: "reply",
+        },
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "react",
+      { chatIdentifier: "blocked-thread", messageId: "message-guid", emoji: "👍" },
+      "sendReaction",
+    ],
+    [
+      "edit",
+      { chatIdentifier: "blocked-thread", messageId: "message-guid", text: "updated" },
+      "editMessage",
+    ],
+    ["unsend", { chatIdentifier: "blocked-thread", messageId: "message-guid" }, "unsendMessage"],
+  ] as const)(
+    "blocks %s when the group target is not allowlisted",
+    async (action, params, runtimeMethod) => {
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action,
+          cfg: cfg(undefined, {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["chat_identifier:allowed-thread"],
+          }),
+          params,
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+      );
+      expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+      expect(runtimeMock.resolveIMessageMessageId).not.toHaveBeenCalled();
+      expect(runtimeMock[runtimeMethod]).not.toHaveBeenCalled();
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["renameGroup", { chatIdentifier: "blocked-thread", displayName: "Blocked" }, "renameGroup"],
+    ["setGroupIcon", { chatIdentifier: "blocked-thread", buffer: "aWNvbg==" }, "setGroupIcon"],
+    [
+      "addParticipant",
+      { chatIdentifier: "blocked-thread", address: "+15551230000" },
+      "addParticipant",
+    ],
+    [
+      "removeParticipant",
+      { chatIdentifier: "blocked-thread", address: "+15551230000" },
+      "removeParticipant",
+    ],
+    ["leaveGroup", { chatIdentifier: "blocked-thread" }, "leaveGroup"],
+  ] as const)(
+    "blocks %s when the group target is not allowlisted",
+    async (action, params, runtimeMethod) => {
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action,
+          cfg: cfg(undefined, {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["chat_identifier:allowed-thread"],
+          }),
+          params,
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+      );
+      expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+      expect(runtimeMock[runtimeMethod]).not.toHaveBeenCalled();
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows group mutation actions when the group target is allowlisted", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;allowed-thread");
+    runtimeMock.renameGroup.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "renameGroup",
+      cfg: cfg(undefined, {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["chat_identifier:allowed-thread"],
+      }),
+      params: {
+        chatIdentifier: "allowed-thread",
+        displayName: "Allowed",
+      },
+    } as never);
+
+    expect(runtimeMock.renameGroup).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;allowed-thread",
+      displayName: "Allowed",
+      options: imsgOptions("iMessage;+;allowed-thread"),
+    });
+  });
+
+  it("validates group mutation inputs before outbound policy", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "renameGroup",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_identifier:allowed-thread"],
+        }),
+        params: {
+          chatIdentifier: "blocked-thread",
+        },
+      } as never),
+    ).rejects.toThrow("iMessage renameGroup requires displayName or name.");
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.renameGroup).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
+  it("allows reply when sender-based group allowlist matches the trusted requester", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;team-thread");
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action: "reply",
+      cfg: cfg(undefined, {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15551230000"],
+      }),
+      params: {
+        messageId: "message-guid",
+        text: "reply",
+      },
+      toolContext: { currentChannelId: "chat_identifier:team-thread" },
+      requesterSenderId: "+15551230000",
+    } as never);
+
+    expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;team-thread",
+      text: "reply",
+      replyToMessageId: "message-guid",
+      partIndex: undefined,
+      attachment: undefined,
+      options: imsgOptions("iMessage;+;team-thread"),
+    });
+  });
+
+  it("keeps runner-inferred reply targets sender-authorized", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;team-thread");
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action: "reply",
+      cfg: cfg(undefined, {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15551230000"],
+      }),
+      params: {
+        target: "chat_identifier:team-thread",
+        to: "chat_identifier:team-thread",
+        __openclawInferredTargetFromCurrentChannel: true,
+        messageId: "message-guid",
+        text: "reply",
+      },
+      toolContext: { currentChannelId: "chat_identifier:team-thread" },
+      requesterSenderId: "+15551230000",
+    } as never);
+
+    expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;team-thread",
+      text: "reply",
+      replyToMessageId: "message-guid",
+      partIndex: undefined,
+      attachment: undefined,
+      options: imsgOptions("iMessage;+;team-thread"),
+    });
+  });
+
+  it("does not trust spoofed inferred-target markers for other groups", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          target: "chat_identifier:blocked-thread",
+          to: "chat_identifier:blocked-thread",
+          __openclawInferredTargetFromCurrentChannel: true,
+          messageId: "message-guid",
+          text: "reply",
+        },
+        toolContext: { currentChannelId: "chat_identifier:team-thread" },
+        requesterSenderId: "+15551230000",
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not trust inferred-target markers when the delivered alias differs", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          target: "chat_identifier:team-thread",
+          to: "chat_identifier:blocked-thread",
+          __openclawInferredTargetFromCurrentChannel: true,
+          messageId: "message-guid",
+          text: "reply",
+        },
+        toolContext: { currentChannelId: "chat_identifier:team-thread" },
+        requesterSenderId: "+15551230000",
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not trust gateway-supplied requester sender for group reply authorization", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          messageId: "message-guid",
+          text: "reply",
+        },
+        toolContext: { currentChannelId: "chat_identifier:team-thread" },
+        requesterSenderId: "+15551230000",
+        gatewayClientScopes: ["operator.write"],
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not use trusted requester sender for explicit group reply targets", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "reply",
+        },
+        requesterSenderId: "+15551230000",
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
+  it("blocks sender-based group replies without a trusted requester", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "reply",
+        },
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
   });
 
   describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
@@ -807,6 +1151,58 @@ describe("imessage message actions", () => {
       ]);
     });
 
+    it("blocks sendWithEffect targets outside iMessage allowlist policy", async () => {
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "sendWithEffect",
+          cfg: {
+            channels: {
+              imessage: {
+                cliPath: "imsg",
+                dbPath: "/tmp/messages.db",
+                dmPolicy: "allowlist",
+                allowFrom: ["+15551230000"],
+              },
+            },
+          } as OpenClawConfig,
+          params: {
+            to: "+15559999999",
+            text: "boom",
+            effect: "slam",
+          },
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.allowFrom/defaultTo",
+      );
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
+
+    it("blocks sendWithEffect when the group target is not allowlisted", async () => {
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "sendWithEffect",
+          cfg: cfg(undefined, {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["chat_guid:iMessage;+;allowed"],
+          }),
+          params: {
+            chatGuid: "iMessage;+;blocked",
+            text: "boom",
+            effect: "slam",
+          },
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+      );
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["echo", "com.apple.messages.effect.CKEchoEffect"],
       ["happybirthday", "com.apple.messages.effect.CKHappyBirthdayEffect"],
@@ -909,4 +1305,25 @@ describe("imessage message actions", () => {
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );
+
+  it("blocks upload-file when the group target is not allowlisted", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_guid:iMessage;+;allowed"],
+        }),
+        params: {
+          chatGuid: "iMessage;+;blocked",
+          filename: "photo.jpg",
+          buffer: Buffer.from("image").toString("base64"),
+        },
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+    expect(runtimeMock.sendAttachment).not.toHaveBeenCalled();
+  });
 });

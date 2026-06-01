@@ -88,6 +88,72 @@ describe("deliverReplies", () => {
     ]);
   });
 
+  it("defaults trusted monitor reply ids to implicit through text sends", async () => {
+    await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
+      replies: [{ text: "reply", replyToId: "reply-3" }],
+      target: "chat_id:30",
+      client,
+      accountId: "acct-3",
+      runtime,
+      maxBytes: 4096,
+      textLimit: 4000,
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:30",
+        "reply",
+        {
+          config: IMESSAGE_TEST_CFG,
+          maxBytes: 4096,
+          client,
+          accountId: "acct-3",
+          replyToId: "reply-3",
+          replyToIdSource: "implicit",
+          replyRequesterSender: "+15551230000",
+        },
+      ],
+    ]);
+  });
+
+  it("preserves implicit reply source through legacy text sends", async () => {
+    const payload = {
+      text: "reply",
+      replyToId: "reply-implicit",
+      replyToIdSource: "implicit",
+    } as const;
+
+    await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
+      replies: [payload],
+      target: "chat_id:31",
+      client,
+      accountId: "acct-31",
+      runtime,
+      maxBytes: 4096,
+      textLimit: 4000,
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:31",
+        "reply",
+        {
+          config: IMESSAGE_TEST_CFG,
+          maxBytes: 4096,
+          client,
+          accountId: "acct-31",
+          replyToId: "reply-implicit",
+          replyToIdSource: "implicit",
+          replyRequesterSender: "+15551230000",
+        },
+      ],
+    ]);
+  });
+
   it("propagates payload replyToId through media sends", async () => {
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
@@ -135,6 +201,43 @@ describe("deliverReplies", () => {
     ]);
   });
 
+  it("defaults trusted monitor reply ids to implicit through media sends", async () => {
+    await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
+      replies: [
+        {
+          text: "caption",
+          mediaUrls: ["https://example.com/a.jpg"],
+          replyToId: "reply-4",
+        },
+      ],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 8192,
+      textLimit: 4000,
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:40",
+        "caption",
+        {
+          config: IMESSAGE_TEST_CFG,
+          mediaUrl: "https://example.com/a.jpg",
+          maxBytes: 8192,
+          client,
+          accountId: "acct-4",
+          replyToId: "reply-4",
+          replyToIdSource: "implicit",
+          replyRequesterSender: "+15551230000",
+        },
+      ],
+    ]);
+  });
+
   it("records durable outbound sends in the sent-message cache", async () => {
     const remember = vi.fn();
     const send = createIMessageEchoCachingSend({
@@ -167,6 +270,63 @@ describe("deliverReplies", () => {
       text: "durable hello",
       messageId: "imsg-durable-1",
     });
+  });
+
+  it("does not infer an implicit reply source from durable send defaults", async () => {
+    const send = createIMessageEchoCachingSend({
+      client,
+      accountId: "acct-7",
+      replyRequesterSender: "+15551230000",
+    });
+
+    await send("chat_id:70", "durable reply", {
+      config: IMESSAGE_TEST_CFG,
+      accountId: "acct-ignored",
+      replyToId: "reply-7",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:70",
+        "durable reply",
+        {
+          config: IMESSAGE_TEST_CFG,
+          accountId: "acct-ignored",
+          replyToId: "reply-7",
+          client,
+          replyRequesterSender: "+15551230000",
+        },
+      ],
+    ]);
+  });
+
+  it("prefers per-send requester sender over durable send defaults", async () => {
+    const send = createIMessageEchoCachingSend({
+      client,
+      accountId: "acct-8",
+      replyRequesterSender: "+15551230000",
+    });
+
+    await send("chat_id:80", "durable reply", {
+      config: IMESSAGE_TEST_CFG,
+      replyToId: "reply-8",
+      replyToIdSource: "implicit",
+      replyRequesterSender: "+15550009999",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:80",
+        "durable reply",
+        {
+          config: IMESSAGE_TEST_CFG,
+          replyToId: "reply-8",
+          replyToIdSource: "implicit",
+          replyRequesterSender: "+15550009999",
+          client,
+        },
+      ],
+    ]);
   });
 
   it("sanitizes durable outbound text before sending", async () => {

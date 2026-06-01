@@ -16,6 +16,10 @@ import {
 import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
+type ReplyPayloadWithReplySource = ReplyPayload & {
+  replyToIdSource?: "explicit" | "implicit";
+};
+
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -25,6 +29,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
+  replyRequesterSender?: string | null;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }) {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
@@ -38,6 +43,10 @@ export async function deliverReplies(params: {
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
+    const replyPayload = payload as ReplyPayloadWithReplySource;
+    const replyToIdSource =
+      replyPayload.replyToIdSource ??
+      (payload.replyToId && params.replyRequesterSender ? "implicit" : undefined);
     const rawText = sanitizeOutboundText(payload.text ?? "");
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(rawText, tableMode),
@@ -53,6 +62,10 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
+          ...(replyToIdSource ? { replyToIdSource } : {}),
+          ...(params.replyRequesterSender
+            ? { replyRequesterSender: params.replyRequesterSender }
+            : {}),
         });
         // Post-send cache population (#47830): caching happens after each chunk is sent,
         // not before. The window between send completion and cache write is sub-millisecond;
@@ -71,6 +84,10 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
+          ...(replyToIdSource ? { replyToIdSource } : {}),
+          ...(params.replyRequesterSender
+            ? { replyRequesterSender: params.replyRequesterSender }
+            : {}),
         });
         sentMessageCache?.remember(scope, {
           text: sent.echoText ?? (sent.sentText || undefined),
@@ -87,13 +104,16 @@ export async function deliverReplies(params: {
 export function createIMessageEchoCachingSend(params: {
   client: IMessageRpcClient;
   accountId?: string;
+  replyRequesterSender?: string | null;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }): typeof sendMessageIMessage {
   return async (target, text, opts) => {
     const sanitizedText = sanitizeOutboundText(text);
+    const replyRequesterSender = opts.replyRequesterSender ?? params.replyRequesterSender;
     const sent = await sendMessageIMessage(target, sanitizedText, {
       ...opts,
       client: params.client,
+      ...(replyRequesterSender ? { replyRequesterSender } : {}),
     });
     const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
     params.sentMessageCache?.remember(scope, {

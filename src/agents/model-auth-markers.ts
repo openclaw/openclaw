@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { SecretRefSource } from "../config/types.secrets.js";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
@@ -57,12 +58,10 @@ export function listKnownNonSecretApiKeyMarkers(): string[] {
   knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
     ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
-      plugin.origin === "bundled"
-        ? normalizeTrimmedStringList(plugin.manifest.nonSecretAuthMarkers)
-        : [],
+      normalizeTrimmedStringList(plugin.manifest.nonSecretAuthMarkers),
     ),
   ]);
-  return [...knownNonSecretApiKeyMarkersCache];
+  return knownNonSecretApiKeyMarkersCache.slice();
 }
 
 export function isAwsSdkAuthMarker(value: string): boolean {
@@ -123,3 +122,7 @@ export function isNonSecretApiKeyMarker(
   // known env-var markers we intentionally persist for compatibility.
   return listKnownEnvApiKeyMarkers().has(trimmed);
 }
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  knownNonSecretApiKeyMarkersCache = undefined;
+});

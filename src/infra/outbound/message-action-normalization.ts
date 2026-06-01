@@ -10,6 +10,8 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
+export const MESSAGE_ACTION_INFERRED_TARGET_PARAM = "__openclawInferredTargetFromCurrentChannel";
+
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
@@ -17,6 +19,7 @@ export function normalizeMessageActionInput(params: {
   toolContext?: ChannelThreadingToolContext;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
+  delete normalizedArgs[MESSAGE_ACTION_INFERRED_TARGET_PARAM];
   const { action, toolContext } = params;
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =
@@ -44,6 +47,7 @@ export function normalizeMessageActionInput(params: {
     const inferredTarget = normalizeOptionalString(toolContext?.currentChannelId);
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
+      normalizedArgs[MESSAGE_ACTION_INFERRED_TARGET_PARAM] = true;
     }
   }
 

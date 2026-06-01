@@ -81,4 +81,54 @@ describe("listOpenClawPluginManifestMetadata", () => {
       { endpointClass: "openai-public", hosts: ["api.openai.com"] },
     ]);
   });
+
+  it("ignores disabled persisted plugin records", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const installedRoot = path.join(home, ".openclaw", "extensions", "disabled-marker-plugin");
+
+    writeJson(path.join(installedRoot, "openclaw.plugin.json"), {
+      id: "disabled-marker-plugin",
+      nonSecretAuthMarkers: ["disabled-plugin-marker"],
+    });
+    writePersistedInstalledPluginIndexSync(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "disabled-marker-plugin",
+            manifestPath: path.join(installedRoot, "openclaw.plugin.json"),
+            manifestHash: "disabled-marker-plugin",
+            rootDir: installedRoot,
+            origin: "global",
+            enabled: false,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+          },
+        ],
+        diagnostics: [],
+      },
+      { stateDir: path.join(home, ".openclaw") },
+    );
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_HOME: home,
+    });
+
+    expect(
+      records.find((record) => record.manifest.id === "disabled-marker-plugin"),
+    ).toBeUndefined();
+  });
 });

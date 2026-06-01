@@ -27,12 +27,15 @@ import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
+import { assertIMessageOutboundAllowed } from "./outbound-allowlist.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
+
+export { assertIMessageOutboundAllowed };
 
 const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
@@ -44,6 +47,9 @@ type IMessageSendOpts = {
   region?: string;
   accountId?: string;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
+  /** Trusted inbound sender for server-injected reply delivery; never source this from model params. */
+  replyRequesterSender?: string | null;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -845,7 +851,17 @@ export async function sendMessageIMessage(
     dbPath,
     remoteHost: account.config.remoteHost,
   });
+  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
+  await assertIMessageOutboundAllowed({
+    cfg,
+    account,
+    target,
+    replyRequesterSender:
+      opts.replyToIdSource === "implicit" && (opts.replyToId == null || resolvedReplyToId)
+        ? opts.replyRequesterSender
+        : undefined,
+  });
   const service =
     opts.service ??
     resolveTargetService(target) ??
@@ -899,7 +915,6 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
-  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));

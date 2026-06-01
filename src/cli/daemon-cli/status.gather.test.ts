@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortConnections } from "../../infra/ports.js";
+import type { PortConnections, PortUsage } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
@@ -34,7 +35,7 @@ const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) =
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
-const inspectPortUsage = vi.fn(async (port: number) => ({
+const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsage>>(async (port: number) => ({
   port,
   status: "free" as const,
   listeners: [],
@@ -52,7 +53,9 @@ const readGatewayRestartHandoffSync = vi.fn<
 >(() => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn<(_env?: NodeJS.ProcessEnv) => Promise<GatewayServiceRuntime>>(
+  async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }),
+);
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -451,6 +454,32 @@ describe("gatherDaemonStatus", () => {
     ).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
+  });
+
+  it("suppresses busy-port hints when all listeners belong to the running gateway pid", async () => {
+    serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 73614 });
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [
+        { pid: 73614, command: "node", address: "127.0.0.1:19001" },
+        { pid: 73614, command: "node", address: "[::1]:19001" },
+      ],
+      hints: [
+        "Another process is listening on this port.",
+        "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
+      ],
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.port?.status).toBe("busy");
+    expect(status.port?.listeners).toHaveLength(2);
+    expect(status.port?.hints).toEqual([]);
   });
 
   it("surfaces recent service restart handoffs only during deep status", async () => {

@@ -134,6 +134,30 @@ export function isExpectedGatewayListeners(listeners: PortListener[], port: numb
   );
 }
 
+export function isExpectedGatewayListenersForPid(
+  listeners: PortListener[],
+  port: number,
+  pid: number | undefined,
+): boolean {
+  if (!listeners.length || typeof pid !== "number" || !Number.isFinite(pid)) {
+    return false;
+  }
+  for (const listener of listeners) {
+    if (listener.pid !== pid || typeof listener.address !== "string") {
+      return false;
+    }
+    const parsedAddress = parseListenerAddress(listener.address);
+    if (
+      !parsedAddress ||
+      parsedAddress.port !== port ||
+      !isExpectedGatewayBindAddress(parsedAddress.host)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];

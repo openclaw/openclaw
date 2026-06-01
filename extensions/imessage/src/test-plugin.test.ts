@@ -153,6 +153,74 @@ describe("createIMessageTestPlugin", () => {
     ).toBe(true);
   });
 
+  it("routes handle-shaped chat identifiers as direct outbound sessions", () => {
+    const route = imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {} as never,
+      agentId: "agent-1",
+      accountId: "default",
+      target: "chat_identifier:+15552223333",
+    });
+
+    expect(route).toStrictEqual({
+      sessionKey: "agent:agent-1:main",
+      baseSessionKey: "agent:agent-1:main",
+      peer: { kind: "direct", id: "+15552223333" },
+      chatType: "direct",
+      from: "imessage:+15552223333",
+      to: "imessage:+15552223333",
+    });
+  });
+
+  it("routes SMS chat identifiers as direct outbound sessions", () => {
+    const route = imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {} as never,
+      agentId: "agent-1",
+      accountId: "default",
+      target: "chat_identifier:SMS;-;+15552223333",
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: "direct", id: "+15552223333" },
+      chatType: "direct",
+      from: "sms:+15552223333",
+      to: "sms:+15552223333",
+    });
+  });
+
+  it("routes direct chat GUIDs as direct outbound sessions", () => {
+    const route = imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {} as never,
+      agentId: "agent-1",
+      accountId: "default",
+      target: "chat_guid:iMessage;-;+15552223333",
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: "direct", id: "+15552223333" },
+      chatType: "direct",
+      from: "imessage:+15552223333",
+      to: "imessage:+15552223333",
+    });
+  });
+
+  it("routes opaque chat identifiers as group outbound sessions", () => {
+    const route = imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {} as never,
+      agentId: "agent-1",
+      accountId: "default",
+      target: "chat_identifier:team-thread",
+    });
+
+    expect(route).toStrictEqual({
+      sessionKey: "agent:agent-1:imessage:group:team-thread",
+      baseSessionKey: "agent:agent-1:imessage:group:team-thread",
+      peer: { kind: "group", id: "team-thread" },
+      chatType: "group",
+      from: "imessage:group:team-thread",
+      to: "chat_identifier:team-thread",
+    });
+  });
+
   it("backs declared durable final capabilities with delivery proofs", async () => {
     const outbound = requireOutbound();
     const sendText = requireOutboundSendText(outbound);

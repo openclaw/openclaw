@@ -673,7 +673,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             client: getActiveClient(),
             maxBytes: mediaMaxBytes,
             accountId: accountInfo.accountId,
-            ...(chatId ? { chatId } : {}),
           });
         },
         onReplyError: (err) => {
@@ -858,6 +857,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             imessage: createIMessageEchoCachingSend({
               client: getActiveClient(),
               accountId: accountInfo.accountId,
+              replyRequesterSender: decision.sender,
               sentMessageCache,
             }),
           },
@@ -877,6 +877,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime,
           maxBytes: mediaMaxBytes,
           textLimit,
+          replyRequesterSender: decision.sender,
           sentMessageCache,
         });
       },

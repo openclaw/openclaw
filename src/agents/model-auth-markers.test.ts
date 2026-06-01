@@ -92,6 +92,65 @@ describe("model auth markers", () => {
     expect(markers.has("ollama-local")).toBe(true);
   });
 
+  it("reads installed plugin-owned non-secret markers from manifests", async () => {
+    vi.doMock("../plugins/manifest-metadata-scan.js", () => ({
+      listOpenClawPluginManifestMetadata: () => [
+        {
+          pluginDir: "/tmp/installed-plugin",
+          origin: "global",
+          manifest: { nonSecretAuthMarkers: ["installed-plugin-marker"] },
+        },
+      ],
+    }));
+    vi.resetModules();
+
+    try {
+      const markersModule = await import("./model-auth-markers.js");
+      expect(markersModule.isNonSecretApiKeyMarker("installed-plugin-marker")).toBe(true);
+      expect(
+        new Set(markersModule.listKnownNonSecretApiKeyMarkers()).has("installed-plugin-marker"),
+      ).toBe(true);
+    } finally {
+      vi.doUnmock("../plugins/manifest-metadata-scan.js");
+      vi.resetModules();
+      await loadMarkerModules();
+    }
+  });
+
+  it("keeps plugin-owned non-secret markers stable until plugin metadata is refreshed", async () => {
+    let pluginMarkers = ["first-plugin-marker"];
+    vi.doMock("../plugins/manifest-metadata-scan.js", () => ({
+      listOpenClawPluginManifestMetadata: () => [
+        {
+          pluginDir: "/tmp/installed-plugin",
+          origin: "global",
+          manifest: { nonSecretAuthMarkers: pluginMarkers },
+        },
+      ],
+    }));
+    vi.resetModules();
+
+    try {
+      const markersModule = await import("./model-auth-markers.js");
+      const lifecycleModule = await import("../plugins/plugin-metadata-lifecycle.js");
+      expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(true);
+
+      pluginMarkers = ["second-plugin-marker"];
+
+      expect(markersModule.isNonSecretApiKeyMarker("second-plugin-marker")).toBe(false);
+      expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(true);
+
+      lifecycleModule.clearPluginMetadataLifecycleCaches();
+
+      expect(markersModule.isNonSecretApiKeyMarker("second-plugin-marker")).toBe(true);
+      expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(false);
+    } finally {
+      vi.doUnmock("../plugins/manifest-metadata-scan.js");
+      vi.resetModules();
+      await loadMarkerModules();
+    }
+  });
+
   it("does not treat removed provider markers as active auth markers", () => {
     expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
   });

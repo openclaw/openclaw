@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
 const monitorMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendMock = vi.hoisted(() => ({
+  sendMessageIMessage: vi.fn(async () => ({ messageId: "m1" })),
+}));
 
 vi.mock("./monitor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor.js")>()),
   monitorIMessageProvider: monitorMock,
 }));
+vi.mock("./send.js", () => ({
+  sendMessageIMessage: sendMock.sendMessageIMessage,
+}));
 
-const { startIMessageGatewayAccount } = await import("./channel.runtime.js");
+const { sendIMessageOutbound, startIMessageGatewayAccount } = await import("./channel.runtime.js");
 const { resolveIMessageAccount } = await import("./accounts.js");
 
 function makeCtx(params: {
@@ -104,5 +110,30 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
 
     await startIMessageGatewayAccount(ctx);
     expect(monitorMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sendIMessageOutbound", () => {
+  it("forwards trusted requester sender context with reply sends", async () => {
+    sendMock.sendMessageIMessage.mockClear();
+
+    await sendIMessageOutbound({
+      cfg: { channels: { imessage: {} } },
+      to: "chat_id:42",
+      text: "hello",
+      replyToId: "reply-1",
+      replyToIdSource: "implicit",
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+      "chat_id:42",
+      "hello",
+      expect.objectContaining({
+        replyToId: "reply-1",
+        replyToIdSource: "implicit",
+        replyRequesterSender: "+15551230000",
+      }),
+    );
   });
 });

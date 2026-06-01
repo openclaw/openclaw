@@ -205,6 +205,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
+  requesterSenderId?: string | null;
   gatewayClientScopes?: readonly string[];
   onPlatformSendStart?: () => Promise<void>;
 };
@@ -580,6 +581,7 @@ function createChannelOutboundContextBase(
     forceDocument: params.forceDocument,
     deps: params.deps,
     silent: params.silent,
+    requesterSenderId: params.requesterSenderId,
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
@@ -1445,6 +1447,7 @@ async function deliverOutboundPayloadsCore(
       forceDocument: params.forceDocument,
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
+      requesterSenderId: params.session?.requesterSenderId,
       gatewayClientScopes: params.gatewayClientScopes,
       ...(params.onPlatformSendStart ? { onPlatformSendStart: params.onPlatformSendStart } : {}),
     });

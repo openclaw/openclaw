@@ -25,6 +25,7 @@ import {
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { isExpectedGatewayListenersForPid } from "../../infra/ports-format.js";
 import {
   formatPortDiagnostics,
   inspectPortConnections,
@@ -450,6 +451,22 @@ function toPortStatusSummary(
   };
 }
 
+function suppressKnownGatewayPortHints(
+  status: PortStatusSummary | undefined,
+  runtime: GatewayServiceRuntime | undefined,
+): PortStatusSummary | undefined {
+  if (status?.status !== "busy" || status.hints.length === 0 || runtime?.status !== "running") {
+    return status;
+  }
+  if (!isExpectedGatewayListenersForPid(status.listeners, status.port, runtime.pid)) {
+    return status;
+  }
+  return {
+    ...status,
+    hints: [],
+  };
+}
+
 async function inspectDaemonPortStatuses(params: {
   daemonPort: number;
   cliPort: number;
@@ -537,6 +554,7 @@ export async function gatherDaemonStatus(
     daemonPort,
     cliPort,
   });
+  const daemonPortStatus = suppressKnownGatewayPortHints(portStatus, runtime);
   const establishedClients = await inspectEstablishedGatewayClients({
     daemonPort,
     deep: opts.deep,
@@ -633,7 +651,12 @@ export async function gatherDaemonStatus(
     : undefined;
 
   let lastError: string | undefined;
-  if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
+  if (
+    loaded &&
+    runtime?.status === "running" &&
+    daemonPortStatus &&
+    daemonPortStatus.status !== "busy"
+  ) {
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
@@ -664,7 +687,7 @@ export async function gatherDaemonStatus(
           }
         : {}),
     },
-    port: portStatus,
+    port: daemonPortStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     ...(establishedClients ? { connections: establishedClients } : {}),
     lastError,
