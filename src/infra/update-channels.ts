@@ -1,7 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseComparableSemver } from "./semver-compare.js";
 
+/** Release channel used for package registry and self-update decisions. */
 export type UpdateChannel = "stable" | "beta" | "dev";
+/** Provenance for the selected update channel shown in status/debug output. */
 export type UpdateChannelSource =
   | "config"
   | "git-tag"
