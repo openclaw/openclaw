@@ -36,7 +36,9 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 type WebchatAudioEmbeddingOptions = {
+  /** Allowed local roots for trusted local audio file embedding. */
   localRoots?: readonly string[];
+  /** Observer for denied local audio access attempts. */
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 
@@ -249,6 +251,7 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
   return blocks;
 }
 
+/** Builds a webchat assistant message from reply payload text plus embeddable audio/image media. */
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAssistantMediaOptions,
