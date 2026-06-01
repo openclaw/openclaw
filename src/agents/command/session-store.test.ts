@@ -71,18 +71,18 @@ vi.mock("../../utils/usage-format.js", () => ({
 
 vi.mock("../../config/sessions.js", async () => {
   const fsSync = await import("node:fs");
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
   const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
     try {
-      return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
+      return JSON.parse(await fsLocal.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
     } catch {
       return {};
     }
   };
   const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+    await fsLocal.mkdir(pathLocal.dirname(storePath), { recursive: true });
+    await fsLocal.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
   };
   sessionStoreMocks.updateSessionStore.mockImplementation(
     async <T>(
@@ -129,7 +129,7 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
-    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
     rewriteSessionFileForNewSessionId: (params: {
       sessionFile?: string;
       previousSessionId: string;
@@ -137,7 +137,7 @@ vi.mock("../../config/sessions.js", async () => {
     }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
     resolveSessionFilePathOptions: (params: unknown) => params,
     resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
-      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
+      entry?.sessionFile ?? pathLocal.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 
@@ -337,7 +337,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           durationMs: 1,
           agentMeta: {
             sessionId,
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.5",
             contextTokens: 400_000,
           },
@@ -350,7 +350,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "openai-codex",
+        defaultProvider: "openai",
         defaultModel: "gpt-5.5",
         result,
       });
@@ -475,6 +475,82 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
       expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
+    });
+  });
+
+  it("clears stale CLI bindings when a successful run reports an unflushed replacement", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {
+                command: "claude",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
+      const sessionId = "test-openclaw-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "stale-cli-session",
+              authEpoch: "old-epoch",
+            },
+            "codex-cli": {
+              sessionId: "codex-session",
+            },
+          },
+          cliSessionIds: {
+            "claude-cli": "stale-cli-session",
+            "codex-cli": "codex-session",
+          },
+          claudeCliSessionId: "stale-cli-session",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            clearCliSessionBinding: true,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        contextTokensOverride: 200_000,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-sonnet-4-6",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session",
+      });
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("codex-session");
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath, { skipCache: true });
+      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
     });
   });
 

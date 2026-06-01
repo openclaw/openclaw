@@ -1,5 +1,9 @@
+import {
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "../../packages/normalization-core/src/number-coercion.js";
 import type { Model } from "../llm/types.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
@@ -19,6 +23,11 @@ export type OAuthPrompt = {
   message: string;
   placeholder?: string;
   allowEmpty?: boolean;
+};
+
+export type OAuthAuthorizationInput = {
+  code?: string;
+  state?: string;
 };
 
 export type OAuthAuthInfo = {
@@ -213,6 +222,55 @@ export function generateOAuthState(): string {
   return base64urlEncode(stateBytes);
 }
 
+export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput {
+  const value = input.trim();
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const url = new URL(value);
+    return {
+      code: url.searchParams.get("code") ?? undefined,
+      state: url.searchParams.get("state") ?? undefined,
+    };
+  } catch {
+    // Plain pasted code or query-string input.
+  }
+
+  if (value.includes("#")) {
+    const [code, state] = value.split("#", 2);
+    return { code, state };
+  }
+
+  if (value.includes("code=")) {
+    const params = new URLSearchParams(value);
+    return {
+      code: params.get("code") ?? undefined,
+      state: params.get("state") ?? undefined,
+    };
+  }
+
+  return { code: value };
+}
+
+export function resolveOAuthTokenLifetimeMs(value: unknown): number | undefined {
+  return positiveSecondsToSafeMilliseconds(value);
+}
+
+export function resolveOAuthTokenExpiresAt(
+  value: unknown,
+  options: { nowMs?: number; refreshSkewMs?: number } = {},
+): number | undefined {
+  const lifetimeMs = resolveOAuthTokenLifetimeMs(value);
+  return lifetimeMs === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(lifetimeMs, {
+        nowMs: options.nowMs,
+        bufferMs: options.refreshSkewMs,
+      });
+}
+
 export function createOAuthLoginCancelledError(): Error {
   return new Error("Login cancelled");
 }
@@ -253,9 +311,9 @@ export function withOAuthLoginAbort<T>(
         cleanup();
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         cleanup();
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -270,4 +328,18 @@ export function buildOAuthRequestSignal(options: {
     return timeoutSignal;
   }
   return AbortSignal.any([options.signal, timeoutSignal]);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

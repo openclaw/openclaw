@@ -1,17 +1,16 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   isCliRuntimeModelBackendForProvider,
   listCliRuntimeModelBackendBindings,
   listCliRuntimeProviderIds,
+  resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { normalizeProviderId } from "./provider-id.js";
-
-const RUNTIME_COMPARISON_PROVIDER_ALIASES = new Map<string, string>([["openai-codex", "openai"]]);
 
 type LegacyRuntimeModelProviderAlias = {
   /** Legacy provider id that encoded the runtime in the model ref. */
@@ -144,16 +143,14 @@ function canonicalizeRuntimeAliasProvider(
   provider: string,
   options: RuntimeAliasComparisonOptions = {},
 ): string {
-  const normalized = normalizeProviderId(provider);
   return (
-    RUNTIME_COMPARISON_PROVIDER_ALIASES.get(normalized) ??
-    listCliRuntimeModelBackendBindings({
+    resolveCliRuntimeCanonicalProvider({
+      runtime: provider,
       config: options.config,
       env: options.env,
       includeSetupRegistry:
         options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
-    }).find((binding) => binding.runtime === normalized)?.provider ??
-    provider
+    }) ?? provider
   );
 }
 
@@ -174,11 +171,26 @@ function normalizeRuntimeModelRefForComparison(
   return model ? `${canonicalProvider}/${model}` : canonicalProvider;
 }
 
+function normalizeRuntimeModelRefWithoutAlias(raw: string): string {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash >= trimmed.length - 1) {
+    return normalizeProviderId(trimmed);
+  }
+  const provider = trimmed.slice(0, slash).trim();
+  const model = trimmed.slice(slash + 1).trim();
+  const normalizedProvider = normalizeProviderId(provider);
+  return model ? `${normalizedProvider}/${model}` : normalizedProvider;
+}
+
 export function areRuntimeModelRefsEquivalent(
   left: string,
   right: string,
   options: RuntimeAliasComparisonOptions = {},
 ): boolean {
+  if (normalizeRuntimeModelRefWithoutAlias(left) === normalizeRuntimeModelRefWithoutAlias(right)) {
+    return true;
+  }
   return (
     normalizeRuntimeModelRefForComparison(left, options) ===
     normalizeRuntimeModelRefForComparison(right, options)

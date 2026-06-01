@@ -8,6 +8,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
+import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -15,6 +16,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
+  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -102,7 +104,10 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -117,7 +122,10 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -938,7 +946,10 @@ describe("before_tool_call requireApproval handling", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
+  async function runAbortDuringApprovalWait(options?: {
+    abortReason?: unknown;
+    onResolution?: ReturnType<typeof vi.fn>;
+  }) {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Abortable",
@@ -950,7 +961,7 @@ describe("before_tool_call requireApproval handling", () => {
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
     mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -1167,6 +1178,63 @@ describe("before_tool_call requireApproval handling", () => {
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
   });
 
+  it("reports trusted policy diagnostics through guarded readers", () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const registry = createEmptyPluginRegistry();
+    const unreadableIdPolicy: Record<string, unknown> = {
+      description: "synthetic trusted policy",
+      evaluate: () => undefined,
+    };
+    Object.defineProperty(unreadableIdPolicy, "id", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy id is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: unreadableIdPolicy as never,
+      },
+      {
+        pluginId: "mockplugin",
+        pluginName: "Mock Plugin",
+        source: "test",
+        policy: {
+          id: "mockpolicy",
+          description: "mock policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
+    try {
+      state = getBeforeToolCallPolicyDiagnosticState();
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+
+    expect(state).toEqual({
+      hasBeforeToolCallHook: false,
+      trustedToolPolicies: [
+        {
+          id: "fuzzplugin",
+          pluginId: "fuzzplugin",
+          pluginName: "Fuzz Plugin",
+        },
+        {
+          id: "mockpolicy",
+          pluginId: "mockplugin",
+          pluginName: "Mock Plugin",
+        },
+      ],
+    });
+  });
+
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const originalPatch = [
@@ -1258,6 +1326,38 @@ describe("before_tool_call requireApproval handling", () => {
     expect(waitCall[0]).toBe("plugin.approval.waitDecision");
     requireRecord(waitCall[1], "approval wait gateway client");
     expect(waitCall[2]).toEqual({ id: "server-id-1" });
+  });
+
+  it("caps oversized plugin approval timeouts before calling gateway", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Oversized timeout",
+        description: "Still valid gateway payload",
+        pluginId: "sage",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(false);
+    const requestCall = requireGatewayCall(0);
+    expect(requireRecord(requestCall[1], "approval request gateway client").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
+    );
+    expect(requireRecord(requestCall[2], "approval request params").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+    );
+    const waitCall = requireGatewayCall(1);
+    expect(requireRecord(waitCall[1], "approval wait gateway client").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
+    );
   });
 
   it("blocks on deny decision", async () => {
@@ -1401,6 +1501,13 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies non-Error abort reasons as run abort cancellation", async () => {
+    const result = await runAbortDuringApprovalWait({ abortReason: "sessions_yield" });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
   });
 
   it("removes abort listener after waitDecision resolves", async () => {

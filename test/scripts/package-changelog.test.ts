@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -163,6 +163,31 @@ Docs: https://docs.openclaw.ai
 
       await expect(restorePackageChangelog(root)).resolves.toBe(true);
       expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(cumulativeChangelog);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to restore stale backups over current changelog edits", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-package-changelog-"));
+    const backupPath = path.join(
+      root,
+      ".artifacts",
+      "package-changelog",
+      "CHANGELOG.md.prepack-backup",
+    );
+    const editedChangelog = cumulativeChangelog.replace("- Current fix.", "- Current fix edited.");
+    try {
+      writeFileSync(path.join(root, "package.json"), '{"version":"2026.5.28-beta.1"}\n', "utf8");
+      writeFileSync(path.join(root, "CHANGELOG.md"), editedChangelog, "utf8");
+      mkdirSync(path.dirname(backupPath), { recursive: true });
+      writeFileSync(backupPath, cumulativeChangelog, "utf8");
+
+      await expect(restorePackageChangelog(root)).rejects.toThrow(
+        "Refusing to restore packaged changelog backup",
+      );
+      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(editedChangelog);
+      expect(existsSync(backupPath)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

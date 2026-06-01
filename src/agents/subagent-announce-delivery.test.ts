@@ -41,17 +41,6 @@ function createGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeCallGateway;
 }
 
-function createGatewaySequenceMock(
-  responses: Record<string, unknown>[],
-): ReturnType<typeof vi.fn> & typeof runtimeCallGateway {
-  let index = 0;
-  return vi.fn(async () => {
-    const response = responses[Math.min(index, responses.length - 1)] ?? {};
-    index += 1;
-    return response;
-  }) as unknown as ReturnType<typeof vi.fn> & typeof runtimeCallGateway;
-}
-
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
 }
@@ -1215,6 +1204,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("directly delivers direct-message subagent text when the announce agent omits the result", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "TG88042_NO_REOUTPUT" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "TG88042_CHILD",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        content: "TG88042_CHILD",
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
   it("does not directly deliver failed subagent placeholder output", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -1245,6 +1284,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "visible_reply_missing",
       error: "completion agent did not produce a visible reply",
     });
     expect(sendMessage).not.toHaveBeenCalled();
@@ -1439,6 +1479,69 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectFinal: true,
       forceSyntheticClient: true,
       timeoutMs: 120_000,
+    });
+  });
+
+  it("does not require generated media delivery for no-target cron completion handoffs", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "cron saw generated media completion" }],
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      queueEmbeddedAgentMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "cron-run-session",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:cron:media-job:run:run-123",
+      targetRequesterSessionKey: "agent:main:cron:media-job:run:run-123",
+      triggerMessage: "image done",
+      steerMessage: "image done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-cron-media-no-target",
+      sourceTool: "image_generate",
+      sourceSessionKey: "image_generate:task-123",
+      sourceChannel: "internal",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "cron proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-cron-proof.png",
+          mediaUrls: ["/tmp/generated-cron-proof.png"],
+          replyInstruction: "Continue the cron job after the generated image is ready.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "cron-run-session",
+      "image done",
+      expect.objectContaining({
+        waitForTranscriptCommit: true,
+      }),
+    );
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      sessionKey: "agent:main:cron:media-job:run:run-123",
     });
   });
 
@@ -2025,6 +2128,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "none",
+      reason: "requester_abandoned",
       error: "requester session abandoned after timeout",
     });
     expect(result.phases).toEqual([
@@ -2032,6 +2136,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         phase: "direct-primary",
         delivered: false,
         path: "none",
+        reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
       }),
       expect.objectContaining({
@@ -3217,6 +3322,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     expectGatewayAgentParams(callGateway, {
@@ -4125,6 +4231,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
     });
   });
@@ -4176,14 +4283,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("keeps automatic final delivery for direct subagent completions", async () => {
+  it("requires message-tool delivery for direct subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {
-        payloads: [{ text: "The subagent is done." }],
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
       },
     });
+    const sendMessage = createSendMessageMock();
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
+      sendMessage,
       sourceTool: "subagent_announce",
       internalEvents: [
         {
@@ -4206,12 +4317,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expectGatewayAgentParams(callGateway, {
-      deliver: true,
+      deliver: false,
       channel: "discord",
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {

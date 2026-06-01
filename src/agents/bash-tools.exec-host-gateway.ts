@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
@@ -20,8 +22,6 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -605,17 +605,18 @@ export async function processGatewayAllowlist(
 
       const {
         baseDecision,
-        approvedByAsk: initialApprovedByAsk,
-        deniedReason: initialDeniedReason,
+        approvedByAsk: baseApprovedByAsk,
+        deniedReason: baseDeniedReason,
       } = createExecApprovalDecisionState({
         decision,
         askFallback,
       });
-      let approvedByAsk = initialApprovedByAsk;
-      let deniedReason = initialDeniedReason;
+      let approvedByAsk = baseApprovedByAsk;
+      let deniedReason = baseDeniedReason;
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
+          approvedByAsk = false;
           // Use a colon separator rather than nested parens so the
           // `Exec denied (gateway id=..., <deniedReason>): cmd` wire format
           // stays unambiguous for parsers that close on the first `):`.
@@ -643,13 +644,15 @@ export async function processGatewayAllowlist(
         }
       }
 
-      ({ approvedByAsk, deniedReason } = enforceStrictInlineEvalApprovalBoundary({
+      const strictBoundaryDecision = enforceStrictInlineEvalApprovalBoundary({
         baseDecision,
         approvedByAsk,
         deniedReason,
         requiresInlineEvalApproval,
         requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
-      }));
+      });
+      approvedByAsk = strictBoundaryDecision.approvedByAsk;
+      deniedReason = strictBoundaryDecision.deniedReason;
 
       if (
         !approvedByAsk &&
@@ -721,7 +724,7 @@ export async function processGatewayAllowlist(
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
-      let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
+      let run: Awaited<ReturnType<typeof runExecProcess>> | null;
       try {
         run = await runExecProcess({
           command: params.command,

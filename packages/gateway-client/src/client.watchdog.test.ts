@@ -82,13 +82,17 @@ describe("GatewayClient", () => {
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
     if (httpsServer) {
       httpsServer.closeAllConnections?.();
       httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        httpsServer?.close(() => resolve());
+      });
       httpsServer = null;
     }
   });
@@ -248,6 +252,39 @@ describe("GatewayClient", () => {
 
       await vi.advanceTimersByTimeAsync(35);
       expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized tick watchdog intervals before scheduling", () => {
+    vi.useFakeTimers();
+    try {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = new GatewayClient({
+        tickWatchMinIntervalMs: 5,
+      });
+      Object.assign(
+        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+        {
+          ws: {
+            readyState: WebSocket.OPEN,
+            send: vi.fn(),
+            close: vi.fn(),
+          },
+          tickIntervalMs: Number.MAX_SAFE_INTEGER,
+          lastTick: Date.now(),
+        },
+      );
+
+      (
+        client as unknown as {
+          startTickWatch: () => void;
+        }
+      ).startTickWatch();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+      client.stop();
     } finally {
       vi.useRealTimers();
     }

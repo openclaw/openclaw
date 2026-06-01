@@ -105,7 +105,28 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
     return false;
   }
   const changelogPath = path.join(cwd, CHANGELOG_PATH);
-  const backup = await readFile(backupPath, "utf8");
+  const [backup, current] = await Promise.all([
+    readFile(backupPath, "utf8"),
+    readFile(changelogPath, "utf8"),
+  ]);
+  if (current !== backup) {
+    const packageVersion = await readPackageVersion(cwd);
+    let expectedPackaged;
+    try {
+      expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Refusing to restore stale packaged changelog backup from ${BACKUP_PATH}: ${message}`,
+        { cause: error },
+      );
+    }
+    if (current !== expectedPackaged) {
+      throw new Error(
+        `Refusing to restore packaged changelog backup from ${BACKUP_PATH} because CHANGELOG.md has changed since the backup was written.`,
+      );
+    }
+  }
   await writeFile(changelogPath, backup, "utf8");
   await rm(backupPath, { force: true });
   return true;

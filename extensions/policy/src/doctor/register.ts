@@ -22,6 +22,13 @@ import {
 } from "../policy-state.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 
+let fsPromisesModulePromise: Promise<typeof import("node:fs/promises")> | null = null;
+
+const loadFsPromisesModule = async () => {
+  fsPromisesModulePromise ??= import("node:fs/promises");
+  return await fsPromisesModulePromise;
+};
+
 const CHECK_IDS = {
   policyAttestationMismatch: "policy/attestation-hash-mismatch",
   policyDeniedChannelProvider: "policy/channels-denied-provider",
@@ -1690,12 +1697,12 @@ export function policyContainerShapeFindings(
   if (sandboxFinding !== undefined) {
     return [sandboxFinding];
   }
-  const ingressFinding = ingressPolicyShapeFinding(policy.ingress, {
+  const ingressFindingValue = ingressPolicyShapeFinding(policy.ingress, {
     policyDocName,
     policyPath,
   });
-  if (ingressFinding !== undefined) {
-    return [ingressFinding];
+  if (ingressFindingValue !== undefined) {
+    return [ingressFindingValue];
   }
   const gatewayFinding = gatewayPolicyShapeFinding(policy.gateway, {
     policyDocName,
@@ -1985,15 +1992,15 @@ function scopedPolicyShapeFinding(
     if (sandboxFinding !== undefined) {
       return sandboxFinding;
     }
-    const ingressFinding = ingressPolicyShapeFinding(overlay.ingress, {
+    const ingressFindingLocal = ingressPolicyShapeFinding(overlay.ingress, {
       policyDocName: params.policyDocName,
       policyPath: params.policyPath,
       targetPrefix: `${targetPrefix}/ingress`,
       propertyPrefix: `scopes.${scopeName}.ingress`,
       allowSession: false,
     });
-    if (ingressFinding !== undefined) {
-      return ingressFinding;
+    if (ingressFindingLocal !== undefined) {
+      return ingressFindingLocal;
     }
   }
   return duplicateScopedPolicyFieldFinding(value, {
@@ -4379,10 +4386,10 @@ function bindHostLooksLikeContainerRuntimeSocket(value: string | undefined): boo
     return false;
   }
   const normalized = value.replaceAll("\\", "/").toLowerCase();
-  const basename = normalized.split("/").at(-1) ?? "";
+  const basenameLocal = normalized.split("/").at(-1) ?? "";
   return (
     CONTAINER_RUNTIME_SOCKET_PATHS.has(normalized) ||
-    CONTAINER_RUNTIME_SOCKET_BASENAMES.has(basename)
+    CONTAINER_RUNTIME_SOCKET_BASENAMES.has(basenameLocal)
   );
 }
 
@@ -5268,7 +5275,7 @@ async function readPolicyFile(
   const displayName = policyDisplayName(ctx);
   const path = resolveWorkspacePath(ctx, policyPathSetting(ctx));
   try {
-    const fs = await import("node:fs/promises");
+    const fs = await loadFsPromisesModule();
     return {
       raw: await fs.readFile(path, "utf-8"),
       path,
@@ -5289,7 +5296,7 @@ async function readWorkspaceFile(
 ): Promise<{ raw: string; path: string } | null> {
   const path = resolveWorkspacePath(ctx, fileName);
   try {
-    const fs = await import("node:fs/promises");
+    const fs = await loadFsPromisesModule();
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFound(err)) {
