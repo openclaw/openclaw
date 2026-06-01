@@ -208,6 +208,34 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
   });
 
+  it("can patch metadata without refreshing session activity", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+    const beforePatch = loadSessionEntry(scope);
+
+    await patchSessionEntry(
+      scope,
+      () => ({
+        model: "gpt-5.5",
+        updatedAt: 20,
+      }),
+      { preserveActivity: true },
+    );
+
+    expect(loadSessionEntry(scope)).toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-1",
+      updatedAt: beforePatch?.updatedAt,
+    });
+  });
+
   it("loads and appends transcript events through a session scope", async () => {
     const scope = {
       sessionFile: transcriptPath,
