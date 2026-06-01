@@ -43,7 +43,7 @@ export type DreamingShadowTrialScoreOptions = {
 };
 
 export type DreamingShadowTrialCandidateInput = {
-  id: string;
+  key: string;
   score: number;
 };
 
@@ -310,12 +310,12 @@ export function scoreDreamingShadowTrialCandidate<T extends DreamingShadowTrialC
 
 export function rankDreamingShadowTrialCandidates<T extends DreamingShadowTrialCandidateInput>(
   candidates: readonly T[],
-  reportsByCandidateId: ReadonlyMap<string, DreamingShadowTrialReport>,
+  reportsByCandidateKey: ReadonlyMap<string, DreamingShadowTrialReport>,
   options?: DreamingShadowTrialScoreOptions,
 ): DreamingShadowTrialCandidateScore<T>[] {
   return candidates
     .map((candidate) => {
-      const report = reportsByCandidateId.get(candidate.id);
+      const report = reportsByCandidateKey.get(candidate.key);
       if (!report) {
         const score = clampScore(candidate.score);
         return {

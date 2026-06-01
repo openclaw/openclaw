@@ -164,7 +164,7 @@ describe("dreaming shadow trial runner", () => {
       verdict: "helpful",
     });
 
-    const scored = scoreDreamingShadowTrialCandidate({ id: "candidate-a", score: 0.98 }, report);
+    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.98 }, report);
 
     expect(scored.scoreBeforeShadowTrial).toBe(0.98);
     expect(scored.shadowTrialScoreDelta).toBe(0.04);
@@ -181,7 +181,7 @@ describe("dreaming shadow trial runner", () => {
       verdict: "neutral",
     });
 
-    const scored = scoreDreamingShadowTrialCandidate({ id: "candidate-a", score: 0.79 }, report);
+    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.79 }, report);
 
     expect(scored.scoreBeforeShadowTrial).toBe(0.79);
     expect(scored.shadowTrialScoreDelta).toBe(0);
@@ -202,7 +202,7 @@ describe("dreaming shadow trial runner", () => {
       riskFlags: ["credential exposure"],
     });
 
-    const scored = scoreDreamingShadowTrialCandidate({ id: "candidate-a", score: 0.92 }, report);
+    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.92 }, report);
 
     expect(scored.scoreBeforeShadowTrial).toBe(0.92);
     expect(scored.scoreAfterShadowTrial).toBe(0);
@@ -227,17 +227,17 @@ describe("dreaming shadow trial runner", () => {
       reason: "The candidate would normalize credential exposure.",
       riskFlags: ["credential exposure"],
     });
-    const helpful = { id: "helpful", score: 0.74 };
-    const untested = { id: "untested", score: 0.76 };
-    const harmful = { id: "harmful", score: 0.99 };
+    const helpful = { key: "helpful", score: 0.74 };
+    const untested = { key: "untested", score: 0.76 };
+    const harmful = { key: "harmful", score: 0.99 };
     const reports = new Map([
-      [helpful.id, helpfulReport],
-      [harmful.id, harmfulReport],
+      [helpful.key, helpfulReport],
+      [harmful.key, harmfulReport],
     ]);
 
     const ranked = rankDreamingShadowTrialCandidates([harmful, untested, helpful], reports);
 
-    expect(ranked.map((entry) => entry.candidate.id)).toEqual(["helpful", "untested", "harmful"]);
+    expect(ranked.map((entry) => entry.candidate.key)).toEqual(["helpful", "untested", "harmful"]);
     expect(ranked[0]?.scoreAfterShadowTrial).toBe(0.78);
     expect(ranked[1]?.shadowTrialRiskFlags).toEqual(["not shadow-trialed"]);
     expect(ranked[1]?.shadowTrialEvidenceRefs).toEqual([]);
@@ -252,7 +252,7 @@ describe("dreaming shadow trial runner", () => {
       evidenceRefs: [],
     });
 
-    const scored = scoreDreamingShadowTrialCandidate({ id: "candidate-a", score: 0.7 }, report);
+    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.7 }, report);
 
     expect(report.riskFlags).toEqual([]);
     expect(report.evidenceRefs).toEqual([]);
