@@ -1351,7 +1351,9 @@ describe("dispatchReplyFromConfig", () => {
     const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
       | [
           {
+            originatingAccountId?: unknown;
             originatingChannel?: unknown;
+            originatingThreadId?: unknown;
             originatingTo?: unknown;
             shouldRouteToOriginating?: unknown;
           },
@@ -1418,6 +1420,8 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
     expect(replyDispatchCall?.[0]?.originatingChannel).toBe("feishu");
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
+    expect(replyDispatchCall?.[0]?.originatingAccountId).toBe("work");
+    expect(replyDispatchCall?.[0]?.originatingThreadId).toBe("thread:om_123");
   });
 
   it("routes exec-event replies using last route fields when delivery context is missing", async () => {

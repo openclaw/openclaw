@@ -1,10 +1,6 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 export type EffectiveReplyRouteContext = Pick<
@@ -51,7 +47,6 @@ export function resolveEffectiveReplyRoute(params: {
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&
     persistedDeliveryChannel &&
     persistedDeliveryChannel !== INTERNAL_MESSAGE_CHANNEL &&
-    isDeliverableMessageChannel(persistedDeliveryChannel) &&
     persistedDeliveryContext?.to
   ) {
     return {

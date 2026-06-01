@@ -95,6 +95,35 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
+  it("keeps plugin-owned external routes for runtime routability checks", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "customer-chat",
+            to: "conversation:123",
+            accountId: "workspace-a",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "customer-chat",
+      to: "conversation:123",
+      accountId: "workspace-a",
+      inheritedExternalRoute: true,
+    });
+  });
+
   it("keeps normal webchat turns on their live route", () => {
     expect(
       resolveEffectiveReplyRoute({
