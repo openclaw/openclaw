@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 
 const mocks = vi.hoisted(() => ({
   hookRunner: undefined as
@@ -117,6 +118,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       PLUGIN_SAFE: "yes",
       PATH: "/tmp/plugin-bin",
       NODE_OPTIONS: "--require /tmp/hook.js",
+      OPENCLAW_CLI: "0",
       "bad-key": "bad",
     });
 
@@ -156,6 +158,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       PLUGIN_SAFE: "yes",
     });
     expect(mocks.gatewayParams[0]?.env).not.toHaveProperty("NODE_OPTIONS");
+    expect(mocks.gatewayParams[0]?.env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(mocks.gatewayParams[0]?.env.PATH).not.toBe("/tmp/plugin-bin");
     expect(mocks.spawnInputs[0]?.env).toMatchObject({
       EXISTING: "plugin",
