@@ -5,6 +5,11 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
 import type { StreamFn } from "./runtime/index.js";
 
+/**
+ * Resolve and register the stream function for a concrete model. Provider
+ * plugin streams win, transport-aware built-ins are the fallback, and successful
+ * resolution updates the custom API registry for downstream runtime dispatch.
+ */
 export function registerProviderStreamForModel<TApi extends Api>(params: {
   model: Model<TApi>;
   cfg?: OpenClawConfig;
