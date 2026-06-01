@@ -1,10 +1,17 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import {
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+  OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+} from "../../context-engine/host-compat.js";
+import { registerContextEngine, resolveContextEngine } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
+import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
+  bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
 } from "./context-engine-lifecycle.js";
 
@@ -46,6 +53,12 @@ const sessionParams = {
   sessionKey: "agent:main",
   sessionFile: "sessions/main.jsonl",
 };
+
+let configuredProofEngineIdCounter = 0;
+function uniqueConfiguredProofEngineId() {
+  configuredProofEngineIdCounter += 1;
+  return `configured-runtime-settings-proof-${configuredProofEngineIdCounter}`;
+}
 
 describe("harness context engine lifecycle", () => {
   it("keeps hidden runtime-context custom messages out of assemble hooks", async () => {
@@ -106,6 +119,131 @@ describe("harness context engine lifecycle", () => {
         tokenBudget: 4096,
       },
     });
+  });
+
+  it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
+    const engineId = uniqueConfiguredProofEngineId();
+    const captured: Array<{
+      hook: "bootstrap" | "assemble" | "afterTurn" | "maintain" | "compact";
+      runtimeSettings?: ContextEngineRuntimeSettings;
+    }> = [];
+    const engine = createContextEngine({
+      info: { id: engineId, name: "Configured runtime settings proof engine" },
+      bootstrap: vi.fn(async (params) => {
+        captured.push({ hook: "bootstrap", runtimeSettings: params.runtimeSettings });
+        return { bootstrapped: true };
+      }),
+      assemble: vi.fn(async (params) => {
+        captured.push({ hook: "assemble", runtimeSettings: params.runtimeSettings });
+        return {
+          messages: params.messages,
+          estimatedTokens: 0,
+        };
+      }),
+      afterTurn: vi.fn(async (params) => {
+        captured.push({ hook: "afterTurn", runtimeSettings: params.runtimeSettings });
+      }),
+      maintain: vi.fn(async (params) => {
+        captured.push({ hook: "maintain", runtimeSettings: params.runtimeSettings });
+        return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+      }),
+      compact: vi.fn(async (params) => {
+        captured.push({ hook: "compact", runtimeSettings: params.runtimeSettings });
+        return { ok: true, compacted: false };
+      }),
+    });
+    registerContextEngine(engineId, () => engine);
+    const configuredEngine = await resolveContextEngine({
+      plugins: { slots: { contextEngine: engineId } },
+    });
+
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: true,
+      contextEngine: configuredEngine,
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      providerId: "openai",
+      requestedModelId: "openai/gpt-5.5",
+      modelId: "anthropic/claude-sonnet-4-6",
+      fallbackReason: "primary_provider_5xx",
+      warn: () => {},
+    });
+
+    await assembleHarnessContextEngine({
+      contextEngine: configuredEngine,
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [textMessage("user", "visible ask", 1)],
+      tokenBudget: 2048,
+      providerId: "openai",
+      requestedModelId: "openai/gpt-5.5",
+      modelId: "anthropic/claude-sonnet-4-6",
+      fallbackReason: "primary_provider_5xx",
+    });
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: configuredEngine,
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [
+        textMessage("user", "old ask", 1),
+        textMessage("assistant", "old answer", 2),
+        textMessage("user", "new ask", 3),
+        textMessage("assistant", "new answer", 4),
+      ],
+      prePromptMessageCount: 2,
+      tokenBudget: 2048,
+      providerId: "openai",
+      requestedModelId: "openai/gpt-5.5",
+      modelId: "anthropic/claude-sonnet-4-6",
+      fallbackReason: "primary_provider_5xx",
+      warn: () => {},
+    });
+
+    const compactRuntimeSettings = buildContextEngineRuntimeSettings({
+      contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      provider: "openai",
+      requestedModel: "openai/gpt-5.5",
+      resolvedModel: "anthropic/claude-sonnet-4-6",
+      tokenBudget: 2048,
+      fallbackReason: "primary_provider_5xx",
+    });
+    await compactContextEngineWithSafetyTimeout(
+      configuredEngine,
+      {
+        sessionId: sessionParams.sessionId,
+        sessionKey: sessionParams.sessionKey,
+        sessionFile: sessionParams.sessionFile,
+        tokenBudget: 2048,
+        runtimeSettings: compactRuntimeSettings,
+      },
+      100,
+    );
+
+    expect(new Set(captured.map((entry) => entry.hook))).toEqual(
+      new Set(["bootstrap", "assemble", "afterTurn", "maintain", "compact"]),
+    );
+    for (const entry of captured) {
+      expect(entry.runtimeSettings).toMatchObject({
+        schemaVersion: 1,
+        runtime: { mode: "fallback" },
+        model: {
+          requested: "openai/gpt-5.5",
+          resolved: "anthropic/claude-sonnet-4-6",
+          provider: "openai",
+          family: null,
+          fallbackActive: true,
+        },
+        diagnostics: {
+          fallbackReason: "primary_provider_5xx",
+        },
+      });
+    }
   });
 
   it("never derives model.family from the model id (defaults to null)", async () => {
