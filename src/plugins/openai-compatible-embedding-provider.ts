@@ -574,7 +574,9 @@ async function waitForOpenAICompatibleBatch(params: {
           error,
         )}; waiting ${delayMs}ms`,
       );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
       current = undefined;
       continue;
     }
@@ -609,7 +611,9 @@ async function waitForOpenAICompatibleBatch(params: {
         status,
       )}; waiting ${delayMs}ms`,
     );
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     current = undefined;
   }
 }

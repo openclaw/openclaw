@@ -234,7 +234,9 @@ async function waitForOpenAiBatch(params: {
           error,
         )}; waiting ${delayMs}ms`,
       );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
       current = undefined;
       continue;
     }
@@ -267,7 +269,9 @@ async function waitForOpenAiBatch(params: {
         status,
       )}; waiting ${delayMs}ms`,
     );
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     current = undefined;
   }
 }
