@@ -324,6 +324,44 @@ describe("workboard controller", () => {
     expect(state.editingCardId).toBeNull();
   });
 
+  it("keeps edit-modal status saves from being rewritten by stale lifecycle sync", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = { ...sampleCard, sessionKey: sampleSession.key };
+    state.loaded = true;
+    state.cards = [linked];
+    state.draftOpen = true;
+    state.editingCardId = linked.id;
+    state.draftTitle = linked.title;
+    state.draftNotes = linked.notes ?? "";
+    state.draftStatus = "running";
+    state.draftPriority = linked.priority;
+    state.draftLabels = linked.labels.join(", ");
+    state.draftAgentId = linked.agentId ?? "";
+    state.draftSessionKey = linked.sessionKey ?? "";
+    const saved = { ...linked, status: "running", updatedAt: 2 } satisfies WorkboardCard;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        return { card: saved };
+      }
+      return {};
+    });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 3 }],
+    });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: "card-1",
+      patch: expect.objectContaining({ status: "running" }),
+    });
+    expect(state.cards[0]).toMatchObject({ status: "running" });
+  });
+
   it("adds operator notes to a selected detail card without opening the edit draft", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1339,6 +1377,94 @@ describe("workboard controller", () => {
       status: "blocked",
       position: 2000,
     });
+  });
+
+  it("keeps dragged status changes from being rewritten by stale lifecycle sync", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = { ...sampleCard, sessionKey: sampleSession.key };
+    const moved = { ...linked, status: "running", position: 2000, updatedAt: 2 };
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "workboard.cards.move") {
+        return { card: moved };
+      }
+      if (method === "workboard.cards.update") {
+        return { card: { ...moved, status: "review", updatedAt: 3 } };
+      }
+      return {};
+    });
+
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: "card-1",
+      status: "running",
+      position: 2000,
+    });
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 3 }],
+    });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: "card-1",
+      status: "running",
+      position: 2000,
+    });
+    expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
+  });
+
+  it("keeps same-status moves following linked session lifecycle sync", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleSession.key,
+      position: 1000,
+    } satisfies WorkboardCard;
+    const moved = { ...linked, position: 2000, updatedAt: 2 } satisfies WorkboardCard;
+    const completed = { ...moved, status: "review", updatedAt: 3 } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "workboard.cards.move") {
+        return { card: moved };
+      }
+      if (method === "workboard.cards.update") {
+        return { card: completed };
+      }
+      return {};
+    });
+
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: "card-1",
+      status: "running",
+      position: 2000,
+    });
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 3 }],
+    });
+
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.move", {
+      id: "card-1",
+      status: "running",
+      position: 2000,
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: expect.objectContaining({ status: "review" }),
+    });
+    expect(state.cards[0]).toMatchObject({ status: "review", position: 2000 });
   });
 
   it("removes stale dependency links from local cards after delete", async () => {

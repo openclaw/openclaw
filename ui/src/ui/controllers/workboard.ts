@@ -352,6 +352,7 @@ export type WorkboardUiState = {
   busyCardId: string | null;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
+  manualStatusCardIds: Set<string>;
   capturingSessionKeys: Set<string>;
 };
 
@@ -396,6 +397,7 @@ function createDefaultState(): WorkboardUiState {
     busyCardId: null,
     draggedCardId: null,
     syncingCardIds: new Set(),
+    manualStatusCardIds: new Set(),
     capturingSessionKeys: new Set(),
   };
 }
@@ -1297,6 +1299,21 @@ function shouldSyncCardStatus(card: WorkboardCard, targetStatus: WorkboardStatus
   return false;
 }
 
+function shouldPreserveManualCardStatus(
+  state: WorkboardUiState,
+  card: WorkboardCard,
+  targetStatus: WorkboardStatus | undefined,
+) {
+  if (!state.manualStatusCardIds.has(card.id)) {
+    return false;
+  }
+  if (!targetStatus || targetStatus === card.status) {
+    state.manualStatusCardIds.delete(card.id);
+    return false;
+  }
+  return true;
+}
+
 function executionStatusForLifecycle(
   lifecycle: WorkboardLifecycle,
 ): WorkboardExecutionStatus | undefined {
@@ -1570,7 +1587,10 @@ export async function syncWorkboardLifecycle(params: {
     );
     const executionStatus = executionStatusForLifecycle(lifecycle);
     const patch: Record<string, unknown> = {};
-    if (shouldSyncCardStatus(card, lifecycle.targetStatus)) {
+    if (
+      !shouldPreserveManualCardStatus(state, card, lifecycle.targetStatus) &&
+      shouldSyncCardStatus(card, lifecycle.targetStatus)
+    ) {
       patch.status = lifecycle.targetStatus;
     }
     if (shouldSyncExecutionStatus(card, executionStatus)) {
@@ -1665,13 +1685,18 @@ export async function saveWorkboardCardDraft(params: {
   }
   state.loading = true;
   state.error = null;
+  const previousStatus = state.cards.find((card) => card.id === state.editingCardId)?.status;
   params.requestUpdate?.();
   try {
     const payload = await params.client.request("workboard.cards.update", {
       id: state.editingCardId,
       patch: draftPayload(state),
     });
-    replaceCard(state, normalizeCardPayload(payload));
+    const card = normalizeCardPayload(payload);
+    replaceCard(state, card);
+    if (previousStatus && card.status !== previousStatus) {
+      state.manualStatusCardIds.add(card.id);
+    }
     resetDraftState(state);
   } catch (error) {
     state.error = formatError(error);
@@ -1730,6 +1755,7 @@ export async function moveWorkboardCard(params: {
   }
   state.busyCardId = params.cardId;
   state.error = null;
+  const previousStatus = state.cards.find((card) => card.id === params.cardId)?.status;
   params.requestUpdate?.();
   try {
     const payload = await params.client.request("workboard.cards.move", {
@@ -1737,7 +1763,11 @@ export async function moveWorkboardCard(params: {
       status: params.status,
       position: params.position,
     });
-    replaceCard(state, normalizeCardPayload(payload));
+    const card = normalizeCardPayload(payload);
+    replaceCard(state, card);
+    if (previousStatus && card.status !== previousStatus) {
+      state.manualStatusCardIds.add(params.cardId);
+    }
   } catch (error) {
     state.error = formatError(error);
   } finally {

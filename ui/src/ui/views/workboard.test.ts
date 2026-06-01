@@ -1016,7 +1016,7 @@ describe("renderWorkboard", () => {
     title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
     const priority = [
       ...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select"),
-    ].at(1);
+    ].find((select) => [...select.options].some((option) => option.value === "urgent"));
     priority!.value = "high";
     priority!.dispatchEvent(new Event("change", { bubbles: true }));
     container
@@ -1032,6 +1032,23 @@ describe("renderWorkboard", () => {
         priority: "high",
       }),
     });
+    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
+
+    render(renderWorkboard(props), container);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    container
+      .querySelector<HTMLButtonElement>('button[title="Edit card"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Renamed",
+    );
+    expect(
+      [...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select")].find(
+        (select) => [...select.options].some((option) => option.value === "urgent"),
+      )?.value,
+    ).toBe("high");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {

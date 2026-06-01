@@ -470,7 +470,10 @@ function renderCardModal(props: WorkboardProps) {
               }}
             >
               ${state.statuses.map(
-                (status) => html`<option value=${status}>${formatStatusLabel(status)}</option>`,
+                (status) =>
+                  html`<option value=${status} ?selected=${state.draftStatus === status}>
+                    ${formatStatusLabel(status)}
+                  </option>`,
               )}
             </select>
           </label>
@@ -486,7 +489,10 @@ function renderCardModal(props: WorkboardProps) {
               }}
             >
               ${WORKBOARD_PRIORITIES.map(
-                (priority) => html`<option value=${priority}>${priority}</option>`,
+                (priority) =>
+                  html`<option value=${priority} ?selected=${state.draftPriority === priority}>
+                    ${priority}
+                  </option>`,
               )}
             </select>
           </label>
@@ -500,10 +506,12 @@ function renderCardModal(props: WorkboardProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              <option value="">${t("workboard.defaultAgent")}</option>
+              <option value="" ?selected=${!state.draftAgentId}>
+                ${t("workboard.defaultAgent")}
+              </option>
               ${agents.map(
                 (agent) =>
-                  html`<option value=${agent.id}>
+                  html`<option value=${agent.id} ?selected=${state.draftAgentId === agent.id}>
                     ${agent.name ?? agent.identity?.name ?? agent.id}
                   </option>`,
               )}
@@ -519,10 +527,15 @@ function renderCardModal(props: WorkboardProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              <option value="">${t("workboard.noLinkedSession")}</option>
+              <option value="" ?selected=${!state.draftSessionKey}>
+                ${t("workboard.noLinkedSession")}
+              </option>
               ${sessions.map(
                 (session) =>
-                  html`<option value=${session.key}>
+                  html`<option
+                    value=${session.key}
+                    ?selected=${state.draftSessionKey === session.key}
+                  >
                     ${session.displayName ?? session.label ?? session.key}
                   </option>`,
               )}
