@@ -57,7 +57,8 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
       (changedPath) =>
         changedPath.startsWith("agents.list.") ||
         changedPath.startsWith("agents.defaults.models.") ||
-        changedPath.startsWith("models."),
+        changedPath.startsWith("models.") ||
+        changedPath.startsWith("plugins."),
     );
     const restartReasons = changedPaths.filter((changedPath) => !hotReasons.includes(changedPath));
     return {
@@ -3518,6 +3519,23 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps plugin entry config writes restart-backed when reload metadata is absent", async () => {
+      const resolved: OpenClawConfig = {
+        plugins: {
+          entries: {
+            canvas: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "plugins.entries.canvas.enabled", "false"]);
+
+      expectLogIncludes("Updated plugins.entries.canvas.enabled");
       expectLogIncludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
     });

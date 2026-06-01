@@ -1001,8 +1001,15 @@ const RESTART_HINT = "Restart the gateway to apply.";
 const HOT_RELOAD_HINT = "Change will apply without restarting the gateway.";
 const NO_RELOAD_HINT = "No gateway restart needed.";
 
+function isPluginEntryConfigPath(path: string): boolean {
+  return path === "plugins.entries" || path.startsWith("plugins.entries.");
+}
+
 function configApplyHintForPaths(paths: string[]): string {
   if (paths.length === 0) {
+    return RESTART_HINT;
+  }
+  if (paths.some(isPluginEntryConfigPath)) {
     return RESTART_HINT;
   }
   const plan = buildGatewayReloadPlan(paths);
