@@ -1769,10 +1769,10 @@ export const dispatchTelegramMessage = async ({
                         info.kind === "block" &&
                         !reply.hasMedia &&
                         !hasExecApprovalPayload(effectivePayload) &&
-                        Boolean(answerLane.stream);
+                        answerLane.hasStreamedMessage;
 
                       if (skipTextOnlyBlock) {
-                        blockDelivered = blockDelivered || answerLane.hasStreamedMessage;
+                        blockDelivered = true;
                         continue;
                       }
 

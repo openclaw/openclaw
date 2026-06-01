@@ -764,6 +764,27 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
+  it("does not resend chunks retained while stopping a long streamed final", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+    answer.stop.mockImplementation(async () => {
+      harness.lanes.answer.activeChunkIndex = 1;
+    });
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("Hello world again");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " again" });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps inline buttons on the current chunk of an already-streamed long final", async () => {
     const buttons = [[{ text: "OK", callback_data: "ok" }]];
     const fullAnswer = "Hello world again";

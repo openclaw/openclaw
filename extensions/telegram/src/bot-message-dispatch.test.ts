@@ -3574,7 +3574,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("does not drop the first chunk of a long final after a generic lane rotation", async () => {
-    setNoAbort();
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -3598,7 +3597,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("does not suppress text-only blocks as delivered when answer draft is inactive", async () => {
-    setNoAbort();
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "forced block" }, { kind: "block" });

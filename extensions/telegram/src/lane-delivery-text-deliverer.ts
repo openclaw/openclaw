@@ -277,7 +277,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         ? compactChunks(params.splitFinalTextForStream?.(text) ?? [])
         : [text];
 
-    const activeChunkIndex = Math.min(lane.activeChunkIndex ?? 0, Math.max(0, chunks.length - 1));
+    const clampActiveChunkIndex = () =>
+      Math.min(lane.activeChunkIndex ?? 0, Math.max(0, chunks.length - 1));
+    const activeChunkIndex = clampActiveChunkIndex();
     const firstChunk = chunks[activeChunkIndex];
     const remainingChunks = chunks.slice(activeChunkIndex + 1);
 
@@ -397,7 +399,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       lane.finalized = true;
       params.markDelivered();
       return result("preview-finalized", {
-        content: text,
+        content: previewText,
         promptContextContent: previewText,
         messageId,
         buttonsAttached,
@@ -415,6 +417,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     } else {
       await params.flushDraftLane(lane);
     }
+    const activeChunkIndexAfterStop = isFinal ? clampActiveChunkIndex() : activeChunkIndex;
+    const remainingChunksAfterStop = chunks.slice(activeChunkIndexAfterStop + 1);
 
     const messageId = stream.messageId();
     if (typeof messageId !== "number") {
@@ -458,7 +462,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
 
     if (isFinal) {
       lane.finalized = true;
-      for (const chunk of remainingChunks) {
+      for (const chunk of remainingChunksAfterStop) {
         if (chunk.trim().length === 0) {
           continue;
         }
