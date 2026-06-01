@@ -29,6 +29,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { recordGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
@@ -385,7 +386,10 @@ async function probeGatewayHealthz(params: {
       },
       (res) => {
         res.resume();
-        resolve(typeof res.statusCode === "number" && res.statusCode < 500);
+        // Only 200 counts as healthy. The previous `< 500` admitted 503 from a
+        // gateway that is mid-shutdown but still bound to the port; lock recovery
+        // then deferred to that zombie and left the supervisor unable to relaunch.
+        resolve(res.statusCode === 200);
       },
     );
     req.once("timeout", () => {
@@ -452,6 +456,18 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       }
 
       const elapsedMs = now() - startedAt;
+      // Probe came back unhealthy while the lock is held. Either the previous
+      // gateway is mid-shutdown (now returns 503 from /healthz thanks to the
+      // shutting-down flag) or it is a zombie that lost the close path but
+      // kept the HTTP listener. Either way, log the detection so the next
+      // supervisor cycle can be correlated in OTel/Loki.
+      recordGatewayRestartTrace("gateway.preflight.zombie_detected", elapsedMs, [
+        ["supervisor", supervisor],
+        ["port", params.port],
+      ]);
+      params.log.warn(
+        `gateway.preflight.zombie_detected supervisor=${supervisor} port=${params.port}; lock held but /healthz reported unhealthy (likely zombie or draining)`,
+      );
       if (elapsedMs >= timeoutMs) {
         throw new GatewayLockError(
           `gateway already running under ${supervisor}; existing gateway did not become healthy after ${timeoutMs}ms`,
@@ -881,6 +897,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
 
 export const testing = {
   normalizeGatewayHealthProbeHost,
+  probeGatewayHealthz,
   resolveGatewayLockErrorExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
