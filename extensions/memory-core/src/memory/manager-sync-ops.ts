@@ -1786,6 +1786,13 @@ export abstract class MemoryManagerSyncOps {
       (params?.force && !hasTargetSessionFiles) ||
       needsInitialIndex ||
       needsExplicitIdentityReindex;
+    if (indexIdentity.status !== "valid" && !needsFullReindex) {
+      this.dirty = true;
+      if (hasTargetSessionFiles || this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      }
+      return;
+    }
     if (!needsFullReindex) {
       const targetedSessionSync = await runMemoryTargetedSessionSync({
         hasSessionSource: this.sources.has("sessions"),
@@ -1853,7 +1860,7 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        if (params?.force && !hasTargetSessionFiles) {
+        if (needsFullReindex && !hasTargetSessionFiles) {
           await this.runSafeReindex({
             reason: params?.reason ?? "fallback",
             force: true,

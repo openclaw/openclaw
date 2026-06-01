@@ -443,6 +443,7 @@ describe("memory index", () => {
       );
       await nextManager.sync({ reason: "watch" });
 
+      expect(embedBatchCalls).toBe(0);
       const stillPausedResults = await nextManager.search("alpha");
       expect(stillPausedResults).toStrictEqual([]);
       expect(nextManager.status().dirty).toBe(true);
@@ -717,9 +718,11 @@ describe("memory index", () => {
       const nextManager = await getFreshManager(nextCfg);
       try {
         expect(nextManager.status().dirty).toBe(true);
+        embedBatchCalls = 0;
 
         await nextManager.sync({ reason: "test", sessionFiles: [sessionFile] });
 
+        expect(embedBatchCalls).toBe(0);
         expect(nextManager.status().dirty).toBe(true);
         expect(nextManager.status().custom?.indexIdentity).toEqual({
           status: "mismatched",
@@ -1302,6 +1305,59 @@ describe("memory index", () => {
         }
       ).provider?.id,
     ).toBe("local");
+  });
+
+  it("rebuilds with fallback provider during explicit identity repair", async () => {
+    const dbPath = path.join(workspaceDir, "index-cli-fallback-identity-repair.sqlite");
+    const oldCfg = createCfg({
+      storePath: dbPath,
+      model: "old-embed",
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    const cfg = createCfg({
+      storePath: dbPath,
+      model: "new-embed",
+      fallback: "fallback-provider",
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      expect(manager.status().dirty).toBe(true);
+      const fields = manager as unknown as {
+        providerInitialized: boolean;
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      };
+      fields.providerInitialized = true;
+      fields.provider = {
+        id: "mock",
+        model: "new-embed",
+        embedQuery: async () => {
+          throw createLocalWorkerExitError();
+        },
+        embedBatch: async () => {
+          throw createLocalWorkerExitError();
+        },
+        close: async () => {},
+      };
+
+      await manager.sync({ reason: "cli" });
+
+      expect(manager.status().dirty).toBe(false);
+      expect(manager.status().provider).toBe("fallback-provider");
+      expect(manager.status().model).toBe("fallback-provider-embed");
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      await expect(manager.search("alpha")).resolves.not.toStrictEqual([]);
+    } finally {
+      await manager.close?.();
+    }
   });
 
   it("activates configured fallback after probe-time local degradation", async () => {
