@@ -146,4 +146,63 @@ describe("prepareSessionManagerForRun", () => {
     );
     expect(JSON.parse(assistantLine ?? "{}")).toEqual(assistantEntry);
   });
+
+  it("does not truncate an existing transcript with a corrupted header", async () => {
+    const sessionFile = await makeTempFile();
+    const originalTranscript =
+      [
+        '{"type":"session","id":"broken"',
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-27T00:00:01.000Z",
+          message: { role: "user", content: "persisted prompt" },
+        }),
+      ].join("\n") + "\n";
+    await fs.writeFile(sessionFile, originalTranscript, "utf-8");
+    const sessionManager = {
+      sessionId: "fresh-session",
+      cwd: "/srv/openclaw/main",
+      flushed: true,
+      fileEntries: [
+        {
+          type: "session",
+          id: "fresh-session",
+          cwd: "/srv/openclaw/main",
+        },
+        {
+          type: "message",
+          message: { role: "user" },
+        },
+      ],
+      byId: new Map([["user-1", {}]]),
+      labelsById: new Map(),
+      leafId: "user-1",
+    };
+
+    await expect(
+      prepareSessionManagerForRun({
+        sessionManager,
+        sessionFile,
+        hadSessionFile: true,
+        sessionId: "new-session",
+        cwd: "/tmp/task-repo",
+      }),
+    ).rejects.toThrow("Refusing to reset session transcript with unreadable header");
+
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe(originalTranscript);
+    expect(sessionManager.fileEntries).toEqual([
+      {
+        type: "session",
+        id: "fresh-session",
+        cwd: "/srv/openclaw/main",
+      },
+      {
+        type: "message",
+        message: { role: "user" },
+      },
+    ]);
+    expect(sessionManager.flushed).toBe(true);
+  });
 });
