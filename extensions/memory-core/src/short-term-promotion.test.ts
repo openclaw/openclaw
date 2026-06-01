@@ -2235,6 +2235,57 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not add heading context to ordinary list-item rehydration", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## Model routing",
+        "- Keep Xiaomi Mimo as the low-cost default.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 4,
+            score: 0.91,
+            snippet: "Keep Xiaomi Mimo as the low-cost default.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "Keep Xiaomi Mimo as the low-cost default.",
+      );
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).not.toContain("Model routing: Keep Xiaomi");
+    });
+  });
+
   it("rehydrates capped heading-prefixed list snippets from the live note", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const longBody = `Keep Xiaomi Mimo as the low-cost default ${"route ".repeat(80)}`.trim();

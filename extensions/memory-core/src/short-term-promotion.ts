@@ -1672,6 +1672,17 @@ function buildListMarkerFreeMatchSnippet(
   return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
 }
 
+function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
+  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
+    return false;
+  }
+  const bodyIndex = targetSnippet.indexOf(bodySnippet);
+  if (bodyIndex <= 0) {
+    return false;
+  }
+  return targetSnippet.slice(0, bodyIndex).trimEnd().endsWith(":");
+}
+
 function compareCandidateWindow(
   targetSnippet: string,
   windowSnippet: string,
@@ -1755,8 +1766,13 @@ function relocateCandidateRange(
       if (!bestComparison.matched) {
         continue;
       }
-      const matchedSnippet =
-        useListMarkerFree || useListMarkerFreeContext ? listMarkerFreeMatchSnippet : snippet;
+      const matchedSnippet = useListMarkerFreeContext
+        ? listMarkerFreeMatchSnippet
+        : useListMarkerFree
+          ? targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
+            ? listMarkerFreeMatchSnippet
+            : listMarkerFreeSnippet
+          : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
