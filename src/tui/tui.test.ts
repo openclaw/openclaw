@@ -101,13 +101,13 @@ describe("canSubmitTuiChatMessage", () => {
     ).toBe(true);
   });
 
-  it("blocks gateway submit while a run is active", () => {
+  it("allows gateway submit while a run is active so queue policy can handle it", () => {
     expect(
       canSubmitTuiChatMessage({
         local: false,
         activeChatRunId: "run-active",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("allows gateway stop text while a run is active", () => {

@@ -867,19 +867,25 @@ describe("tui command handlers", () => {
     expect(state.pendingChatRunId).toEqual(expect.any(String));
   });
 
-  it("blocks gateway slash prompts while a run is active", async () => {
-    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+  it("sends gateway slash prompts while a run is active so queue policy can handle them", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness({
       activeChatRunId: "run-active",
       activityStatus: "streaming",
     });
 
     await handleCommand("/context detail");
 
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addUser).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith(
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, {
+      message: "/context detail",
+      sessionKey: "agent:main:main",
+    });
+    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(state.pendingChatRunId).toEqual(expect.any(String));
   });
 
   it("routes slash stop to the abort path instead of queueing a chat send", async () => {
@@ -955,19 +961,35 @@ describe("tui command handlers", () => {
     );
   });
 
-  it("blocks gateway sends while the current run is finishing", async () => {
-    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+  it("sends gateway prompts while the current run is finishing", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness({
       activeChatRunId: "run-active",
       activityStatus: "finishing context",
     });
 
     await handleCommand("/context detail");
 
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addUser).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith(
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(state.pendingChatRunId).toEqual(expect.any(String));
+  });
+
+  it("preserves the active run if a queued gateway send fails", async () => {
+    const { handleCommand, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      sendChat: vi.fn().mockRejectedValue(new Error("gateway down")),
+    });
+
+    await handleCommand("queue this next");
+
+    expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
   });
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {

@@ -726,12 +726,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await abortActive({ preferActive: true });
       return;
     }
-    if (
-      !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
-    ) {
+    if (!isBtw && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
       tui.requestRender();
       return;
@@ -792,16 +787,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
-        forgetLocalRunId?.(state.activeChatRunId);
-      }
       if (!isBtw) {
         forgetLocalRunId?.(runId);
       }
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
-        state.activeChatRunId = null;
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
       if (!isBtw) {
