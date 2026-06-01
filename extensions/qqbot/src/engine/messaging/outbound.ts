@@ -34,6 +34,7 @@ export {
 } from "./outbound-media-send.js";
 
 import type { GatewayAccount } from "../types.js";
+import { formatQqbotNotConfiguredError } from "../errors.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
@@ -274,7 +275,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return { channel: "qqbot", error: formatQqbotNotConfiguredError() };
   }
 
   try {
@@ -311,7 +312,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return { channel: "qqbot", error: formatQqbotNotConfiguredError() };
   }
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };

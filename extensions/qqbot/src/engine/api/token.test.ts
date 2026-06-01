@@ -77,6 +77,17 @@ describe("QQBot token manager", () => {
     );
   });
 
+  it("adds setup guidance when the access token response omits the token", async () => {
+    mockGuardedTokenResponse('{"code":40001,"message":"invalid app secret"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(new TokenManager().getAccessToken("app-id", "secret")).rejects.toThrow(
+      /Failed to get QQBot access token.*QQBOT_APP_ID.*QQBOT_CLIENT_SECRET.*https:\/\/q\.qq\.com\/.*https:\/\/docs\.openclaw\.ai\/channels\/qqbot.*invalid app secret/,
+    );
+  });
+
   it("does not cache access tokens forever when expires_in is unsafe", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));

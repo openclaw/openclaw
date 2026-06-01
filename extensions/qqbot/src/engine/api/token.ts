@@ -13,6 +13,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatQqbotTokenError, formatQqbotTokenNetworkError } from "../errors.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -266,7 +267,7 @@ export class TokenManager {
       release = guarded.release;
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
-      throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
+      throw new Error(formatQqbotTokenNetworkError(formatErrorMessage(err)), {
         cause: err,
       });
     }
@@ -296,7 +297,7 @@ export class TokenManager {
       }
 
       if (!data.access_token) {
-        throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+        throw new Error(formatQqbotTokenError(JSON.stringify(data)));
       }
 
       const nowMs = asDateTimestampMs(Date.now());
