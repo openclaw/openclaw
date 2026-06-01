@@ -278,14 +278,19 @@ jobs:
     needs: build
     runs-on: [self-hosted, macOS, ARM64, rockie]
     timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
     env:
       API_URL: ${{ secrets.ROCKIELAB_API_URL }}
       ADMIN_TOKEN: ${{ secrets.ROCKIELAB_ADMIN_TOKEN }}
       API_PASSWORD: ${{ secrets.ROCKIELAB_API_PASSWORD }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       IMAGE_TAG: ghcr.io/saml212/rockielab-runtime-multitenant:${{ github.sha }}
       ROLLOUT_ARTIFACT_DIR: .artifacts/runtime-rollout
       ROLLOUT_MAX_ATTEMPTS: "5"
       ROLLOUT_CURL_MAX_TIME: "180"
+      ROLLOUT_FALLBACK_AFTER_TRANSIENTS: "2"
     steps:
       - name: Preflight — required secrets present
         id: preflight
@@ -295,6 +300,7 @@ jobs:
           [ -z "$API_URL" ] && missing="$missing ROCKIELAB_API_URL"
           [ -z "$ADMIN_TOKEN" ] && missing="$missing ROCKIELAB_ADMIN_TOKEN"
           [ -z "$API_PASSWORD" ] && missing="$missing ROCKIELAB_API_PASSWORD"
+          [ -z "$FLY_API_TOKEN" ] && missing="$missing FLY_API_TOKEN"
           if [ -n "$missing" ]; then
             echo "::warning::Skipping cross-tenant rollout. Missing secrets on saml212/platform-runtime:$missing"
             echo "skipped=true" >> $GITHUB_OUTPUT
@@ -308,6 +314,7 @@ jobs:
               echo "ROCKIELAB_API_URL: full https url of the api host (e.g. \`https://api.rockielab.com\`)"
               echo "ROCKIELAB_ADMIN_TOKEN: must match the api host's env"
               echo "ROCKIELAB_API_PASSWORD: must match OPEN_NOTEBOOK_PASSWORD on the api host"
+              echo "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback after Cloudflare 524s"
             } >> $GITHUB_STEP_SUMMARY
             {
               echo "# Cross-tenant rollout skipped"
@@ -329,208 +336,15 @@ jobs:
             echo "skipped=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Checkout rollout script
+        uses: actions/checkout@v4
+        if: steps.preflight.outputs.skipped == 'false'
+        with:
+          fetch-depth: 1
+
       - name: Roll every tenant to the new image SHA
         if: steps.preflight.outputs.skipped == 'false'
-        run: |
-          # Strip any trailing slash on API_URL.
-          mkdir -p "$ROLLOUT_ARTIFACT_DIR"
-          base="${API_URL%/}"
-          rollout_url="$base/api/admin/tenants/rollout?image=$(printf '%s' "$IMAGE_TAG" | jq -sRr @uri)"
-          summary_md="$ROLLOUT_ARTIFACT_DIR/rollout-summary.md"
-          summary_json="$ROLLOUT_ARTIFACT_DIR/rollout-summary.json"
-          attempts_jsonl="$ROLLOUT_ARTIFACT_DIR/attempts.jsonl"
-          final_response_json="$ROLLOUT_ARTIFACT_DIR/final-response.json"
-          final_response_body="$ROLLOUT_ARTIFACT_DIR/final-response.txt"
-          : > "$attempts_jsonl"
-
-          echo "POST $base/api/admin/tenants/rollout?image=$IMAGE_TAG"
-
-          is_transient_rollout_error() {
-            case "$1" in
-              000|520|521|522|523|524) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          response_codes=()
-          retry_count=0
-          attempt=1
-          max_attempts="$ROLLOUT_MAX_ATTEMPTS"
-          backoff_seconds=5
-          final_result="failed"
-          final_code="000"
-          curl_exit=0
-          final_response_file=""
-
-          while [ "$attempt" -le "$max_attempts" ]; do
-            response_file=$(mktemp)
-            set +e
-            code=$(curl -sS -o "$response_file" -w "%{http_code}" \
-              --connect-timeout 10 \
-              --max-time "$ROLLOUT_CURL_MAX_TIME" \
-              -X POST \
-              -H "X-Admin-Token: $ADMIN_TOKEN" \
-              -H "Authorization: Bearer $API_PASSWORD" \
-              -H "Accept: application/json" \
-              "$rollout_url")
-            curl_exit=$?
-            set -e
-
-            if [ "$curl_exit" -ne 0 ] || [ -z "$code" ]; then
-              code="000"
-            fi
-            response_codes+=("$code")
-            final_code="$code"
-            final_response_file="$response_file"
-
-            retryable=false
-            if is_transient_rollout_error "$code"; then
-              retryable=true
-            fi
-
-            jq -n \
-              --arg attempt "$attempt" \
-              --arg code "$code" \
-              --arg curl_exit "$curl_exit" \
-              --arg retryable "$retryable" \
-              --rawfile body "$response_file" \
-              '{
-                attempt: ($attempt | tonumber),
-                response_code: $code,
-                curl_exit: ($curl_exit | tonumber),
-                retryable: ($retryable == "true"),
-                response_body: $body
-              }' >> "$attempts_jsonl"
-
-            echo "attempt $attempt response code: $code curl exit: $curl_exit"
-            echo "--- response body ---"
-            cat "$response_file" | jq . 2>/dev/null || cat "$response_file"
-            echo "--- end body ---"
-
-            if [ "$code" = "200" ]; then
-              final_result="succeeded"
-              break
-            fi
-
-            if [ "$retryable" != "true" ]; then
-              echo "::error::rollout endpoint returned non-retryable HTTP $code"
-              final_result="failed-non-retryable"
-              break
-            fi
-
-            if [ "$attempt" -ge "$max_attempts" ]; then
-              echo "::error::rollout endpoint still returned transient HTTP $code after $attempt attempt(s)"
-              final_result="failed-after-retries"
-              break
-            fi
-
-            retry_count=$((retry_count + 1))
-            echo "::warning::Transient rollout error HTTP $code on attempt $attempt; retrying in ${backoff_seconds}s."
-            sleep "$backoff_seconds"
-            backoff_seconds=$((backoff_seconds * 2))
-            if [ "$backoff_seconds" -gt 60 ]; then
-              backoff_seconds=60
-            fi
-            attempt=$((attempt + 1))
-          done
-
-          cp "$final_response_file" "$final_response_body"
-          if jq . "$final_response_file" >/dev/null 2>&1; then
-            jq . "$final_response_file" > "$final_response_json"
-          fi
-
-          codes_csv=$(IFS=,; echo "${response_codes[*]}")
-          updated=0
-          skipped=0
-          failed=0
-          total=0
-          if [ "$final_result" = "succeeded" ]; then
-            updated=$(jq -r '.summary.updated // 0' "$final_response_file")
-            skipped=$(jq -r '.summary.skipped // 0' "$final_response_file")
-            failed=$(jq -r '.summary.failed // 0' "$final_response_file")
-            total=$(jq -r '.summary.total // 0' "$final_response_file")
-          fi
-
-          jq -n \
-            --arg image "$IMAGE_TAG" \
-            --arg final_result "$final_result" \
-            --arg final_code "$final_code" \
-            --arg response_codes "$codes_csv" \
-            --arg retry_count "$retry_count" \
-            --arg updated "$updated" \
-            --arg skipped "$skipped" \
-            --arg failed "$failed" \
-            --arg total "$total" \
-            --slurpfile attempts "$attempts_jsonl" \
-            '{
-              image: $image,
-              image_sha: ($image | split(":") | last),
-              response_codes: ($response_codes | split(",") | map(select(. != ""))),
-              retry_count: ($retry_count | tonumber),
-              final_result: $final_result,
-              final_response_code: $final_code,
-              buckets: {
-                updated: ($updated | tonumber),
-                skipped: ($skipped | tonumber),
-                failed: ($failed | tonumber),
-                total: ($total | tonumber)
-              },
-              attempts: $attempts
-            }' > "$summary_json"
-
-          {
-            echo "## Cross-tenant rollout"
-            echo ""
-            echo "Image: \`$IMAGE_TAG\`"
-            echo "Image SHA: \`$GITHUB_SHA\`"
-            echo ""
-            echo "- final result: $final_result"
-            echo "- final response code: $final_code"
-            echo "- response codes: $codes_csv"
-            echo "- retries: $retry_count"
-            echo ""
-            echo "- updated: $updated"
-            echo "- skipped (already on target): $skipped"
-            echo "- failed: $failed"
-            echo "- total tenants seen: $total"
-            if [ "$final_result" = "succeeded" ] && [ "$failed" -gt "0" ]; then
-              echo ""
-              echo "### Failures"
-              echo ""
-              jq -r '.failed[]' "$final_response_file" | while read tid; do
-                err=$(jq -r ".error_details[\"$tid\"]" "$final_response_file")
-                echo "- \`$tid\`: $err"
-              done
-            fi
-            if [ "$final_result" != "succeeded" ]; then
-              echo ""
-              echo "### Final response body"
-              echo ""
-              echo '```text'
-              cat "$final_response_file"
-              echo '```'
-              echo ""
-              echo "### Manual single-tenant recovery"
-              echo ""
-              echo '```bash'
-              echo 'curl -sS -X POST \'
-              echo '  -H "X-Admin-Token: $ROCKIELAB_ADMIN_TOKEN" \'
-              echo '  -H "Authorization: Bearer $ROCKIELAB_API_PASSWORD" \'
-              echo '  -H "Accept: application/json" \'
-              echo "  \"${base}/api/tenants/<tenant-id>/image\" \\"
-              echo "  -d '{\"image\":\"$IMAGE_TAG\"}'"
-              echo '```'
-            fi
-          } | tee "$summary_md" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$final_result" != "succeeded" ]; then
-            echo "::error::Cross-tenant rollout did not succeed; see runtime-rollout-summary artifact."
-            exit 1
-          fi
-
-          if [ "$(jq -r '.summary.failed // 0' "$final_response_file")" -gt "0" ]; then
-            echo "::warning::Some tenants failed to roll forward — see summary."
-          fi
+        run: node scripts/runtime-rollout.mjs
 
       - name: Upload rollout summary artifact
         if: always()
