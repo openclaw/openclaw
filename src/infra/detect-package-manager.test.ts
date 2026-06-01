@@ -29,6 +29,18 @@ describe("detectPackageManager", () => {
     );
   });
 
+  it("treats npm shrinkwrap as the install manager when packageManager is build-time pnpm", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
   it.each([
     {
       name: "uses bun.lock",

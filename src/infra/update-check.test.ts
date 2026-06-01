@@ -194,6 +194,21 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkDepsStatus", () => {
+  it("uses npm shrinkwrap as the npm package lockfile marker", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-npm-" }, async (base) => {
+      const shrinkwrapPath = path.join(base, "npm-shrinkwrap.json");
+      await fs.writeFile(shrinkwrapPath, "{}", "utf8");
+      await fs.mkdir(path.join(base, "node_modules"), { recursive: true });
+
+      await expect(checkDepsStatus({ root: base, manager: "npm" })).resolves.toMatchObject({
+        manager: "npm",
+        status: "ok",
+        lockfilePath: shrinkwrapPath,
+        markerPath: path.join(base, "node_modules"),
+      });
+    });
+  });
+
   it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
     await withTempDir({ prefix: "openclaw-update-check-" }, async (base) => {
       await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
