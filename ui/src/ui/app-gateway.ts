@@ -574,9 +574,20 @@ function canRefreshActiveTabBeforeAgents(host: GatewayHost): boolean {
     return false;
   }
   if (isUiGlobalSessionKey(host.sessionKey)) {
-    return Boolean(
-      host.assistantAgentId || (!host.agentsList?.defaultId && resolveFreshDefaultAgentId(host)),
-    );
+    const freshDefaultAgentId = resolveFreshDefaultAgentId(host);
+    if (!freshDefaultAgentId) {
+      return false;
+    }
+    const carriedAgentId = host.assistantAgentId
+      ? normalizeAgentId(host.assistantAgentId)
+      : undefined;
+    if (carriedAgentId && carriedAgentId !== freshDefaultAgentId) {
+      return false;
+    }
+    const cachedDefaultAgentId = host.agentsList?.defaultId
+      ? normalizeAgentId(host.agentsList.defaultId)
+      : undefined;
+    return !cachedDefaultAgentId || cachedDefaultAgentId === freshDefaultAgentId;
   }
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (!parsed) {

@@ -336,6 +336,7 @@ describe("connectGateway chat load startup work", () => {
       };
     });
     host.sessionKey = "global";
+    host.assistantAgentId = "old-default";
     host.agentsList = {
       defaultId: "old-default",
       mainKey: "main",
