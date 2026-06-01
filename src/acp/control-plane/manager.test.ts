@@ -304,7 +304,7 @@ describe("AcpSessionManager", () => {
       text: "hello",
       mode: "prompt",
       requestId: "turn-end-success",
-      onBeforeTurnSaveHook: vi.fn(),
+      onBeforeTurnSaveHook: vi.fn(() => ({ saveOutcome: "saved" as const })),
     });
 
     await vi.waitFor(() => {
@@ -333,6 +333,97 @@ describe("AcpSessionManager", () => {
           sessionKey: "agent:codex:acp:session-1",
           success: true,
           saveOutcome: "saved",
+          turnSuccess: true,
+          durationMs: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
+  it("emits skipped agent:turn:save when no save callback is provided", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const saveHandler = vi.fn();
+    registerInternalHook("agent:turn:save", saveHandler);
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-save-no-callback",
+    });
+
+    await vi.waitFor(() => {
+      expect(saveHandler).toHaveBeenCalledTimes(1);
+    });
+
+    expect(saveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent",
+        action: "turn:save",
+        sessionKey: "agent:codex:acp:session-1",
+        context: expect.objectContaining({
+          sessionKey: "agent:codex:acp:session-1",
+          success: false,
+          saveOutcome: "skipped",
+          saveSkipReason: "no_save_callback",
+          turnSuccess: true,
+          durationMs: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
+  it("emits skipped agent:turn:save when the save callback returns no evidence", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const saveHandler = vi.fn();
+    registerInternalHook("agent:turn:save", saveHandler);
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-save-no-evidence",
+      onBeforeTurnSaveHook: (() => undefined) as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(saveHandler).toHaveBeenCalledTimes(1);
+    });
+
+    expect(saveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent",
+        action: "turn:save",
+        sessionKey: "agent:codex:acp:session-1",
+        context: expect.objectContaining({
+          sessionKey: "agent:codex:acp:session-1",
+          success: false,
+          saveOutcome: "skipped",
+          saveSkipReason: "no_save_evidence",
           turnSuccess: true,
           durationMs: expect.any(Number),
         }),

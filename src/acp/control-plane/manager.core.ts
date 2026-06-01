@@ -426,7 +426,7 @@ export class AcpSessionManager {
     errorCode?: AcpRuntimeError["code"];
     beforeSaveHook?: (
       context: AcpTurnCompletionHookContext,
-    ) => Promise<AcpTurnSaveHookResult | boolean | void> | AcpTurnSaveHookResult | boolean | void;
+    ) => Promise<AcpTurnSaveHookResult | false | void> | AcpTurnSaveHookResult | false | void;
   }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
@@ -443,16 +443,22 @@ export class AcpSessionManager {
       durationMs,
       ...(params.errorCode ? { errorCode: params.errorCode } : {}),
     } satisfies AcpTurnCompletionHookContext;
-    this.emitTurnEndHook(context);
-    if (!params.beforeSaveHook) {
-      return;
-    }
     const saveContextBase = {
       sessionKey: params.sessionKey,
       turnSuccess: context.success,
       durationMs,
       ...(params.errorCode ? { turnErrorCode: params.errorCode } : {}),
     };
+    this.emitTurnEndHook(context);
+    if (!params.beforeSaveHook) {
+      this.emitTurnSaveHook({
+        ...saveContextBase,
+        success: false,
+        saveOutcome: "skipped",
+        saveSkipReason: "no_save_callback",
+      });
+      return;
+    }
     try {
       const beforeSaveResult = await params.beforeSaveHook(context);
       const saveOutcome = this.normalizeTurnSaveHookResult(beforeSaveResult);
@@ -481,6 +487,9 @@ export class AcpSessionManager {
     if (result === false) {
       return { saveOutcome: "skipped", saveSkipReason: "declined" };
     }
+    if (result === undefined) {
+      return { saveOutcome: "skipped", saveSkipReason: "no_save_evidence" };
+    }
     if (result && typeof result === "object") {
       if (result.saveOutcome === "saved") {
         return { saveOutcome: "saved" };
@@ -496,7 +505,7 @@ export class AcpSessionManager {
       }
       throw new Error("invalid ACP turn save outcome");
     }
-    return { saveOutcome: "saved" };
+    throw new Error("invalid ACP turn save outcome");
   }
 
   private emitTurnEndHook(context: AcpTurnCompletionHookContext): void {
