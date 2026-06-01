@@ -252,6 +252,7 @@ type MockNpmPackage = {
   skipLockfileEntry?: boolean;
   packArchivePath?: string;
   packTarballName?: string;
+  viewFailure?: string;
 };
 
 function writeNpmRootPackageLock(params: {
@@ -393,6 +394,16 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
       }
       const viewPackage = viewPackagesByArgv.get(argvKey);
       if (viewPackage) {
+        if (viewPackage.viewFailure) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: viewPackage.viewFailure,
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+          };
+        }
         return successfulSpawn(
           JSON.stringify({
             name: viewPackage.packageName,
@@ -663,9 +674,8 @@ describe("installPluginFromNpmSpec", () => {
     const { archivePath, calls, dependencySpec, npmRoot, result, stagedArchiveContents } =
       npmPackArchiveInstallCase;
 
-    expect(result.ok).toBe(true);
     if (!result.ok) {
-      return;
+      throw new Error(result.error);
     }
     expect(result.pluginId).toBe("pack-demo");
     expect(result.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, "@openclaw/pack-demo"));
@@ -825,7 +835,7 @@ describe("installPluginFromNpmSpec", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
-      return;
+      throw new Error(result.error);
     }
     expect(result.pluginId).toBe("voice-call");
     expect(result.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, "@openclaw/voice-call"));
@@ -865,6 +875,400 @@ describe("installPluginFromNpmSpec", () => {
       await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
     expect(manifest.dependencies?.["mutable-plugin"]).toBe("1.2.3");
+  });
+
+  it("fails closed when update finds a newer user-pinned managed dependency", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@martian-engineering/lossless-claw";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            [packageName]: "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName,
+      version: "0.11.2",
+      pluginId: "lossless-claw",
+    });
+    writeNpmRootPackageLock({
+      npmRoot: npmProjectRoot,
+      dependencies: {
+        [packageName]: "0.11.2",
+      },
+      packages: [
+        {
+          packageName,
+          version: "0.11.2",
+          npmRoot,
+          pluginId: "lossless-claw",
+        },
+      ],
+    });
+    mockNpmViewAndInstall({
+      spec: `${packageName}@0.10.0`,
+      packageName,
+      version: "0.10.0",
+      pluginId: "lossless-claw",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@0.10.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(
+      `Managed plugin dependency conflict for ${packageName}: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0.`,
+    );
+    expect(result.error).toContain("Non-interactive update is refusing to choose automatically.");
+    expect(result.error).toContain("Use the release-managed version, keep the user pin explicitly");
+    const installCalls = runCommandWithTimeoutMock.mock.calls.filter((call) =>
+      isManagedNpmInstallCommand(call[0]),
+    );
+    expect(installCalls).toHaveLength(0);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.[packageName]).toBe("0.11.2");
+  });
+
+  it("fails closed during dry-run when update finds a newer user-pinned managed dependency", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@martian-engineering/lossless-claw";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            [packageName]: "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    mockNpmViewAndInstall({
+      spec: `${packageName}@0.10.0`,
+      packageName,
+      version: "0.10.0",
+      pluginId: "lossless-claw",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@0.10.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      dryRun: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(
+      `Managed plugin dependency conflict for ${packageName}: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0.`,
+    );
+    const installCalls = runCommandWithTimeoutMock.mock.calls.filter((call) =>
+      isManagedNpmInstallCommand(call[0]),
+    );
+    expect(installCalls).toHaveLength(0);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.[packageName]).toBe("0.11.2");
+  });
+
+  it("fails closed for a newer user pin even when the installed package is missing", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@martian-engineering/lossless-claw";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            [packageName]: "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    mockNpmViewAndInstall({
+      spec: `${packageName}@0.10.0`,
+      packageName,
+      version: "0.10.0",
+      pluginId: "lossless-claw",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@0.10.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(
+      `Managed plugin dependency conflict for ${packageName}: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0.`,
+    );
+    const installCalls = runCommandWithTimeoutMock.mock.calls.filter((call) =>
+      isManagedNpmInstallCommand(call[0]),
+    );
+    expect(installCalls).toHaveLength(0);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.[packageName]).toBe("0.11.2");
+  });
+
+  it("fails closed when lockfile and node_modules disagree under a newer user pin", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@martian-engineering/lossless-claw";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            [packageName]: "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName,
+      version: "0.10.0",
+      pluginId: "lossless-claw",
+    });
+    writeNpmRootPackageLock({
+      npmRoot: npmProjectRoot,
+      dependencies: {
+        [packageName]: "0.11.2",
+      },
+      packages: [
+        {
+          packageName,
+          version: "0.11.2",
+          npmRoot,
+          pluginId: "lossless-claw",
+        },
+      ],
+    });
+    mockNpmViewAndInstall({
+      spec: `${packageName}@0.10.0`,
+      packageName,
+      version: "0.10.0",
+      pluginId: "lossless-claw",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@0.10.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(
+      `Managed plugin dependency conflict for ${packageName}: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0.`,
+    );
+    const installCalls = runCommandWithTimeoutMock.mock.calls.filter((call) =>
+      isManagedNpmInstallCommand(call[0]),
+    );
+    expect(installCalls).toHaveLength(0);
+    const installedManifest = JSON.parse(
+      await fs.promises.readFile(
+        path.join(npmProjectRoot, "node_modules", ...packageName.split("/"), "package.json"),
+        "utf8",
+      ),
+    ) as { version?: string };
+    expect(installedManifest.version).toBe("0.10.0");
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.[packageName]).toBe("0.11.2");
+  });
+
+  it("fails closed for a newer user pin before resolving replacement metadata", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@martian-engineering/lossless-claw";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            [packageName]: "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName,
+      version: "0.11.2",
+      pluginId: "lossless-claw",
+    });
+    mockNpmViewAndInstallMany([
+      {
+        spec: `${packageName}@0.10.0`,
+        packageName,
+        version: "0.10.0",
+        pluginId: "lossless-claw",
+        integrity: "sha512-old",
+        shasum: "oldshasum",
+        npmRoot,
+      },
+      {
+        spec: `${packageName}@0.11.2`,
+        packageName,
+        version: "0.11.2",
+        pluginId: "lossless-claw",
+        integrity: "sha512-new",
+        shasum: "newshasum",
+        expectedDependencySpec: "0.11.2",
+        npmRoot,
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@0.10.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(
+      `Managed plugin dependency conflict for ${packageName}: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0.`,
+    );
+    const installCalls = runCommandWithTimeoutMock.mock.calls.filter((call) =>
+      isManagedNpmInstallCommand(call[0]),
+    );
+    expect(installCalls).toHaveLength(0);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.[packageName]).toBe("0.11.2");
+  });
+
+  it("fails closed for a newer user pin even when replacement metadata is unavailable", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@martian-engineering/lossless-claw";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            [packageName]: "0.11.2",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName,
+      version: "0.11.2",
+      pluginId: "lossless-claw",
+    });
+    mockNpmViewAndInstallMany([
+      {
+        spec: `${packageName}@0.10.0`,
+        packageName,
+        version: "0.10.0",
+        pluginId: "lossless-claw",
+        integrity: "sha512-old",
+        shasum: "oldshasum",
+        npmRoot,
+      },
+      {
+        spec: `${packageName}@0.11.2`,
+        packageName,
+        version: "0.11.2",
+        pluginId: "lossless-claw",
+        npmRoot,
+        viewFailure: "npm ERR! registry unavailable",
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@0.10.0`,
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(
+      `Managed plugin dependency conflict for ${packageName}: current package.json pin is 0.11.2 but OpenClaw release target is 0.10.0.`,
+    );
+    const installCalls = runCommandWithTimeoutMock.mock.calls.filter((call) =>
+      isManagedNpmInstallCommand(call[0]),
+    );
+    expect(installCalls).toHaveLength(0);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.[packageName]).toBe("0.11.2");
   });
 
   it("rejects npm installs when the installed artifact drifts from verified metadata", async () => {

@@ -278,6 +278,15 @@ export async function upsertManagedNpmRootDependency(params: {
   await writeJson(manifestPath, next, { trailingNewline: true });
 }
 
+export async function readManagedNpmRootDependencySpec(params: {
+  npmRoot: string;
+  packageName: string;
+}): Promise<string | undefined> {
+  const manifestPath = path.join(params.npmRoot, "package.json");
+  const manifest = await readManagedNpmRootManifest(manifestPath);
+  return readDependencyRecord(manifest.dependencies)[params.packageName];
+}
+
 function isOptionalPeerDependency(manifest: Record<string, unknown>, peerName: string): boolean {
   if (!isRecord(manifest.peerDependenciesMeta)) {
     return false;

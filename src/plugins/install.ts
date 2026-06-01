@@ -16,6 +16,7 @@ import {
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   type ManagedNpmRootPeerDependencySnapshot,
+  readManagedNpmRootDependencySpec,
   readManagedNpmRootInstalledDependency,
   readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
@@ -1014,6 +1015,35 @@ function resolveInstalledNpmResolutionMismatch(params: {
   return null;
 }
 
+async function resolveManagedNpmDependencyUpdateConflict(params: {
+  npmRoot: string;
+  packageName: string;
+  requestedResolution: NpmSpecResolution;
+  mode: "install" | "update";
+}): Promise<string | null> {
+  const requestedVersion = params.requestedResolution.version;
+  if (params.mode !== "update" || !requestedVersion) {
+    return null;
+  }
+  let dependencySpec: string | undefined;
+  try {
+    dependencySpec = await readManagedNpmRootDependencySpec({
+      npmRoot: params.npmRoot,
+      packageName: params.packageName,
+    });
+  } catch {
+    return null;
+  }
+  if (!dependencySpec || compareNpmSemver(dependencySpec, requestedVersion) <= 0) {
+    return null;
+  }
+  return [
+    `Managed plugin dependency conflict for ${params.packageName}: current package.json pin is ${dependencySpec} but OpenClaw release target is ${requestedVersion}.`,
+    "Non-interactive update is refusing to choose automatically.",
+    "Use the release-managed version, keep the user pin explicitly, or abort.",
+  ].join(" ");
+}
+
 async function listManagedNpmRootPackageNames(npmRoot: string): Promise<Set<string>> {
   const nodeModulesDir = path.join(npmRoot, "node_modules");
   let entries: Dirent[];
@@ -1144,6 +1174,15 @@ async function installPluginFromManagedNpmRoot(
   });
   if (!availability.ok) {
     return availability;
+  }
+  const updateConflict = await resolveManagedNpmDependencyUpdateConflict({
+    npmRoot,
+    packageName: params.packageName,
+    requestedResolution: params.npmResolution,
+    mode: mode ?? effectiveMode,
+  });
+  if (updateConflict) {
+    return { ok: false, error: updateConflict };
   }
   if (dryRun) {
     return {
