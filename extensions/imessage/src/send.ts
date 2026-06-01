@@ -3,7 +3,6 @@ import { constants, accessSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/access-groups";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -14,10 +13,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
-} from "openclaw/plugin-sdk/runtime-group-policy";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
@@ -32,13 +27,15 @@ import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
+import { assertIMessageOutboundAllowed } from "./outbound-allowlist.js";
 import {
   formatIMessageChatTarget,
-  isAllowedIMessageReplyContextSender,
   type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
+
+export { assertIMessageOutboundAllowed };
 
 const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
@@ -832,231 +829,6 @@ async function trySendAttachmentForTarget(params: {
       kind: "media",
     }),
   };
-}
-
-function normalizeIMessageOutboundAllowValue(raw: string | number | null | undefined): string {
-  if (raw === null || raw === undefined) {
-    return "";
-  }
-  const value = String(raw).trim();
-  if (value === "*") {
-    return "*";
-  }
-  return normalizeIMessageHandle(value);
-}
-
-function resolveIMessageDirectChatIdentifier(target: ParsedIMessageTarget): string | null {
-  if (target.kind !== "chat_identifier") {
-    return null;
-  }
-  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(target.chatIdentifier.trim());
-  const handle = match?.[1]?.trim();
-  return handle || null;
-}
-
-function resolveIMessageDirectChatGuid(target: ParsedIMessageTarget): string | null {
-  if (target.kind !== "chat_guid") {
-    return null;
-  }
-  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(target.chatGuid.trim());
-  const handle = match?.[1]?.trim();
-  return handle || null;
-}
-
-function normalizeIMessageOutboundTarget(target: ParsedIMessageTarget): string {
-  if (target.kind === "chat_id") {
-    return `chat_id:${target.chatId}`;
-  }
-  const directChatGuid = resolveIMessageDirectChatGuid(target);
-  if (directChatGuid) {
-    return normalizeIMessageHandle(directChatGuid);
-  }
-  if (target.kind === "chat_guid") {
-    return `chat_guid:${target.chatGuid}`;
-  }
-  const directChatIdentifier = resolveIMessageDirectChatIdentifier(target);
-  if (directChatIdentifier) {
-    return normalizeIMessageHandle(directChatIdentifier);
-  }
-  if (target.kind === "chat_identifier") {
-    return `chat_identifier:${target.chatIdentifier}`;
-  }
-  return normalizeIMessageHandle(target.to);
-}
-
-function isIMessageOutboundDmTarget(target: ParsedIMessageTarget): boolean {
-  return (
-    target.kind === "handle" ||
-    resolveIMessageDirectChatIdentifier(target) !== null ||
-    resolveIMessageDirectChatGuid(target) !== null
-  );
-}
-
-function isIMessageOutboundAllowlisted(params: {
-  allowFrom: readonly (string | number)[];
-  normalizedTarget: string;
-}): boolean {
-  const allowed = new Set(
-    params.allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean),
-  );
-  return allowed.has("*") || allowed.has(params.normalizedTarget);
-}
-
-function getIMessageConversationFacts(
-  target: ParsedIMessageTarget,
-): Pick<
-  Parameters<typeof isAllowedIMessageReplyContextSender>[0],
-  "chatId" | "chatGuid" | "chatIdentifier"
-> {
-  if (target.kind === "chat_id") {
-    return { chatId: target.chatId };
-  }
-  if (target.kind === "chat_guid") {
-    return { chatGuid: target.chatGuid };
-  }
-  if (target.kind === "chat_identifier") {
-    return { chatIdentifier: target.chatIdentifier };
-  }
-  return {};
-}
-
-function isIMessageOutboundTargetAllowed(
-  senderId: string,
-  allowFrom: readonly (string | number)[],
-): boolean {
-  return isIMessageOutboundAllowlisted({ allowFrom, normalizedTarget: senderId });
-}
-
-async function expandIMessageOutboundAllowFrom(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedIMessageAccount;
-  target: ParsedIMessageTarget;
-  allowFrom: Array<string | number>;
-}): Promise<string[]> {
-  const normalizedTarget = normalizeIMessageOutboundTarget(params.target);
-  return await expandAllowFromWithAccessGroups({
-    cfg: params.cfg,
-    allowFrom: params.allowFrom,
-    channel: "imessage",
-    accountId: params.account.accountId,
-    senderId: normalizedTarget,
-    isSenderAllowed: isIMessageOutboundTargetAllowed,
-  });
-}
-
-async function isIMessageSenderBasedGroupReplyAllowed(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedIMessageAccount;
-  target: ParsedIMessageTarget;
-  allowFrom: Array<string | number>;
-  replyRequesterSender?: string | null;
-}): Promise<boolean> {
-  const sender = params.replyRequesterSender?.trim();
-  if (!sender) {
-    return false;
-  }
-  const normalizedSender = normalizeIMessageHandle(sender);
-  if (!normalizedSender) {
-    return false;
-  }
-  const senderAllowFrom = await expandAllowFromWithAccessGroups({
-    cfg: params.cfg,
-    allowFrom: params.allowFrom,
-    channel: "imessage",
-    accountId: params.account.accountId,
-    senderId: normalizedSender,
-    isSenderAllowed: isIMessageOutboundTargetAllowed,
-  });
-  return isAllowedIMessageReplyContextSender({
-    allowFrom: senderAllowFrom,
-    sender: normalizedSender,
-    ...getIMessageConversationFacts(params.target),
-  });
-}
-
-function resolveIMessageOutboundGroupPolicy(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedIMessageAccount;
-}) {
-  return resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.cfg.channels?.imessage !== undefined,
-    groupPolicy: params.account.config.groupPolicy,
-    defaultGroupPolicy: resolveDefaultGroupPolicy(params.cfg),
-  }).groupPolicy;
-}
-
-function resolveIMessageOutboundGroupAllowFrom(
-  account: ResolvedIMessageAccount,
-): Array<string | number> {
-  const configuredGroupAllowFrom = account.config.groupAllowFrom;
-  return [...(configuredGroupAllowFrom ?? account.config.allowFrom ?? [])];
-}
-
-export async function assertIMessageOutboundAllowed(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedIMessageAccount;
-  target: ParsedIMessageTarget;
-  replyRequesterSender?: string | null;
-}): Promise<void> {
-  const { cfg, account, target } = params;
-  if (!isIMessageOutboundDmTarget(target)) {
-    const groupPolicy = resolveIMessageOutboundGroupPolicy({ cfg, account });
-    if (groupPolicy === "disabled") {
-      throw new Error("iMessage outbound blocked: group targets are disabled");
-    }
-    if (groupPolicy !== "allowlist") {
-      return;
-    }
-    const normalizedTarget = normalizeIMessageOutboundTarget(target);
-    const configuredGroupAllowFrom = resolveIMessageOutboundGroupAllowFrom(account);
-    const allowFrom = await expandIMessageOutboundAllowFrom({
-      cfg,
-      account,
-      target,
-      allowFrom: configuredGroupAllowFrom,
-    });
-    const targetAllowed = isIMessageOutboundAllowlisted({
-      allowFrom,
-      normalizedTarget,
-    });
-    const replyRequesterAllowed = await isIMessageSenderBasedGroupReplyAllowed({
-      cfg,
-      account,
-      target,
-      allowFrom: configuredGroupAllowFrom,
-      replyRequesterSender: params.replyRequesterSender,
-    });
-    if (allowFrom.length === 0 && !replyRequesterAllowed) {
-      throw new Error("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
-    }
-    if (!targetAllowed && !replyRequesterAllowed) {
-      throw new Error(
-        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
-      );
-    }
-    return;
-  }
-  if (account.config.dmPolicy !== "allowlist") {
-    return;
-  }
-  const normalizedTarget = normalizeIMessageOutboundTarget(target);
-  const allowFrom = await expandIMessageOutboundAllowFrom({
-    cfg,
-    account,
-    target,
-    allowFrom: [
-      ...(account.config.allowFrom ?? []),
-      ...(account.config.defaultTo ? [account.config.defaultTo] : []),
-    ],
-  });
-  if (allowFrom.length === 0) {
-    throw new Error("iMessage outbound blocked: channels.imessage.allowFrom/defaultTo is empty");
-  }
-  if (!isIMessageOutboundAllowlisted({ allowFrom, normalizedTarget })) {
-    throw new Error(
-      "iMessage outbound blocked: target is not in channels.imessage.allowFrom/defaultTo",
-    );
-  }
 }
 
 export async function sendMessageIMessage(
