@@ -779,10 +779,14 @@ export async function dispatchWhatsAppBufferedReply(params: {
       },
     },
     replyOptions: {
-      // Message-tool-only unmentioned group turns have no automatic visible reply.
-      // Suppress composing there so silent background runs do not leak presence.
+      // Uninvoked unmentioned group turns suppress composing regardless of delivery mode.
+      // Silent background runs must not leak presence; the rare proactive visible
+      // reply in an unmentioned group arrives without a typing indicator (accepted tradeoff).
+      // Authorized commands are explicitly invoked, so they keep their typing indicator.
       suppressTyping:
-        sourceRepliesAreToolOnly && params.msg.chatType === "group" && !params.msg.wasMentioned,
+        params.msg.chatType === "group" &&
+        !params.msg.wasMentioned &&
+        !sourceReplyCommandAuthorized,
       disableBlockStreaming,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,

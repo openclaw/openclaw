@@ -1073,7 +1073,7 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it("honors automatic visible replies for WhatsApp groups", async () => {
+  it("suppresses typing for automatic-delivery unmentioned group chat", async () => {
     await dispatchBufferedReply({
       cfg: {
         channels: { whatsapp: { blockStreaming: true } },
@@ -1086,7 +1086,7 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
-      suppressTyping: false,
+      suppressTyping: true,
     });
   });
 
