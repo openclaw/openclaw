@@ -128,6 +128,7 @@ function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
 
+/** Result of checking already-parsed exec segments against every configured trust source. */
 export type ExecAllowlistEvaluation = {
   /** True when every command segment is approved by an allow mechanism. */
   allowlistSatisfied: boolean;
@@ -139,6 +140,7 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+/** Per-segment trust source used to explain why a command segment did not need approval. */
 export type ExecSegmentSatisfiedBy =
   | "allowlist"
   | "safeBins"
@@ -146,6 +148,7 @@ export type ExecSegmentSatisfiedBy =
   | "safeBuiltins"
   | "skills"
   | null;
+/** Trusted skill-provided executable that can satisfy a matching command segment. */
 export type SkillBinTrustEntry = {
   /** Command name exposed by a trusted skill bin. */
   name: string;
@@ -726,6 +729,7 @@ export function evaluateExecAllowlist(
   };
 }
 
+/** Shell command analysis plus allowlist evaluation metadata used by approval policy. */
 export type ExecAllowlistAnalysis = {
   /** True when command parsing/analysis succeeded. */
   analysisOk: boolean;
@@ -917,6 +921,7 @@ function isDirectShellPositionalCarrierInvocation(command: string): boolean {
   ).test(trimmed);
 }
 
+/** Persistable allow-always pattern derived from an approved command segment. */
 export type AllowAlwaysPattern = {
   /** Executable trust path or basename pattern to persist. */
   pattern: string;
