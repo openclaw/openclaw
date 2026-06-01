@@ -376,7 +376,9 @@ describe("phone-control plugin", () => {
 
       expect(lookup).not.toHaveBeenCalled();
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(lookup).toHaveBeenCalledWith("current");
 
