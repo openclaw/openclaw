@@ -289,6 +289,42 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       expect(loadSqliteTranscriptEventsSync(readScope)).toEqual([event]);
     });
 
+    it("maps canonical sessions.json store paths to the agent SQLite database", async () => {
+      const legacyStorePath = path.join(
+        paths.stateDir,
+        "agents",
+        "main",
+        "sessions",
+        "sessions.json",
+      );
+      const sqlitePath = path.join(
+        paths.stateDir,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const scope = {
+        agentId: "main",
+        env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
+        sessionKey: "agent:main:main",
+        storePath: legacyStorePath,
+      };
+
+      await upsertSqliteSessionEntry(scope, {
+        model: "gpt-5.5",
+        sessionId: "session-1",
+        updatedAt: 10,
+      });
+
+      expect(loadSqliteSessionEntry({ ...scope, storePath: sqlitePath })).toMatchObject({
+        model: "gpt-5.5",
+        sessionId: "session-1",
+      });
+      expect(fs.existsSync(sqlitePath)).toBe(true);
+      expect(fs.existsSync(legacyStorePath)).toBe(false);
+    });
+
     it("conforms for transcript message append, idempotency, and update publication", async () => {
       const scope = adapter.transcriptScope(paths, "session-2");
       const updates: unknown[] = [];
