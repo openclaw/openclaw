@@ -118,8 +118,11 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
+/** Derive the live Gateway session-row fields from an agent lifecycle event. */
 export function deriveGatewaySessionLifecycleSnapshot(params: {
+  /** Existing live row fields used to preserve timestamps when the event omits them. */
   session?: Partial<LifecycleSessionShape> | null;
+  /** Agent lifecycle event carrying start/end/error phase metadata. */
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const phase = resolveLifecyclePhase(params.event);
@@ -158,8 +161,11 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   };
 }
 
+/** Derive the persisted session-store patch for an agent lifecycle event. */
 export function derivePersistedSessionLifecyclePatch(params: {
+  /** Existing persisted entry fields used to preserve timestamps when the event omits them. */
   entry?: Partial<PersistedLifecycleSessionShape> | null;
+  /** Agent lifecycle event carrying start/end/error phase metadata. */
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
@@ -178,7 +184,9 @@ export function derivePersistedSessionLifecyclePatch(params: {
  * run's sessionId and the current row's sessionId are known and differ.
  */
 export function isStaleLifecycleEventForSession(params: {
+  /** Session id attached to the lifecycle event's owning run. */
   owningSessionId?: string;
+  /** Current session id stored under the session key. */
   currentSessionId?: string;
 }): boolean {
   return Boolean(
@@ -188,9 +196,13 @@ export function isStaleLifecycleEventForSession(params: {
   );
 }
 
+/** Persist an agent lifecycle event into the session store row when it still owns the row. */
 export async function persistGatewaySessionLifecycleEvent(params: {
+  /** Session key whose store row should receive lifecycle state. */
   sessionKey: string;
+  /** Optional agent scope used when loading the store entry. */
   agentId?: string;
+  /** Agent lifecycle event carrying phase and terminal metadata. */
   event: LifecycleEventLike;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
