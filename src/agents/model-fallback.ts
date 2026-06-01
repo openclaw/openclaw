@@ -5,7 +5,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitFailoverEvent } from "../infra/diagnostic-events.js";
+import { emitDiagnosticEvent, emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -596,8 +596,22 @@ function throwFallbackFailureSummary(params: {
   attribution?: FailoverAttribution;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  /** Provider the caller asked for (primary, pre-fallback). Used for the
+   *  `openclaw.model.fallback.exhausted` observability counter. */
+  requestedProvider: string;
+  /** Model the caller asked for (primary, pre-fallback). Used for the
+   *  `openclaw.model.fallback.exhausted` observability counter. */
+  requestedModel: string;
+  /** Fallback chain kind for the observability counter. */
+  kind: "text" | "image";
+  /** Optional run id propagated through to the diagnostic event. */
+  runId?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
+    // Single-attempt path: surface the underlying error directly. The fallback
+    // chain wasn't really exercised (only one configured candidate), so we do
+    // NOT emit the `model.fallback.exhausted` diagnostic event here — that
+    // event semantically means "all candidates in a multi-candidate chain failed".
     throw toLintErrorObject(params.lastError, "Non-Error thrown");
   }
 
@@ -619,6 +633,30 @@ function throwFallbackFailureSummary(params: {
   const message = remediation
     ? `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}. ${remediation}`
     : `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`;
+
+  // Emit fallback-exhaustion counter so operators can alert on auth-class
+  // outages in minutes (real-traffic-derived, sub-minute resolution) rather
+  // than waiting for downstream replica/CrashLoop signals. Reason = terminal
+  // attempt's classification, falling back to "unknown" when the last
+  // candidate failed without a recognised reason.
+  const terminalReason =
+    params.attempts.length > 0
+      ? (params.attempts[params.attempts.length - 1].reason ?? "unknown")
+      : "unknown";
+  try {
+    emitDiagnosticEvent({
+      type: "model.fallback.exhausted",
+      requestedProvider: params.requestedProvider,
+      requestedModel: params.requestedModel,
+      reason: terminalReason,
+      kind: params.kind,
+      totalAttempts: params.attempts.length,
+      ...(params.runId ? { runId: params.runId } : {}),
+    });
+  } catch {
+    // Diagnostic emission must never block the user-visible error path.
+  }
+
   throw new FallbackSummaryError(
     message,
     params.attempts,
@@ -1697,6 +1735,10 @@ export async function runWithModelFallback<T>(
     attribution: { sessionId: params.sessionId, lane: params.lane },
     cfg: params.cfg,
     agentDir: params.agentDir,
+    requestedProvider: params.provider,
+    requestedModel: params.model,
+    kind: "text",
+    ...(params.runId ? { runId: params.runId } : {}),
   });
 }
 
@@ -1757,6 +1799,9 @@ export async function runWithImageModelFallback<T>(params: {
     label: "image models",
     formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
     cfg: params.cfg,
+    requestedProvider: candidates[0]?.provider ?? DEFAULT_PROVIDER,
+    requestedModel: candidates[0]?.model ?? DEFAULT_MODEL,
+    kind: "image",
   });
 }
 export { testing as __testing };

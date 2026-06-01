@@ -1,3 +1,4 @@
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
@@ -643,6 +644,41 @@ export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
   drainBatchSize: number;
 };
 
+/**
+ * Emitted by the model fallback runner when the entire candidate chain is
+ * exhausted without producing a successful response (i.e. just before
+ * `FallbackSummaryError` is thrown). Surfaces the requested
+ * provider/model the caller asked for, the terminal failure reason from the
+ * last attempted candidate, and total attempt count. Consumed by
+ * `extensions/diagnostics-otel` to emit the
+ * `openclaw.model.fallback.exhausted` counter (sub-minute alertable signal
+ * for in-process fallback chain exhaustion).
+ */
+export type DiagnosticModelFallbackExhaustedEvent = DiagnosticBaseEvent & {
+  type: "model.fallback.exhausted";
+  /** Provider the caller asked for (the primary, before fallback substitution). */
+  requestedProvider: string;
+  /** Model the caller asked for (the primary, before fallback substitution). */
+  requestedModel: string;
+  /**
+   * Terminal reason classification from the last attempted candidate.
+   * Reuses the existing `FailoverReason` union so the taxonomy stays in
+   * lockstep with classification updates. Defaults to `"unknown"` when no
+   * candidate produced a classified reason.
+   */
+  reason: FailoverReason;
+  /**
+   * Fallback chain kind. `"text"` for `runWithModelFallback`, `"image"` for
+   * `runWithImageModelFallback`. Lets dashboards/alerts scope to text-only
+   * traffic without picking up image-generation fallbacks.
+   */
+  kind: "text" | "image";
+  /** Number of candidate attempts the chain actually executed. */
+  totalAttempts: number;
+  /** Optional run identifier propagated from `runWithModelFallback`. */
+  runId?: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -693,7 +729,8 @@ export type DiagnosticEventPayload =
   | DiagnosticLogRecordEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticFailoverEvent
+  | DiagnosticModelFallbackExhaustedEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

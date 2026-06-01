@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -1781,9 +1786,9 @@ describe("runWithModelFallback", () => {
       { provider: "openai", model: "gpt-4.1-mini" },
       { provider: "tui-pty-mock", model: "gpt-5.5" },
     ]);
-    expect(providerModelNormalizationMock.normalizeProviderModelIdWithRuntime).not.toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "tui-pty-mock" }),
-    );
+    expect(
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+    ).not.toHaveBeenCalledWith(expect.objectContaining({ provider: "tui-pty-mock" }));
   });
 
   it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {
@@ -2202,6 +2207,106 @@ describe("runWithModelFallback", () => {
       { provider: "anthropic", model: "claude-opus-4-5" },
       { provider: "anthropic", model: "claude-haiku-3-5" },
     ]);
+  });
+
+  it("emits model.fallback.exhausted diagnostic event with terminal reason and chain context (GH-5632)", async () => {
+    resetDiagnosticEventsForTest();
+    const events: Extract<DiagnosticEventPayload, { type: "model.fallback.exhausted" }>[] = [];
+    const unsubscribe = onDiagnosticEvent((evt) => {
+      if (evt.type === "model.fallback.exhausted") {
+        events.push(evt);
+      }
+    });
+
+    try {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "google/gemini-2.5-flash",
+              fallbacks: ["openai/gpt-4o-mini"],
+            },
+          },
+        },
+      });
+      // Each candidate fails with a 401 (auth class) so the terminal reason
+      // should be "auth".
+      const run = vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.reject(Object.assign(new Error("unauthorized"), { status: 401 })),
+        );
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "google",
+          model: "gemini-2.5-flash",
+          runId: "run-gh5632",
+          run,
+        }),
+      ).rejects.toMatchObject({ name: "FallbackSummaryError" });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "model.fallback.exhausted",
+        requestedProvider: "google",
+        requestedModel: "gemini-2.5-flash",
+        reason: "auth",
+        kind: "text",
+        totalAttempts: 2,
+        runId: "run-gh5632",
+      });
+    } finally {
+      unsubscribe();
+      resetDiagnosticEventsForTest();
+    }
+  });
+
+  it("does NOT emit model.fallback.exhausted when only one candidate is attempted (single-attempt path)", async () => {
+    resetDiagnosticEventsForTest();
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((evt) => {
+      if (evt.type === "model.fallback.exhausted") {
+        events.push(evt);
+      }
+    });
+
+    try {
+      // No fallbacks configured — only the primary is tried, so we hit the
+      // single-attempt early-return path inside throwFallbackFailureSummary
+      // (which surfaces the underlying error rather than wrapping it). Per
+      // GH-5632 spec, the counter is the equivalent of the
+      // "FallbackSummaryError: All models failed (N)" log line and only fires
+      // when a multi-candidate chain is actually exhausted.
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: { primary: "google/gemini-2.5-flash" },
+          },
+        },
+      });
+      const run = vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.reject(Object.assign(new Error("unauthorized"), { status: 401 })),
+        );
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "google",
+          model: "gemini-2.5-flash",
+          fallbacksOverride: [],
+          run,
+        }),
+      ).rejects.toThrow("unauthorized");
+
+      expect(events).toHaveLength(0);
+    } finally {
+      unsubscribe();
+      resetDiagnosticEventsForTest();
+    }
   });
 
   it("refreshes cooldown expiry from persisted auth state before fallback summary", async () => {

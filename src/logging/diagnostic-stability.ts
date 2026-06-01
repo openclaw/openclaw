@@ -536,6 +536,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.fromModel;
       assignReasonCode(record, event.reason);
       break;
+    case "model.fallback.exhausted":
+      record.provider = event.requestedProvider;
+      record.model = event.requestedModel;
+      assignReasonCode(record, event.reason);
+      break;
   }
 
   return record;

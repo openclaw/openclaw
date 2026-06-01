@@ -1146,6 +1146,60 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
   });
 
+  test("records model.fallback.exhausted counter with reason/provider/model/kind attrs (GH-5632)", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.fallback.exhausted",
+      requestedProvider: "google",
+      requestedModel: "gemini-2.5-flash",
+      reason: "auth",
+      kind: "text",
+      totalAttempts: 3,
+      runId: "run-1",
+    });
+
+    const counter = telemetryState.counters.get("openclaw.model.fallback.exhausted");
+    expect(counter).toBeDefined();
+    expect(counter?.add).toHaveBeenCalledWith(1, {
+      "openclaw.requested_provider": "google",
+      "openclaw.requested_model": "gemini-2.5-flash",
+      "openclaw.reason": "auth",
+      "openclaw.kind": "text",
+    });
+
+    // Distinct reason values produce separate label sets (cardinality bounded
+    // by the FailoverReason union, ~10 values).
+    emitDiagnosticEvent({
+      type: "model.fallback.exhausted",
+      requestedProvider: "openai",
+      requestedModel: "gpt-4o-mini",
+      reason: "rate_limit",
+      kind: "text",
+      totalAttempts: 1,
+    });
+    emitDiagnosticEvent({
+      type: "model.fallback.exhausted",
+      requestedProvider: "openai",
+      requestedModel: "dall-e-3",
+      reason: "unknown",
+      kind: "image",
+      totalAttempts: 2,
+    });
+
+    expect(counter?.add).toHaveBeenCalledTimes(3);
+    expect(counter?.add).toHaveBeenLastCalledWith(1, {
+      "openclaw.requested_provider": "openai",
+      "openclaw.requested_model": "dall-e-3",
+      "openclaw.reason": "unknown",
+      "openclaw.kind": "image",
+    });
+
+    await service.stop?.(ctx);
+  });
+
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
