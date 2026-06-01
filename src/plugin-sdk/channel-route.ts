@@ -170,6 +170,8 @@ export function resolveChannelRouteTargetWithParser(params: {
 /** Builds a JSON route dedupe key that remains unambiguous when route parts contain separators. */
 export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): string {
   const route = normalizeChannelRouteTarget(input);
+  // JSON avoids delimiter ambiguity for queue/dedupe keys; compact keys remain
+  // human-readable but are not the canonical collision-resistant identity.
   return JSON.stringify([
     route?.channel ?? "",
     route?.target?.to ?? "",
@@ -237,6 +239,8 @@ export function channelRoutesShareConversation(params: {
     // Parent route matches any child thread once channel, target, and compatible account match.
     return true;
   }
+  // Once both sides carry thread ids, conversation sharing narrows to exact
+  // thread equality so sibling thread replies do not collapse together.
   return threadIdsEqual(left.thread.id, right.thread.id);
 }
 
@@ -290,6 +294,8 @@ export function channelRouteCompactKey(route?: ChannelRouteKeyInput | null): str
   if (!normalized?.channel || !normalized.target?.to) {
     return undefined;
   }
+  // Compact keys are for logs/UI and intentionally require channel+target so
+  // partial routes do not look like stable delivery identities.
   return [
     normalized.channel,
     normalized.target.to,
