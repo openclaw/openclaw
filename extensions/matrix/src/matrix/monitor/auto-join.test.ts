@@ -5,7 +5,7 @@ import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 
-type InviteHandler = (roomId: string, inviteEvent: unknown) => void;
+type InviteHandler = (roomId: string, inviteEvent: unknown) => void | Promise<void>;
 
 async function flushInviteTasks() {
   for (let i = 0; i < 5; i += 1) {
@@ -74,7 +74,7 @@ async function triggerInvite(
   if (!inviteHandler) {
     throw new Error("expected Matrix invite handler");
   }
-  inviteHandler("!room:example.org", inviteEvent);
+  await inviteHandler("!room:example.org", inviteEvent);
   await flushInviteTasks();
 }
 
@@ -162,7 +162,7 @@ describe("registerMatrixAutoJoin", () => {
     if (!inviteHandler) {
       throw new Error("expected Matrix invite handler");
     }
-    inviteHandler("!room:example.org", {});
+    await inviteHandler("!room:example.org", {});
     await flushInviteTasks();
 
     expect(joinRoom).not.toHaveBeenCalled();
