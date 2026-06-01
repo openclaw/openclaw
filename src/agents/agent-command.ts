@@ -109,7 +109,6 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
