@@ -831,6 +831,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const task = state.tasksByCardId.get(card.id);
   const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
   const formatted = formatLifecycle(lifecycle);
+  const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
   const writable = canMutate(props);
   const comments = card.metadata?.comments ?? [];
@@ -872,7 +873,9 @@ function renderCardDetailsPanel(props: WorkboardProps) {
               ${formatted.label}
             </span>
             <span class="workboard-card__lifecycle-detail">
-              ${task ? taskDetail(task) : (lifecycle.session?.displayName ?? formatted.detail)}
+              ${task && taskIsAuthoritative
+                ? taskDetail(task)
+                : (lifecycle.session?.displayName ?? formatted.detail)}
             </span>
           </div>
           <div class="workboard-detail__grid">

@@ -377,33 +377,42 @@ describe("renderWorkboard", () => {
       progressSummary: "Still running according to stale cache.",
     });
     const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [
+        {
+          key: "agent:main:subagent:workboard-default-card-1",
+          kind: "direct",
+          displayName: "Finished session",
+          updatedAt: 2,
+          hasActiveRun: false,
+          status: "done",
+        },
+      ],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
 
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [
-          {
-            key: "agent:main:subagent:workboard-default-card-1",
-            kind: "direct",
-            displayName: "Finished session",
-            updatedAt: 2,
-            hasActiveRun: false,
-            status: "done",
-          },
-        ],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
+    render(renderWorkboard(props), container);
 
     expect(container.textContent).toContain("Done");
     expect(container.textContent).toContain("Finished session");
     expect(container.textContent).not.toContain("Task running");
     expect(container.textContent).not.toContain("Still running according to stale cache.");
+
+    container
+      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Finished session");
+    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain(
+      "Still running according to stale cache.",
+    );
   });
 
   it("shows stop controls without start controls for active task-only cards", () => {
