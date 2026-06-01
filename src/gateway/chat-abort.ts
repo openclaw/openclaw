@@ -8,6 +8,7 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -235,7 +236,11 @@ export function resolveInFlightRunSnapshot(params: {
   // only at completion — so there is nothing to show mid-run, but the client
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
-  return { runId: best.runId, text: params.chatRunBuffers?.get(best.runId) ?? "" };
+  const bufferedText = params.chatRunBuffers?.get(best.runId) ?? "";
+  const projected = projectLiveAssistantBufferedText(bufferedText, {
+    suppressLeadFragments: true,
+  });
+  return { runId: best.runId, text: projected.suppress ? "" : projected.text };
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {

@@ -468,6 +468,16 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run", text: "" });
   });
 
+  it("does not surface suppressed control-token lead fragments from the live buffer", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map([["run", "NO_"]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run", text: "" });
+  });
+
   it("scopes the shared global session by agent so one agent's run is not restored into another", () => {
     const controllers = new Map<string, ChatAbortControllerEntry>([
       ["run-a", inFlightEntry("global", { agentId: "main" })],
