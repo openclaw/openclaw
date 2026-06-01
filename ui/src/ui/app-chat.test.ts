@@ -1847,6 +1847,43 @@ describe("handleSendChat", () => {
     expect(host.chatStream).toBeNull();
   });
 
+  it("defers queued global send agent selection until defaults are known", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return Promise.resolve({ runId: "run-work", status: "started" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: null,
+      connected: false,
+      sessionKey: "global",
+      chatMessage: "send to default later",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "send to default later",
+      sessionKey: "global",
+      sendState: "waiting-reconnect",
+    });
+    expect(host.chatQueue[0]?.agentId).toBeUndefined();
+
+    host.agentsList = { defaultId: "work" };
+    host.client = { request } as unknown as ChatHost["client"];
+    host.connected = true;
+    await retryReconnectableQueuedChatSends(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "queued global send payload",
+    );
+    expect(payload.sessionKey).toBe("global");
+    expect(payload.agentId).toBe("work");
+  });
+
   it("marks saved session queued sends waiting after a disconnect", () => {
     const host = makeHost({
       chatQueue: [],

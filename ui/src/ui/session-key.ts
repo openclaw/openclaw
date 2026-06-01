@@ -73,10 +73,20 @@ export function resolveUiDefaultAgentId(
   );
 }
 
+export function resolveUiKnownSelectedGlobalAgentId(
+  host: Pick<UiSessionDefaultsHost, "assistantAgentId" | "agentsList" | "hello">,
+): string | undefined {
+  const selectedAgentId =
+    host.assistantAgentId ??
+    host.agentsList?.defaultId ??
+    readSessionDefaults(host)?.defaultAgentId;
+  return selectedAgentId ? normalizeAgentId(selectedAgentId) : undefined;
+}
+
 export function resolveUiSelectedGlobalAgentId(
   host: Pick<UiSessionDefaultsHost, "assistantAgentId" | "agentsList" | "hello">,
 ): string {
-  return normalizeAgentId(host.assistantAgentId ?? resolveUiDefaultAgentId(host));
+  return resolveUiKnownSelectedGlobalAgentId(host) ?? DEFAULT_AGENT_ID;
 }
 
 export function resolveUiGlobalAliasAgentId(

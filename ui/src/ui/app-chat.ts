@@ -50,6 +50,7 @@ import {
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
@@ -232,7 +233,7 @@ function readHelloDefaultAgentId(host: Pick<ChatHost, "hello">): string | undefi
 
 function scopedAgentIdForSession(host: ChatHost, sessionKey: string | undefined | null) {
   return isUiGlobalSessionKey(sessionKey)
-    ? resolveUiSelectedGlobalAgentId(host)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
     : (resolveUiGlobalAliasAgentId(host, sessionKey) ?? undefined);
 }
 
@@ -254,7 +255,7 @@ function visibleSessionMatches(
   if (!isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const selectedAgentId = resolveUiSelectedGlobalAgentId(host);
+  const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(host);
   const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
   return expectedAgentId
     ? selectedAgentId === normalizeAgentId(expectedAgentId)
@@ -266,7 +267,7 @@ export function scopedAgentParamsForSession(
   sessionKey: string,
 ) {
   const agentId = isUiGlobalSessionKey(sessionKey)
-    ? resolveUiSelectedGlobalAgentId(host)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
     : resolveUiGlobalAliasAgentId(host, sessionKey);
   return agentId ? { agentId } : {};
 }
@@ -280,7 +281,7 @@ export function scopedAgentListParamsForSession(
   const agentId =
     parsed?.agentId ??
     (normalizedSessionKey === "global"
-      ? resolveUiSelectedGlobalAgentId(host)
+      ? resolveUiKnownSelectedGlobalAgentId(host)
       : normalizedSessionKey === "unknown"
         ? undefined
         : resolveUiDefaultAgentId(host));
