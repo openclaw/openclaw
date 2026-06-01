@@ -11,8 +11,10 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
       ...env,
+      BASH_ENV: "",
+      ENV: "",
+      OPENCLAW_INSTALL_SH_NO_RUN: "1",
     },
   });
 }
@@ -87,6 +89,23 @@ function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
 
 describe("install.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  it("runs installer snippets without inherited shell startup files", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shell-env-"));
+    const bashEnvPath = join(tmp, "bash_env");
+    writeFileSync(bashEnvPath, "export OPENCLAW_BASH_ENV_LEAKED=1\n");
+
+    try {
+      const result = runInstallShell('printf "leaked=%s\\n" "${OPENCLAW_BASH_ENV_LEAKED:-0}"', {
+        BASH_ENV: bashEnvPath,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("leaked=0\n");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
 
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
@@ -987,6 +1006,9 @@ describe("install.sh", () => {
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           "set +e",
+          "unset -f node 2>/dev/null || true",
+          "unalias node 2>/dev/null || true",
+          "hash -r",
           `FAKE_NODE_VERSION="v22.${minMinor - 1}.0"`,
           "export FAKE_NODE_VERSION",
           "node_is_at_least_required",

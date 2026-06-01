@@ -65,6 +65,7 @@ function resolveSchedulePayload(
   return undefined;
 }
 
+/** Builds a stable scheduling identity for deciding whether stored timer state is still valid. */
 export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string | undefined {
   const schedule = resolveSchedulePayload(job);
   if (!schedule) {
@@ -77,6 +78,7 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
   });
 }
 
+/** Compares two cron jobs by the normalized inputs that affect next-run computation. */
 export function cronSchedulingInputsEqual(
   previous: CronScheduleIdentityInput,
   next: CronScheduleIdentityInput,

@@ -20,6 +20,7 @@ import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import { extractToolPayload } from "./tool-payload.js";
 
+/** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
   url?: string;
   token?: string;
@@ -29,6 +30,7 @@ export type OutboundGatewayContext = {
   mode: GatewayClientMode;
 };
 
+/** Shared execution context for message-tool send and poll actions. */
 export type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -234,6 +236,7 @@ async function tryPreparePluginSendPayload(params: {
   );
 }
 
+/** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -270,6 +273,7 @@ export async function executeSendAction(params: {
   });
   if (preparedPayload) {
     throwIfAborted(params.ctx.abortSignal);
+    // Prepared plugin payloads still use core delivery so queueing, hooks, and mirrors stay uniform.
     const result = await sendCoreMessage({
       ...params,
       queuePolicy,
@@ -322,6 +326,7 @@ export async function executeSendAction(params: {
   };
 }
 
+/** Executes a message-tool poll through plugin handlers or the core poll path. */
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
   resolveCorePoll: () => {

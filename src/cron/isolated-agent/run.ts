@@ -1205,6 +1205,7 @@ async function disposeCronRunContext(params: {
   (params.cronSession as { store?: unknown }).store = undefined;
 }
 
+/** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;

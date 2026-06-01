@@ -2,6 +2,7 @@ import type { CronFailureAlert } from "../types.js";
 import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
+/** Maps cron failure-alert config into normalized SQLite columns. */
 export function bindFailureAlertColumns(
   failureAlert: CronFailureAlert | false | undefined,
 ): Pick<
@@ -39,6 +40,7 @@ export function bindFailureAlertColumns(
   };
 }
 
+/** Reconstructs failure-alert config, distinguishing disabled from omitted config. */
 export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false | undefined {
   if (row.failure_alert_disabled === 1) {
     return false;

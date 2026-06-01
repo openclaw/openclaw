@@ -192,6 +192,7 @@ type ChatAbortRequester = {
 
 type PreRegisteredAgentDedupePayload = {
   agentId?: unknown;
+  controlUiVisible?: unknown;
   dedupeKeys?: unknown;
   ownerConnId?: unknown;
   ownerDeviceId?: unknown;
@@ -1840,12 +1841,16 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
   sessionKey: string;
   agentId?: string;
   defaultAgentId: string;
+  includeHidden?: boolean;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
     return undefined;
   }
   const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
   if (payload?.status !== "accepted") {
+    return undefined;
+  }
+  if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
   const payloadRunId = normalizeUnknownText(payload.runId);
@@ -1885,6 +1890,9 @@ function readPreRegisteredAgentRun(params: {
   if (payload?.status !== "accepted") {
     return undefined;
   }
+  if (payload.controlUiVisible === false) {
+    return undefined;
+  }
   const runId = normalizeUnknownText(payload.runId) ?? normalizeOptionalText(params.key.slice(6));
   const sessionKey = normalizeUnknownText(payload.sessionKey);
   if (!runId || !sessionKey) {
@@ -1906,6 +1914,7 @@ function canRequesterAbortPreRegisteredAgentRun(
       expiresAtMs: 0,
       ownerConnId: normalizeUnknownText(payload.ownerConnId),
       ownerDeviceId: normalizeUnknownText(payload.ownerDeviceId),
+      controlUiVisible: payload.controlUiVisible === false ? false : undefined,
       kind: "agent",
     },
     requester,
@@ -1955,6 +1964,7 @@ function writePreRegisteredAgentAbort(params: {
           runId: params.runId,
           sessionKey: params.sessionKey,
           ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+          ...(params.payload.controlUiVisible === false ? { controlUiVisible: false } : {}),
           status: "timeout" as const,
           summary: "aborted",
           stopReason: params.stopReason,
@@ -2031,6 +2041,9 @@ function resolveAuthorizedRunsForSessionKeys(params: {
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
+    if (active.controlUiVisible === false) {
+      continue;
+    }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
@@ -2746,6 +2759,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalAbortSessionKey,
           agentId: abortAgentId,
           defaultAgentId,
+          includeHidden: true,
         });
         if (canonicalMatch) {
           return { sessionKey: canonicalAbortSessionKey, payload: canonicalMatch };
@@ -2759,6 +2773,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey: rawSessionKey,
           agentId: abortAgentId,
           defaultAgentId,
+          includeHidden: true,
         });
         return aliasMatch ? { sessionKey: rawSessionKey, payload: aliasMatch } : undefined;
       })();
@@ -2816,7 +2831,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: active.sessionKey,
       stopReason: "rpc",
     });
-    if (res.aborted && partialText && partialText.trim()) {
+    if (res.aborted && active.controlUiVisible !== false && partialText && partialText.trim()) {
       await persistAbortedPartials({
         context,
         sessionKey: active.sessionKey,

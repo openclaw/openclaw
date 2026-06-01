@@ -5,12 +5,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
-type RunAgentAttempt = typeof import("./command/attempt-execution.runtime.js").runAgentAttempt;
+type RunAgentAttempt = typeof runAgentAttempt;
 
 const state = vi.hoisted(() => ({
   cfg: undefined as OpenClawConfig | undefined,
@@ -137,7 +138,7 @@ vi.mock("./command/attempt-execution.runtime.js", async () => {
   );
   return {
     ...actual,
-    runAgentAttempt: (params: Parameters<RunAgentAttempt>[0]) => state.runAgentAttemptMock(params),
+    runAgentAttempt: (...args: Parameters<RunAgentAttempt>) => state.runAgentAttemptMock(...args),
   };
 });
 
@@ -207,7 +208,7 @@ function makeResult(params: {
       durationMs: 1,
       stopReason: "end_turn",
       executionTrace: {
-        runner: "embedded",
+        runner: "embedded" as const,
         fallbackUsed: false,
         winnerProvider: "openai",
         winnerModel: "gpt-5.5",

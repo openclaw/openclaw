@@ -195,6 +195,42 @@ describe("normalizeCronJobCreate", () => {
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
   });
 
+  it("normalizes whitespace-only payload text to empty strings so validation rejects it", () => {
+    const agentTurn = normalizeCronJobCreate({
+      name: "blank agent turn",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+    expect(agentTurn.payload).toEqual({ kind: "agentTurn", message: "" });
+    expect(validateCronAddParams(agentTurn)).toBe(false);
+
+    const systemEvent = normalizeCronJobCreate({
+      name: "blank system event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: {
+        kind: "systemEvent",
+        text: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+    expect(systemEvent.payload).toEqual({ kind: "systemEvent", text: "" });
+    expect(validateCronAddParams(systemEvent)).toBe(false);
+
+    const update = normalizeCronJobPatch({
+      payload: { kind: "agentTurn", message: "   " },
+    }) as unknown as Record<string, unknown>;
+    expect(update.payload).toEqual({ kind: "agentTurn", message: "" });
+    expect(validateCronUpdateParams({ id: "job-1", patch: update })).toBe(false);
+  });
+
   it("normalizes delivery accountId and strips blanks", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery account",
@@ -498,6 +534,27 @@ describe("normalizeCronJobCreate", () => {
       anchorMs: 123,
     });
     expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
+
+    const nested = normalizeCronJobPatch({
+      delivery: {
+        failureDestination: {
+          channel: null,
+          to: null,
+          accountId: null,
+          mode: null,
+        },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(nested.delivery).toEqual({
+      failureDestination: {
+        channel: null,
+        to: null,
+        accountId: null,
+        mode: null,
+      },
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: nested })).toBe(true);
   });
 
   it("keeps invalid every schedule numbers invalid for validation", () => {
@@ -755,6 +812,27 @@ describe("normalizeCronJobPatch", () => {
         mode: "webhook",
         to: "https://example.invalid/complete",
       },
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
+  });
+
+  it("preserves nullable delivery field clears in patches", () => {
+    const normalized = normalizeCronJobPatch({
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        failureDestination: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.delivery).toEqual({
+      channel: null,
+      to: null,
+      threadId: null,
+      accountId: null,
+      failureDestination: null,
     });
     expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
   });

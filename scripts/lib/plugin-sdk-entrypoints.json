@@ -250,6 +250,7 @@
   "qa-live-transport-scenarios",
   "memory-core",
   "memory-core-engine-runtime",
+  "memory-core-host-embedding-registry",
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-foundation",
   "memory-core-host-engine-qmd",

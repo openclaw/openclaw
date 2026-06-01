@@ -25,6 +25,11 @@ export type ChatAbortControllerEntry = {
   authProviderId?: string;
   abortStopReason?: string;
   /**
+   * False for backend/internal agent runs that may share a session key but must
+   * not be projected into operator chat surfaces.
+   */
+  controlUiVisible?: boolean;
+  /**
    * Controls only the sessions.list active-run projection. Terminal lifecycle
    * clears this before chat.send settles, while the entry stays as the retry
    * idempotency guard until normal cleanup removes it.
@@ -114,6 +119,7 @@ export function registerChatAbortController(params: {
   ownerDeviceId?: string;
   providerId?: string;
   authProviderId?: string;
+  controlUiVisible?: boolean;
   kind?: ChatAbortControllerEntry["kind"];
   now?: number;
   expiresAtMs?: number;
@@ -147,6 +153,7 @@ export function registerChatAbortController(params: {
     ownerDeviceId: params.ownerDeviceId,
     providerId: normalizeProviderIdForActiveRun(params.providerId),
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
+    controlUiVisible: params.controlUiVisible,
     projectSessionActive: true,
     kind: params.kind,
   };
@@ -221,6 +228,7 @@ export function resolveInFlightRunSnapshot(params: {
     // that indicator shows active is never silently dropped here.
     if (
       entry.projectSessionActive === false ||
+      entry.controlUiVisible === false ||
       entry.controller.signal.aborted ||
       entry.kind === "agent"
     ) {
@@ -383,13 +391,15 @@ export function abortChatRunById(
   ops.chatAbortControllers.delete(runId);
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
-  broadcastChatAborted(ops, {
-    runId,
-    sessionKey,
-    agentId: active.agentId,
-    stopReason,
-    partialText,
-  });
+  if (active.controlUiVisible !== false) {
+    broadcastChatAborted(ops, {
+      runId,
+      sessionKey,
+      agentId: active.agentId,
+      stopReason,
+      partialText,
+    });
+  }
   emitAgentEvent({
     runId,
     sessionKey,

@@ -5,7 +5,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml, toStreamingPlainTextHtml } from "../markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -1913,7 +1913,7 @@ function renderMarkdownText(
   if (isStreaming) {
     return html`
       <div class="chat-text" dir="${detectTextDirection(markdown)}">
-        ${unsafeHTML(toStreamingPlainTextHtml(markdown))}
+        ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
       </div>
     `;
   }
