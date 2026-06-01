@@ -43,12 +43,18 @@ export const ALL_STATE_DIRNAMES: ReadonlySet<string> = new Set<string>([
  * would produce `~/.openclaw/.openclaw` (#45765). The implicit `$HOME` /
  * `USERPROFILE` path keeps the existing `~/.openclaw` convention even when
  * the OS home happens to end with a state-dir name.
+ *
+ * Matches `home-dir.ts` sentinel normalization: the literal strings
+ * `"undefined"` and `"null"` are treated as unset (callers commonly leak
+ * stringified `undefined`/`null` via shell envs), so this guard does not
+ * activate against an effectively-unset value.
  */
 export function isExplicitOpenClawHomeStateDir(
   env: NodeJS.ProcessEnv,
   resolvedHome: string,
 ): boolean {
-  if (!env.OPENCLAW_HOME?.trim()) {
+  const trimmed = env.OPENCLAW_HOME?.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
     return false;
   }
   return ALL_STATE_DIRNAMES.has(path.basename(resolvedHome));
