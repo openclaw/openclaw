@@ -1215,6 +1215,16 @@ describe("gateway server chat", () => {
         }, FAST_WAIT_OPTS);
         await vi.waitFor(async () => {
           const events = await readTimelineEvents(timelinePath);
+          const ackReady = events.find(
+            (event) =>
+              event.type === "mark" &&
+              event.name === "gateway.chat_send.ack_ready" &&
+              (event.attributes as Record<string, unknown> | undefined)?.runId === "idem-timeline",
+          );
+          expect(ackReady?.attributes).toMatchObject({
+            runId: "idem-timeline",
+            ackStatus: "started",
+          });
           expect(
             events.some(
               (event) =>

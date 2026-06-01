@@ -50,6 +50,7 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
@@ -3074,6 +3075,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const clientInfo = client?.connect?.client;
+    const chatSendTraceAttributes = {
+      runId: clientRunId,
+      sessionKey,
+      agentId: selectedAgent.agentId ?? agentId,
+      provider: resolvedSessionModel.provider,
+      model: resolvedSessionModel.model,
+      hasAttachments: normalizedAttachments.length > 0,
+      hasExplicitOrigin: explicitOriginResult.value !== undefined,
+      hasConnectedClient: client?.connect !== undefined,
+    };
     const originatingRoute = resolveChatSendOriginatingRoute({
       client: clientInfo,
       deliver: p.deliver,
@@ -3162,8 +3173,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             phase: "agent-turn",
             config: cfg,
             attributes: {
+              ...chatSendTraceAttributes,
               attachmentCount: normalizedAttachments.length,
-              hasExplicitOrigin: explicitOriginResult.value !== undefined,
             },
           },
         );
@@ -3219,6 +3230,18 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         status: "started" as const,
       };
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "mark",
+          name: "gateway.chat_send.ack_ready",
+          phase: "agent-turn",
+          attributes: {
+            ...chatSendTraceAttributes,
+            ackStatus: ackPayload.status,
+          },
+        },
+        { config: cfg },
+      );
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
@@ -3347,16 +3370,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const chatSendTraceAttributes = {
-        runId: clientRunId,
-        sessionKey,
-        agentId: selectedAgent.agentId ?? agentId,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
-        hasAttachments: normalizedAttachments.length > 0,
-        hasExplicitOrigin: explicitOriginResult.value !== undefined,
-        hasConnectedClient: client?.connect !== undefined,
-      };
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
