@@ -37,7 +37,12 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  readSessionUpdatedAt,
+  resolveSendPolicy,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -89,6 +94,7 @@ const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
 function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
   return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
@@ -895,12 +901,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
-    let directTypingController:
-      | Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0]
-      | undefined;
+    let directTypingController: IMessageTypingController | undefined;
     const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
     const shouldStartToolTyping =
       !decision.isGroup &&
+      sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
     const directToolTypingOptions = shouldStartToolTyping
       ? ({
@@ -912,7 +924,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // decide when typing can begin.
           suppressDefaultToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-          onTypingController: (typing) => {
+          onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
             typingReplyOptions.onTypingController?.(typing);
           },
