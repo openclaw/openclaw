@@ -20,10 +20,11 @@ function resolvePerMillionRate(
 }
 
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
-  const inputRate = resolvePerMillionRate(model, "input", usage.input);
-  const outputRate = resolvePerMillionRate(model, "output", usage.input);
-  const cacheReadRate = resolvePerMillionRate(model, "cacheRead", usage.input);
-  const cacheWriteRate = resolvePerMillionRate(model, "cacheWrite", usage.input);
+  const tierInputTokens = usage.input + usage.cacheRead;
+  const inputRate = resolvePerMillionRate(model, "input", tierInputTokens);
+  const outputRate = resolvePerMillionRate(model, "output", tierInputTokens);
+  const cacheReadRate = resolvePerMillionRate(model, "cacheRead", tierInputTokens);
+  const cacheWriteRate = resolvePerMillionRate(model, "cacheWrite", tierInputTokens);
   usage.cost.input = (inputRate / 1000000) * usage.input;
   usage.cost.output = (outputRate / 1000000) * usage.output;
   usage.cost.cacheRead = (cacheReadRate / 1000000) * usage.cacheRead;

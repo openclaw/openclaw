@@ -62,4 +62,41 @@ describe("calculateCost", () => {
     expect(higherTierUsage.cost.cacheWrite).toBeCloseTo(0);
     expect(higherTierUsage.cost.total).toBeCloseTo(0.792);
   });
+
+  it("uses cached input tokens when selecting tiered pricing", () => {
+    const model = {
+      id: "MiniMax-M3",
+      name: "MiniMax M3",
+      api: "anthropic-messages",
+      provider: "minimax",
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.6,
+        output: 2.4,
+        cacheRead: 0.12,
+        cacheWrite: 0,
+        tieredPricing: [
+          { range: [0, 512_000], input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+          { range: [512_000], input: 1.2, output: 4.8, cacheRead: 0.24, cacheWrite: 0 },
+        ],
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 131072,
+    } as Model<"anthropic-messages">;
+
+    const usage = createUsage({
+      input: 400_000,
+      output: 10_000,
+      cacheRead: 200_000,
+    });
+
+    calculateCost(model, usage);
+
+    expect(usage.cost.input).toBeCloseTo(0.48);
+    expect(usage.cost.output).toBeCloseTo(0.048);
+    expect(usage.cost.cacheRead).toBeCloseTo(0.048);
+    expect(usage.cost.cacheWrite).toBeCloseTo(0);
+    expect(usage.cost.total).toBeCloseTo(0.576);
+  });
 });
