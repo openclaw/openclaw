@@ -13,7 +13,9 @@ async function waitForWebhookServer(accountId: string): Promise<void> {
     if (server?.listening) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`feishu webhook server did not start for accountId=${accountId}`);
 }
