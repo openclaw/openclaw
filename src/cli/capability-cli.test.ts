@@ -2261,6 +2261,43 @@ describe("capability cli", () => {
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
   });
 
+  it("does not override inherited local TTS channel provider API keys", async () => {
+    const rawConfig = {
+      messages: { tts: { providers: { openai: { apiKey: "config-key" } } } },
+      channels: {
+        discord: {
+          tts: {
+            providers: { openai: { speakerVoice: "nova" } },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveTtsConfig.mockReturnValue({
+      providers: { openai: { apiKey: "config-key", speakerVoice: "nova" } },
+    });
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--channel", "discord", "--json"],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+      channels?: {
+        discord?: { tts?: { providers?: { openai?: { apiKey?: string; speakerVoice?: string } } } };
+      };
+    };
+    expect(cfg.messages?.tts?.providers?.openai?.apiKey).toBe("config-key");
+    expect(cfg.channels?.discord?.tts?.providers?.openai).toEqual({ speakerVoice: "nova" });
+    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("does not hydrate local TTS provider config from token auth profiles", async () => {
     const rawConfig = { messages: { tts: { provider: "openai" } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
