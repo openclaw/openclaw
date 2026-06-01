@@ -431,6 +431,34 @@ function clearRecoveredOwnerMarkers(
   }
 }
 
+function pruneActivityStartedBeforeRecoveryCutoff(
+  activity: SessionActivity,
+  recoveryStartedAfterEmbeddedRunSequence: number | undefined,
+  recoveryStartedAfterDiagnosticEventSequence: number | undefined,
+): void {
+  if (
+    recoveryStartedAfterEmbeddedRunSequence === undefined &&
+    recoveryStartedAfterDiagnosticEventSequence === undefined
+  ) {
+    return;
+  }
+  for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
+    if (!embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
+      activity.activeEmbeddedRuns.delete(key);
+    }
+  }
+  for (const [key, tool] of activity.activeTools) {
+    if (!activityMarkerStartedAfter(tool, recoveryStartedAfterDiagnosticEventSequence)) {
+      activity.activeTools.delete(key);
+    }
+  }
+  for (const [key, modelCall] of activity.activeModelCalls) {
+    if (!activityMarkerStartedAfter(modelCall, recoveryStartedAfterDiagnosticEventSequence)) {
+      activity.activeModelCalls.delete(key);
+    }
+  }
+}
+
 function rememberRecoveredOwnerStartEventCutoffs(
   activity: SessionActivity,
   ownerRefs: Set<string>,
@@ -524,6 +552,11 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   );
   if (activity.activeEmbeddedRuns.size > 0) {
     if (hasEmbeddedRunStartedAfter(activity, params.recoveryStartedAfterEmbeddedRunSequence)) {
+      pruneActivityStartedBeforeRecoveryCutoff(
+        activity,
+        params.recoveryStartedAfterEmbeddedRunSequence,
+        params.recoveryStartedAfterDiagnosticEventSequence,
+      );
       touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
       return { cleared: false, blockedByActiveEmbeddedRun: true };
     }

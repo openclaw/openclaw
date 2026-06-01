@@ -2748,6 +2748,53 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.hasActiveEmbeddedRun).toBe(true);
   });
 
+  it("prunes older same-key activity when a fresh owner blocks recovery clearing", async () => {
+    markDiagnosticEmbeddedRunStarted({ sessionId: "older-run-1", sessionKey });
+    markDiagnosticToolStartedForTest({
+      sessionId: "older-run-1",
+      sessionKey,
+      toolName: "OldTool",
+      toolCallId: "old-tool",
+    });
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        markDiagnosticEmbeddedRunStarted({ sessionId: "reply-run-1", sessionKey });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      "embedded_run",
+    );
+
+    markDiagnosticEmbeddedRunEnded({
+      sessionId: "reply-run-1",
+      sessionKey,
+      clearRunActivity: false,
+    });
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.activeToolName).toBeUndefined();
+  });
+
   it("preserves fresh same-session tool activity rearmed after recovery starts", async () => {
     logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
@@ -2798,7 +2845,8 @@ describe("stuck session recovery activity reconciliation", () => {
     requestStuckSessionRecovery({
       recover: () => {
         markDiagnosticEmbeddedRunStarted({ sessionId: "reply-run-1", sessionKey });
-        markDiagnosticToolStartedForTest({
+        emitDiagnosticEvent({
+          type: "tool.execution.started",
           sessionId: "reply-run-1",
           sessionKey,
           toolName: "ReplyTool",
