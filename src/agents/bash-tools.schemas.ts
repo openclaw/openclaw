@@ -40,7 +40,8 @@ export const execSchema = Type.Object({
   ),
   ask: Type.Optional(
     Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
+      description:
+        "Ignored for normal calls; exec ask mode is set by tools.exec.ask and host approvals.",
     }),
   ),
   node: Type.Optional(

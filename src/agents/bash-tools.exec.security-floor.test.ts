@@ -88,6 +88,45 @@ describe("exec security floor", () => {
     ).rejects.toThrow(/exec denied: allowlist miss/i);
   });
 
+  it("ignores model-supplied ask overrides when configured ask is off", async () => {
+    const root = tempRoot ?? os.tmpdir();
+    const binDir = path.join(root, "bin");
+    const openclawDir = path.join(root, ".openclaw");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(openclawDir, { recursive: true });
+    const gogPath = path.join(binDir, "gog");
+    fs.writeFileSync(gogPath, "#!/bin/sh\nprintf 'gog-ok %s\\n' \"$*\"\n", { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(openclawDir, "exec-approvals.json"),
+      `${JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "allowlist" },
+        agents: { "*": { allowlist: [{ pattern: gogPath }] } },
+      })}\n`,
+    );
+    const tool = createExecTool({
+      host: "gateway",
+      security: "allowlist",
+      ask: "off",
+      safeBins: [],
+      pathPrepend: [binDir],
+      messageProvider: "telegram",
+      currentChannelId: "telegram:12345",
+      accountId: "default",
+    });
+
+    const result = await tool.execute("call-model-ask-ignored", {
+      command: "gog tasks add tasklist --title test",
+      ask: "always",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text ?? "").toContain(
+      "gog-ok tasks add tasklist --title test",
+    );
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("ignores model-supplied deny security when configured security is allowlist", async () => {
     const tool = createExecTool({
       security: "allowlist",
