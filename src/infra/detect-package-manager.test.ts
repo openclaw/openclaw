@@ -29,10 +29,11 @@ describe("detectPackageManager", () => {
     );
   });
 
-  it("uses npm-shrinkwrap.json as npm package install evidence", async () => {
+  it("uses published npm package markers as npm install evidence", async () => {
     await withPackageManagerRoot(
       [
         { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
+        { path: "pnpm-workspace.yaml", content: "packages: []\n" },
         { path: "npm-shrinkwrap.json", content: "" },
       ],
       async (root) => {

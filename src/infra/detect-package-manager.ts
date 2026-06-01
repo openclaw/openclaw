@@ -7,8 +7,7 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   const files = await fs.readdir(root).catch((): string[] => []);
   const hasNpmShrinkwrap = files.includes("npm-shrinkwrap.json");
   const hasPnpmLock = files.includes("pnpm-lock.yaml");
-  const hasPnpmWorkspace = files.includes("pnpm-workspace.yaml");
-  if (hasNpmShrinkwrap && !hasPnpmLock && !hasPnpmWorkspace) {
+  if (hasNpmShrinkwrap && !hasPnpmLock) {
     return "npm";
   }
 

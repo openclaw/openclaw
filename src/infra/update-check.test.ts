@@ -291,6 +291,7 @@ describe("checkUpdateStatus", () => {
         JSON.stringify({ packageManager: "pnpm@11.2.2" }),
         "utf8",
       );
+      await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
       await fs.writeFile(shrinkwrapPath, "lock", "utf8");
       await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
 
