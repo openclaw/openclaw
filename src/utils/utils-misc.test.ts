@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { asBoolean, parseBooleanValue } from "./boolean.js";
 import { chunkItems } from "./chunk-items.js";
 import { splitShellArgs } from "./shell-argv.js";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "./zod-parse.js";
 
 describe("asBoolean", () => {
   it("accepts booleans only", () => {
@@ -81,5 +83,20 @@ describe("chunkItems", () => {
 
   it("keeps one row when the requested size is not positive", () => {
     expect(chunkItems([1, 2, 3], 0)).toEqual([[1, 2, 3]]);
+  });
+});
+
+describe("zod parse helpers", () => {
+  const schema = z.object({ name: z.string() });
+
+  it("returns parsed data for schema-valid values", () => {
+    expect(safeParseWithSchema(schema, { name: "Ada" })).toEqual({ name: "Ada" });
+    expect(safeParseJsonWithSchema(schema, `{"name":"Ada"}`)).toEqual({ name: "Ada" });
+  });
+
+  it("returns null for schema failures or invalid JSON", () => {
+    expect(safeParseWithSchema(schema, { name: 1 })).toBeNull();
+    expect(safeParseJsonWithSchema(schema, `{"name":1}`)).toBeNull();
+    expect(safeParseJsonWithSchema(schema, `{`)).toBeNull();
   });
 });
