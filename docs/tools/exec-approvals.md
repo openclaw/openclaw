@@ -144,9 +144,15 @@ when set at the narrower session or agent scope.
 ### `exec.ask`
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
-  - `off` - never prompt.
-  - `on-miss` - prompt only when the allowlist does not match.
-  - `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
+  Configured ask policy for host exec. Controls when approval prompts
+  appear based on `tools.exec.ask` and host approvals defaults. The
+  per-call `ask` tool parameter (see [Exec tool](/tools/exec#parameters))
+  is ignored for normal tool calls; only the configured policy and host
+  approvals set the effective ask mode.
+
+- `off` - never prompt.
+- `on-miss` - prompt only when the allowlist does not match.
+- `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
 
 </ParamField>
 

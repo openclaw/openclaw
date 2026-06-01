@@ -52,7 +52,10 @@ force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
-Approval prompt behavior for `gateway` / `node` execution.
+Ignored for normal tool calls. Exec ask mode is controlled by
+`tools.exec.ask` and host approvals. Approval-required diagnostics
+paths (such as approval-card exec tool construction) that pass an
+explicit `ask` value are unchanged.
 </ParamField>
 
 <ParamField path="node" type="string">
