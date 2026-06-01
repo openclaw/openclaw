@@ -158,10 +158,9 @@ function resolveStreamingCardAppendContent(previousText: string, nextText: strin
   if (!nextText || nextText === previousText) {
     return "";
   }
-  if (!previousText) {
-    return nextText;
-  }
-  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
+  // The CardKit content endpoint overwrites the markdown element body, so send
+  // the complete visible text instead of only the newly generated suffix.
+  return nextText;
 }
 
 export function mergeStreamingText(
