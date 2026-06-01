@@ -333,12 +333,27 @@ function markerBelongsToRecoveredOwner(
   );
 }
 
-function clearRecoveredOwnerEmbeddedRuns(activity: SessionActivity, ownerRefs: Set<string>): void {
+function embeddedRunStartedAfter(
+  embeddedRun: ActiveEmbeddedRun,
+  sequence: number | undefined,
+): boolean {
+  return sequence !== undefined && embeddedRun.sequence > sequence;
+}
+
+function clearRecoveredOwnerEmbeddedRuns(
+  activity: SessionActivity,
+  ownerRefs: Set<string>,
+  recoveryStartedAfterSequence: number | undefined,
+): void {
   if (ownerRefs.size === 0) {
     return;
   }
   for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
-    if (embeddedRun.sessionId !== undefined && ownerRefs.has(embeddedRun.sessionId)) {
+    if (
+      embeddedRun.sessionId !== undefined &&
+      ownerRefs.has(embeddedRun.sessionId) &&
+      !embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterSequence)
+    ) {
       activity.activeEmbeddedRuns.delete(key);
     }
   }
@@ -399,11 +414,11 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
   const ownerRefs = ownerRefsForRecovery(params);
-  const recoveredWorkKey = resolveEmbeddedRunWorkKey({ sessionId: [...ownerRefs][0] ?? "" });
-  if (recoveredWorkKey) {
-    activity.activeEmbeddedRuns.delete(recoveredWorkKey);
-  }
-  clearRecoveredOwnerEmbeddedRuns(activity, ownerRefs);
+  clearRecoveredOwnerEmbeddedRuns(
+    activity,
+    ownerRefs,
+    params.recoveryStartedAfterEmbeddedRunSequence,
+  );
   clearRecoveredOwnerMarkers(activity, ownerRefs);
   if (activity.activeEmbeddedRuns.size > 0) {
     if (hasEmbeddedRunStartedAfter(activity, params.recoveryStartedAfterEmbeddedRunSequence)) {

@@ -2624,6 +2624,37 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.hasActiveEmbeddedRun).toBeUndefined();
   });
 
+  it("preserves same-session work rearmed after recovery starts", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBe("embedded_run");
+    expect(activity.hasActiveEmbeddedRun).toBe(true);
+  });
+
   it("keeps fresh tool markers when a different embedded owner blocks recovery clearing", async () => {
     logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
