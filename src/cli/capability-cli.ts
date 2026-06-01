@@ -1492,12 +1492,15 @@ async function injectTtsAuthProfileApiKey(params: {
   if (!providerId) {
     return params.cfg;
   }
-  const existingProviderConfig = params.cfg.messages?.tts?.providers?.[providerId];
+  const existingProviderConfig = resolveExistingTtsProviderConfig({
+    cfg: params.cfg,
+    providerId,
+  });
   if (
-    existingProviderConfig &&
-    typeof existingProviderConfig === "object" &&
-    !Array.isArray(existingProviderConfig) &&
-    "apiKey" in existingProviderConfig
+    existingProviderConfig?.value &&
+    typeof existingProviderConfig.value === "object" &&
+    !Array.isArray(existingProviderConfig.value) &&
+    "apiKey" in existingProviderConfig.value
   ) {
     return params.cfg;
   }
@@ -1512,11 +1515,12 @@ async function injectTtsAuthProfileApiKey(params: {
   const messages = { ...(params.cfg.messages ?? {}) };
   const tts = { ...(messages.tts ?? {}) };
   const providers = { ...(tts.providers ?? {}) };
-  providers[providerId] = {
-    ...(existingProviderConfig &&
-    typeof existingProviderConfig === "object" &&
-    !Array.isArray(existingProviderConfig)
-      ? existingProviderConfig
+  const providerConfigKey = existingProviderConfig?.key ?? providerId;
+  providers[providerConfigKey] = {
+    ...(existingProviderConfig?.value &&
+    typeof existingProviderConfig.value === "object" &&
+    !Array.isArray(existingProviderConfig.value)
+      ? existingProviderConfig.value
       : {}),
     apiKey: auth.apiKey,
   };
@@ -1530,6 +1534,29 @@ async function injectTtsAuthProfileApiKey(params: {
       },
     },
   };
+}
+
+function resolveExistingTtsProviderConfig(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): { key: string; value: unknown } | undefined {
+  const providers = params.cfg.messages?.tts?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const exact = providers[params.providerId];
+  if (exact !== undefined) {
+    return { key: params.providerId, value: exact };
+  }
+  for (const [key, value] of Object.entries(providers)) {
+    const normalizedKey = normalizeLowercaseStringOrEmpty(
+      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+    );
+    if (normalizedKey === params.providerId) {
+      return { key, value };
+    }
+  }
+  return undefined;
 }
 
 async function runTtsProviders(transport: CapabilityTransport) {
