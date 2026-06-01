@@ -2474,6 +2474,53 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.activeToolName).toBeUndefined();
   });
 
+  it("remembers stale async start cutoffs even when activity was already empty", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    emitDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: sessionId,
+      sessionId,
+      sessionKey,
+      toolName: "Bash",
+      toolCallId: "late-tool",
+    });
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: sessionId,
+      sessionId,
+      sessionKey,
+      callId: "late-model",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.resolve(abortedOutcome()),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("idle");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.activeToolName).toBeUndefined();
+  });
+
   it("preserves an active flag for a newer run that re-armed work mid-recovery", async () => {
     logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });

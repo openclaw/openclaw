@@ -460,16 +460,23 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   recoveryStartedAfterEmbeddedRunSequence?: number;
   recoveryStartedAfterDiagnosticEventSequence?: number;
 }): { cleared: boolean; blockedByActiveEmbeddedRun: boolean } {
-  const activity = resolveSessionActivity(params);
+  const shouldCreateCutoffActivity =
+    params.recoveryStartedAfterDiagnosticEventSequence !== undefined;
+  const activity = resolveSessionActivity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runId: params.activeSessionId,
+    create: shouldCreateCutoffActivity,
+  });
   if (!activity) {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
-  if (
-    activity.activeEmbeddedRuns.size === 0 &&
-    activity.activeTools.size === 0 &&
-    activity.activeModelCalls.size === 0
-  ) {
-    return { cleared: false, blockedByActiveEmbeddedRun: false };
+  if (params.activeSessionId) {
+    registerSessionActivityRefs(activity, {
+      sessionId: params.activeSessionId,
+      sessionKey: params.sessionKey,
+      runId: params.activeSessionId,
+    });
   }
   const ownerRefs = ownerRefsForRecovery(params);
   rememberRecoveredOwnerStartEventCutoffs(
@@ -477,6 +484,13 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     ownerRefs,
     params.recoveryStartedAfterDiagnosticEventSequence,
   );
+  if (
+    activity.activeEmbeddedRuns.size === 0 &&
+    activity.activeTools.size === 0 &&
+    activity.activeModelCalls.size === 0
+  ) {
+    return { cleared: false, blockedByActiveEmbeddedRun: false };
+  }
   clearRecoveredOwnerEmbeddedRuns(
     activity,
     ownerRefs,
