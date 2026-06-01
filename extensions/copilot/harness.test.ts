@@ -4,15 +4,18 @@ import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness
 
 const mocks = vi.hoisted(() => ({
   runCopilotAttempt: vi.fn(),
-  resolvePoolAcquire: vi.fn(() => ({
-    auth: {
-      agentId: "test",
-      authMode: "useLoggedInUser",
-      copilotHome: "/tmp/copilot",
-    },
-    key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/tmp/copilot" },
-    options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
-  })),
+  resolvePoolAcquire: vi.fn(
+    () =>
+      ({
+        auth: {
+          agentId: "test",
+          authMode: "useLoggedInUser",
+          copilotHome: "/tmp/copilot",
+        },
+        key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/tmp/copilot" },
+        options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
+      }) as any,
+  ),
   createCopilotClientPool: vi.fn(),
 }));
 

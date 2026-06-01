@@ -773,7 +773,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("honors selected plugin harness pins during compaction preflight", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -816,7 +819,10 @@ describe("selectAgentHarness", () => {
 
   it("keeps compaction recoverable when auth profile lookup fails", async () => {
     compactAuthMocks.getApiKeyForModel.mockRejectedValue(new Error("missing auth profile"));
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -878,7 +884,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("uses agent-scoped runtime policy during compaction preflight", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -907,7 +916,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("uses sandbox session key for compaction preflight runtime policy", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
@@ -938,7 +950,10 @@ describe("selectAgentHarness", () => {
   });
 
   it("keeps explicit agent id for non-agent sandbox policy keys during compaction preflight", async () => {
-    const compact = vi.fn(async () => ({ ok: true, compacted: false }));
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
     registerAgentHarness(
       {
         id: "codex",
