@@ -64,16 +64,22 @@ function isMissingOrEmptyObject(value: unknown): boolean {
 }
 
 function nullableStringSchema(description: string) {
-  return Type.Optional(Type.Union([Type.String(), Type.Null()], { description }));
+  return Type.Optional(Type.Unsafe<string | null>({ type: "string", description }));
 }
 
 function nullableStringArraySchema(description: string) {
-  return Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()], { description }));
+  return Type.Optional(
+    Type.Unsafe<string[] | null>({
+      type: "array",
+      items: { type: "string" },
+      description,
+    }),
+  );
 }
 
 function deliveryStringSchema(params: { description: string; nullableClears: boolean }) {
   return params.nullableClears
-    ? nullableStringSchema(params.description)
+    ? nullableStringSchema(`${params.description}, or null to clear`)
     : Type.Optional(Type.String({ description: params.description }));
 }
 

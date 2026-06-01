@@ -64,6 +64,58 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
   return { ...rest, state: {} };
 }
 
+function mergeFailureDestinationProjection(
+  configJob: Record<string, unknown>,
+  projectedJob: CronJob | null,
+): Record<string, unknown> {
+  const failureDestination = projectedJob?.delivery?.failureDestination;
+  if (!failureDestination) {
+    return configJob;
+  }
+  const delivery: Record<string, unknown> =
+    isRecord(configJob.delivery) && !Array.isArray(configJob.delivery)
+      ? { ...configJob.delivery }
+      : projectedJob?.delivery
+        ? {
+            mode: projectedJob.delivery.mode,
+            ...(projectedJob.delivery.channel ? { channel: projectedJob.delivery.channel } : {}),
+            ...(projectedJob.delivery.to ? { to: projectedJob.delivery.to } : {}),
+            ...(projectedJob.delivery.threadId !== undefined
+              ? { threadId: projectedJob.delivery.threadId }
+              : {}),
+            ...(projectedJob.delivery.accountId
+              ? { accountId: projectedJob.delivery.accountId }
+              : {}),
+            ...(projectedJob.delivery.bestEffort !== undefined
+              ? { bestEffort: projectedJob.delivery.bestEffort }
+              : {}),
+            ...(projectedJob.delivery.completionDestination
+              ? { completionDestination: projectedJob.delivery.completionDestination }
+              : {}),
+          }
+        : {};
+  const nextFailureDestination = isRecord(delivery.failureDestination)
+    ? { ...delivery.failureDestination }
+    : {};
+  if (Object.hasOwn(failureDestination, "channel")) {
+    nextFailureDestination.channel = failureDestination.channel;
+  }
+  if (Object.hasOwn(failureDestination, "to")) {
+    nextFailureDestination.to = failureDestination.to;
+  }
+  if (Object.hasOwn(failureDestination, "accountId")) {
+    nextFailureDestination.accountId = failureDestination.accountId;
+  }
+  if (Object.hasOwn(failureDestination, "mode")) {
+    nextFailureDestination.mode = failureDestination.mode;
+  }
+  delivery.failureDestination = nextFailureDestination;
+  return {
+    ...configJob,
+    delivery,
+  };
+}
+
 function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): CronJobInsert {
   return {
     store_key: storeKey,
@@ -248,9 +300,12 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   const parsedJobs = rows.map(rowToCronJob);
   const jobs = parsedJobs.filter((job): job is CronJob => job !== null);
   const configJobs = rows.map((row, index) =>
-    parseJsonObject<Record<string, unknown>>(
-      row.job_json,
-      stripJobRuntimeFields(parsedJobs[index] ?? ({} as CronJob)),
+    mergeFailureDestinationProjection(
+      parseJsonObject<Record<string, unknown>>(
+        row.job_json,
+        stripJobRuntimeFields(parsedJobs[index] ?? ({} as CronJob)),
+      ),
+      parsedJobs[index] ?? null,
     ),
   );
   const configJobRuntimeEntries = rows.map((row) => ({

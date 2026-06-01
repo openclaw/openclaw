@@ -20,6 +20,7 @@ export function bindDeliveryColumns(
   | "failure_delivery_mode"
   | "failure_delivery_to"
 > {
+  const failureDestination = delivery?.failureDestination;
   return {
     delivery_mode: delivery?.mode ?? null,
     delivery_channel: delivery?.channel ?? null,
@@ -32,11 +33,28 @@ export function bindDeliveryColumns(
     delivery_best_effort: booleanToInteger(delivery?.bestEffort),
     delivery_completion_mode: delivery?.completionDestination?.mode ?? null,
     delivery_completion_to: delivery?.completionDestination?.to ?? null,
-    failure_delivery_mode: delivery?.failureDestination?.mode ?? null,
-    failure_delivery_channel: delivery?.failureDestination?.channel ?? null,
-    failure_delivery_to: delivery?.failureDestination?.to ?? null,
-    failure_delivery_account_id: delivery?.failureDestination?.accountId ?? null,
+    // Empty string is an internal SQLite sentinel for an explicit undefined field.
+    // `resolveFailureDestination` uses own-property presence to clear inherited
+    // global failure-destination fields, so persistence must preserve presence.
+    failure_delivery_mode: bindFailureDestinationField(failureDestination, "mode"),
+    failure_delivery_channel: bindFailureDestinationField(failureDestination, "channel"),
+    failure_delivery_to: bindFailureDestinationField(failureDestination, "to"),
+    failure_delivery_account_id: bindFailureDestinationField(failureDestination, "accountId"),
   };
+}
+
+function bindFailureDestinationField(
+  failureDestination: CronDelivery["failureDestination"],
+  key: "accountId" | "channel" | "mode" | "to",
+): string | null {
+  if (!failureDestination || !Object.hasOwn(failureDestination, key)) {
+    return null;
+  }
+  return failureDestination[key] ?? "";
+}
+
+function readFailureDestinationField(value: string | null): string | undefined {
+  return value === "" || value == null ? undefined : value;
 }
 
 function cronDeliveryModeFromValue(value: unknown): CronDelivery["mode"] | undefined {
@@ -54,10 +72,10 @@ export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
       row.delivery_account_id ||
       row.delivery_completion_mode ||
       row.delivery_completion_to ||
-      row.failure_delivery_channel ||
-      row.failure_delivery_to ||
-      row.failure_delivery_mode ||
-      row.failure_delivery_account_id,
+      row.failure_delivery_channel != null ||
+      row.failure_delivery_to != null ||
+      row.failure_delivery_mode != null ||
+      row.failure_delivery_account_id != null,
     ) || row.delivery_best_effort != null;
   const completionDestination =
     rowMode === "announce" && row.delivery_completion_mode === "webhook"
@@ -67,20 +85,30 @@ export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
         }
       : undefined;
   const failureDestination =
-    row.failure_delivery_channel ||
-    row.failure_delivery_to ||
-    row.failure_delivery_mode ||
-    row.failure_delivery_account_id
+    row.failure_delivery_channel != null ||
+    row.failure_delivery_to != null ||
+    row.failure_delivery_mode != null ||
+    row.failure_delivery_account_id != null
       ? {
-          ...(row.failure_delivery_channel
-            ? { channel: row.failure_delivery_channel as CronDelivery["channel"] }
+          ...(row.failure_delivery_channel != null
+            ? {
+                channel: readFailureDestinationField(
+                  row.failure_delivery_channel,
+                ) as CronDelivery["channel"],
+              }
             : {}),
-          ...(row.failure_delivery_to ? { to: row.failure_delivery_to } : {}),
-          ...(row.failure_delivery_mode
-            ? { mode: row.failure_delivery_mode as "announce" | "webhook" }
+          ...(row.failure_delivery_to != null
+            ? { to: readFailureDestinationField(row.failure_delivery_to) }
             : {}),
-          ...(row.failure_delivery_account_id
-            ? { accountId: row.failure_delivery_account_id }
+          ...(row.failure_delivery_mode != null
+            ? {
+                mode: readFailureDestinationField(row.failure_delivery_mode) as
+                  | "announce"
+                  | "webhook",
+              }
+            : {}),
+          ...(row.failure_delivery_account_id != null
+            ? { accountId: readFailureDestinationField(row.failure_delivery_account_id) }
             : {}),
         }
       : undefined;

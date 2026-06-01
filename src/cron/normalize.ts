@@ -276,6 +276,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("channel" in next) {
     if (next.channel === null) {
       next.channel = null;
+    } else if (next.channel === undefined) {
+      next.channel = undefined;
     } else {
       const channel = normalizeOptionalLowercaseString(next.channel);
       if (channel) {
@@ -288,6 +290,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("to" in next) {
     if (next.to === null) {
       next.to = null;
+    } else if (next.to === undefined) {
+      next.to = undefined;
     } else {
       const to = normalizeOptionalString(next.to);
       if (to) {
@@ -300,6 +304,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("accountId" in next) {
     if (next.accountId === null) {
       next.accountId = null;
+    } else if (next.accountId === undefined) {
+      next.accountId = undefined;
     } else {
       const accountId = normalizeOptionalString(next.accountId);
       if (accountId) {
@@ -312,6 +318,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("mode" in next) {
     if (next.mode === null) {
       next.mode = null;
+    } else if (next.mode === undefined) {
+      next.mode = undefined;
     } else {
       const mode = normalizeOptionalLowercaseString(next.mode);
       if (mode === "announce" || mode === "webhook") {
