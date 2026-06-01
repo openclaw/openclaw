@@ -98,7 +98,7 @@ describe("sendMessageIMessage receipts", () => {
         client,
       }),
     ).rejects.toThrow("iMessage outbound blocked: group targets are disabled");
-    expect(client.request).not.toHaveBeenCalled();
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
   it("allows explicit chat targets listed by group allowlist policy", async () => {
@@ -117,7 +117,7 @@ describe("sendMessageIMessage receipts", () => {
       client,
     });
 
-    expect(client.request).toHaveBeenCalledWith(
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({ chat_id: 42 }),
       expect.any(Object),
@@ -147,7 +147,7 @@ describe("sendMessageIMessage receipts", () => {
       client,
     });
 
-    expect(client.request).toHaveBeenCalledWith(
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({ chat_id: 42 }),
       expect.any(Object),
@@ -169,7 +169,7 @@ describe("sendMessageIMessage receipts", () => {
       client,
     });
 
-    expect(client.request).toHaveBeenCalledWith(
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({ to: "+15551230000" }),
       expect.any(Object),
@@ -191,7 +191,7 @@ describe("sendMessageIMessage receipts", () => {
       client,
     });
 
-    expect(client.request).toHaveBeenCalledWith(
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({ to: "+15551230000" }),
       expect.any(Object),
@@ -221,7 +221,7 @@ describe("sendMessageIMessage receipts", () => {
       client,
     });
 
-    expect(client.request).toHaveBeenCalledWith(
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({ to: "+15551230000" }),
       expect.any(Object),
