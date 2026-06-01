@@ -99,7 +99,10 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./subagent-registry.js";
-import { splitModelRef } from "./subagent-spawn-plan.js";
+import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  splitModelRef,
+} from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
@@ -1252,6 +1255,10 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = getRuntimeConfig();
+  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
+    cfg,
+    runTimeoutSeconds: params.runTimeoutSeconds,
+  });
   const requesterInternalKey = resolveRequesterInternalSessionKey({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -1388,7 +1395,7 @@ export async function spawnAcpDirect(
     configAgentId: targetAgentResult.configAgentId,
     model: params.model,
     thinking: params.thinking,
-    runTimeoutSeconds: params.runTimeoutSeconds,
+    runTimeoutSeconds,
   });
   if (!runtimeOptionsResult.ok) {
     return createAcpSpawnFailure({
@@ -1562,7 +1569,7 @@ export async function spawnAcpDirect(
         deliver: deliveryPlan.useInlineDelivery,
         lane: AGENT_LANE_SUBAGENT,
         acpTurnSource: "manual_spawn",
-        ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
+        ...(runTimeoutSeconds > 0 ? { timeout: runTimeoutSeconds } : {}),
         label: params.label || undefined,
         ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
       },

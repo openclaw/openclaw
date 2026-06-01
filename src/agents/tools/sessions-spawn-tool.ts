@@ -7,6 +7,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -284,11 +285,13 @@ export function createSessionsSpawnTool(
         );
       }
       const unsupportedTimeoutParam = UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS.find((key) =>
-        Object.hasOwn(params, key),
+        resolveSnakeCaseParamKey(params, key),
       );
       if (unsupportedTimeoutParam) {
+        const providedTimeoutParam =
+          resolveSnakeCaseParamKey(params, unsupportedTimeoutParam) ?? unsupportedTimeoutParam;
         throw new ToolInputError(
-          `sessions_spawn does not support per-call "${unsupportedTimeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+          `sessions_spawn does not support per-call "${providedTimeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
         );
       }
       const task = readStringParam(params, "task", { required: true });
