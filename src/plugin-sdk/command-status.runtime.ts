@@ -10,16 +10,25 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadSessionEntry } from "../gateway/session-utils.js";
 
 export type ResolveDirectStatusReplyForSessionParams = {
+  /** Fallback config when the target session cannot supply its stored config. */
   cfg: OpenClawConfig;
+  /** Requested session key; loadSessionEntry may canonicalize it before status rendering. */
   sessionKey: string;
+  /** Channel/surface name used in the command context. */
   channel: string;
+  /** Optional sender id included in the synthetic status command context. */
   senderId?: string;
+  /** Whether the sender owns the target session. */
   senderIsOwner: boolean;
+  /** Whether channel policy authorizes this sender for status details. */
   isAuthorizedSender: boolean;
+  /** Whether the status command originated from a group context. */
   isGroup: boolean;
+  /** Channel default used when status text needs group activation semantics. */
   defaultGroupActivation: () => "always" | "mention";
 };
 
+/** Builds the direct /status reply for an existing session without dispatching a new agent turn. */
 export async function resolveDirectStatusReplyForSession(
   params: ResolveDirectStatusReplyForSessionParams,
 ): Promise<ReplyPayload | undefined> {
@@ -89,6 +98,7 @@ export async function resolveDirectStatusReplyForSession(
     statusEntry?.reasoningLevel !== undefined && statusEntry.reasoningLevel !== null;
   const canUseReasoningState = params.senderIsOwner || params.isAuthorizedSender;
   if (!canUseReasoningState && (sessionReasoningExplicitlySet || hasAgentReasoningDefault)) {
+    // Do not expose owner-configured reasoning state to unauthorized direct status callers.
     resolvedReasoningLevel = "off";
   }
   const reasoningExplicitlySet = sessionReasoningExplicitlySet || hasAgentReasoningDefault;
