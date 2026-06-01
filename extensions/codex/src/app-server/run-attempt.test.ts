@@ -2209,11 +2209,19 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledOnce();
     const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-      { messages?: Array<{ role?: string }>; prompt?: string },
+      {
+        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+        prompt?: string;
+      },
       { runId?: string; sessionId?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([]);
+    expect(hookInput.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "previous turn" }],
+      }),
+    ]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
