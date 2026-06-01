@@ -33,6 +33,7 @@ import {
   testing as replyRunRegistryTesting,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -3160,6 +3161,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
     const sessionCtx = {
       Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
       OriginatingTo: "+15550001111",
       AccountId: "primary",
       MessageSid: "msg",
@@ -3193,7 +3195,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       },
     } as unknown as FollowupRun;
 
-    await runReplyAgent({
+    const result = await runReplyAgent({
       commandBody: "hello",
       followupRun,
       queueKey: sessionKey,
@@ -3217,6 +3219,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       shouldInjectGroupIntro: false,
       typingMode: "instant",
     });
+    return { storePath, tmp, sessionKey, result };
   }
 
   it("warns when a substantive private final reply never used the message tool", async () => {
@@ -3225,9 +3228,31 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
   });
 
+  it("sets pendingFinalDelivery for a stranded substantive reply (#85714)", async () => {
+    const { storePath, sessionKey } = await runPrivateFinalCase({});
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
+
+    expect(store[sessionKey]?.pendingFinalDelivery).toBe(true);
+    expect(store[sessionKey]?.pendingFinalDeliveryText).toContain("Here is the answer");
+    expect(store[sessionKey]?.pendingFinalDeliveryContext).toMatchObject({
+      channel: "whatsapp",
+      to: "+15550001111",
+      accountId: "primary",
+    });
+  });
+
   it("does not warn for a short private final reply", async () => {
     await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not set pendingFinalDelivery for short private final replies", async () => {
+    const { storePath, sessionKey } = await runPrivateFinalCase({
+      finalAssistantText: "Nothing to send here.",
+    });
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
+
+    expect(store[sessionKey]?.pendingFinalDelivery).not.toBe(true);
   });
 
   it("does not warn when the message tool delivered this turn", async () => {
@@ -3235,6 +3260,33 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not set pendingFinalDelivery when the message tool delivered this turn", async () => {
+    const { storePath, sessionKey } = await runPrivateFinalCase({
+      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
+    });
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
+
+    expect(store[sessionKey]?.pendingFinalDelivery).not.toBe(true);
+  });
+
+  it("marks stranded reply payloads for delivery despite source suppression (#85714)", async () => {
+    const { result } = await runPrivateFinalCase({});
+    // runReplyAgent returns a single payload or array; normalize to check metadata.
+    const payload = result && typeof result === "object" ? result : undefined;
+    expect(payload).toBeDefined();
+    expect(getReplyPayloadMetadata(payload!)?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("does not mark short replies for delivery despite source suppression", async () => {
+    const { result } = await runPrivateFinalCase({ finalAssistantText: "Short." });
+    const payload = result && typeof result === "object" ? result : undefined;
+    if (payload) {
+      expect(
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+      ).not.toBe(true);
+    }
   });
 
   it("still warns when only an unrelated cron side effect succeeded", async () => {
