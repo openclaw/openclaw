@@ -23,6 +23,7 @@ function collectTrackedActiveSessionRuns(
     }
     if (
       active.projectSessionActive !== false &&
+      active.controlUiVisible !== false &&
       typeof active.sessionKey === "string" &&
       active.sessionKey.trim()
     ) {
@@ -45,11 +46,17 @@ function isTrackedActiveSessionRunForKey(
   if (active.sessionKey !== key) {
     return false;
   }
-  if (key !== "global" || agentId === undefined) {
+  if (key !== "global") {
+    return true;
+  }
+  const requestedAgentId = agentId ?? defaultAgentId;
+  if (!requestedAgentId) {
     return true;
   }
   const activeAgentId = active.agentId ?? defaultAgentId;
-  return activeAgentId ? normalizeAgentId(activeAgentId) === normalizeAgentId(agentId) : false;
+  return activeAgentId
+    ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
+    : false;
 }
 
 function hasTrackedActiveSessionRun(params: {

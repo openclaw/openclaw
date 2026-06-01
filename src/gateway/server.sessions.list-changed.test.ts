@@ -529,6 +529,40 @@ test("sessions.changed command metadata excludes only the command run from activ
   expect(payload.excludeActiveRunIds).toBeUndefined();
 });
 
+test("sessions.changed command metadata ignores hidden internal active runs", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const broadcastToConnIds = vi.fn();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  emitSessionsChanged(
+    {
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getRuntimeConfig,
+      chatAbortControllers: new Map([
+        ["command-run", { sessionKey: "agent:main:main" }],
+        ["hidden-run", { sessionKey: "agent:main:main", controlUiVisible: false }],
+      ]),
+    } as never,
+    {
+      sessionKey: "agent:main:main",
+      reason: "command-metadata",
+      excludeActiveRunIds: ["command-run"],
+    },
+  );
+
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "command-metadata",
+    hasActiveRun: false,
+  });
+});
+
 test("sessions.changed command metadata marks selected global runs active", async () => {
   const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
@@ -612,6 +646,32 @@ test("sessions.changed command metadata marks selected global runs active", asyn
   await fs.writeFile(configPath, "{}\n", "utf-8");
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+});
+
+test("sessions.changed command metadata scopes untagged global runs to the default agent", async () => {
+  const globalStores = await setupGlobalAgentSessionStores({ writePrimeStore: true });
+
+  const broadcastToConnIds = vi.fn();
+  emitSessionsChanged(
+    {
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getRuntimeConfig: globalStores.getRuntimeConfig,
+      chatAbortControllers: new Map([["work-run", { sessionKey: "global", agentId: "work" }]]),
+    } as never,
+    {
+      sessionKey: "global",
+      reason: "command-metadata",
+    },
+  );
+
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    reason: "command-metadata",
+    sessionId: "sess-main-global",
+    hasActiveRun: false,
+  });
+  await resetGlobalAgentSessionStores(globalStores);
 });
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
