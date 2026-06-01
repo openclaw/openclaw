@@ -359,6 +359,9 @@ export function createScopedChannelConfigAdapter<
     allowTopLevel?: boolean;
   },
 ): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
+  // Scoped channels store every account under `accounts`; accessor overrides let
+  // channels expose inherited allowlists/default targets without changing CRUD
+  // account resolution.
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createScopedChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -513,6 +516,8 @@ export function createTopLevelChannelConfigAdapter<
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
+  // Top-level adapters always resolve the root account for accessor methods;
+  // callers may still override the accessor account to project inherited state.
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createTopLevelChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -600,6 +605,8 @@ export function createHybridChannelConfigAdapter<
     preserveSectionOnDefaultDelete?: boolean;
   },
 ): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
+  // Hybrid adapters preserve the default account at the channel root while
+  // routing named accounts through the shared `accounts` map helpers.
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createHybridChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -656,6 +663,8 @@ export function createScopedDmSecurityResolver<
     const access = params.resolveAccess?.({ cfg, accountId, account });
     // Explicit access resolvers win over resolved account fields; channels use
     // this to project inherited/default DM policy without mutating the account.
+    // The fallback account id keeps approval paths stable when a resolver merges
+    // default-account policy into a requested account.
     return buildAccountScopedDmSecurityPolicy({
       cfg,
       channelKey: params.channelKey,
