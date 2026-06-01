@@ -144,11 +144,11 @@ when set at the narrower session or agent scope.
 ### `exec.ask`
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
-  Configured ask policy for host exec. Controls when approval prompts
-  appear based on `tools.exec.ask` and host approvals defaults. The
+  Configured ask policy for host exec. Controls the baseline approval
+  prompt behavior from `tools.exec.ask` and host approvals defaults. The
   per-call `ask` tool parameter (see [Exec tool](/tools/exec#parameters))
-  is ignored for normal tool calls; only the configured policy and host
-  approvals set the effective ask mode.
+  can only harden that baseline, and channel-origin model calls ignore it
+  when the effective host ask is `off`.
 
 - `off` - never prompt.
 - `on-miss` - prompt only when the allowlist does not match.

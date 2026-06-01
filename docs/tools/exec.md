@@ -52,9 +52,10 @@ force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
-Ignored for normal tool calls. Exec ask mode is controlled by
-`tools.exec.ask` and host approvals. Approval-required diagnostics
-paths (such as approval-card exec tool construction) that pass an
+The baseline ask mode comes from `tools.exec.ask` and host approvals.
+For channel-origin model calls, per-call `ask` is ignored when the
+effective host ask is `off`; otherwise it can only harden to a stricter
+mode. Trusted internal/API callers that construct exec tools with an
 explicit `ask` value are unchanged.
 </ParamField>
 

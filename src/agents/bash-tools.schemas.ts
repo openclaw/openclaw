@@ -41,7 +41,7 @@ export const execSchema = Type.Object({
   ask: Type.Optional(
     Type.String({
       description:
-        "Ignored for normal calls; exec ask mode is set by tools.exec.ask and host approvals.",
+        "Baseline ask comes from tools.exec.ask and host approvals; channel-origin calls ignore per-call ask when effective host ask is off.",
     }),
   ),
   node: Type.Optional(
