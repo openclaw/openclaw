@@ -389,11 +389,11 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.compactionCount).toBe(1);
   });
 
-  it("treats below-target Codex native CLI compaction as a no-op", async () => {
-    const sessionKey = "agent:main:codex-under-target";
-    const sessionId = "session-codex-under-target";
-    const sessionFile = path.join(tmpDir, "session-codex-under-target.jsonl");
-    const storePath = path.join(tmpDir, "sessions-codex-under-target.json");
+  it("treats below-target Copilot native CLI compaction as a no-op", async () => {
+    const sessionKey = "agent:main:copilot-under-target";
+    const sessionId = "session-copilot-under-target";
+    const sessionFile = path.join(tmpDir, "session-copilot-under-target.jsonl");
+    const storePath = path.join(tmpDir, "sessions-copilot-under-target.json");
     await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
@@ -403,7 +403,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
-      agentHarnessId: "codex",
+      agentHarnessId: "copilot",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -447,7 +447,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionAgentId: "main",
       workspaceDir: tmpDir,
       agentDir: tmpDir,
-      provider: "codex",
+      provider: "github-copilot",
       model: "gpt-5.5",
     });
 

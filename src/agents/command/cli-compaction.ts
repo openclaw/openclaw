@@ -175,8 +175,8 @@ function isNativeHarnessCompactionSession(
   const providerId = provider.trim().toLowerCase();
   return (
     harnessId === providerId ||
-    (harnessId === "codex" &&
-      (providerId === "codex" || providerId === "openai" || providerId === "openai"))
+    (harnessId === "copilot" && providerId === "github-copilot") ||
+    (harnessId === "codex" && (providerId === "codex" || providerId === "openai"))
   );
 }
 
