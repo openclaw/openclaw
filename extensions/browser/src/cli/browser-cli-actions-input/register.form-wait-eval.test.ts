@@ -92,6 +92,54 @@ describe("browser action input wait command", () => {
   });
 });
 
+describe("browser action input fill command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("sends normalized fill fields with target and profile context", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "--browser-profile",
+        "qa",
+        "fill",
+        "--fields",
+        JSON.stringify([
+          { ref: "name", value: "Ada" },
+          { ref: "enabled", type: "checkbox", value: true },
+          { ref: "empty" },
+        ]),
+        "--target-id",
+        "tab-main",
+      ],
+      { from: "user" },
+    );
+
+    expect(mocks.callBrowserRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ browserProfile: "qa" }),
+      {
+        method: "POST",
+        path: "/act",
+        query: { profile: "qa" },
+        body: {
+          kind: "fill",
+          fields: [
+            { ref: "name", type: "text", value: "Ada" },
+            { ref: "enabled", type: "checkbox", value: true },
+            { ref: "empty", type: "text" },
+          ],
+          targetId: "tab-main",
+        },
+      },
+      { timeoutMs: 25000 },
+    );
+  });
+});
+
 describe("browser action input evaluate command", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();

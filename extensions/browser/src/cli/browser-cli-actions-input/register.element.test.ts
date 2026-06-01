@@ -41,6 +41,44 @@ describe("browser element commands", () => {
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
+  it("sends click requests with element action options", async () => {
+    const program = createElementProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "--browser-profile",
+        "qa",
+        "click",
+        "ref-42",
+        "--target-id",
+        "tab-main",
+        "--double",
+        "--button",
+        "right",
+        "--modifiers",
+        "Shift, Meta",
+      ],
+      { from: "user" },
+    );
+
+    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    expect(call?.[1]).toMatchObject({
+      method: "POST",
+      path: "/act",
+      query: { profile: "qa" },
+      body: {
+        kind: "click",
+        ref: "ref-42",
+        targetId: "tab-main",
+        doubleClick: true,
+        button: "right",
+        modifiers: ["Shift", "Meta"],
+      },
+    });
+    expect(call?.[2]).toMatchObject({ timeoutMs: 25000 });
+  });
+
   it("rejects non-decimal coordinate values before dispatch", async () => {
     const program = createElementProgram();
 
