@@ -940,6 +940,31 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
+  it("uses requesterAgentIdOverride for implicit ACP parent-stream eligibility", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "research" }],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:subagent:parent",
+        requesterAgentIdOverride: "research",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(result.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
   it("does not implicitly stream for subagent requester sessions when heartbeat cadence is invalid", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
