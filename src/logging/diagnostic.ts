@@ -478,14 +478,16 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
 
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
-  ageMs: number;
+  activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
+  const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
-    params.ageMs >= params.stuckSessionAbortMs
+    typeof lastProgressAgeMs === "number" &&
+    lastProgressAgeMs >= params.stuckSessionAbortMs
   );
 }
 

@@ -12,7 +12,7 @@ export type EmbeddedAgentQueueHandle = {
   isStreaming: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
-  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  cancel?: (reason?: "user_abort" | "restart" | "superseded" | "stuck_recovery") => void;
   abort: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };

@@ -8,6 +8,7 @@ import {
   queueReplyRunMessage,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
+  type ReplyBackendCancelReason,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   markDiagnosticEmbeddedRunEnded,
@@ -434,18 +435,31 @@ function prepareEmbeddedAgentQueueMessage(
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
 export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(sessionId: string, opts?: { reason?: string }): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
   opts: { mode: "all" | "compacting" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting" },
+  opts?: { mode?: "all" | "compacting"; reason?: string },
 ): boolean {
+  const mapAbortReasonToCancelReason = (
+    reason?: string,
+  ): ReplyBackendCancelReason | undefined => {
+    if (!reason) {
+      return undefined;
+    }
+    if (reason === "user_abort" || reason === "restart" || reason === "stuck_recovery") {
+      return reason;
+    }
+    return "superseded";
+  };
+
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
-      if (abortReplyRunBySessionId(sessionId)) {
+      if (abortReplyRunBySessionId(sessionId, opts?.reason ? { reason: opts.reason } : undefined)) {
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
@@ -453,7 +467,12 @@ export function abortEmbeddedAgentRun(
     }
     diag.debug(`aborting run: sessionId=${sessionId}`);
     try {
-      handle.abort();
+      const cancelReason = mapAbortReasonToCancelReason(opts?.reason);
+      if (cancelReason && handle.cancel) {
+        handle.cancel(cancelReason);
+      } else {
+        handle.abort();
+      }
     } catch (err) {
       diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
       return false;
@@ -698,7 +717,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const aborted = abortEmbeddedAgentRun(params.sessionId);
+  const aborted = abortEmbeddedAgentRun(params.sessionId, { reason: params.reason });
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

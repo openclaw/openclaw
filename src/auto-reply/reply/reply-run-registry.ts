@@ -10,7 +10,11 @@ export type ReplyRunKey = string;
 
 export type ReplyBackendKind = "embedded" | "cli";
 
-export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+export type ReplyBackendCancelReason =
+  | "user_abort"
+  | "restart"
+  | "superseded"
+  | "stuck_recovery";
 
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
@@ -40,12 +44,15 @@ export type ReplyOperationFailureCode =
   | "session_corruption_reset"
   | "run_failed";
 
-export type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+export type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_by_system";
 
 export type ReplyOperationResult =
   | { kind: "completed" }
   | { kind: "failed"; code: ReplyOperationFailureCode; cause?: unknown }
-  | { kind: "aborted"; code: ReplyOperationAbortCode };
+  | { kind: "aborted"; code: ReplyOperationAbortCode; reason?: string };
 
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
@@ -68,6 +75,12 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
+  abortWithReason?: (params: {
+    reason: string;
+    abortReason?: unknown;
+    cancelReason?: ReplyBackendCancelReason;
+    abortedCode?: Extract<ReplyOperationAbortCode, "aborted_by_system">;
+  }) => void;
 };
 
 export type ReplyRunRegistry = {
@@ -81,7 +94,7 @@ export type ReplyRunRegistry = {
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
   isStreaming(sessionKey: string): boolean;
-  abort(sessionKey: string): boolean;
+  abort(sessionKey: string, opts?: { reason?: string }): boolean;
   waitForIdle(
     sessionKey: string,
     timeoutMs?: number,
@@ -124,6 +137,12 @@ export class ReplyRunAlreadyActiveError extends Error {
 
 function createUserAbortError(): Error {
   const err = new Error("Reply operation aborted by user");
+  err.name = "AbortError";
+  return err;
+}
+
+function createSystemAbortError(reason: string): Error {
+  const err = new Error(`Reply operation aborted by system reason=${reason}`);
   err.name = "AbortError";
   return err;
 }
@@ -268,17 +287,39 @@ export function createReplyOperation(params: {
     }
   };
 
-  const abortWithReason = (
-    reason: ReplyBackendCancelReason,
-    abortReason: unknown,
-    opts?: { abortedCode?: ReplyOperationAbortCode },
-  ) => {
-    if (opts?.abortedCode && !result) {
-      result = { kind: "aborted", code: opts.abortedCode };
+  const applyAbort = (params: {
+    cancelReason: ReplyBackendCancelReason;
+    abortReason: unknown;
+    abortedCode?: ReplyOperationAbortCode;
+    resultReason?: string;
+  }) => {
+    if (params.abortedCode && !result) {
+      result = {
+        kind: "aborted",
+        code: params.abortedCode,
+        ...(params.resultReason ? { reason: params.resultReason } : {}),
+      };
     }
     phase = "aborted";
-    abortInternally(abortReason);
-    getAttachedBackend(operation)?.cancel(reason);
+    abortInternally(params.abortReason);
+    getAttachedBackend(operation)?.cancel(params.cancelReason);
+  };
+
+  const abortWithReason = (
+    reason: string,
+    opts?: {
+      abortReason?: unknown;
+      cancelReason?: ReplyBackendCancelReason;
+      abortedCode?: Extract<ReplyOperationAbortCode, "aborted_by_system">;
+    },
+  ) => {
+    applyAbort({
+      cancelReason:
+        opts?.cancelReason ?? (reason === "stuck_recovery" ? "stuck_recovery" : "superseded"),
+      abortReason: opts?.abortReason ?? createSystemAbortError(reason),
+      abortedCode: opts?.abortedCode ?? "aborted_by_system",
+      resultReason: reason,
+    });
   };
 
   if (params.upstreamAbortSignal) {
@@ -353,7 +394,11 @@ export function createReplyOperation(params: {
           result.kind === "aborted"
             ? result.code === "aborted_for_restart"
               ? "restart"
-              : "user_abort"
+              : result.code === "aborted_by_user"
+                ? "user_abort"
+                : result.reason === "stuck_recovery"
+                  ? "stuck_recovery"
+                  : "superseded"
             : "superseded",
         );
         return;
@@ -388,7 +433,9 @@ export function createReplyOperation(params: {
     },
     abortByUser() {
       const phaseBeforeAbort = phase;
-      abortWithReason("user_abort", createUserAbortError(), {
+      applyAbort({
+        cancelReason: "user_abort",
+        abortReason: createUserAbortError(),
         abortedCode: "aborted_by_user",
       });
       if (phaseBeforeAbort === "queued") {
@@ -397,8 +444,21 @@ export function createReplyOperation(params: {
     },
     abortForRestart() {
       const phaseBeforeAbort = phase;
-      abortWithReason("restart", new Error("Reply operation aborted for restart"), {
+      applyAbort({
+        cancelReason: "restart",
+        abortReason: new Error("Reply operation aborted for restart"),
         abortedCode: "aborted_for_restart",
+      });
+      if (phaseBeforeAbort === "queued") {
+        clearState();
+      }
+    },
+    abortWithReason(params) {
+      const phaseBeforeAbort = phase;
+      abortWithReason(params.reason, {
+        abortReason: params.abortReason,
+        cancelReason: params.cancelReason,
+        abortedCode: params.abortedCode,
       });
       if (phaseBeforeAbort === "queued") {
         clearState();
@@ -440,12 +500,16 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return getAttachedBackend(operation)?.isStreaming() ?? false;
   },
-  abort(sessionKey) {
+  abort(sessionKey, opts) {
     const operation = this.get(sessionKey);
     if (!operation) {
       return false;
     }
-    operation.abortByUser();
+    if (opts?.reason) {
+      operation.abortWithReason?.({ reason: opts.reason });
+    } else {
+      operation.abortByUser();
+    }
     return true;
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
@@ -538,12 +602,19 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   return true;
 }
 
-export function abortReplyRunBySessionId(sessionId: string): boolean {
+export function abortReplyRunBySessionId(
+  sessionId: string,
+  opts?: { reason?: string },
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   if (!operation) {
     return false;
   }
-  operation.abortByUser();
+  if (opts?.reason) {
+    operation.abortWithReason?.({ reason: opts.reason });
+  } else {
+    operation.abortByUser();
+  }
   return true;
 }
 

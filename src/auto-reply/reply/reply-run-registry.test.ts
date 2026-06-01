@@ -7,6 +7,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
   abortActiveReplyRuns,
+  abortReplyRunBySessionId,
   createReplyOperation,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
@@ -102,6 +103,29 @@ describe("reply run registry", () => {
     operation.abortByUser();
 
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("preserves stuck recovery when aborting through the session-id fallback", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-stuck-recovery",
+      resetTriggered: false,
+    });
+
+    expect(abortReplyRunBySessionId("session-stuck-recovery", { reason: "stuck_recovery" })).toBe(
+      true,
+    );
+
+    expect(operation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_by_system",
+      reason: "stuck_recovery",
+    });
+    expect(operation.abortSignal.reason).toMatchObject({
+      name: "AbortError",
+      message: "Reply operation aborted by system reason=stuck_recovery",
+    });
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 

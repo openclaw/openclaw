@@ -3190,7 +3190,7 @@ export async function runEmbeddedAttempt(
       };
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
-        cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+        cancel: (reason?: "user_abort" | "restart" | "superseded" | "stuck_recovery") => void;
       } = {
         kind: "embedded",
         queueMessage: async (text: string, options) => {
@@ -3203,7 +3203,10 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        cancel: abortActiveRunExternally,
+        cancel: (reason) => {
+          externalAbort = true;
+          abortRun(false, reason);
+        },
         abort: abortActiveRunExternally,
       };
       let lastAssistant: AssistantMessage | undefined;
