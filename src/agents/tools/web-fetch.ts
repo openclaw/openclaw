@@ -210,6 +210,26 @@ function hasOnlyReadableTitle(params: { text: string; title?: string }): boolean
   return title.length > 0 && normalizeComparableWebFetchText(params.text) === title;
 }
 
+function extractHtmlBody(html: string): string | undefined {
+  const bodyMatch = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) {
+    return bodyMatch[1];
+  }
+  const openBodyMatch = html.match(/<body\b[^>]*>([\s\S]*)/i);
+  return openBodyMatch?.[1];
+}
+
+async function extractBasicHtmlBodyContent(params: {
+  html: string;
+  extractMode: ExtractMode;
+}): Promise<{ text: string; title?: string } | null> {
+  const bodyHtml = extractHtmlBody(params.html);
+  if (bodyHtml === undefined) {
+    return await extractBasicHtmlContent(params);
+  }
+  return await extractBasicHtmlContent({ html: bodyHtml, extractMode: params.extractMode });
+}
+
 function redactUrlForDebugLog(rawUrl: string): string {
   try {
     const parsed = new URL(rawUrl);
@@ -675,26 +695,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           extractMode: params.extractMode,
           config: params.config,
         });
-        if (readable?.text) {
-          const basic = hasOnlyReadableTitle(readable)
-            ? await extractBasicHtmlContent({
-                html: body,
-                extractMode: params.extractMode,
-              })
-            : null;
-          if (
-            basic?.text &&
-            normalizeComparableWebFetchText(basic.text) !==
-              normalizeComparableWebFetchText(readable.text)
-          ) {
-            text = basic.text;
-            title = basic.title ?? readable.title;
-            extractor = "raw-html";
-          } else {
-            text = readable.text;
-            title = readable.title;
-            extractor = readable.extractor;
-          }
+        const readableTitleOnly = readable?.text ? hasOnlyReadableTitle(readable) : false;
+        if (readable?.text && !readableTitleOnly) {
+          text = readable.text;
+          title = readable.title;
+          extractor = readable.extractor;
         } else {
           let payload: Record<string, unknown> | null = null;
           try {
@@ -710,13 +715,18 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           if (payload) {
             return payload;
           }
-          const basic = await extractBasicHtmlContent({
-            html: body,
-            extractMode: params.extractMode,
-          });
+          const basic = readableTitleOnly
+            ? await extractBasicHtmlBodyContent({
+                html: body,
+                extractMode: params.extractMode,
+              })
+            : await extractBasicHtmlContent({
+                html: body,
+                extractMode: params.extractMode,
+              });
           if (basic?.text) {
             text = basic.text;
-            title = basic.title;
+            title = basic.title ?? readable?.title;
             extractor = "raw-html";
           } else {
             const providerLabel =
