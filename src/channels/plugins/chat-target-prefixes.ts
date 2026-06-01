@@ -17,11 +17,13 @@ export type ChatTargetPrefixesParams = {
   chatIdentifierPrefixes: string[];
 };
 
+/** Parsed conversation target from strict chat id/GUID/identifier prefixes. */
 export type ParsedChatTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string };
 
+/** Parsed allowlist entry that may authorize either a conversation target or sender handle. */
 export type ParsedChatAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
 /** Inputs for checking a parsed allowlist against a sender and optional conversation target. */
@@ -121,6 +123,7 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
   return null;
 }
 
+/** Resolves service-prefixed targets while preserving nested chat target grammar. */
 export function resolveServicePrefixedChatTarget<TService extends string, TTarget>(params: {
   trimmed: string;
   lower: string;
@@ -184,6 +187,7 @@ export function parseChatTargetPrefixesOrThrow(
   return null;
 }
 
+/** Parses service-prefixed allowlist entries using the channel-owned allow target parser. */
 export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
   trimmed: string;
   lower: string;
@@ -203,6 +207,7 @@ export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
   return null;
 }
 
+/** Parses allowlist entries that may be service-prefixed handles or native chat targets. */
 export function resolveServicePrefixedOrChatAllowTarget<
   TAllowTarget extends ParsedChatAllowTarget,
 >(params: {
