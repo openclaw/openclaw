@@ -13,6 +13,10 @@ export function createGatewayClientVitestConfig(env?: Record<string, string | un
     {
       env,
       exclude: ["src/gateway/**/*server*.test.ts"],
+      // This shard mixes fake-timer client unit tests, module-level mocks, and
+      // loopback WebSocket connection tests. Keep files isolated so timer/mock
+      // state cannot leak into another file's real connection readiness wait.
+      isolate: true,
       name: "gateway-client",
     },
   );

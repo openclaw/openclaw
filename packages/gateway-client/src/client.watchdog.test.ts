@@ -156,22 +156,29 @@ describe("GatewayClient", () => {
       });
     });
 
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      const client = new GatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        connectChallengeTimeoutMs: 0,
-        tickWatchMinIntervalMs: 5,
-        onClose: (code, reason) => resolve({ code, reason }),
+    let client: GatewayClient | undefined;
+    try {
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        client = new GatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          connectChallengeTimeoutMs: 0,
+          tickWatchMinIntervalMs: 5,
+          onClose: (code, reason) => resolve({ code, reason }),
+        });
+        client.start();
       });
-      client.start();
-    });
 
-    const res = await closed;
-    // Depending on auth/challenge timing in the harness, the client can either
-    // hit the tick watchdog (4000) or close with policy violation (1008).
-    expect([4000, 1008]).toContain(res.code);
-    if (res.code === 4000) {
-      expect(res.reason).toContain("tick timeout");
+      const res = await closed;
+      // Depending on auth/challenge timing in the harness, the client can either
+      // hit the tick watchdog (4000) or close with policy violation (1008).
+      expect([4000, 1008]).toContain(res.code);
+      if (res.code === 4000) {
+        expect(res.reason).toContain("tick timeout");
+      }
+    } finally {
+      await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {
+        client?.stop();
+      });
     }
   }, 4000);
 
