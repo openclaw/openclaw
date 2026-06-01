@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { collectPluginNpmPublishedRuntimeErrors } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+import {
+  collectPluginNpmPublishedRuntimeErrors,
+  findPackedPackageReadmePath,
+  parseNpmReadmeMetadata,
+  readPositiveIntEnv,
+  resolveNpmPackFilename,
+} from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+
+describe("plugin npm publish verifier retry limits", () => {
+  it("rejects loose numeric retry env values instead of parsing prefixes", () => {
+    expect(() =>
+      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS", 90, {
+        OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS: "2tries",
+      }),
+    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS: 2tries");
+    expect(() =>
+      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS", 10000, {
+        OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS: "1e3",
+      }),
+    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS: 1e3");
+    expect(() =>
+      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS", 6, {
+        OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS: "0",
+      }),
+    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS: 0");
+  });
+
+  it("accepts strict positive retry env values and defaults", () => {
+    expect(readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS", 90, {})).toBe(90);
+    expect(
+      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS", 10000, {
+        OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS: "2500",
+      }),
+    ).toBe(2500);
+  });
+});
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
   it("flags published plugin packages with TypeScript entries and no compiled runtime output", () => {
@@ -160,5 +195,41 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
     ).toEqual([
       "@openclaw/twitch@2026.5.3 package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
     ]);
+  });
+});
+
+describe("resolveNpmPackFilename", () => {
+  it("uses the final tarball filename from plain npm pack output", () => {
+    const noisyOutput = [
+      "npm notice",
+      "npm notice package: @openclaw/msteams@2026.5.24-beta.1",
+      "openclaw-msteams-2026.5.24-beta.1.tgz",
+      "",
+    ].join("\n");
+
+    expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
+  });
+});
+
+describe("findPackedPackageReadmePath", () => {
+  it("finds a root package README without accepting nested documentation files", () => {
+    expect(
+      findPackedPackageReadmePath(["package.json", "docs/README.md", "README.md", "dist/index.js"]),
+    ).toBe("README.md");
+    expect(findPackedPackageReadmePath(["package.json", "docs/README.md"])).toBe("");
+  });
+});
+
+describe("parseNpmReadmeMetadata", () => {
+  it("accepts non-empty npm readme metadata", () => {
+    expect(parseNpmReadmeMetadata(JSON.stringify("# Plugin\n\nInstall it."))).toBe(
+      "# Plugin\n\nInstall it.",
+    );
+  });
+
+  it("rejects empty or unsupported npm readme metadata", () => {
+    expect(parseNpmReadmeMetadata(JSON.stringify(""))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify(null))).toBe("");
+    expect(parseNpmReadmeMetadata("{")).toBe("");
   });
 });

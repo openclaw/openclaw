@@ -44,6 +44,28 @@ function extractTailnetHostFromStatusJson(raw: string): string | null {
   return ips.length > 0 ? (ips[0] ?? null) : null;
 }
 
+export function resolveTailscalePublishedHost(params: {
+  tailscaleMode: string;
+  tailnetHost: string | null;
+  serviceName?: string | null;
+}): string | null {
+  const tailnetHost = params.tailnetHost?.trim();
+  if (!tailnetHost) {
+    return null;
+  }
+  const serviceName =
+    params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
+  if (!serviceName) {
+    return tailnetHost;
+  }
+  if (/^[\d.:]+$/.test(tailnetHost)) {
+    return null;
+  }
+  const bareServiceName = serviceName.replace(/^svc:/, "");
+  const tailnetSuffix = tailnetHost.split(".").slice(1).join(".");
+  return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : null;
+}
+
 export async function resolveTailnetHostWithRunner(
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
 ): Promise<string | null> {

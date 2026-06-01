@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginFormat } from "./manifest-types.js";
@@ -56,10 +56,12 @@ export function createPluginRecord(params: {
     channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
     providerIds: [...(params.providerIds ?? [])],
+    embeddingProviderIds: [...(params.contracts?.embeddingProviders ?? [])],
     speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
     realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
     realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
     mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
+    transcriptSourceProviderIds: [...(params.contracts?.transcriptSourceProviders ?? [])],
     imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
     videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
     musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],
@@ -181,7 +183,7 @@ function describePluginModuleExportShape(
   const details = [`${label}:object keys=${keySummary}`];
 
   for (const key of ["default", "module", "register", "activate"]) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) {
+    if (Object.hasOwn(record, key)) {
       details.push(...describePluginModuleExportShape(record[key], `${label}.${key}`, seen));
     }
   }

@@ -150,13 +150,13 @@ What you set:
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or legacy Codex model refs.
 
   </Accordion>
   <Accordion title="xAI (Grok) OAuth">
     Browser sign-in for eligible SuperGrok or X Premium accounts. This is the
     recommended xAI path for most users. OpenClaw stores the resulting auth
-    profile for Grok models, `x_search`, and `code_execution`.
+    profile for Grok models, Grok `web_search`, `x_search`, and `code_execution`.
   </Accordion>
   <Accordion title="xAI (Grok) device code">
     Remote-friendly browser sign-in with a short code instead of a localhost

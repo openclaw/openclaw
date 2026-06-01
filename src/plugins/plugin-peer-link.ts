@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
 type PluginPeerLinkLogger = {
@@ -14,7 +15,7 @@ type RelinkManagedNpmRootResult = {
   skipped: number;
 };
 
-type OpenClawPeerLinkAuditIssue = {
+export type OpenClawPeerLinkAuditIssue = {
   packageName: string;
   packageDir: string;
   reason: string;
@@ -73,12 +74,14 @@ async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]>
     }
     const entryPath = path.join(nodeModulesDir, entry.name);
     if (entry.name.startsWith("@")) {
-      const scopedEntries = await fs.readdir(entryPath, { withFileTypes: true }).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return [];
-        }
-        throw error;
-      });
+      const scopedEntries = await fs
+        .readdir(entryPath, { withFileTypes: true })
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return [];
+          }
+          throw error;
+        });
       for (const scopedEntry of scopedEntries) {
         if (scopedEntry.isDirectory()) {
           packageDirs.push(path.join(entryPath, scopedEntry.name));
@@ -110,13 +113,18 @@ function managedPackageNameFromDir(params: { npmRoot: string; packageDir: string
 
 async function auditOpenClawPeerDependency(params: {
   hostRoot: string;
-  npmRoot: string;
   packageDir: string;
+  npmRoot?: string;
+  packageName?: string;
 }): Promise<OpenClawPeerLinkAuditIssue | null> {
-  const packageName = managedPackageNameFromDir({
-    npmRoot: params.npmRoot,
-    packageDir: params.packageDir,
-  });
+  const packageName =
+    params.packageName ??
+    (params.npmRoot
+      ? managedPackageNameFromDir({
+          npmRoot: params.npmRoot,
+          packageDir: params.packageDir,
+        })
+      : path.basename(params.packageDir));
   const nodeModulesDir = path.join(params.packageDir, "node_modules");
   try {
     const existing = await fs.lstat(nodeModulesDir);
@@ -156,6 +164,30 @@ async function auditOpenClawPeerDependency(params: {
     };
   }
   return null;
+}
+
+export async function auditOpenClawPeerDependencyLink(params: {
+  packageDir: string;
+  packageName?: string;
+}): Promise<OpenClawPeerLinkAuditIssue | null> {
+  const packageName = params.packageName ?? path.basename(params.packageDir);
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    return {
+      packageName,
+      packageDir: params.packageDir,
+      reason: "could not locate openclaw package root",
+    };
+  }
+  return await auditOpenClawPeerDependency({
+    hostRoot,
+    packageDir: params.packageDir,
+    packageName,
+  });
 }
 
 async function ensureRealNodeModulesDir(params: {
@@ -211,8 +243,8 @@ async function linkOpenClawPeerDependency(params: {
   }
 
   try {
-    const existing = await fs.lstat(linkPath).catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") {
+    const existing = await fs.lstat(linkPath).catch((err: unknown) => {
+      if (hasErrnoCode(err, "ENOENT")) {
         return null;
       }
       throw err;

@@ -1,29 +1,22 @@
 #!/usr/bin/env -S pnpm tsx
-import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
   makeTempDir,
-  packageBuildCommitFromTgz,
-  packageVersionFromTgz,
-  packOpenClaw,
   parseMode,
   parseProvider,
-  resolveHostIp,
-  resolveHostPort,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
   resolveWindowsProviderAuth,
   resolveSnapshot,
   run,
   say,
-  startHostServer,
   warn,
   writeSummaryMarkdown,
   writeJson,
-  type HostServer,
   type Mode,
   type PackageArtifact,
   type Provider,
@@ -31,35 +24,37 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports.ts";
-import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
+import { startHostServer } from "./host-server.ts";
 import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
+import { windowsProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
   windowsOpenClawResolver,
   windowsScopedEnvFunction,
 } from "./powershell.ts";
+import {
+  buildCommonSmokeSummary,
+  expectedPackageBuildCommit,
+  expectedPackageTargetVersion,
+  extractLastOpenClawVersion,
+  packAndServeSmokeArtifact,
+  printSmokeTargetSummary,
+  SmokeRunController,
+  type SmokeHostOptions,
+  type SmokeRunOptions,
+} from "./smoke-common.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
 
-interface WindowsOptions {
+interface WindowsOptions extends SmokeHostOptions, SmokeRunOptions {
   vmName: string;
-  snapshotHint: string;
-  mode: Mode;
-  provider: Provider;
   apiKeyEnv?: string;
   modelId?: string;
   installUrl: string;
-  hostPort: number;
-  hostPortExplicit: boolean;
-  hostIp?: string;
   latestVersion?: string;
-  installVersion?: string;
-  targetPackageSpec?: string;
   upgradeFromPackedMain: boolean;
   skipLatestRefCheck: boolean;
-  keepServer: boolean;
-  json: boolean;
 }
 
 interface WindowsSummary {
@@ -141,103 +136,105 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): WindowsOptions {
+export function parseArgs(argv: string[]): WindowsOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--":
-        break;
-      case "--vm":
-        options.vmName = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--snapshot-hint":
-        options.snapshotHint = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--mode":
-        options.mode = parseMode(ensureValue(argv, i, arg));
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--install-url":
-        options.installUrl = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--host-port":
-        options.hostPort = Number(ensureValue(argv, i, arg));
-        options.hostPortExplicit = true;
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--latest-version":
-        options.latestVersion = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--install-version":
-        options.installVersion = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--upgrade-from-packed-main":
-        options.upgradeFromPackedMain = true;
-        break;
-      case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--skip-latest-ref-check":
-        options.skipLatestRefCheck = true;
-        break;
-      case "--keep-server":
-        options.keepServer = true;
-        break;
-      case "--json":
-        options.json = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
-        die(`unknown arg: ${arg}`);
+  const valueHandlers: Record<string, (value: string) => void> = {
+    "--api-key-env": (value) => {
+      options.apiKeyEnv = value;
+    },
+    "--host-ip": (value) => {
+      options.hostIp = value;
+    },
+    "--host-port": (value) => {
+      options.hostPort = Number(value);
+      options.hostPortExplicit = true;
+    },
+    "--install-url": (value) => {
+      options.installUrl = value;
+    },
+    "--install-version": (value) => {
+      options.installVersion = value;
+    },
+    "--latest-version": (value) => {
+      options.latestVersion = value;
+    },
+    "--model": (value) => {
+      options.modelId = value;
+    },
+    "--openai-api-key-env": (value) => {
+      options.apiKeyEnv = value;
+    },
+    "--provider": (value) => {
+      options.provider = parseProvider(value);
+    },
+    "--snapshot-hint": (value) => {
+      options.snapshotHint = value;
+    },
+    "--target-package-spec": (value) => {
+      options.targetPackageSpec = value;
+    },
+    "--vm": (value) => {
+      options.vmName = value;
+    },
+    "--mode": (value) => {
+      options.mode = parseMode(value);
+    },
+  };
+  const flagHandlers: Record<string, () => void> = {
+    "--json": () => {
+      options.json = true;
+    },
+    "--keep-server": () => {
+      options.keepServer = true;
+    },
+    "--skip-latest-ref-check": () => {
+      options.skipLatestRefCheck = true;
+    },
+    "--upgrade-from-packed-main": () => {
+      options.upgradeFromPackedMain = true;
+    },
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") {
+      break;
     }
+    const valueHandler = valueHandlers[arg];
+    if (valueHandler) {
+      valueHandler(ensureValue(args, i, arg));
+      i++;
+      continue;
+    }
+    const flagHandler = flagHandlers[arg];
+    if (flagHandler) {
+      flagHandler();
+      continue;
+    }
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(usage());
+      process.exit(0);
+    }
+    die(`unknown arg: ${arg}`);
   }
   return options;
 }
 
-class WindowsSmoke {
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
+class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   private auth: ProviderAuth;
-  private hostIp = "";
-  private hostPort = 0;
-  private runDir = "";
-  private tgzDir = "";
-  private server: HostServer | null = null;
   private artifact: PackageArtifact | null = null;
   private minGitZipPath = "";
   private latestVersion = "";
   private installVersion = "";
-  private targetExpectVersion = "";
   private snapshot!: SnapshotInfo;
   private phases!: PhaseRunner;
   private guest!: WindowsGuest;
 
-  private status = {
+  protected status = {
     freshAgent: "skip",
     freshGateway: "skip",
     freshMain: "skip",
@@ -250,7 +247,8 @@ class WindowsSmoke {
     upgradeVersion: "skip",
   };
 
-  constructor(private options: WindowsOptions) {
+  constructor(options: WindowsOptions) {
+    super(options);
     this.auth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
@@ -267,41 +265,22 @@ class WindowsSmoke {
       this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
-      this.hostIp = resolveHostIp(this.options.hostIp);
-      this.hostPort = await resolveHostPort(
-        this.options.hostPort,
-        this.options.hostPortExplicit,
+      await this.prepareHost(
         defaultOptions().hostPort,
+        this.latestVersion,
+        this.snapshot,
+        this.options.vmName,
       );
-
-      say(`VM: ${this.options.vmName}`);
-      say(`Snapshot hint: ${this.options.snapshotHint}`);
-      say(`Resolved snapshot: ${this.snapshot.name} [${this.snapshot.state}]`);
-      say(`Latest npm version: ${this.latestVersion}`);
-      say(
-        `Current head: ${run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim()}`,
-      );
-      say(`Run logs: ${this.runDir}`);
 
       this.minGitZipPath = await prepareMinGitZip(this.tgzDir);
       if (this.needsHostTgz()) {
-        this.artifact = await packOpenClaw({
-          destination: this.tgzDir,
-          packageSpec: this.options.targetPackageSpec,
-          requireControlUi: false,
-        });
-        if (this.options.targetPackageSpec) {
-          this.targetExpectVersion =
-            this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
-        }
-        this.server = await startHostServer({
-          artifactPath: this.artifact.path,
-          dir: this.tgzDir,
-          hostIp: this.hostIp,
-          label: this.artifactLabel(),
-          port: this.hostPort,
-        });
-        this.hostPort = this.server.port;
+        [this.artifact, this.server, this.hostPort] = await packAndServeSmokeArtifact(
+          this.tgzDir,
+          this.options.targetPackageSpec,
+          this.hostIp,
+          this.hostPort,
+          this.artifactLabel(),
+        );
       }
       if (!this.server) {
         this.server = await startHostServer({
@@ -314,27 +293,9 @@ class WindowsSmoke {
         this.hostPort = this.server.port;
       }
 
-      if (this.options.mode === "fresh" || this.options.mode === "both") {
-        await this.runLane("fresh", async () => this.runFreshLane());
-      }
-      if (this.options.mode === "upgrade" || this.options.mode === "both") {
-        await this.runLane("upgrade", async () => this.runUpgradeLane());
-      }
-
-      const summaryPath = await this.writeSummary();
-      if (this.options.json) {
-        process.stdout.write(await readFile(summaryPath, "utf8"));
-      } else {
-        this.printSummary(summaryPath);
-      }
-      if (this.status.freshMain === "fail" || this.status.upgrade === "fail") {
-        process.exitCode = 1;
-      }
+      await this.runLanesAndFinish();
     } finally {
-      if (!this.options.keepServer) {
-        await this.server?.stop().catch(() => undefined);
-        await rm(this.tgzDir, { force: true, recursive: true }).catch(() => undefined);
-      }
+      await this.cleanupArtifacts();
     }
   }
 
@@ -371,19 +332,7 @@ class WindowsSmoke {
     return this.options.upgradeFromPackedMain ? "packed-main->dev" : "latest->dev";
   }
 
-  private async runLane(name: "fresh" | "upgrade", fn: () => Promise<void>): Promise<void> {
-    await runSmokeLane(name, fn, (lane, status) => this.setLaneStatus(lane, status));
-  }
-
-  private setLaneStatus(name: SmokeLane, status: SmokeLaneStatus): void {
-    if (name === "fresh") {
-      this.status.freshMain = status;
-    } else {
-      this.status.upgrade = status;
-    }
-  }
-
-  private async runFreshLane(): Promise<void> {
+  protected async runFreshLane(): Promise<void> {
     await this.phase("fresh.restore-snapshot", 240, () => this.restoreSnapshot());
     await this.phase("fresh.wait-for-user", 240, () => this.waitForGuestReady());
     await this.phase("fresh.ensure-git", 1200, () =>
@@ -405,7 +354,7 @@ class WindowsSmoke {
     this.status.freshAgent = "pass";
   }
 
-  private async runUpgradeLane(): Promise<void> {
+  protected async runUpgradeLane(): Promise<void> {
     await this.phase("upgrade.restore-snapshot", 240, () => this.restoreSnapshot());
     await this.phase("upgrade.wait-for-user", 240, () => this.waitForGuestReady());
     await this.phase("upgrade.ensure-git", 1200, () =>
@@ -463,33 +412,24 @@ class WindowsSmoke {
     this.status.upgradeAgent = "pass";
   }
 
-  private async phase(
-    name: string,
-    timeoutSeconds: number,
-    fn: () => Promise<void> | void,
-  ): Promise<void> {
+  private phase = async (name: string, timeoutSeconds: number, fn: () => Promise<void> | void) =>
     await this.phases.phase(name, timeoutSeconds, fn);
-  }
 
-  private remainingPhaseTimeoutMs(fallbackMs?: number): number | undefined {
-    return this.phases.remainingTimeoutMs(fallbackMs);
-  }
+  private remainingPhaseTimeoutMs = (fallbackMs?: number): number | undefined =>
+    this.phases.remainingTimeoutMs(fallbackMs);
 
-  private async phaseReturns(
+  private phaseReturns = async (
     name: string,
     timeoutSeconds: number,
     fn: () => Promise<void> | void,
-  ): Promise<boolean> {
-    return await this.phases.phaseReturns(name, timeoutSeconds, fn);
-  }
+  ): Promise<boolean> => await this.phases.phaseReturns(name, timeoutSeconds, fn);
 
-  private log(text: string): void {
-    this.phases.append(text);
-  }
+  private log = (text: string): void => this.phases.append(text);
 
-  private guestExec(args: string[], options: { check?: boolean; timeoutMs?: number } = {}): string {
-    return this.guest.exec(args, options);
-  }
+  private guestExec = (
+    args: string[],
+    options: { check?: boolean; timeoutMs?: number } = {},
+  ): string => this.guest.exec(args, options);
 
   private guestPowerShell(
     script: string,
@@ -617,16 +557,16 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
 
   private async verifyTargetVersion(): Promise<void> {
     if (this.options.targetPackageSpec) {
-      this.verifyVersionContains(this.targetExpectVersion);
+      if (!this.artifact) {
+        die("package artifact missing");
+      }
+      this.verifyVersionContains(await expectedPackageTargetVersion(this.artifact));
       return;
     }
     if (!this.artifact) {
       die("package artifact missing");
     }
-    const commit =
-      this.artifact.buildCommitShort ||
-      (await packageBuildCommitFromTgz(this.artifact.path)).slice(0, 7);
-    this.verifyVersionContains(commit);
+    this.verifyVersionContains(await expectedPackageBuildCommit(this.artifact));
   }
 
   private verifyVersionContains(needle: string): void {
@@ -648,9 +588,17 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
 $PSNativeCommandUseErrorActionPreference = $false
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
-if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }`,
+if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }
+${this.windowsPluginIsolationScript()}`,
       720_000,
     );
+  }
+
+  private windowsPluginIsolationScript(): string {
+    return windowsProviderOnlyPluginIsolationScript({
+      fallbackPluginId: this.options.provider,
+      modelId: this.auth.modelId,
+    });
   }
 
   private async guestPowerShellBackground(
@@ -809,39 +757,25 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
   }
 
   private async extractLastVersion(phaseName: string): Promise<string> {
-    const log = await readFile(path.join(this.runDir, `${phaseName}.log`), "utf8").catch(() => "");
-    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
-    return matches.at(-1)?.[1] ?? "";
+    return await extractLastOpenClawVersion(this.runDir, phaseName, /OpenClaw\s+([0-9][^\s]*)/gi);
   }
 
-  private async writeSummary(): Promise<string> {
-    const summary: WindowsSummary = {
-      currentHead:
-        this.artifact?.buildCommitShort ||
-        run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim(),
-      freshMain: {
-        agent: this.status.freshAgent,
-        gateway: this.status.freshGateway,
-        status: this.status.freshMain,
-        version: this.status.freshVersion,
-      },
-      installVersion: this.options.installVersion || "",
+  protected async writeSummary(): Promise<string> {
+    const common = buildCommonSmokeSummary({
+      artifact: this.artifact,
       latestVersion: this.latestVersion,
-      mode: this.options.mode,
-      provider: this.options.provider,
+      options: this.options,
       runDir: this.runDir,
-      snapshotHint: this.options.snapshotHint,
-      snapshotId: this.snapshot.id,
-      targetPackageSpec: this.options.targetPackageSpec || "",
+      snapshot: this.snapshot,
+      status: this.status,
+      vmName: this.options.vmName,
+    });
+    const summary: WindowsSummary = {
+      ...common,
       upgrade: {
-        agent: this.status.upgradeAgent,
-        gateway: this.status.upgradeGateway,
-        latestVersionInstalled: this.status.latestInstalledVersion,
-        mainVersion: this.status.upgradeVersion,
+        ...common.upgrade,
         precheck: this.status.upgradePrecheck,
-        status: this.status.upgrade,
       },
-      vm: this.options.vmName,
     };
     const summaryPath = path.join(this.runDir, "summary.json");
     await writeJson(summaryPath, summary);
@@ -859,11 +793,9 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
     return summaryPath;
   }
 
-  private printSummary(summaryPath: string): void {
+  protected printSummary(summaryPath: string): void {
     process.stdout.write("\nSummary:\n");
-    if (this.options.targetPackageSpec) {
-      process.stdout.write(`  target-package: ${this.options.targetPackageSpec}\n`);
-    }
+    printSmokeTargetSummary({ ...this.options, includeInstallVersion: false });
     if (this.options.upgradeFromPackedMain) {
       process.stdout.write("  upgrade-from-packed-main: yes\n");
     }
@@ -882,6 +814,8 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
   }
 }
 
-await new WindowsSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await new WindowsSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

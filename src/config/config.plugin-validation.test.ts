@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -141,7 +143,7 @@ describe("config plugin validation", () => {
 
   const validateRemovedPluginConfig = (removedId: string) =>
     validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: false,
         entries: { [removedId]: { enabled: true } },
@@ -245,7 +247,7 @@ describe("config plugin validation", () => {
   it("reports missing plugin refs across entries and allowlist surfaces", () => {
     const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [missingPath] },
@@ -299,7 +301,7 @@ describe("config plugin validation", () => {
 
   it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         deny: ["missing-deny"],
       },
@@ -318,7 +320,7 @@ describe("config plugin validation", () => {
   it("deduplicates catalog install hints for missing configured official external plugins", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: { brave: { enabled: true } },
           allow: ["brave"],
@@ -352,7 +354,7 @@ describe("config plugin validation", () => {
   it("warns instead of failing when an official external memory slot plugin is not installed", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "memory-lancedb" },
           entries: { "memory-lancedb": { enabled: true } },
@@ -381,7 +383,7 @@ describe("config plugin validation", () => {
   it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "none" },
           entries: { "memory-lancedb": { enabled: true } },
@@ -414,7 +416,7 @@ describe("config plugin validation", () => {
   it("deduplicates yuanbao missing-plugin warnings across entries and allow", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: { yuanbao: { enabled: true } },
           allow: ["yuanbao"],
@@ -441,7 +443,7 @@ describe("config plugin validation", () => {
   it("keeps official external non-memory plugins fatal in the memory slot", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "brave" },
           entries: { brave: { enabled: true } },
@@ -473,7 +475,7 @@ describe("config plugin validation", () => {
   it("keeps blocked official external memory slot plugins fatal", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "memory-lancedb" },
           entries: { "memory-lancedb": { enabled: true } },
@@ -523,7 +525,7 @@ describe("config plugin validation", () => {
       await fs.chmod(blockedPluginDir, 0o777);
       try {
         const res = validateInSuite({
-          agents: { list: [{ id: "pi" }] },
+          agents: { list: [{ id: "openclaw" }] },
           plugins: {
             enabled: true,
             load: { paths: [blockedPluginDir] },
@@ -562,7 +564,7 @@ describe("config plugin validation", () => {
   it("maps legacy blocked diagnostics without plugin ids to configured load paths", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           enabled: true,
           load: { paths: [blockedPluginDir] },
@@ -609,7 +611,7 @@ describe("config plugin validation", () => {
   it("warns for broken discovered plugins that are not referenced by config", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           allow: ["telegram"],
         },
@@ -647,7 +649,7 @@ describe("config plugin validation", () => {
   it("keeps broken discovered plugins fatal when config references them", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: {
             "broken-local": { enabled: true },
@@ -687,7 +689,7 @@ describe("config plugin validation", () => {
     const aliasDir = path.join(suiteHome, "alias-dir");
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           enabled: true,
           load: { paths: [aliasDir] },
@@ -743,7 +745,7 @@ describe("config plugin validation", () => {
 
   it("warns instead of failing for stale channel config backed by missing plugin refs", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       channels: {
         "missing-chat": { token: "stale" },
       },
@@ -776,7 +778,7 @@ describe("config plugin validation", () => {
 
   it("keeps unknown channel typos fatal when there is no stale plugin evidence", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       channels: {
         telegarm: { botToken: "typo" },
       },
@@ -801,7 +803,7 @@ describe("config plugin validation", () => {
   it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         channels: {
           discord: { token: "xxx" },
         },
@@ -831,29 +833,32 @@ describe("config plugin validation", () => {
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
-    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
-    await mkdirSafe(path.dirname(installedPluginIndexPath));
-    await fs.writeFile(
-      installedPluginIndexPath,
-      JSON.stringify(
-        {
-          installRecords: {
-            "missing-sms": {
-              source: "npm",
-              spec: "missing-sms@1.0.0",
-              installedAt: "2026-04-12T00:00:00.000Z",
-            },
+    const stateDir = path.join(suiteHome, ".openclaw");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          "missing-sms": {
+            source: "npm",
+            spec: "missing-sms@1.0.0",
+            installedAt: "2026-04-12T00:00:00.000Z",
           },
-          plugins: [],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir },
     );
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     try {
       const res = validateInSuite({
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         channels: {
           "missing-sms": { token: "stale" },
         },
@@ -869,13 +874,27 @@ describe("config plugin validation", () => {
           "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
       });
     } finally {
-      await fs.rm(installedPluginIndexPath, { force: true });
+      await writePersistedInstalledPluginIndex(
+        {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: "test",
+          generatedAtMs: 2,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        { stateDir },
+      );
+      clearLoadInstalledPluginIndexInstallRecordsCache();
     }
   });
 
   it("warns with actionable guidance when a runtime command name is used in plugins.allow", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         allow: ["dreaming"],
         entries: {
@@ -905,7 +924,7 @@ describe("config plugin validation", () => {
   it("does not fail validation for the implicit default memory slot when plugins config is explicit", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: { acpx: { enabled: true } },
         },
@@ -959,9 +978,25 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
+    const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
+    await mkdirSafe(path.dirname(helperPath));
+    await fs.writeFile(helperPath, "export default {};\n", "utf-8");
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: { enabled: true },
+      });
+
+      expect(res.ok).toBe(true);
+    } finally {
+      await fs.rm(helperPath, { force: true });
+    }
+  });
+
   it("surfaces plugin config diagnostics", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [badPluginDir] },
@@ -982,7 +1017,7 @@ describe("config plugin validation", () => {
   it("surfaces invalid Codex native plugin marketplaces as config diagnostics", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: {
             codex: {
@@ -1031,7 +1066,7 @@ describe("config plugin validation", () => {
 
   it("does not require native config schemas for enabled bundle plugins", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [bundlePluginDir] },
@@ -1044,7 +1079,7 @@ describe("config plugin validation", () => {
 
   it("accepts enabled manifestless Claude bundles without a native schema", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [manifestlessClaudeBundleDir] },
@@ -1057,7 +1092,7 @@ describe("config plugin validation", () => {
 
   it("surfaces allowed enum values for plugin config diagnostics", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [enumPluginDir] },
@@ -1077,7 +1112,7 @@ describe("config plugin validation", () => {
 
   it("accepts voice-call webhookSecurity and streaming guard config fields", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1108,7 +1143,7 @@ describe("config plugin validation", () => {
 
   it("accepts voice-call OpenAI TTS speed, instructions, and baseUrl config fields", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1135,7 +1170,7 @@ describe("config plugin validation", () => {
 
   it("accepts voice-call SecretRef credentials declared by the plugin schema", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1167,7 +1202,7 @@ describe("config plugin validation", () => {
 
   it("rejects out-of-range voice-call OpenAI TTS speed values", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1200,7 +1235,7 @@ describe("config plugin validation", () => {
 
   it("rejects out-of-range voice-call ElevenLabs voice settings", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1237,7 +1272,7 @@ describe("config plugin validation", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { target: "last", directPolicy: "block" } },
-        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+        list: [{ id: "openclaw", heartbeat: { directPolicy: "allow" } }],
       },
       channels: {
         modelByChannel: {
@@ -1253,8 +1288,15 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "pi" }] },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "openclaw" }] },
       plugins: { enabled: false, load: { paths: [chatPluginDir] } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts bundled channel aliases for heartbeat targets", () => {
+    const res = validateInSuite({
+      agents: { defaults: { heartbeat: { target: "gchat" } }, list: [{ id: "pi" }] },
     });
     expect(res.ok).toBe(true);
   });
@@ -1263,7 +1305,7 @@ describe("config plugin validation", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { target: "not-a-channel" } },
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(res.ok).toBe(false);
@@ -1283,7 +1325,7 @@ describe("config plugin validation", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { directPolicy: "maybe" } },
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(res.ok).toBe(false);

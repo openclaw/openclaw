@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { validatePluginId } from "./install-paths.js";
@@ -10,10 +11,6 @@ export type LegacyNpmPluginDeclaration = {
   npmSpec: string;
   source: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function readLegacyNpmPluginDeclaration(
   pluginDir: string,

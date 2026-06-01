@@ -1,6 +1,5 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -13,17 +12,26 @@ import {
 import { builtinModules } from "node:module";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  posix as pathPosix,
+  relative,
+  win32 as pathWin32,
+} from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -63,12 +71,12 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // lazy chunks from the plugin build even though dist/extensions/feishu is
   // externalized from the root package scan.
   "@larksuiteoapi/node-sdk",
+  // Discord remains an official external plugin. The root package can retain
+  // orphaned lazy chunks from the plugin build, but the plugin owns prism-media.
+  "prism-media",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
   "matrix-js-sdk",
-  // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
-  // Discord plugin remains externalized from the root package.
-  "opusscript",
   // Public plugin SDK contract helpers are intentionally test-only entrypoints.
   // Consumers importing them run under their own Vitest dev dependency.
   "vitest",
@@ -496,8 +504,33 @@ function isBundledExtensionOwnedRuntimeImport(params: {
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
   return platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
+    ? pathWin32.join(prefixDir, "openclaw.cmd")
+    : pathPosix.join(prefixDir, "bin", "openclaw");
+}
+
+export function resolveInstalledBinaryCommandInvocation(
+  prefixDir: string,
+  args: string[],
+  params: { comSpec?: string; platform?: NodeJS.Platform } = {},
+): {
+  args: string[];
+  command: string;
+  windowsVerbatimArguments?: boolean;
+} {
+  const platform = params.platform ?? process.platform;
+  const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command: binaryPath,
+    args,
+  };
 }
 
 function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
@@ -577,16 +610,13 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
 
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
+    npmArgs: args,
     npmExecPath: process.env.npm_execpath,
     nodeExecPath: process.execPath,
     platform: process.platform,
   });
 
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
@@ -602,12 +632,8 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
 }
 
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
-  return execFileSync(resolveInstalledBinaryPath(prefixDir), ["--version"], {
-    cwd,
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function verifyScenario(version: string, scenario: PublishedInstallScenario): void {

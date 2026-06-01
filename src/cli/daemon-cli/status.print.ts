@@ -1,3 +1,4 @@
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -17,7 +18,6 @@ import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -220,7 +220,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  const gatewayVersion = rpc?.server?.version?.trim();
+  const gatewayVersion = rpc?.server?.version?.trim() || status.gateway?.version?.trim();
   const cliVersionLine = formatCliVersionLine(status.cli);
   if (gatewayVersion) {
     if (cliVersionLine) {
@@ -320,7 +320,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   const systemdUnavailable =
-    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+    process.platform === "linux" &&
+    rpc?.ok !== true &&
+    isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const container = Boolean(
       resolveDaemonContainerContext(service.command?.environment ?? process.env),

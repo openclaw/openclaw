@@ -109,7 +109,7 @@ vi.mock("../infra/wsl.js", () => ({
   isWSL: vi.fn(async () => false),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -312,7 +312,7 @@ describe("maybeRepairGatewayDaemon", () => {
       healthOk: false,
     });
 
-    expect(readGatewayRestartHandoffSync).toHaveBeenCalledOnce();
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalledTimes(2);
     const [handoffEnv] = readGatewayRestartHandoffSync.mock.calls[0] as unknown as [
       { OPENCLAW_STATE_DIR?: string; OPENCLAW_CONFIG_PATH?: string },
     ];
@@ -324,13 +324,74 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it("does not read restart handoffs during normal doctor", async () => {
+  it("does not inspect port connections during normal doctor", async () => {
     setPlatform("linux");
 
     await runNonInteractiveRepair();
 
-    expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
     expect(inspectPortConnections).not.toHaveBeenCalled();
+  });
+
+  it("still audits missing service when gateway health was skipped", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValueOnce(false);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime,
+      prompter: createDoctorPrompter({
+        runtime,
+        options: { nonInteractive: true },
+      }),
+      options: { deep: false, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("does not audit local services when skipped gateway health is remote", async () => {
+    setPlatform("linux");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: { mode: "remote" } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { nonInteractive: true },
+      }),
+      options: { deep: false, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("does not start loaded services with unknown runtime when health was skipped", async () => {
+    setPlatform("linux");
+    service.readRuntime.mockResolvedValueOnce({ status: "unknown" });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { repair: true, nonInteractive: true },
+      }),
+      options: { deep: false, repair: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("reports established gateway clients during deep doctor", async () => {
@@ -550,5 +611,75 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
+  });
+
+  it("skips restart prompt when gateway is healthy after recent restart handoff in normal doctor flow", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(40_000);
+    setPlatform("linux");
+    const handoff = {
+      kind: "gateway-supervisor-restart-handoff" as const,
+      version: 1 as const,
+      intentId: "intent-healthy",
+      pid: 99_999,
+      createdAt: 35_000,
+      expiresAt: 95_000,
+      reason: "update.run",
+      source: "gateway-update" as const,
+      restartKind: "update-process" as const,
+      supervisorMode: "systemd" as const,
+    } satisfies GatewayRestartHandoff;
+    readGatewayRestartHandoffSync.mockReturnValue(handoff);
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createPrompter(() => true),
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
+    expect(healthCommand).toHaveBeenCalledOnce();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "Gateway is healthy after recent restart; skipping restart prompt.",
+      "Gateway",
+    );
+  });
+
+  it("prompts for restart when health probe fails despite recent restart handoff in normal doctor flow", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(40_000);
+    setPlatform("linux");
+    const handoff = {
+      kind: "gateway-supervisor-restart-handoff" as const,
+      version: 1 as const,
+      intentId: "intent-unhealthy",
+      pid: 88_888,
+      createdAt: 35_000,
+      expiresAt: 95_000,
+      reason: "gateway.restart",
+      source: "operator-restart" as const,
+      restartKind: "full-process" as const,
+      supervisorMode: "systemd" as const,
+    } satisfies GatewayRestartHandoff;
+    readGatewayRestartHandoffSync.mockReturnValue(handoff);
+    healthCommand.mockRejectedValueOnce(new Error("gateway closed"));
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createPrompter(() => false),
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
+    expect(healthCommand).toHaveBeenCalledOnce();
+    expect(service.restart).not.toHaveBeenCalled();
+    // The restart prompt was shown but user declined (createPrompter returned false for it).
   });
 });

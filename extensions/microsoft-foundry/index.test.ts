@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
@@ -73,7 +73,9 @@ function requirePrepareRuntimeAuth(
   return prepareRuntimeAuth;
 }
 
-function requireRuntimeAuthResult(result: { apiKey?: string; baseUrl?: string } | undefined) {
+function requireRuntimeAuthResult(
+  result: { apiKey?: string; baseUrl?: string; expiresAt?: number } | undefined,
+) {
   if (!result) {
     throw new Error("expected Microsoft Foundry runtime auth result");
   }
@@ -277,6 +279,10 @@ describe("microsoft-foundry plugin", () => {
     ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("keeps the API key profile bound when multiple auth profiles exist without explicit order", async () => {
     const provider = registerProvider();
     const config = buildFoundryConfig({
@@ -325,6 +331,8 @@ describe("microsoft-foundry plugin", () => {
       models: {
         providers: {
           "microsoft-foundry": {
+            baseUrl: "",
+            models: [],
             timeoutSeconds: 120,
           },
         },
@@ -338,7 +346,7 @@ describe("microsoft-foundry plugin", () => {
       agentDir: defaultFoundryAgentDir,
     });
 
-    expect(config.models?.providers?.["microsoft-foundry"]?.models?.[0]?.id).toBe("gpt-5.4");
+    expect(config.models?.providers?.["microsoft-foundry"]?.models).toEqual([]);
     expect(config.models?.providers?.["microsoft-foundry"]?.timeoutSeconds).toBe(120);
   });
 
@@ -487,6 +495,42 @@ describe("microsoft-foundry plugin", () => {
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds Entra token fallback expiry when the process clock is invalid", async () => {
+    const provider = registerProvider();
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    mockAzureCliTokenRaw(JSON.stringify({ accessToken: "fallback-token" }));
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
+
+    const prepared = requireRuntimeAuthResult(
+      await provider.prepareRuntimeAuth?.(buildFoundryRuntimeAuthContext()),
+    );
+
+    expect(prepared.apiKey).toBe("fallback-token");
+    expect(prepared.expiresAt).toBe(55 * 60 * 1000);
+  });
+
+  it("treats an invalid process clock as an Entra token cache miss", async () => {
+    const provider = registerProvider();
+    mockAzureCliToken({ accessToken: "cached-token", expiresInMs: 10 * 60_000 });
+    ensureAuthProfileStoreMock.mockReturnValue(buildEntraProfileStore());
+    const runtimeContext = buildFoundryRuntimeAuthContext();
+
+    const first = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
+    expect(first.apiKey).toBe("cached-token");
+
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    mockAzureCliTokenRaw(
+      JSON.stringify({
+        accessToken: "refreshed-token",
+        expiresOn: "2026-05-29T12:10:00.000Z",
+      }),
+    );
+    const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
+
+    expect(second.apiKey).toBe("refreshed-token");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps other configured Foundry models when switching the selected model", async () => {
     const provider = registerProvider();
     const config: OpenClawConfig = {
@@ -557,6 +601,8 @@ describe("microsoft-foundry plugin", () => {
     expect(usesFoundryResponsesByDefault("gpt-5.4")).toBe(true);
     expect(usesFoundryResponsesByDefault("gpt-5.2-codex")).toBe(true);
     expect(usesFoundryResponsesByDefault("o4-mini")).toBe(true);
+    expect(usesFoundryResponsesByDefault("DeepSeek-V4-Pro")).toBe(true);
+    expect(usesFoundryResponsesByDefault("DeepSeek-V4-Flash")).toBe(true);
     expect(usesFoundryResponsesByDefault("MAI-DS-R1")).toBe(false);
     expect(requiresFoundryMaxCompletionTokens("gpt-5.4")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);

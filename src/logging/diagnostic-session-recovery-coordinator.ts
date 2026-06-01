@@ -1,10 +1,11 @@
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitInternalDiagnosticEvent as emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   recoveryOutcomeClearsQueuedSessionState,
   recoveryOutcomeMutatesSessionState,
   recoveryOutcomeReleasedCount,
+  resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
@@ -61,11 +62,7 @@ function emitSessionRecoveryCompleted(params: {
 }
 
 function recoveryRequestKey(request: StuckSessionRecoveryRequest): string | undefined {
-  const ref = request.sessionKey?.trim() || request.sessionId?.trim();
-  if (!ref) {
-    return undefined;
-  }
-  return `${ref}:${request.stateGeneration ?? "unknown"}`;
+  return resolveStuckSessionRecoveryRef(request);
 }
 
 function isRecoveryPromiseLike(

@@ -107,28 +107,6 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("uses image model fallback overrides for model fallback options", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: ["openai/gpt-4o-mini"],
-    });
-
-    const resolved = resolveModelFallbackOptions(run);
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.fallbacksOverride).toEqual(["openai/gpt-4o-mini"]);
-  });
-
-  it("preserves empty image model fallback overrides for model fallback options", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: [],
-    });
-
-    const resolved = resolveModelFallbackOptions(run);
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.fallbacksOverride).toEqual([]);
-  });
-
   it("passes through missing agentId for helper-based fallback resolution", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
@@ -147,7 +125,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -165,6 +143,7 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.sessionFile).toBe(run.sessionFile);
     expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.cwd).toBe("/tmp/task-repo");
     expect(resolved.agentDir).toBe(run.agentDir);
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
@@ -211,48 +190,6 @@ describe("agent-runner-utils", () => {
       hasAutoFallbackProvenance: true,
     });
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
-  });
-
-  it("uses image model fallback overrides for embedded run params", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: ["openai/gpt-4o-mini"],
-    });
-    const authProfile = resolveProviderScopedAuthProfile({
-      provider: "openai",
-      primaryProvider: "openai",
-    });
-
-    const resolved = buildEmbeddedRunBaseParams({
-      run,
-      provider: "openai",
-      model: "gpt-4o",
-      runId: "run-1",
-      authProfile,
-    });
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.modelFallbacksOverride).toEqual(["openai/gpt-4o-mini"]);
-  });
-
-  it("preserves empty image model fallback overrides for embedded run params", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: [],
-    });
-    const authProfile = resolveProviderScopedAuthProfile({
-      provider: "openai",
-      primaryProvider: "openai",
-    });
-
-    const resolved = buildEmbeddedRunBaseParams({
-      run,
-      provider: "openai",
-      model: "gpt-4o",
-      runId: "run-1",
-      authProfile,
-    });
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.modelFallbacksOverride).toEqual([]);
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {
@@ -371,5 +308,64 @@ describe("agent-runner-utils", () => {
 
     expect(context.currentChannelId).toBe("channel:123456789012345678");
     expect(context.currentMessageId).toBe("msg-9");
+  });
+
+  it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          context,
+        }: {
+          context: { To?: string; MessageThreadId?: string | number };
+        }) => ({
+          currentChannelId: context.To,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        }),
+      },
+    });
+
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1003841603622:topic:928",
+        MessageThreadId: 928,
+        MessageSid: "restart-sentinel:agent:main:telegram:agentTurn:123",
+        InputProvenance: {
+          kind: "internal_system",
+          sourceChannel: "telegram",
+          sourceTool: "restart-sentinel",
+        },
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context.currentChannelId).toBe("telegram:-1003841603622:topic:928");
+    expect(context.currentThreadTs).toBe("928");
+    expect(context.currentMessageId).toBeUndefined();
+  });
+
+  it("uses restart-sentinel reply target when one exists", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+15550002",
+        ReplyToId: "provider-reply-id",
+        MessageSid: "restart-sentinel:agent:main:whatsapp:agentTurn:123",
+        InputProvenance: {
+          kind: "internal_system",
+          sourceChannel: "whatsapp",
+          sourceTool: "restart-sentinel",
+        },
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context.currentChannelId).toBe("whatsapp:+15550002");
+    expect(context.currentMessageId).toBe("provider-reply-id");
   });
 });

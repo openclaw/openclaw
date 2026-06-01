@@ -39,6 +39,36 @@ type UntrustedStructuredContextEntry = {
   payload: unknown;
 };
 
+export type SupplementalContextFacts = {
+  quote?: {
+    id?: string;
+    fullId?: string;
+    body?: string;
+    sender?: string;
+    senderAllowed?: boolean;
+    isExternal?: boolean;
+    isQuote?: boolean;
+  };
+  forwarded?: {
+    from?: string;
+    fromType?: string;
+    fromId?: string;
+    date?: number;
+    senderAllowed?: boolean;
+  };
+  thread?: {
+    id?: string;
+    starterBody?: string;
+    historyBody?: string;
+    label?: string;
+    parentSessionKey?: string;
+    modelParentSessionKey?: string;
+    senderAllowed?: boolean;
+  };
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  groupSystemPrompt?: string;
+};
+
 export type MsgContext = {
   Body?: string;
   InboundEventKind?: InboundEventKind;
@@ -72,6 +102,11 @@ export type MsgContext = {
   From?: string;
   To?: string;
   SessionKey?: string;
+  /**
+   * Resolved agent scope for canonical session keys that do not encode the agent
+   * id, such as selected-agent global sessions.
+   */
+  AgentId?: string;
   /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
@@ -186,6 +221,11 @@ export type MsgContext = {
   MemberRoleIds?: string[];
   GroupMembers?: string;
   GroupSystemPrompt?: string;
+  /**
+   * Canonical inbound supplemental facts for new channel code. `finalizeInboundContext`
+   * projects these to the existing flat reply/forward/thread/group prompt fields.
+   */
+  SupplementalContext?: SupplementalContextFacts;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
   /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
@@ -236,8 +276,6 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
-  /** System-event authority override for contexts that must never inherit owner semantics. */
-  ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Provider-native thread target for reply delivery without making the session thread-scoped. */

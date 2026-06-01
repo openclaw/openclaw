@@ -21,6 +21,7 @@ export {
 } from "./auth-profiles/oauth.js";
 export {
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
@@ -52,6 +53,7 @@ export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getRuntimeAuthProfileStoreSnapshot,
   hasAnyAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -86,4 +88,5 @@ export {
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
+  setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";

@@ -6,7 +6,7 @@ import {
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -291,9 +291,9 @@ function buildUsageMosaicStats(
     }
 
     if (
-      !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
-        hourTotals[hour] += usage.totalTokens * share;
-        weekdayTotals[weekday] += usage.totalTokens * share;
+      !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
+        hourTotals[hour] += usageLocal.totalTokens * share;
+        weekdayTotals[weekday] += usageLocal.totalTokens * share;
       })
     ) {
       continue;

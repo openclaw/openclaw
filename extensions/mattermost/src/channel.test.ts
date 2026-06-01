@@ -449,7 +449,7 @@ describe("mattermostPlugin", () => {
       expect(options.replyToId).toBe("post-root");
     });
 
-    it("maps presentation buttons without using legacy interactive conversion", async () => {
+    it("maps legacy presentation buttons without using interactive conversion", async () => {
       const cfg = createMattermostTestConfig();
 
       await mattermostPlugin.actions?.handleAction?.(
@@ -463,7 +463,11 @@ describe("mattermostPlugin", () => {
                 {
                   type: "buttons",
                   buttons: [
-                    { label: "Open", value: "open", style: "primary" },
+                    {
+                      label: "Open",
+                      value: "open",
+                      style: "primary",
+                    },
                     { label: "Docs", url: "https://example.com/docs" },
                   ],
                 },
@@ -480,8 +484,70 @@ describe("mattermostPlugin", () => {
         "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
       );
       expect(options.buttons).toStrictEqual([
-        [{ text: "Open", callback_data: "open", style: "primary" }],
+        [
+          {
+            id: "open",
+            text: "Open",
+            callback_data: "open",
+            context: { callback_data: "open" },
+            style: "primary",
+          },
+        ],
       ]);
+    });
+
+    it("does not render callback action buttons that Mattermost cannot round-trip", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "Pick",
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Inspect", action: { type: "callback", value: "inspect" } }],
+                },
+              ],
+            },
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Inspect");
+      expect(options.buttons).toBeUndefined();
+    });
+
+    it("does not render command action buttons that Mattermost cannot execute", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "Pick",
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Plugins", action: { type: "command", command: "/codex" } }],
+                },
+              ],
+            },
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Plugins");
+      expect(options.buttons).toBeUndefined();
     });
 
     it("falls back to trimmed replyTo when replyToId is blank", async () => {
@@ -556,7 +622,15 @@ describe("mattermostPlugin", () => {
         "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
       );
       expect(options.buttons).toStrictEqual([
-        [{ text: "Open", callback_data: "open", style: "primary" }],
+        [
+          {
+            id: "open",
+            text: "Open",
+            callback_data: "open",
+            context: { callback_data: "open" },
+            style: "primary",
+          },
+        ],
       ]);
     });
 

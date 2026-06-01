@@ -51,6 +51,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "plugins-offline",
       "plugins",
       "kitchen-sink-plugin",
+      "kitchen-sink-rpc",
       "plugin-update",
       "config-reload",
       "gateway-network",
@@ -116,6 +117,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB");
     expect(script).toContain(
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
@@ -158,8 +160,43 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       "X-ClawHub-Artifact-Sha256",
     );
-    expect(script).toContain("docker stats --no-stream");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
+  });
+
+  it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
+    const lane = getDockerLane("kitchen-sink-rpc");
+    const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
+    const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+      e2eImageKind: "functional",
+      live: false,
+      name: "kitchen-sink-rpc",
+      resources: ["service", "npm"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      timeoutMs: 900000,
+      weight: 3,
+    });
+    expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
+    expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(script).not.toContain("--import tsx");
+    expect(walkScript).toContain("commands.list");
+    expect(walkScript).toContain("tools.invoke");
+    expect(walkScript).toContain("tts.providers");
+    expect(walkScript).toContain("plugins.uiDescriptors");
+    expect(walkScript).toContain("loadCallGatewayModule(options.runner)");
+    expect(walkScript).toContain("usesBuiltOpenClawEntry(runner)");
+    expect(walkScript).toContain('"gateway"');
+    expect(walkScript).toContain('"call"');
+    expect(walkScript).not.toContain("src/gateway/call.ts");
+    expect(walkScript).toContain("^call(?:\\.runtime)?");
   });
 
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {
@@ -245,7 +282,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
-            "persist-credentials": false,
+            "persist-credentials": true,
             ref: "${{ needs.preflight.outputs.checkout_revision }}",
             submodules: false,
           },
@@ -315,7 +352,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
-    expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
+    expect(
+      workflow.jobs["check-shard"].strategy.matrix.include.find(
+        (entry) => entry.check_name === "check-dependencies",
+      ),
+    ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
       runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -481,6 +522,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
     for (const jobName of [
       "resolve_target",
+      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
@@ -490,6 +532,35 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
+    expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+    );
+    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
+      "resolve_target",
+      "docker_runtime_assets_preflight",
+    ]);
+    expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
+      "needs.resolve_target.result == 'success'",
+    );
+    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
+      "inputs.rerun_group == 'all'",
+    );
+    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
+      (step) => step.name === "Build and smoke test final Docker runtime image",
+    );
+    expect(dockerPreflightStep).toBeDefined();
+    expect(dockerPreflightStep?.run).toContain("docker build");
+    expect(dockerPreflightStep?.run).toContain("node /app/openclaw.mjs agent");
+    expect(dockerPreflightStep?.run).toContain(
+      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
+    );
+    expect(dockerPreflightStep?.run).toContain("/app/src/agents/templates/HEARTBEAT.md");
+    expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
+    );
+    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+    );
   });
 
   it("keeps runtime tool coverage blocking in release checks", () => {

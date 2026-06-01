@@ -1,4 +1,3 @@
-import { useFrozenTime, useRealTime } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
@@ -248,7 +247,7 @@ describe("createTelegramBot channel_post media", () => {
   it("coalesces channel_post near-limit text fragments into one message", async () => {
     setOpenChannelPostConfig();
 
-    useFrozenTime("2026-02-20T00:00:00.000Z");
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const handler = getChannelPostHandler();
 
@@ -278,14 +277,17 @@ describe("createTelegramBot channel_post media", () => {
       });
 
       expect(replySpy).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 100);
+      await flushChannelPostMediaGroupForDelay(
+        setTimeoutSpy,
+        TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+      );
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replyPayload() as { RawBody?: string };
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
     } finally {
-      useRealTime();
+      setTimeoutSpy.mockRestore();
     }
   });
 
@@ -431,6 +433,54 @@ describe("createTelegramBot channel_post media", () => {
         {
           reply_parameters: {
             message_id: 81182,
+            allow_sending_without_reply: true,
+          },
+        },
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("treats targeted bot command captions as mentions before media download", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("MediaFetchError: ECONNRESET");
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const caption = "/inspect@openclaw_bot";
+
+      await handler({
+        message: {
+          chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+          message_id: 81184,
+          date: 1736380800,
+          caption,
+          caption_entities: [{ type: "bot_command", offset: 0, length: caption.length }],
+          photo: [{ file_id: "p1" }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        -100456,
+        "⚠️ Failed to download media. Please try again.",
+        {
+          reply_parameters: {
+            message_id: 81184,
             allow_sending_without_reply: true,
           },
         },

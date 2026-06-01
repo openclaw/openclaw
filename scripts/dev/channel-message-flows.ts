@@ -19,10 +19,10 @@ import {
   createNativeTelegramToolProgressDraft,
   type NativeTelegramToolProgressDraft,
 } from "../../extensions/telegram/src/native-tool-progress-draft.js";
-import { formatReasoningMessage } from "../../src/agents/pi-embedded-utils.js";
+import { formatReasoningMessage } from "../../src/agents/embedded-agent-utils.js";
 import { getRuntimeConfig } from "../../src/config/config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { formatChannelProgressDraftText } from "../../src/plugin-sdk/channel-streaming.js";
+import { formatChannelProgressDraftText } from "../../src/plugin-sdk/channel-outbound.js";
 
 type SupportedChannel = "telegram";
 type SupportedFlow = "thinking-final" | "working-final";

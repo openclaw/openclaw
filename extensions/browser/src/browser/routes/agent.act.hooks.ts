@@ -1,4 +1,6 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -8,13 +10,12 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
   jsonError,
   toBoolean,
-  toNumber,
   toStringArray,
   toStringOrEmpty,
 } from "./utils.js";
@@ -32,7 +33,12 @@ export function registerBrowserAgentActHookRoutes(
       const inputRef = toStringOrEmpty(body.inputRef) || undefined;
       const element = toStringOrEmpty(body.element) || undefined;
       const paths = toStringArray(body.paths) ?? [];
-      const timeoutMs = toNumber(body.timeoutMs);
+      let timeoutMs: number | undefined;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
       if (!paths.length) {
         return jsonError(res, 400, "paths are required");
       }
@@ -43,14 +49,12 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const uploadPathsResult = await pathScope(DEFAULT_UPLOAD_DIR, {
-            label: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          }).existing(paths);
-          if (!uploadPathsResult.ok) {
-            res.status(400).json({ error: uploadPathsResult.error });
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            res.status(400).json({ error: resolvedResult.error });
             return;
           }
-          const resolvedPaths = uploadPathsResult.paths;
+          const resolvedPaths = resolvedResult.paths;
 
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (element) {
@@ -118,7 +122,12 @@ export function registerBrowserAgentActHookRoutes(
       const targetId = resolveTargetIdFromBody(body);
       const accept = toBoolean(body.accept);
       const promptText = toStringOrEmpty(body.promptText) || undefined;
-      const timeoutMs = toNumber(body.timeoutMs);
+      let timeoutMs: number | undefined;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
       const dialogId = toStringOrEmpty(body.dialogId) || undefined;
       if (accept === undefined) {
         return jsonError(res, 400, "accept is required");

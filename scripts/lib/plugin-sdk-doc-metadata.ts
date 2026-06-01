@@ -35,6 +35,9 @@ export const pluginSdkDocMetadata = {
   "approval-native-runtime": {
     category: "runtime",
   },
+  "approval-reaction-runtime": {
+    category: "runtime",
+  },
   "approval-reply-runtime": {
     category: "runtime",
   },
@@ -92,11 +95,17 @@ export const pluginSdkDocMetadata = {
   "provider-onboard": {
     category: "provider",
   },
+  "provider-oauth-runtime": {
+    category: "provider",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
   "runtime-store": {
     category: "runtime",
+  },
+  "qa-live-transport-scenarios": {
+    category: "utilities",
   },
   "agent-runtime": {
     category: "runtime",
@@ -104,7 +113,13 @@ export const pluginSdkDocMetadata = {
   "speech-core": {
     category: "provider",
   },
+  "realtime-voice": {
+    category: "provider",
+  },
   "tts-runtime": {
+    category: "runtime",
+  },
+  "inline-image-data-url-runtime": {
     category: "runtime",
   },
   "allow-from": {

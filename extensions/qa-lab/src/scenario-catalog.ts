@@ -17,7 +17,7 @@ Persona:
 Style:
 - read source and docs first
 - test systematically
-- record evidence
+- record what happened
 - end with a concise protocol report`;
 
 const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((config, ctx) => {
@@ -230,6 +230,7 @@ export type QaBootstrapScenarioCatalog = {
 };
 
 export {
+  QA_OBSERVABILITY_SCENARIO_IDS,
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
   resolveQaScenarioPackScenarioIds,
@@ -317,8 +318,8 @@ function extractQaScenarioFlow(content: string, relativePath: string) {
   return parseQaYamlWithContext(qaFlowSchema, YAML.parse(match[1]) as unknown, relativePath);
 }
 
-function formatZodIssuePath(path: PropertyKey[]) {
-  return path.length ? path.map(String).join(".") : "<root>";
+function formatZodIssuePath(pathLocal: PropertyKey[]) {
+  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
 function parseQaYamlWithContext<T>(schema: z.ZodType<T>, value: unknown, label: string): T {

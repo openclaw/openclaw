@@ -1,11 +1,23 @@
-export { getRuntimeConfig } from "./sdk-config.js";
+import { getRuntimeConfig } from "./sdk-config.js";
+
+export { getRuntimeConfig };
+export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
+  const configured = getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return undefined;
+  }
+  return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
+}
 export {
   callGatewayTool,
+  describeImageFile,
   imageResultFromFile,
   jsonResult,
   listNodes,
+  readPositiveIntegerParam,
   readStringParam,
   resolveNodeIdFromList,
+  saveMediaBuffer,
   selectDefaultNodeFromList,
 } from "./sdk-setup-tools.js";
 export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
@@ -38,7 +50,7 @@ export {
 } from "./browser/client.js";
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
-export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
+export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {

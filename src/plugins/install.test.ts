@@ -54,6 +54,19 @@ const dynamicArchiveTemplatePathCache = new Map<string, string>();
 let installPluginFromDirTemplateDir = "";
 let manifestInstallTemplateDir = "";
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install");
+let previousNpmGlobalConfig: string | undefined;
+let npmGlobalConfigPath = "";
+let archiveDepsInstallCase: {
+  commandRun: Parameters<typeof runCommandWithTimeout> | undefined;
+  result: Awaited<ReturnType<typeof installPluginFromArchive>>;
+};
+let scopedArchiveInstallCase: {
+  duplicate: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  first: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  stateDir: string;
+  updated: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  updatedVersion: string | undefined;
+};
 const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
   {
     outName: "traversal.tgz",
@@ -79,6 +92,34 @@ const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
     packageJson: {
       name: "@openclaw/nope",
       version: "0.0.1",
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "archive-with-deps.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "archive-with-deps",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+      dependencies: { "left-pad": "1.3.0" },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "voice-call-0.0.1.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "voice-call-0.0.2.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.2",
+      openclaw: { extensions: ["./dist/index.js"] },
     } as Record<string, unknown>,
   },
 ];
@@ -268,6 +309,21 @@ function setPluginMinHostVersion(pluginDir: string, minHostVersion: string) {
   fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
 }
 
+function setPluginPackageCompatibility(pluginDir: string, pluginApiRange: unknown) {
+  const packageJsonPath = path.join(pluginDir, "package.json");
+  const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+    openclaw?: { compat?: Record<string, unknown> };
+  };
+  manifest.openclaw = {
+    ...manifest.openclaw,
+    compat: {
+      ...manifest.openclaw?.compat,
+      pluginApi: pluginApiRange,
+    },
+  };
+  fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+}
+
 function expectFailedInstallResult<
   TResult extends { ok: boolean; code?: string } & Partial<{ error: string }>,
 >(params: { result: TResult; code?: string; messageIncludes: readonly string[] }) {
@@ -291,6 +347,10 @@ function expectWarningIncludes(warnings: readonly string[], fragment: string) {
 
 function expectWarningExcludes(warnings: readonly string[], fragment: string) {
   expect(warnings.join("\n")).not.toContain(fragment);
+}
+
+function expectMessageIncludesPath(message: string, fragment: string) {
+  expect(message.replaceAll("\\", "/")).toContain(fragment);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -557,12 +617,22 @@ async function ensureDynamicArchiveTemplate(params: {
 }
 
 afterAll(() => {
+  if (previousNpmGlobalConfig === undefined) {
+    delete process.env.NPM_CONFIG_GLOBALCONFIG;
+  } else {
+    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
+  }
   resetGlobalHookRunner();
   suiteTempRootTracker.cleanup();
   suiteFixtureRoot = "";
 });
 
 beforeAll(async () => {
+  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmGlobalConfigPath = path.join(suiteTempRootTracker.makeTempDir(), "global-npmrc");
+  fs.writeFileSync(npmGlobalConfigPath, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
+
   installPluginFromDirTemplateDir = path.join(
     ensureSuiteFixtureRoot(),
     "install-from-dir-template",
@@ -619,6 +689,73 @@ beforeAll(async () => {
       }),
     ),
   );
+
+  const run = vi.mocked(runCommandWithTimeout);
+  run.mockReset();
+  mockSuccessfulCommandRun(run);
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
+  archiveDepsInstallCase = {
+    result: await installArchivePackageAndReturnResult({
+      packageJson: {
+        name: "archive-with-deps",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "left-pad": "1.3.0" },
+      },
+      outName: "archive-with-deps.tgz",
+      withDistIndex: true,
+    }),
+    commandRun: firstMockCall(run) as Parameters<typeof runCommandWithTimeout> | undefined,
+  };
+
+  const stateDir = suiteTempRootTracker.makeTempDir();
+  const archiveV1 = await ensureDynamicArchiveTemplate({
+    outName: "voice-call-0.0.1.tgz",
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    },
+    withDistIndex: true,
+  });
+  const archiveV2 = await ensureDynamicArchiveTemplate({
+    outName: "voice-call-0.0.2.tgz",
+    packageJson: {
+      name: "@openclaw/voice-call",
+      version: "0.0.2",
+      openclaw: { extensions: ["./dist/index.js"] },
+    },
+    withDistIndex: true,
+  });
+
+  const extensionsDir = path.join(stateDir, "extensions");
+  const first = await installPluginFromArchive({
+    archivePath: archiveV1,
+    extensionsDir,
+  });
+  const duplicate = await installPluginFromArchive({
+    archivePath: archiveV1,
+    extensionsDir,
+  });
+  const updated = await installPluginFromArchive({
+    archivePath: archiveV2,
+    extensionsDir,
+    mode: "update",
+  });
+  const updatedVersion = updated.ok
+    ? (
+        JSON.parse(fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8")) as {
+          version?: string;
+        }
+      ).version
+    : undefined;
+  scopedArchiveInstallCase = {
+    duplicate,
+    first,
+    stateDir,
+    updated,
+    updatedVersion,
+  };
 });
 
 beforeEach(() => {
@@ -628,26 +765,15 @@ beforeEach(() => {
   run.mockReset();
   mockSuccessfulCommandRun(run);
   vi.unstubAllEnvs();
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
   resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
 });
 
 describe("installPluginFromArchive", () => {
   it("installs package archive runtime dependencies", async () => {
-    const result = await installArchivePackageAndReturnResult({
-      packageJson: {
-        name: "archive-with-deps",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-      },
-      outName: "archive-with-deps.tgz",
-      withDistIndex: true,
-    });
+    const { commandRun, result } = archiveDepsInstallCase;
 
     expect(result.ok).toBe(true);
-    const commandRun = firstMockCall(vi.mocked(runCommandWithTimeout)) as
-      | Parameters<typeof runCommandWithTimeout>
-      | undefined;
     expect(commandRun?.[0]).toContain("npm");
     expect(commandRun?.[0]).toContain("install");
     const commandOptions = commandRun?.[1];
@@ -658,55 +784,20 @@ describe("installPluginFromArchive", () => {
   });
 
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const archiveV1 = await ensureDynamicArchiveTemplate({
-      outName: "voice-call-0.0.1.tgz",
-      packageJson: {
-        name: "@openclaw/voice-call",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-      },
-      withDistIndex: true,
-    });
-    const archiveV2 = await ensureDynamicArchiveTemplate({
-      outName: "voice-call-0.0.2.tgz",
-      packageJson: {
-        name: "@openclaw/voice-call",
-        version: "0.0.2",
-        openclaw: { extensions: ["./dist/index.js"] },
-      },
-      withDistIndex: true,
-    });
+    const { duplicate, first, stateDir, updated, updatedVersion } = scopedArchiveInstallCase;
 
-    const extensionsDir = path.join(stateDir, "extensions");
-    const first = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
     expectSuccessfulArchiveInstall({ result: first, stateDir, pluginId: "@openclaw/voice-call" });
 
-    const duplicate = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
     expect(duplicate.ok).toBe(false);
     if (!duplicate.ok) {
       expect(duplicate.error).toContain("already exists");
     }
 
-    const updated = await installPluginFromArchive({
-      archivePath: archiveV2,
-      extensionsDir,
-      mode: "update",
-    });
     expect(updated.ok).toBe(true);
     if (!updated.ok) {
       return;
     }
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8"),
-    ) as { version?: string };
-    expect(manifest.version).toBe("0.0.2");
+    expect(updatedVersion).toBe("0.0.2");
   });
 
   it("rejects native plugin zip archives without openclaw.plugin.json", async () => {
@@ -1002,12 +1093,12 @@ describe("installPluginFromArchive", () => {
   });
 
   it("rejects reserved archive package ids", async () => {
-    for (const params of [
-      { packageName: "@evil/..", outName: "traversal.tgz" },
-      { packageName: "@evil/.", outName: "reserved.tgz" },
-    ]) {
-      await expectArchiveInstallReservedSegmentRejection(params);
-    }
+    await Promise.all(
+      [
+        { packageName: "@evil/..", outName: "traversal.tgz" },
+        { packageName: "@evil/.", outName: "reserved.tgz" },
+      ].map((params) => expectArchiveInstallReservedSegmentRejection(params)),
+    );
   });
 
   it("rejects packages without openclaw.extensions", async () => {
@@ -1185,6 +1276,33 @@ describe("installPluginFromArchive", () => {
       expect(result.error).toContain("plugin packaging issue");
       expect(result.error).toContain("disable/uninstall the plugin");
     }
+  });
+
+  it("allows linked source probes when TypeScript extension entries have no compiled runtime output", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "source-link-runtime-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      dryRun: true,
+      allowSourceTypeScriptEntries: true,
+    });
+
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.pluginId).toBe("source-link-runtime-plugin");
+    expect(result.targetDir).toBe(resolvePluginInstallDir(result.pluginId, extensionsDir));
   });
 
   it("rejects package installs when runtimeExtensions length does not match extensions", async () => {
@@ -1450,7 +1568,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("dist/payload.js");
+      expectMessageIncludesPath(result.error, "dist/payload.js");
     }
     expectWarningIncludes(warnings, "dangerous code pattern");
   });
@@ -1601,7 +1719,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
-      expect(result.error).toContain("declared in axios (vendor/axios/package.json)");
+      expectMessageIncludesPath(result.error, "declared in axios (vendor/axios/package.json)");
     }
   });
 
@@ -1628,7 +1746,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependency directory "plain-crypto-js"');
-      expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
+      expectMessageIncludesPath(result.error, "vendor/node_modules/plain-crypto-js");
     }
   });
 
@@ -1655,7 +1773,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js.Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js.Js");
     }
   });
 
@@ -1682,7 +1800,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js");
     }
   });
 
@@ -2085,7 +2203,8 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error).toContain(
+      expectMessageIncludesPath(
+        result.error,
         "vendor/pkg-127/node_modules/nested-safe/node_modules/plain-crypto-js/package.json",
       );
     }
@@ -2410,7 +2529,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "blocked-dependency-bundle" installation blocked');
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
-      expect(result.error).toContain("declared in axios (vendor/axios/package.json)");
+      expectMessageIncludesPath(result.error, "declared in axios (vendor/axios/package.json)");
     }
     expect(
       warnings.some((warning) =>
@@ -2442,7 +2561,8 @@ describe("installPluginFromArchive", () => {
         'Bundle "blocked-vendored-package-name-bundle" installation blocked',
       );
       expect(result.error).toContain('"plain-crypto-js" as package name');
-      expect(result.error).toContain(
+      expectMessageIncludesPath(
+        result.error,
         "declared in plain-crypto-js (vendor/plain-crypto-js/package.json)",
       );
     }
@@ -2464,7 +2584,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "blocked-package-dir-bundle" installation blocked');
       expect(result.error).toContain('blocked dependency directory "plain-crypto-js"');
-      expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
+      expectMessageIncludesPath(result.error, "vendor/node_modules/plain-crypto-js");
     }
   });
 
@@ -2484,7 +2604,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "blocked-package-file-bundle" installation blocked');
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js.Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js.Js");
     }
   });
 
@@ -2506,7 +2626,7 @@ describe("installPluginFromArchive", () => {
         'Bundle "blocked-package-extensionless-file-bundle" installation blocked',
       );
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js");
     }
   });
 
@@ -3111,7 +3231,7 @@ describe("installPluginFromDir", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
+      expectMessageIncludesPath(result.error, "node_modules/plain-crypto-js/package.json");
     }
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
@@ -3556,6 +3676,128 @@ describe("installPluginFromDir", () => {
       expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects plugins whose package plugin API range is newer than the current host", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.10-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginMinHostVersion(pluginDir, ">=2026.4.25");
+    setPluginPackageCompatibility(pluginDir, ">=2026.5.27");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: [
+        "requires plugin API >=2026.5.27",
+        "runtime exposes 2026.5.10-beta.1",
+        "install a compatible plugin version",
+      ],
+    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugins whose package plugin API metadata is malformed", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginPackageCompatibility(pluginDir, 20260527);
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+      messageIncludes: ["openclaw.compat.pluginApi", "must be a string"],
+    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("checks package plugin API before current-host extension shape validation", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: Record<string, unknown>;
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      extensions: { runtime: "./src/index.ts" },
+      compat: { pluginApi: ">=2026.5.27-beta.2" },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: [
+        "requires plugin API >=2026.5.27-beta.2",
+        "runtime exposes 2026.5.27-beta.1",
+      ],
+    });
+    if (!result.ok) {
+      expect(result.error).not.toContain("openclaw.extensions");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("rejects bundle package installs whose package plugin API range is newer than the current host", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.10-beta.1");
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Future Bundle",
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/future-bundle",
+        version: "2026.5.27",
+        openclaw: { compat: { pluginApi: ">=2026.5.27" } },
+      }),
+      "utf-8",
+    );
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: ["requires plugin API >=2026.5.27", "runtime exposes 2026.5.10-beta.1"],
+    });
+    expect(fs.existsSync(path.join(extensionsDir, "future-bundle"))).toBe(false);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("allows plugins when a beta host is on the package plugin API floor", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginMinHostVersion(pluginDir, ">=2026.4.25");
+    setPluginPackageCompatibility(pluginDir, ">=2026.5.27");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("@openclaw/test-plugin");
+  });
 
   it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({

@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
@@ -31,7 +32,6 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 const channelAgentToolMeta = new WeakMap<ChannelAgentTool, ChannelAgentToolMeta>();
@@ -129,9 +129,7 @@ export function resolveChannelMessageToolHints(params: {
     return [];
   }
   const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return (resolve({ cfg, accountId: params.accountId }) ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(resolve({ cfg, accountId: params.accountId }));
 }
 
 export function resolveChannelPromptCapabilities(params: {
@@ -155,7 +153,7 @@ export function resolveChannelPromptCapabilities(params: {
 }
 
 function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
-  return (capabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
+  return normalizeStringEntries(capabilities ?? []);
 }
 
 export function resolveChannelReactionGuidance(params: {

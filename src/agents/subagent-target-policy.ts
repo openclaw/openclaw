@@ -1,3 +1,7 @@
+import {
+  normalizeUniqueStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
@@ -22,8 +26,22 @@ function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {
   return {
     configured: true,
     allowAny: allowAgents.some((value) => value.trim() === "*"),
-    allowedIds: Array.from(new Set(allowedIds)).toSorted((a, b) => a.localeCompare(b)),
+    allowedIds: sortUniqueStrings(allowedIds),
   };
+}
+
+function normalizeConfiguredAgentIds(
+  configuredAgentIds: readonly string[] | undefined,
+): Set<string> {
+  return new Set(normalizeUniqueStringEntries((configuredAgentIds ?? []).map(normalizeAgentId)));
+}
+
+function filterConfiguredAllowedIds(params: {
+  allowedIds: readonly string[];
+  configuredAgentIds?: readonly string[];
+}): string[] {
+  const configuredIds = normalizeConfiguredAgentIds(params.configuredAgentIds);
+  return params.allowedIds.filter((id) => configuredIds.has(id));
 }
 
 export function resolveSubagentAllowedTargetIds(params: {
@@ -40,21 +58,21 @@ export function resolveSubagentAllowedTargetIds(params: {
     };
   }
   if (policy.allowAny) {
-    const configuredIds = (params.configuredAgentIds ?? [])
-      .map((id) => normalizeAgentId(id))
-      .filter(Boolean);
-    configuredIds.push(...policy.allowedIds);
+    const configuredIds = Array.from(normalizeConfiguredAgentIds(params.configuredAgentIds));
     if (requesterAgentId) {
       configuredIds.push(requesterAgentId);
     }
     return {
       allowAny: true,
-      allowedIds: Array.from(new Set(configuredIds)).toSorted((a, b) => a.localeCompare(b)),
+      allowedIds: sortUniqueStrings(configuredIds),
     };
   }
   return {
     allowAny: false,
-    allowedIds: policy.allowedIds,
+    allowedIds: filterConfiguredAllowedIds({
+      allowedIds: policy.allowedIds,
+      configuredAgentIds: params.configuredAgentIds,
+    }).toSorted((a, b) => a.localeCompare(b)),
   };
 }
 
@@ -80,7 +98,8 @@ export function resolveSubagentTargetPolicy(params: {
     return { ok: true };
   }
   const allowedText = allowed.allowedIds.length > 0 ? allowed.allowedIds.join(", ") : "none";
-  if (allowed.allowAny) {
+  const policy = normalizeAllowAgents(params.allowAgents);
+  if (allowed.allowAny || policy.allowedIds.includes(targetAgentId)) {
     return {
       ok: false,
       allowedText,

@@ -1,18 +1,21 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../pi-embedded-runner/run/types.js";
-import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
-} from "../pi-tools.policy.js";
+} from "../agent-tools.policy.js";
+import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../embedded-agent-runner/run/types.js";
+import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
+import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
 import {
@@ -20,7 +23,7 @@ import {
   resolveSubagentCapabilityStore,
 } from "../subagent-capabilities.js";
 import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
-import { createPiAgentHarness } from "./builtin-pi.js";
+import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
@@ -55,14 +58,16 @@ type AgentHarnessSelectionDecision = {
   policy: AgentHarnessPolicy;
   selectedHarnessId: string;
   selectedReason:
-    | "forced_pi"
+    | "forced_openclaw"
     | "forced_plugin"
-    // Implicit Codex preference found no registered Codex harness, so PI handled the run.
-    | "implicit_plugin_unavailable_pi"
+    // Implicit Codex preference found no registered Codex harness, so OpenClaw handled the run.
+    | "implicit_plugin_unavailable_openclaw"
+    // Provider-owned CLI runtime aliases have no agent harness plugin counterpart.
+    | "cli_runtime_passthrough_openclaw"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
-    // Auto mode found no supporting plugin harness, so PI handled the run.
-    | "auto_pi";
+    // Auto mode found no supporting plugin harness, so OpenClaw handled the run.
+    | "auto_openclaw";
   candidates: AgentHarnessSelectionCandidate[];
 };
 
@@ -89,7 +94,7 @@ function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentH
   ) {
     return {
       ...policy,
-      runtime: "pi",
+      runtime: "openclaw",
     };
   }
   return policy;
@@ -128,46 +133,86 @@ function selectAgentHarnessDecision(params: {
   agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
   const resolvedPolicy = resolveConfiguredAgentHarnessPolicy(params);
-  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
   const policy =
-    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
+    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride)
       ? ({
           ...resolvedPolicy,
           runtime: runtimeOverride,
           runtimeSource: "model",
         } as AgentHarnessPolicy)
       : resolvedPolicy;
-  // PI is intentionally not part of the plugin candidate list. Explicit plugin
-  // runtimes fail closed; only `auto` may route an unmatched turn to PI.
+  // OpenClaw's built-in harness is intentionally not part of the plugin candidate list. Explicit plugin
+  // runtimes fail closed; only `auto` may route an unmatched turn to OpenClaw.
   const pluginHarnesses = listPluginAgentHarnesses();
-  const piHarness = createPiAgentHarness();
+  const openClawHarness = createOpenClawAgentHarness();
   const runtime = policy.runtime;
-  if (runtime === "pi") {
+  if (runtime === "openclaw") {
     return buildSelectionDecision({
-      harness: piHarness,
+      harness: openClawHarness,
       policy,
-      selectedReason: "forced_pi",
+      selectedReason: "forced_openclaw",
       candidates: listHarnessCandidates(pluginHarnesses),
     });
   }
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
-      return buildSelectionDecision({
-        harness: forced,
-        policy,
-        selectedReason: "forced_plugin",
-        candidates: listHarnessCandidates(pluginHarnesses),
+      const support = forced.supports({
+        provider: params.provider,
+        modelId: params.modelId,
+        requestedRuntime: runtime,
       });
+      if (support.supported) {
+        return buildSelectionDecision({
+          harness: forced,
+          policy,
+          selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+        return buildSelectionDecision({
+          harness: openClawHarness,
+          policy: {
+            ...policy,
+            runtime: "openclaw",
+          },
+          selectedReason: "cli_runtime_passthrough_openclaw",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      throw new Error(
+        `Requested agent harness "${runtime}" does not support ${formatProviderModel(params)}${
+          support.reason ? ` (${support.reason})` : ""
+        }.`,
+      );
     }
     if (runtime === "codex" && policy.runtimeSource === "implicit") {
       return buildSelectionDecision({
-        harness: piHarness,
+        harness: openClawHarness,
         policy: {
           ...policy,
-          runtime: "pi",
+          runtime: "openclaw",
         },
-        selectedReason: "implicit_plugin_unavailable_pi",
+        selectedReason: "implicit_plugin_unavailable_openclaw",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (
+      isCliRuntimeAliasForProvider({
+        runtime,
+        provider: params.provider,
+        cfg: params.config,
+      })
+    ) {
+      return buildSelectionDecision({
+        harness: openClawHarness,
+        policy: {
+          ...policy,
+          runtime: "openclaw",
+        },
+        selectedReason: "cli_runtime_passthrough_openclaw",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
@@ -203,9 +248,9 @@ function selectAgentHarnessDecision(params: {
     });
   }
   return buildSelectionDecision({
-    harness: piHarness,
+    harness: openClawHarness,
     policy,
-    selectedReason: "auto_pi",
+    selectedReason: "auto_openclaw",
     candidates: candidates.map(toSelectionCandidate),
   });
 }
@@ -223,7 +268,8 @@ export async function runAgentHarnessAttempt(
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
-  const attemptParams = harness.id === "pi" ? params : applyPluginHarnessDenyAllToolPolicy(params);
+  const attemptParams =
+    harness.id === "openclaw" ? params : applyPluginHarnessDenyAllToolPolicy(params);
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -231,14 +277,14 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
   });
   const v2Harness = adaptAgentHarnessToV2(harness);
-  if (harness.id === "pi") {
+  if (harness.id === "openclaw") {
     return await runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
   }
 
   try {
     return await runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
   } catch (error) {
-    log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
+    log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
       harnessId: harness.id,
       provider: params.provider,
       modelId: params.modelId,
@@ -440,23 +486,61 @@ function logAgentHarnessSelection(
 }
 
 export async function maybeCompactAgentHarnessSession(
-  params: CompactEmbeddedPiSessionParams,
-): Promise<EmbeddedPiCompactResult | undefined> {
-  const harness = selectAgentHarness({
-    provider: params.provider ?? "",
+  params: CompactEmbeddedAgentSessionParams,
+): Promise<EmbeddedAgentCompactResult | undefined> {
+  if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
+    return undefined;
+  }
+  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const runtimePolicyAgentId =
+    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+      ? undefined
+      : params.agentId;
+  const runtime = resolveConfiguredAgentHarnessPolicy({
+    provider: params.provider,
     modelId: params.model,
     config: params.config,
-    sessionKey: params.sessionKey,
-  });
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+  }).runtime;
+  if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
+    return undefined;
+  }
+  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const agentHarnessRuntimeOverride =
+    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
+  let harness: AgentHarness;
+  try {
+    harness = selectAgentHarness({
+      provider: params.provider ?? "",
+      modelId: params.model,
+      config: params.config,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessRuntimeOverride,
+    });
+  } catch (err) {
+    if (agentHarnessRuntimeOverride) {
+      const message = formatErrorMessage(err);
+      if (message.includes("does not support")) {
+        return undefined;
+      }
+    }
+    throw err;
+  }
   if (!harness.compact) {
-    if (harness.id !== "pi") {
+    if (harness.id !== "openclaw") {
       return {
         ok: false,
         compacted: false,
         reason: `Agent harness "${harness.id}" does not support compaction.`,
+        failure: { reason: "unsupported_harness_compaction" },
       };
     }
     return undefined;
   }
   return harness.compact(params);
+}
+function formatProviderModel(params: { provider: string; modelId?: string }): string {
+  return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }
