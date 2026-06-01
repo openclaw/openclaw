@@ -6,6 +6,7 @@ export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
   allowedValueFlags?: ReadonlySet<string>;
+  allowedBooleanFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
@@ -17,6 +18,7 @@ export type SafeBinProfileFixture = {
   minPositional?: number;
   maxPositional?: number;
   allowedValueFlags?: readonly string[];
+  allowedBooleanFlags?: readonly string[];
   deniedFlags?: readonly string[];
 };
 
@@ -36,9 +38,15 @@ const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
 export function collectKnownLongFlags(
   allowedValueFlags: ReadonlySet<string>,
   deniedFlags: ReadonlySet<string>,
+  allowedBooleanFlags: ReadonlySet<string> = NO_FLAGS,
 ): string[] {
   const known = new Set<string>();
   for (const flag of allowedValueFlags) {
+    if (flag.startsWith("--")) {
+      known.add(flag);
+    }
+  }
+  for (const flag of allowedBooleanFlags) {
     if (flag.startsWith("--")) {
       known.add(flag);
     }
@@ -76,12 +84,14 @@ export function buildLongFlagPrefixMap(
 
 function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
+  const allowedBooleanFlags = toFlagSet(fixture.allowedBooleanFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
-  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags);
+  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
     allowedValueFlags,
+    allowedBooleanFlags,
     deniedFlags,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
@@ -159,6 +169,14 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-f",
       "-d",
     ],
+    allowedBooleanFlags: [
+      "--complement",
+      "--only-delimited",
+      "--zero-terminated",
+      "-n",
+      "-s",
+      "-z",
+    ],
   },
   sort: {
     maxPositional: 0,
@@ -195,10 +213,31 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-s",
       "-w",
     ],
+    allowedBooleanFlags: [
+      "--count",
+      "--repeated",
+      "--unique",
+      "--ignore-case",
+      "--zero-terminated",
+      "-c",
+      "-d",
+      "-u",
+      "-i",
+      "-z",
+    ],
   },
   head: {
     maxPositional: 0,
     allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
+    allowedBooleanFlags: [
+      "--quiet",
+      "--silent",
+      "--verbose",
+      "--zero-terminated",
+      "-q",
+      "-v",
+      "-z",
+    ],
   },
   tail: {
     maxPositional: 0,
@@ -211,13 +250,45 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
       "-n",
       "-c",
     ],
+    allowedBooleanFlags: [
+      "--quiet",
+      "--silent",
+      "--verbose",
+      "--zero-terminated",
+      "-q",
+      "-v",
+      "-z",
+    ],
   },
   tr: {
     minPositional: 1,
     maxPositional: 2,
+    allowedBooleanFlags: [
+      "--complement",
+      "--delete",
+      "--squeeze-repeats",
+      "--truncate-set1",
+      "-C",
+      "-c",
+      "-d",
+      "-s",
+      "-t",
+    ],
   },
   wc: {
     maxPositional: 0,
+    allowedBooleanFlags: [
+      "--bytes",
+      "--chars",
+      "--lines",
+      "--max-line-length",
+      "--words",
+      "-L",
+      "-c",
+      "-l",
+      "-m",
+      "-w",
+    ],
     deniedFlags: ["--files0-from"],
   },
 };
