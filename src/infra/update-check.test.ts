@@ -51,7 +51,7 @@ describe("resolveNpmChannelTag", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        const tag = decodeURIComponent(url.split("/").pop() ?? "");
+        const tag = decodeURIComponent(url.split("/").pop() ?? "").split("?")[0];
         const version = versionByTag[tag] ?? null;
         return {
           ok: version != null,
