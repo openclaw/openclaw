@@ -974,7 +974,8 @@
                   "tools/apply-patch",
                   "tools/elevated",
                   "tools/thinking",
-                  "tools/reactions"
+                  "tools/reactions",
+                  "tools/save-user-section"
                 ]
               },
               {
