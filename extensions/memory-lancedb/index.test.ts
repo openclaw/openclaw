@@ -3413,6 +3413,18 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
   });
 
+  test("sanitizeForMemoryCapture strips envelopes after JSON-only metadata", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"channel":"telegram"}',
+      "```",
+      "",
+      "[Telegram Alice] I prefer dark mode",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
   test("sanitizeForMemoryCapture preserves user text after back-to-back sentinels at start", () => {
     // Two sentinels at the very start (no user content before either) must
     // both be stripped so the body that follows survives.

@@ -916,16 +916,17 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
 }
 
 function stripLeadingInboundEnvelope(text: string): string {
+  const candidateText = text.trimStart();
   const envelopePrefixMatch =
-    text.match(INBOUND_ENVELOPE_PREFIX_RE) ??
+    candidateText.match(INBOUND_ENVELOPE_PREFIX_RE) ??
     (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE
-      ? text.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE)
+      ? candidateText.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE)
       : null);
   if (!envelopePrefixMatch) {
     return text;
   }
   const headerInside = envelopePrefixMatch[1] ?? "";
-  const afterBracket = text.slice(envelopePrefixMatch[0].length);
+  const afterBracket = candidateText.slice(envelopePrefixMatch[0].length);
   return stripEnvelopeBodySenderPrefix(afterBracket, headerInside);
 }
 
