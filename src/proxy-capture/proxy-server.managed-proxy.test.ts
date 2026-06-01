@@ -40,14 +40,16 @@ async function connectThroughProxy(proxyUrl: string): Promise<string> {
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
     socket.connect(Number(target.port), target.hostname, resolve);
   });
   socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }
@@ -59,14 +61,36 @@ async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
     socket.connect(Number(proxy.port), proxy.hostname, resolve);
   });
   socket.write(`GET ${target.href} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
+  socket.destroy();
+  return data;
+}
+
+async function requestRawThroughProxy(proxyUrl: string, request: string): Promise<string> {
+  const proxy = new URL(proxyUrl);
+  const socket = new Socket();
+  let data = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    data += chunk.toString();
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.connect(Number(proxy.port), proxy.hostname, resolve);
+  });
+  socket.write(request);
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }
@@ -186,6 +210,22 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     } finally {
       await server.stop();
       await origin.stop();
+    }
+  });
+
+  it("rejects malformed relative-form HTTP proxy targets before upstream handling", async () => {
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
+    try {
+      const response = await requestRawThroughProxy(
+        server.proxyUrl,
+        "GET /capture HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n",
+      );
+
+      expect(response).toContain("400 Bad Request");
+      expect(response).toContain("Connection: close");
+      expect(response).toContain("Invalid proxy target URL");
+    } finally {
+      await server.stop();
     }
   });
 });

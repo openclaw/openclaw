@@ -31,7 +31,7 @@ vi.mock("../../agents/harness/registry.js", () => ({
   resetRegisteredAgentHarnessSessions: sessionCleanupMocks.resetRegisteredAgentHarnessSessions,
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: sessionCleanupMocks.retireSessionMcpRuntime,
 }));
 
@@ -149,7 +149,7 @@ function requireHookCall(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): readonly [Record<string, unknown>, Record<string, unknown> | undefined] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} hook call`);
   }

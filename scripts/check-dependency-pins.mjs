@@ -12,6 +12,8 @@ const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.
 const EXACT_NPM_ALIAS_PATTERN =
   /^npm:(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
+const PINNED_GITHUB_TARBALL_PATTERN =
+  /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 
 function listTrackedPackageJsonFiles(cwd) {
   return execFileSync("git", ["ls-files", "-z", "--", "*package.json"], {
@@ -27,6 +29,19 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function readTrackedJson(cwd, relativePath) {
+  const filePath = path.join(cwd, relativePath);
+  if (fs.existsSync(filePath)) {
+    return readJson(filePath);
+  }
+  return JSON.parse(
+    execFileSync("git", ["show", `:${relativePath}`], {
+      cwd,
+      encoding: "utf8",
+    }),
+  );
+}
+
 function isAllowedPinnedSpec(spec) {
   if (typeof spec !== "string") {
     return false;
@@ -40,13 +55,16 @@ function isAllowedPinnedSpec(spec) {
   if (/^(?:git\+|github:|gitlab:|bitbucket:)/u.test(spec)) {
     return PINNED_GIT_PATTERN.test(spec);
   }
+  if (PINNED_GITHUB_TARBALL_PATTERN.test(spec)) {
+    return true;
+  }
   return false;
 }
 
 function collectPackageJsonViolations(cwd) {
   const violations = [];
   for (const relativePath of listTrackedPackageJsonFiles(cwd)) {
-    const packageJson = readJson(path.join(cwd, relativePath));
+    const packageJson = readTrackedJson(cwd, relativePath);
     for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
       for (const [name, spec] of Object.entries(packageJson[section] ?? {})) {
         if (!isAllowedPinnedSpec(spec)) {
@@ -92,13 +110,41 @@ export function collectDependencyPinViolations(cwd = process.cwd()) {
   return [...collectPackageJsonViolations(cwd), ...collectWorkspaceViolations(cwd)];
 }
 
+export function collectDependencyPinAudit(cwd = process.cwd()) {
+  const packageJsonFiles = listTrackedPackageJsonFiles(cwd);
+  let packageSpecCount = 0;
+  for (const relativePath of packageJsonFiles) {
+    const packageJson = readTrackedJson(cwd, relativePath);
+    for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
+      packageSpecCount += Object.keys(packageJson[section] ?? {}).length;
+    }
+  }
+  const workspaceViolations = collectWorkspaceViolations(cwd);
+  const violations = [...collectPackageJsonViolations(cwd), ...workspaceViolations];
+  return {
+    packageManifestCount: packageJsonFiles.length,
+    packageSpecCount,
+    violations,
+  };
+}
+
 export async function main() {
-  const violations = collectDependencyPinViolations();
+  const audit = collectDependencyPinAudit();
+  const { violations } = audit;
   if (violations.length === 0) {
+    process.stdout.write(
+      `PASS direct dependency pin guard: checked ${audit.packageSpecCount} directly declared ` +
+        `dependency specs across ${audit.packageManifestCount} tracked package manifests; ` +
+        "0 violations.\n",
+    );
     return;
   }
 
-  console.error("Dependency specs must be pinned exactly outside peer dependency contracts:");
+  console.error(
+    `FAIL direct dependency pin guard: ${violations.length} unpinned directly declared ` +
+      "dependency specs found. Direct dependency specs must be pinned exactly outside peer " +
+      "dependency contracts:",
+  );
   for (const violation of violations) {
     console.error(
       `- ${violation.file}:${violation.section}:${violation.name} -> ${JSON.stringify(violation.spec)}`,
@@ -108,8 +154,10 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }

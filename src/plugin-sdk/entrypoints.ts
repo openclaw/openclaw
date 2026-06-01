@@ -35,7 +35,7 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
 
 // Transitional compatibility/helper surfaces owned by their matching bundled plugin.
 // Cross-owner extension imports are blocked by the package contract guardrails.
-export const reservedBundledPluginSdkEntrypoints = [] as const;
+export const reservedBundledPluginSdkEntrypoints = ["codex-mcp-projection"] as const;
 
 // Supported SDK facades backed by bundled plugins. These are intentionally public
 // until they move to generic, plugin-neutral contracts.
@@ -57,6 +57,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
 export const publicPluginOwnedSdkEntrypoints = [
   "browser-config",
   "image-generation-core",
+  "memory-core",
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-foundation",
   "memory-core-host-engine-qmd",
@@ -107,7 +108,7 @@ export function buildPluginSdkPackageExports() {
 
 /** List the dist artifacts expected for every generated plugin SDK entrypoint. */
 export function listPluginSdkDistArtifacts() {
-  return pluginSdkEntrypoints.flatMap((entry) => [
+  return publicPluginSdkEntrypoints.flatMap((entry) => [
     `dist/plugin-sdk/${entry}.js`,
     `dist/plugin-sdk/${entry}.d.ts`,
   ]);

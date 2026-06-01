@@ -13,6 +13,7 @@ const { botApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
     deleteMessage: vi.fn(),
     editForumTopic: vi.fn(),
+    editMessageCaption: vi.fn(),
     editMessageText: vi.fn(),
     editMessageReplyMarkup: vi.fn(),
     pinChatMessage: vi.fn(),
@@ -139,13 +140,17 @@ vi.mock("grammy", () => ({
   InputFile: function InputFile() {},
 }));
 
-vi.mock("undici", () => ({
-  Agent: undiciAgentCtor,
-  EnvHttpProxyAgent: undiciEnvHttpProxyAgentCtor,
-  ProxyAgent: undiciProxyAgentCtor,
-  fetch: undiciFetch,
-  setGlobalDispatcher: undiciSetGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: undiciAgentCtor,
+    EnvHttpProxyAgent: undiciEnvHttpProxyAgentCtor,
+    ProxyAgent: undiciProxyAgentCtor,
+    fetch: undiciFetch,
+    setGlobalDispatcher: undiciSetGlobalDispatcher,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(

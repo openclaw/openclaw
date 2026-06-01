@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   agentsSetIdentityCommandMock: vi.fn(),
   agentsUnbindCommandMock: vi.fn(),
   setVerboseMock: vi.fn(),
-  createDefaultDepsMock: vi.fn(() => ({ deps: true })),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -29,29 +28,36 @@ const agentsListCommandMock = mocks.agentsListCommandMock;
 const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
 const agentsUnbindCommandMock = mocks.agentsUnbindCommandMock;
 const setVerboseMock = mocks.setVerboseMock;
-const createDefaultDepsMock = mocks.createDefaultDepsMock;
 const runtime = mocks.runtime;
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => ({
+vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.bind.js", () => ({
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
   agentsBindCommand: mocks.agentsBindCommandMock,
-  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
-  agentsListCommand: mocks.agentsListCommandMock,
-  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
   agentsUnbindCommand: mocks.agentsUnbindCommandMock,
 }));
 
-vi.mock("../../globals.js", () => ({
-  setVerbose: mocks.setVerboseMock,
+vi.mock("../../commands/agents.commands.delete.js", () => ({
+  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
 }));
 
-vi.mock("../deps.js", () => ({
-  createDefaultDeps: mocks.createDefaultDepsMock,
+vi.mock("../../commands/agents.commands.identity.js", () => ({
+  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.list.js", () => ({
+  agentsListCommand: mocks.agentsListCommandMock,
+}));
+
+vi.mock("../../global-state.js", () => ({
+  setVerbose: mocks.setVerboseMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -76,7 +82,6 @@ describe("registerAgentCommands", () => {
     agentsListCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
     agentsUnbindCommandMock.mockResolvedValue(undefined);
-    createDefaultDepsMock.mockReturnValue({ deps: true });
   });
 
   function commandCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
@@ -87,17 +92,16 @@ describe("registerAgentCommands", () => {
     return call;
   }
 
-  it("runs agent command with deps and verbose enabled for --verbose on", async () => {
+  it("runs agent command with verbose enabled for --verbose on", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
 
     expect(setVerboseMock).toHaveBeenCalledWith(true);
-    expect(createDefaultDepsMock).toHaveBeenCalledTimes(1);
     const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
     expect((options as { message?: string }).message).toBe("hi");
     expect((options as { verbose?: string }).verbose).toBe("ON");
     expect((options as { json?: boolean }).json).toBe(true);
     expect(callRuntime).toBe(runtime);
-    expect(deps).toEqual({ deps: true });
+    expect(deps).toBeUndefined();
   });
 
   it("runs agent command with verbose disabled for --verbose off", async () => {
@@ -108,7 +112,7 @@ describe("registerAgentCommands", () => {
     expect((options as { message?: string }).message).toBe("hi");
     expect((options as { verbose?: string }).verbose).toBe("off");
     expect(callRuntime).toBe(runtime);
-    expect(deps).toEqual({ deps: true });
+    expect(deps).toBeUndefined();
   });
 
   it("accepts a model override for one-shot agent runs", async () => {
@@ -119,7 +123,17 @@ describe("registerAgentCommands", () => {
     expect((options as { agent?: string }).agent).toBe("ops");
     expect((options as { model?: string }).model).toBe("openai/gpt-5.4");
     expect(callRuntime).toBe(runtime);
-    expect(deps).toEqual({ deps: true });
+    expect(deps).toBeUndefined();
+  });
+
+  it("forwards an explicit session key to the agent command", async () => {
+    await runCli(["agent", "--message", "hi", "--session-key", "agent:ops:incident-42"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { sessionKey?: string }).sessionKey).toBe("agent:ops:incident-42");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
   });
 
   it("runs agents add and computes hasFlags based on explicit options", async () => {

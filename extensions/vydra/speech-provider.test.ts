@@ -54,7 +54,7 @@ describe("vydra speech provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://www.vydra.ai/api/v1/models/elevenlabs/tts");
     expect(init.method).toBe("POST");
     expect(init.body).toBe(
@@ -68,5 +68,38 @@ describe("vydra speech provider", () => {
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
+  });
+
+  it("rejects generated audio downloads that exceed the configured media cap", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            audioUrl: "https://cdn.vydra.ai/generated/test.mp3",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("too-large"), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } } as never,
+        providerConfig: { apiKey: "vydra-test-key" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Vydra audio download exceeds 1 bytes");
   });
 });

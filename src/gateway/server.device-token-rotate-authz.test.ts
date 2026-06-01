@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {
   approveDevicePairing,
@@ -120,8 +120,12 @@ async function getConnectedNodeId(ws: WebSocket): Promise<string> {
 }
 
 async function waitForMacrotasks(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Promise<{
@@ -186,15 +190,26 @@ async function issueMixedRolePairingScopedDevice(
 }
 
 describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
-  test("rejects a device-token caller rotating or revoking another device's token", async () => {
-    const started = await startServer("secret");
+  let ownershipGuardServer: Awaited<ReturnType<typeof startServer>>;
+  let pairingScopeDeniedCase: {
+    pairedBAfterRevokeRevokedAtMs: unknown;
+    pairedBToken: string | undefined;
+    revokeMessage: string | undefined;
+    revokeOk: boolean;
+    rotateMessage: string | undefined;
+    rotateOk: boolean;
+    token: string;
+  };
+
+  beforeAll(async () => {
+    ownershipGuardServer = await startServer("secret");
     const deviceA = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-a");
     const deviceB = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-b");
 
     let pairingWs: WebSocket | undefined;
     try {
       pairingWs = await connectPairingScopedOperator({
-        port: started.port,
+        port: ownershipGuardServer.port,
         identityPath: deviceA.identityPath,
         deviceToken: deviceA.pairingToken,
       });
@@ -204,26 +219,39 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
         role: "operator",
         scopes: ["operator.pairing"],
       });
-      expect(rotate.ok).toBe(false);
-      expect(rotate.error?.message).toBe("device token rotation denied");
-
       const pairedB = await getPairedDevice(deviceB.deviceId);
-      expect(pairedB?.tokens?.operator?.token).toBe(deviceB.pairingToken);
 
       const revoke = await rpcReq(pairingWs, "device.token.revoke", {
         deviceId: deviceB.deviceId,
         role: "operator",
       });
-      expect(revoke.ok).toBe(false);
-      expect(revoke.error?.message).toBe("device token revocation denied");
-
       const pairedBAfterRevoke = await getPairedDevice(deviceB.deviceId);
-      expect(pairedBAfterRevoke?.tokens?.operator?.revokedAtMs).toBeUndefined();
+      pairingScopeDeniedCase = {
+        pairedBAfterRevokeRevokedAtMs: pairedBAfterRevoke?.tokens?.operator?.revokedAtMs,
+        pairedBToken: pairedB?.tokens?.operator?.token,
+        revokeMessage: revoke.error?.message,
+        revokeOk: revoke.ok,
+        rotateMessage: rotate.error?.message,
+        rotateOk: rotate.ok,
+        token: deviceB.pairingToken,
+      };
     } finally {
       pairingWs?.close();
-      await started.server.close();
-      started.envSnapshot.restore();
     }
+  });
+
+  afterAll(async () => {
+    await ownershipGuardServer.server.close();
+    ownershipGuardServer.envSnapshot.restore();
+  });
+
+  test("rejects a device-token caller rotating or revoking another device's token", async () => {
+    expect(pairingScopeDeniedCase.rotateOk).toBe(false);
+    expect(pairingScopeDeniedCase.rotateMessage).toBe("device token rotation denied");
+    expect(pairingScopeDeniedCase.pairedBToken).toBe(pairingScopeDeniedCase.token);
+    expect(pairingScopeDeniedCase.revokeOk).toBe(false);
+    expect(pairingScopeDeniedCase.revokeMessage).toBe("device token revocation denied");
+    expect(pairingScopeDeniedCase.pairedBAfterRevokeRevokedAtMs).toBeUndefined();
   });
 
   test("allows an admin-scoped caller to rotate and revoke another device's token", async () => {
@@ -429,7 +457,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
           clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
           clientDisplayName: "node-token-metadata-mismatch",
           clientVersion: "1.0.0",
-          platform: "darwin",
+          platform: "macos",
           mode: GATEWAY_CLIENT_MODES.UI,
           scopes: [],
           commands: ["system.run"],

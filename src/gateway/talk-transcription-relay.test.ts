@@ -67,6 +67,7 @@ function expectTalkEventFields(
 
 describe("talk transcription gateway relay", () => {
   afterEach(() => {
+    vi.useRealTimers();
     clearTalkTranscriptionRelaySessionsForTest();
   });
 
@@ -113,8 +114,8 @@ describe("talk transcription gateway relay", () => {
       transport: "gateway-relay",
     });
     expectRecordFields(session.audio, "session audio", {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
+      inputEncoding: "g711_ulaw",
+      inputSampleRateHz: 8000,
     });
     expectRecordFields(sttRequest, "stt request", {
       providerConfig: { model: "stt-model" },
@@ -198,6 +199,66 @@ describe("talk transcription gateway relay", () => {
       type: "session.closed",
       final: true,
     });
+  });
+
+  it("rejects provider configs that do not match relay audio input", () => {
+    const sttSession = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeTranscriptionProviderPlugin = {
+      id: "stt-test",
+      label: "STT Test",
+      isConfigured: () => true,
+      createSession: vi.fn(() => sttSession),
+    };
+    const context = {
+      getRuntimeConfig: () => ({}),
+      broadcastToConnIds: vi.fn(),
+    } as never;
+
+    expect(() =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: { encoding: "linear16", sampleRate: 16000 },
+      }),
+    ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects session creation when transcription expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const sttSession = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeTranscriptionProviderPlugin = {
+      id: "stt-test",
+      label: "STT Test",
+      isConfigured: () => true,
+      createSession: vi.fn(() => sttSession),
+    };
+    const context = {
+      getRuntimeConfig: () => ({}),
+      broadcastToConnIds: vi.fn(),
+    } as never;
+
+    expect(() =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId: "conn-1",
+        provider,
+        providerConfig: {},
+      }),
+    ).toThrow("Transcription relay session expiry is outside the supported Date range");
+    expect(provider.createSession).not.toHaveBeenCalled();
   });
 
   it("cancels an active transcription turn and closes the provider session", async () => {

@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { registerExecPolicyCli } from "./exec-policy-cli.js";
 
 function hashApprovalsFile(file: ExecApprovalsFile): string {
@@ -122,6 +122,7 @@ const mocks = vi.hoisted(() => {
       return {
         path: "/tmp/openclaw.json",
         previousHash: "hash-1",
+        persistedHash: "hash-1",
         snapshot: { path: "/tmp/openclaw.json" },
         nextConfig: draft,
         result: undefined,
@@ -133,6 +134,7 @@ const mocks = vi.hoisted(() => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };
@@ -234,6 +236,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig: draft,
           result: undefined,
@@ -247,6 +250,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };

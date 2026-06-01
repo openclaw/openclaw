@@ -1,24 +1,46 @@
+import { EventEmitter } from "node:events";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeClient(
   connId: string,
   nodeId: string,
   sent: string[] = [],
-  opts: { clientId?: string; platform?: string; version?: string } = {},
+  opts: {
+    clientId?: string;
+    platform?: string;
+    version?: string;
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
+    declaredCaps?: string[];
+    declaredCommands?: string[];
+    declaredPermissions?: Record<string, boolean>;
+    socket?: GatewayWsClient["socket"];
+  } = {},
 ): GatewayWsClient {
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket: {
-      send(frame: unknown) {
-        if (typeof frame === "string") {
-          sent.push(frame);
-        }
-      },
-    } as unknown as GatewayWsClient["socket"],
+    socket:
+      opts.socket ??
+      ({
+        send(frame: unknown) {
+          if (typeof frame === "string") {
+            sent.push(frame);
+          }
+        },
+      } as unknown as GatewayWsClient["socket"]),
     connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
       client: {
         id: opts.clientId ?? "openclaw-macos",
         version: opts.version ?? "1.0.0",
@@ -32,11 +54,67 @@ function makeClient(
         signedAt: 1,
         nonce: "nonce",
       },
-    } as GatewayWsClient["connect"],
+      caps: opts.caps ?? [],
+      commands: opts.commands ?? [],
+      permissions: opts.permissions,
+      declaredCaps: opts.declaredCaps,
+      declaredCommands: opts.declaredCommands,
+      declaredPermissions: opts.declaredPermissions,
+    } as unknown as GatewayWsClient["connect"],
   };
 }
 
 describe("gateway/node-registry", () => {
+  it("checks node websocket connectivity with ping/pong", async () => {
+    const registry = new NodeRegistry();
+    const socket = new EventEmitter() as EventEmitter & {
+      readyState: number;
+      send: (frame: unknown) => void;
+      ping: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+    };
+    socket.readyState = 1;
+    socket.send = () => {};
+    socket.ping = (dataValue, _mask, cb) => {
+      cb?.();
+      queueMicrotask(() => socket.emit("pong"));
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("reports stale node websocket connectivity before invoke timeout", async () => {
+    const registry = new NodeRegistry();
+    const socket = new EventEmitter() as EventEmitter & {
+      readyState: number;
+      send: (frame: unknown) => void;
+      ping: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+    };
+    socket.readyState = 1;
+    socket.send = () => {};
+    socket.ping = (dataValue, _mask, cb) => {
+      cb?.();
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    const result = await registry.checkConnectivity("node-1", 1);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+    });
+  });
+
   it("keeps a reconnected node when the old connection unregisters", async () => {
     const registry = new NodeRegistry();
     const oldFrames: string[] = [];
@@ -172,6 +250,102 @@ describe("gateway/node-registry", () => {
           terminal: true,
         }),
       ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps oversized invoke and system.run authorization timers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    try {
+      registry.register(makeClient("conn-1", "node-1", frames), {});
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "system.run",
+        params: {
+          runId: "run-oversized",
+          sessionKey: "agent:main:main",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        },
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-oversized",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires system.run authorization when the process clock is invalid", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-invalid-clock", sessionKey: "agent:main:main", timeoutMs: 1_000 },
+      timeoutMs: 1_000,
+    });
+    void invoke.catch(() => {});
+
+    try {
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-invalid-clock",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(false);
+    } finally {
+      registry.unregister("conn-1");
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("expires system.run authorization when the expiry would exceed the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    try {
+      registry.register(makeClient("conn-1", "node-1", frames), {});
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "system.run",
+        params: { runId: "run-overflow", sessionKey: "agent:main:main", timeoutMs: 1_000 },
+        timeoutMs: 1_000,
+      });
+      void invoke.catch(() => {});
+
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-overflow",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(false);
+      registry.unregister("conn-1");
     } finally {
       vi.useRealTimers();
     }
@@ -432,5 +606,92 @@ describe("gateway/node-registry", () => {
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
       '{"type":"event","event":"heartbeat"}',
     ]);
+  });
+
+  it("rejects raw event sends when the node socket buffer is saturated", () => {
+    resetDiagnosticEventsForTest();
+    const diagnosticEvents: unknown[] = [];
+    const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const registry = new NodeRegistry();
+    const socket = {
+      bufferedAmount: MAX_BUFFERED_BYTES + 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+    const payload = serializeEventPayload({ foo: "bar" });
+
+    try {
+      expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(diagnosticEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "payload.large",
+            action: "rejected",
+            surface: "gateway.ws.outbound_buffer",
+            bytes: MAX_BUFFERED_BYTES + 1,
+            limitBytes: MAX_BUFFERED_BYTES,
+            reason: "ws_send_buffer_close",
+          }),
+        ]),
+      );
+    } finally {
+      stopDiagnostics();
+      resetDiagnosticEventsForTest();
+    }
+  });
+
+  it("refreshes effective live surface within the declared surface", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      caps: [],
+      commands: [],
+      declaredCaps: ["talk"],
+      declaredCommands: ["talk.ptt.start"],
+      declaredPermissions: { microphone: true, camera: false },
+    });
+
+    const session = registry.register(client, {});
+    expect(session.caps).toEqual([]);
+    expect(session.commands).toEqual([]);
+
+    const updated = registry.updateSurface("node-1", {
+      caps: ["talk", "screen"],
+      commands: ["talk.ptt.start", "system.run"],
+      permissions: { microphone: true, camera: true },
+    });
+
+    expect(updated?.caps).toEqual(["talk"]);
+    expect(updated?.commands).toEqual(["talk.ptt.start"]);
+    expect(updated?.permissions).toEqual({ microphone: true, camera: false });
+    expect(client.connect.caps).toEqual(["talk"]);
+    expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+  });
+
+  it("clears effective permissions when explicitly removed", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      permissions: { camera: false },
+      declaredPermissions: { camera: false },
+    });
+
+    registry.register(client, {});
+    const updated = registry.updateSurface("node-1", {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+
+    expect(updated?.permissions).toBeUndefined();
+    expect(
+      (client.connect as { permissions?: Record<string, boolean> }).permissions,
+    ).toBeUndefined();
   });
 });

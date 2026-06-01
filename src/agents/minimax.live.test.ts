@@ -1,4 +1,4 @@
-import { completeSimple, type Model } from "@earendil-works/pi-ai";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
@@ -42,7 +42,9 @@ describeLive("minimax live", () => {
       contextWindow: 200000,
       maxTokens: 8192,
     };
-    let { res, text } = await runMinimaxTextProbe(model, 128);
+    const probeResult = await runMinimaxTextProbe(model, 128);
+    const { res } = probeResult;
+    let { text } = probeResult;
     // MiniMax can spend a small token budget in hidden thinking before it emits
     // the visible answer. Give this smoke probe one larger retry.
     if (text.length === 0 && res.stopReason === "length") {

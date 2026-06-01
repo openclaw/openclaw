@@ -25,8 +25,12 @@ vi.mock("./method-scopes.js", () => {
   };
 });
 
-const { readJsonBodyOrError, sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } =
-  await import("./http-common.js");
+const {
+  readJsonBodyOrError,
+  sendJson: _sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} = await import("./http-common.js");
 const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
   await import("./http-utils.js");
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
@@ -91,6 +95,28 @@ describe("handleGatewayPostJsonEndpoint", () => {
     );
     expect(result).toEqual({
       body: { hello: "world" },
+      requestAuth: { trustDeclaredOperatorScopes: true },
+    });
+  });
+
+  it("matches paths without trusting malformed Host headers", async () => {
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
+      trustDeclaredOperatorScopes: true,
+    });
+    vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
+
+    const result = await handleGatewayPostJsonEndpoint(
+      {
+        url: "/v1/ok",
+        method: "POST",
+        headers: { host: "[" },
+      } as unknown as IncomingMessage,
+      {} as unknown as ServerResponse,
+      { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 123 },
+    );
+
+    expect(result).toEqual({
+      body: { ok: true },
       requestAuth: { trustDeclaredOperatorScopes: true },
     });
   });

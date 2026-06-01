@@ -5,17 +5,6 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotForWriteMock = vi.hoisted(() => vi.fn());
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
-const resolveSecretInputRefMock = vi.hoisted(() =>
-  vi.fn((): { ref: unknown } => ({ ref: undefined })),
-);
-const hasConfiguredSecretInputMock = vi.hoisted(() =>
-  vi.fn((value: unknown) => {
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    return value != null;
-  }),
-);
 const resolveGatewayAuthMock = vi.hoisted(() =>
   vi.fn(() => ({
     mode: "token",
@@ -32,11 +21,6 @@ const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 vi.mock("./gateway-install-token.persist.runtime.js", () => ({
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   replaceConfigFile: replaceConfigFileMock,
-}));
-
-vi.mock("../config/types.secrets.js", () => ({
-  resolveSecretInputRef: resolveSecretInputRefMock,
-  hasConfiguredSecretInput: hasConfiguredSecretInputMock,
 }));
 
 vi.mock("../gateway/auth.js", () => ({
@@ -75,13 +59,6 @@ describe("resolveGatewayInstallToken", () => {
       snapshot: await readConfigFileSnapshotMock(),
       writeOptions: {},
     }));
-    resolveSecretInputRefMock.mockReturnValue({ ref: undefined });
-    hasConfiguredSecretInputMock.mockImplementation((value: unknown) => {
-      if (typeof value === "string") {
-        return value.trim().length > 0;
-      }
-      return value != null;
-    });
     resolveSecretRefValuesMock.mockResolvedValue(new Map());
     shouldRequireGatewayTokenForInstallMock.mockReturnValue(true);
     resolveGatewayAuthMock.mockReturnValue({
@@ -111,7 +88,6 @@ describe("resolveGatewayInstallToken", () => {
 
   it("validates SecretRef token but does not persist resolved plaintext", async () => {
     const tokenRef = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" };
-    resolveSecretInputRefMock.mockReturnValue({ ref: tokenRef });
     resolveSecretRefValuesMock.mockResolvedValue(
       new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-token"]]),
     );
@@ -130,9 +106,6 @@ describe("resolveGatewayInstallToken", () => {
   });
 
   it("returns unavailable reason when token SecretRef is unresolved in token mode", async () => {
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
-    });
     resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
 
     const result = await resolveGatewayInstallToken({
@@ -210,6 +183,7 @@ describe("resolveGatewayInstallToken", () => {
           },
         },
       },
+      snapshot: baseSnapshot,
       writeOptions: {
         baseSnapshot,
         skipRuntimeSnapshotRefresh: true,
@@ -230,9 +204,6 @@ describe("resolveGatewayInstallToken", () => {
         },
       },
       issues: [],
-    });
-    resolveSecretInputRefMock.mockReturnValueOnce({ ref: undefined }).mockReturnValueOnce({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
     });
 
     const result = await resolveGatewayInstallToken({
@@ -310,7 +281,6 @@ describe("resolveGatewayInstallToken", () => {
 
   it("skips token SecretRef resolution when token auth is not required", async () => {
     const tokenRef = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" };
-    resolveSecretInputRefMock.mockReturnValue({ ref: tokenRef });
     shouldRequireGatewayTokenForInstallMock.mockReturnValue(false);
 
     const result = await resolveGatewayInstallToken({

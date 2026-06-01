@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { __testing } from "../test-api.js";
+import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
@@ -63,20 +63,20 @@ describe("exa web search provider", () => {
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
-    expect(__testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
+    expect(testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
   });
 
   it("resolves Exa search base URL overrides", () => {
-    expect(__testing.resolveExaSearchEndpoint()).toEqual({
+    expect(testing.resolveExaSearchEndpoint()).toEqual({
       endpoint: "https://api.exa.ai/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
+    expect(testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
+    expect(testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
+    expect(testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
       docs: "https://docs.openclaw.ai/tools/exa-search",
       error: "invalid_base_url",
       message:
@@ -91,12 +91,12 @@ describe("exa web search provider", () => {
       count: 5,
     };
     expect(
-      __testing.buildExaCacheKey({
+      testing.buildExaCacheKey({
         ...base,
         endpoint: "https://api.exa.ai/search",
       }),
     ).not.toBe(
-      __testing.buildExaCacheKey({
+      testing.buildExaCacheKey({
         ...base,
         endpoint: "https://proxy.example/exa/search",
       }),
@@ -105,22 +105,22 @@ describe("exa web search provider", () => {
 
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
-      __testing.resolveExaDescription({
+      testing.resolveExaDescription({
         highlights: ["first", "", "second"],
         text: "full text",
       }),
     ).toBe("first\nsecond");
-    expect(__testing.resolveExaDescription({ text: "full text" })).toBe("full text");
+    expect(testing.resolveExaDescription({ text: "full text" })).toBe("full text");
   });
 
   it("handles month freshness without date overflow", () => {
-    const iso = __testing.resolveFreshnessStartDate("month");
+    const iso = testing.resolveFreshnessStartDate("month");
     expect(Number.isNaN(Date.parse(iso))).toBe(false);
   });
 
   it("accepts current Exa contents object options from the docs", () => {
     expect(
-      __testing.parseExaContents({
+      testing.parseExaContents({
         text: { maxCharacters: 1200 },
         highlights: {
           maxCharacters: 4000,
@@ -146,7 +146,7 @@ describe("exa web search provider", () => {
 
   it("rejects invalid Exa contents objects", () => {
     expect(
-      __testing.parseExaContents({
+      testing.parseExaContents({
         highlights: { numSentences: 0 },
       }),
     ).toEqual({
@@ -182,8 +182,12 @@ describe("exa web search provider", () => {
       "deep-reasoning",
       "instant",
     ]);
-    expect(__testing.resolveExaSearchCount(80, 10)).toBe(80);
-    expect(__testing.resolveExaSearchCount(120, 10)).toBe(100);
+    expect(testing.resolveExaSearchCount(80, 10)).toBe(80);
+    expect(testing.resolveExaSearchCount(120, 10)).toBe(100);
+    expect(testing.resolveExaSearchCount("+05", 10)).toBe(5);
+    expect(testing.resolveExaSearchCount("0x10", 10)).toBe(10);
+    expect(testing.resolveExaSearchCount("1e2", 10)).toBe(10);
+    expect(testing.resolveExaSearchCount(1.5, 10)).toBe(10);
   });
 
   it("returns validation errors for conflicting time filters", async () => {
@@ -230,5 +234,11 @@ describe("exa web search provider", () => {
       message: "date_after must be YYYY-MM-DD format.",
       docs: "https://docs.openclaw.ai/tools/web",
     });
+  });
+
+  it("reports malformed Exa API JSON with a stable provider error", async () => {
+    await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
+      "Exa API returned malformed JSON",
+    );
   });
 });

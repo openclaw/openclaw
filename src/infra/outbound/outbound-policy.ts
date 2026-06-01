@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -152,8 +153,8 @@ export function resolveAllowedMessageActions(params: {
   if (!allow) {
     return undefined;
   }
-  const normalized = allow.map((entry) => entry.trim()).filter(Boolean);
-  return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+  const normalized = normalizeUniqueStringEntries(allow);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function enforceMessageActionAllowlist(params: {

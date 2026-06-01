@@ -9,11 +9,9 @@ let authRevoked = false;
 let gatewayConfig: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  webchat: { chatHistoryMaxChars: number };
 } = {
   trustedProxies: ["10.0.0.1"],
   allowRealIpFallback: false,
-  webchat: { chatHistoryMaxChars: 2000 },
 };
 let authCheckCalls = 0;
 
@@ -43,10 +41,11 @@ vi.mock("./http-utils.js", () => ({
     const value = req.headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
   },
-  resolveTrustedHttpOperatorScopes: () => ["operator.read"],
+  resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
-    cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
+    cfg: { gateway: {} },
     requestAuth: { trustDeclaredOperatorScopes: true },
+    operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
     trustedProxies?: string[];
@@ -169,7 +168,6 @@ afterEach(() => {
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
-    webchat: { chatHistoryMaxChars: 2000 },
   };
 });
 
@@ -223,9 +221,7 @@ describe("session history SSE auth revocation", () => {
     expect(handled).toBe(true);
     expect(transcriptUpdateHandler).toBeTypeOf("function");
 
-    gatewayConfig = {
-      webchat: { chatHistoryMaxChars: 2000 },
-    };
+    gatewayConfig = {};
 
     transcriptUpdateHandler?.({
       sessionFile: "/tmp/session-1.jsonl",
@@ -261,9 +257,7 @@ describe("session history SSE auth revocation", () => {
     expect(transcriptUpdateHandler).toBeTypeOf("function");
 
     authCheckCalls = 0;
-    gatewayConfig = {
-      webchat: { chatHistoryMaxChars: 2000 },
-    };
+    gatewayConfig = {};
 
     transcriptUpdateHandler?.({
       sessionFile: "/tmp/other-session.jsonl",

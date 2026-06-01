@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,7 +11,6 @@ import {
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import { sendDurableMessageBatch } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
@@ -48,7 +48,7 @@ export type DurableInboundReplyDeliveryResult =
     }
   | { status: "handled_visible"; delivery: ChannelDeliveryResult }
   | { status: "handled_no_send"; reason: "no_visible_result"; delivery: ChannelDeliveryResult }
-  | { status: "failed"; error: unknown };
+  | { status: "failed"; error: unknown; sentBeforeError?: true };
 
 function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): string | undefined {
   return (
@@ -106,8 +106,21 @@ export function throwIfDurableInboundReplyDeliveryFailed(
   result: DurableInboundReplyDeliveryResult,
 ): void {
   if (result.status === "failed") {
-    throw result.error;
+    throw result.sentBeforeError === true
+      ? markDurableInboundReplyDeliveryErrorVisible(result.error)
+      : result.error;
   }
+}
+
+function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
+  if (typeof error === "object" && error !== null && Object.isExtensible(error)) {
+    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+    return error;
+  }
+
+  const visibleError = new Error("visible durable reply delivery failed", { cause: error });
+  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
+  return visibleError;
 }
 
 export async function deliverInboundReplyWithMessageSendContext(
@@ -192,7 +205,11 @@ export async function deliverInboundReplyWithMessageSendContext(
     return { status: "failed" as const, error: send.error };
   }
   if (send.status === "partial_failed") {
-    return { status: "failed" as const, error: send.error };
+    return {
+      status: "failed" as const,
+      error: markDurableInboundReplyDeliveryErrorVisible(send.error),
+      sentBeforeError: true,
+    };
   }
 
   const delivery = createChannelDeliveryResultFromReceipt({

@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
@@ -97,12 +98,16 @@ function buildMissText(query: string, labels: RealtimeVoiceFastContextLabels): s
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new RealtimeFastContextTimeoutError(timeoutMs)), timeoutMs);
+        timer = setTimeout(
+          () => reject(new RealtimeFastContextTimeoutError(resolvedTimeoutMs)),
+          resolvedTimeoutMs,
+        );
       }),
     ]);
   } finally {

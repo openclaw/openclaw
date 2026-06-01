@@ -5,7 +5,7 @@ import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-har
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
 const documentCreateMock = vi.hoisted(() => vi.fn());
@@ -31,6 +31,8 @@ vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValu
   drive: false,
   perm: false,
   scopes: false,
+  bitable: false,
+  base: false,
 });
 vi.spyOn(toolAccountModule, "resolveFeishuToolAccount").mockImplementation((...args) =>
   resolveFeishuToolAccountMock(...args),
@@ -40,7 +42,7 @@ vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
     ({
       channel: {
         media: {
-          fetchRemoteMedia: fetchRemoteMediaMock,
+          readRemoteMediaBuffer: readRemoteMediaBufferMock,
           saveMediaBuffer: vi.fn(),
         },
       },
@@ -233,7 +235,7 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
-    const call = blockDescendantCreateMock.mock.calls.at(0)?.[0];
+    const call = blockDescendantCreateMock.mock.calls[0]?.[0];
     expect(call?.data.children_id).toEqual(["h1", "t1", "h2"]);
     expect(call?.data.descendants).toEqual(blocks);
 
@@ -272,9 +274,9 @@ describe("feishu_doc image fetch hardening", () => {
       content: "tree reorder",
     });
 
-    const call = blockDescendantCreateMock.mock.calls.at(0)?.[0];
+    const call = blockDescendantCreateMock.mock.calls[0]?.[0];
     expect(call?.data.children_id).toEqual(["h1", "p1", "h2", "list1"]);
-    expect((call?.data.descendants as Array<{ block_id: string }>).map((b) => b.block_id)).toEqual([
+    expect((call!.data.descendants as Array<{ block_id: string }>).map((b) => b.block_id)).toEqual([
       "h1",
       "p1",
       "h2",
@@ -389,7 +391,7 @@ describe("feishu_doc image fetch hardening", () => {
 
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    fetchRemoteMediaMock.mockRejectedValueOnce(
+    readRemoteMediaBufferMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),
     );
 
@@ -401,7 +403,7 @@ describe("feishu_doc image fetch hardening", () => {
       content: "![x](https://x.test/image.png)",
     });
 
-    expect(fetchRemoteMediaMock).toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).toHaveBeenCalled();
     expect(driveUploadAllMock).not.toHaveBeenCalled();
     expect(blockPatchMock).not.toHaveBeenCalled();
     expect(result.details.images_processed).toBe(0);

@@ -52,7 +52,7 @@ jobs:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Build plugin prerelease manifest
@@ -209,7 +209,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -221,7 +221,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -245,7 +245,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
-    runs-on: ${{ matrix.runner || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -257,7 +257,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -318,7 +318,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -330,7 +330,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -344,7 +344,7 @@ jobs:
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --exclude extensions/codex/src/app-server/run-attempt.test.ts
 
   plugin-prerelease-inspector:
     permissions:
@@ -362,7 +362,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment

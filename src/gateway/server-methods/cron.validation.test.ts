@@ -75,6 +75,7 @@ function createCronContext(currentJob?: CronJob) {
     cron: {
       add: vi.fn(async () => ({ id: "cron-1" })),
       update: vi.fn(async () => ({ id: "cron-1" })),
+      remove: vi.fn(async () => ({ ok: true, removed: true })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
       wake: vi.fn(() => ({ ok: true }) as const),
@@ -119,6 +120,26 @@ async function invokeCronUpdate(params: Record<string, unknown>, currentJob: Cro
   const context = createCronContext(currentJob);
   const respond = vi.fn();
   await cronHandlers["cron.update"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: context as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return { context, respond };
+}
+
+async function invokeCronRemove(
+  params: Record<string, unknown>,
+  options?: { removeResult?: { ok: boolean; removed: boolean } },
+) {
+  const context = createCronContext();
+  if (options?.removeResult) {
+    context.cron.remove.mockResolvedValueOnce(options.removeResult);
+  }
+  const respond = vi.fn();
+  await cronHandlers["cron.remove"]({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -244,6 +265,17 @@ describe("cron method validation", () => {
       threadId: 123,
     });
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("returns invalid-request error when cron.remove target id is missing", async () => {
+    const { respond } = await invokeCronRemove(
+      { id: "missing-id" },
+      { removeResult: { ok: true, removed: false } },
+    );
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.remove params: id not found",
+    });
   });
 
   it("returns a single cron job for cron.get", async () => {
@@ -506,6 +538,53 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
+  it("accepts completion webhook delivery patches and nullable clears", async () => {
+    const currentJob = createCronJob({
+      delivery: { mode: "announce" },
+    });
+
+    const addResult = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            mode: "announce",
+            completionDestination: {
+              mode: "webhook",
+              to: "https://example.invalid/cron-finished",
+            },
+          },
+        },
+      },
+      currentJob,
+    );
+
+    expect(addResult.context.cron.update).toHaveBeenCalled();
+    const addPatch = requireCronUpdatePatch(addResult.context);
+    const addDelivery = requireRecord(addPatch.delivery, "delivery");
+    expect(addDelivery.completionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+
+    const clearResult = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            completionDestination: null,
+          },
+        },
+      },
+      currentJob,
+    );
+
+    expect(clearResult.context.cron.update).toHaveBeenCalled();
+    const clearPatch = requireCronUpdatePatch(clearResult.context);
+    const clearDelivery = requireRecord(clearPatch.delivery, "delivery");
+    expect(clearDelivery.completionDestination).toBeNull();
+  });
+
   it("rejects underscored provider prefixes for a different explicit delivery channel", async () => {
     getRuntimeConfig.mockReturnValue({
       channels: {
@@ -620,7 +699,7 @@ describe("cron method validation", () => {
       params: {
         name: "bad-cron",
         enabled: true,
-        schedule: { kind: "cron", cron: "not-a-cron-expr" },
+        schedule: { kind: "cron", expr: "not-a-cron-expr" },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "ping" },
@@ -646,7 +725,7 @@ describe("cron method validation", () => {
       params: {
         id: existingJob.id,
         patch: {
-          schedule: { kind: "cron", cron: "99 * * * *" },
+          schedule: { kind: "cron", expr: "99 * * * *" },
         },
       } as never,
       respond: respond as never,

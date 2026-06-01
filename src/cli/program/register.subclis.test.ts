@@ -68,7 +68,7 @@ const { addGatewayRunCommand, gatewayRunAction, registerGatewayCli } = vi.hoiste
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../gateway-cli.js", () => ({ registerGatewayCli }));
-vi.mock("../gateway-cli/run.js", () => ({ addGatewayRunCommand }));
+vi.mock("../gateway-cli/run-command.js", () => ({ addGatewayRunCommand }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
@@ -172,6 +172,12 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["nodes", "list"], { from: "user" });
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
+    expect(registerNodesCli).toHaveBeenCalledWith(expect.any(Command), [
+      "node",
+      "openclaw",
+      "nodes",
+      "list",
+    ]);
     expect(nodesAction).toHaveBeenCalledTimes(1);
   });
 
@@ -253,13 +259,13 @@ describe("registerSubCliCommands", () => {
     expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
   });
 
-  it("keeps plugin CLI registrations available for the plugins command root", async () => {
+  it("does not preload plugin CLI registrations for bare plugin parent help", async () => {
     process.argv = ["node", "openclaw", "plugins"];
     const program = new Command().name("openclaw");
 
     await registerSubCliByName(program, "plugins");
 
     expect(registerPluginsCli).toHaveBeenCalledTimes(1);
-    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
   });
 });

@@ -1,20 +1,25 @@
-import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
-} from "../../../src/gateway/protocol/client-info.js";
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ConnectErrorDetailCodes,
   formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
-} from "../../../src/gateway/protocol/connect-error-details.js";
+  readPairingConnectErrorDetails,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   isRetryableGatewayStartupUnavailableError,
   resolveGatewayStartupRetryAfterMs,
-} from "../../../src/gateway/protocol/startup-unavailable.js";
+} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../../packages/gateway-protocol/src/version.js";
+import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -56,7 +61,12 @@ export class GatewayRequestError extends Error {
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
-    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
+    super(
+      formatConnectErrorMessage({
+        message: error.message,
+        details: enrichProtocolMismatchDetails(error.message, error.details),
+      }),
+    );
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
@@ -65,10 +75,33 @@ export class GatewayRequestError extends Error {
   }
 }
 
+function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
+  if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+    return details;
+  }
+  if (!message?.toLowerCase().includes("protocol mismatch")) {
+    return details;
+  }
+  return {
+    code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    clientMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    clientMaxProtocol: PROTOCOL_VERSION,
+    ...(details && typeof details === "object" && !Array.isArray(details) ? details : {}),
+  };
+}
+
 export function resolveGatewayErrorDetailCode(
   error: { details?: unknown } | null | undefined,
 ): string | null {
   return readConnectErrorDetailCode(error?.details);
+}
+
+function shouldContinueReconnectForPairingRequired(details: unknown): boolean {
+  const pairingDetails = readPairingConnectErrorDetails(details);
+  return (
+    pairingDetails?.pauseReconnect === false ||
+    pairingDetails?.recommendedNextStep === "wait_then_retry"
+  );
 }
 
 /**
@@ -84,6 +117,12 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     return false;
   }
   const code = resolveGatewayErrorDetailCode(error);
+  if (
+    code === ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+    shouldContinueReconnectForPairingRequired(error.details)
+  ) {
+    return false;
+  }
   return (
     code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
@@ -197,8 +236,8 @@ export type GatewayConnectClientInfo = {
 };
 
 export type GatewayConnectParams = {
-  minProtocol: 4;
-  maxProtocol: 4;
+  minProtocol: typeof MIN_CLIENT_PROTOCOL_VERSION;
+  maxProtocol: typeof PROTOCOL_VERSION;
   client: GatewayConnectClientInfo;
   role: string;
   scopes: string[];
@@ -484,11 +523,10 @@ export class GatewayBrowserClient {
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
-      if (
-        connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH &&
-        this.deviceTokenRetryBudgetUsed &&
-        !this.pendingDeviceTokenRetry
-      ) {
+      if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+        if (this.pendingDeviceTokenRetry) {
+          this.scheduleReconnect();
+        }
         return;
       }
       if (!isNonRecoverableAuthError(connectError)) {
@@ -560,8 +598,8 @@ export class GatewayBrowserClient {
 
   private buildConnectParams(plan: ConnectPlan): GatewayConnectParams {
     return {
-      minProtocol: 4,
-      maxProtocol: 4,
+      minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
       client: plan.client,
       role: plan.role,
       scopes: plan.scopes,
@@ -582,7 +620,7 @@ export class GatewayBrowserClient {
     // crypto.subtle is only available in secure contexts (HTTPS, localhost).
     // Over plain HTTP, we skip device identity and fall back to token-only auth.
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
-    const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
+    const isSecureContext = typeof crypto !== "undefined" && Boolean(crypto.subtle);
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: SelectedConnectAuth = {
       authToken: explicitGatewayToken,
@@ -790,7 +828,6 @@ export class GatewayBrowserClient {
           }),
         );
       }
-      return;
     }
   }
 
