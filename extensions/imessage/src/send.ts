@@ -858,7 +858,7 @@ export async function sendMessageIMessage(
     account,
     target,
     replyRequesterSender:
-      resolvedReplyToId && opts.replyToIdSource === "implicit"
+      opts.replyToIdSource === "implicit" && (opts.replyToId == null || resolvedReplyToId)
         ? opts.replyRequesterSender
         : undefined,
   });

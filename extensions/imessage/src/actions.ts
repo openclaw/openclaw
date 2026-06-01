@@ -257,6 +257,25 @@ function readOutboundActionTarget(params: {
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
+function readRawOutboundActionTarget(params: {
+  actionParams: Record<string, unknown>;
+  currentChannelId?: string;
+}): string | undefined {
+  return (
+    readStringParam(params.actionParams, "chatGuid")?.trim() ||
+    (typeof readPositiveIntegerParam(params.actionParams, "chatId") === "number"
+      ? `chat_id:${readPositiveIntegerParam(params.actionParams, "chatId")}`
+      : undefined) ||
+    (readStringParam(params.actionParams, "chatIdentifier")?.trim()
+      ? `chat_identifier:${readStringParam(params.actionParams, "chatIdentifier")?.trim()}`
+      : undefined) ||
+    readStringParam(params.actionParams, "to")?.trim() ||
+    readStringParam(params.actionParams, "target")?.trim() ||
+    params.currentChannelId?.trim() ||
+    undefined
+  );
+}
+
 function hasExplicitOutboundActionTarget(
   params: Record<string, unknown>,
   currentChannelId?: string,
@@ -267,7 +286,7 @@ function hasExplicitOutboundActionTarget(
   const targetWasInferred =
     params[MESSAGE_ACTION_INFERRED_TARGET_PARAM] === true &&
     Boolean(currentTarget) &&
-    (targetParam === currentTarget || toParam === currentTarget);
+    readRawOutboundActionTarget({ actionParams: params, currentChannelId }) === currentTarget;
   return (
     Boolean(readStringParam(params, "chatGuid")?.trim()) ||
     typeof readPositiveIntegerParam(params, "chatId") === "number" ||
@@ -447,7 +466,15 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    requesterSenderId,
+    toolContext,
+    gatewayClientScopes,
+  }) => {
     const runtime = await loadIMessageActionsRuntime();
     const account = resolveIMessageAccount({
       cfg,
@@ -524,7 +551,9 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           toolContext?.currentChannelId,
         )
           ? undefined
-          : assertOpts?.replyRequesterSender;
+          : gatewayClientScopes
+            ? undefined
+            : assertOpts?.replyRequesterSender;
         await assertIMessageOutboundAllowed({
           cfg,
           account,

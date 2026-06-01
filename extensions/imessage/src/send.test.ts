@@ -461,6 +461,30 @@ describe("sendMessageIMessage receipts", () => {
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
+  it("preserves sender-based group allowance after an implicit reply id is consumed", async () => {
+    const client = createClient({ guid: "p:0/group-consumed-reply-id" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["+15551230000"],
+          },
+        },
+      },
+      client,
+      replyToIdSource: "implicit",
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
   it("blocks sender-based group allowance when the reply id sanitizes empty", async () => {
     const client = createClient({ guid: "p:0/group-empty-reply-id" });
 
