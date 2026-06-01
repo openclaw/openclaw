@@ -742,6 +742,41 @@ describe("scripts/test-extension.mjs", () => {
     expect(runParams.targets).toContain("extensions/codex/src/app-server/client.test.ts");
   });
 
+  it("chunks large extension batch groups into separate Vitest processes", async () => {
+    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const result = await runExtensionBatchPlan(
+      {
+        extensionCount: 1,
+        extensionIds: ["telegram"],
+        estimatedCost: 125,
+        hasTests: true,
+        planGroups: [
+          {
+            config: "test/vitest/vitest.extension-telegram.config.ts",
+            estimatedCost: 125,
+            extensionIds: ["telegram"],
+            roots: [bundledPluginRoot("telegram")],
+            testFileCount: 125,
+          },
+        ],
+        testFileCount: 125,
+      },
+      {
+        env: { OPENCLAW_EXTENSION_BATCH_TARGET_CHUNK_SIZE: "50" },
+        runGroup,
+      },
+    );
+
+    expect(result).toBe(0);
+    expect(runGroup).toHaveBeenCalledTimes(3);
+    expect(runGroup.mock.calls.map(([params]) => params.targets)).toEqual([
+      expect.arrayContaining([bundledPluginFile("telegram", "index.test.ts")]),
+      expect.any(Array),
+      expect.any(Array),
+    ]);
+    expect(runGroup.mock.calls.map(([params]) => params.targets.length)).toEqual([50, 50, 25]);
+  });
+
   it("fails extension batch groups when exact excludes remove every test", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
     const result = await runExtensionBatchPlan(

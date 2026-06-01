@@ -11,6 +11,9 @@ import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const PARALLEL_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_PARALLEL";
+const TARGET_CHUNK_SIZE_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_TARGET_CHUNK_SIZE";
+const TELEGRAM_VITEST_CONFIG = "test/vitest/vitest.extension-telegram.config.ts";
+const TELEGRAM_TARGET_CHUNK_SIZE = 40;
 const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
 const ALLOW_EMPTY_AFTER_EXCLUDE_FLAG = "--allow-empty-after-exclude";
 
@@ -137,8 +140,8 @@ export function parseExactVitestExcludePaths(vitestArgs) {
   return excludePaths;
 }
 
-function resolveGroupTargets(group, exactExcludePaths) {
-  if (exactExcludePaths.size === 0) {
+function resolveGroupTargets(group, exactExcludePaths, forceFileTargets = false) {
+  if (exactExcludePaths.size === 0 && !forceFileTargets) {
     return group.roots;
   }
 
@@ -150,8 +153,28 @@ function resolveGroupTargets(group, exactExcludePaths) {
   return testFiles.filter((file) => !exactExcludePaths.has(file));
 }
 
+function resolveGroupTargetChunkSize(group, env) {
+  const override = parsePositiveInt(env[TARGET_CHUNK_SIZE_ENV_KEY]);
+  if (override !== null) {
+    return override;
+  }
+  return group.config === TELEGRAM_VITEST_CONFIG ? TELEGRAM_TARGET_CHUNK_SIZE : null;
+}
+
+function chunkTargets(targets, chunkSize) {
+  if (!chunkSize || targets.length <= chunkSize) {
+    return [targets];
+  }
+  const chunks = [];
+  for (let index = 0; index < targets.length; index += chunkSize) {
+    chunks.push(targets.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
 async function runPlanGroup(group, params) {
-  const targets = resolveGroupTargets(group, params.exactExcludePaths);
+  const targetChunkSize = resolveGroupTargetChunkSize(group, params.env);
+  const targets = resolveGroupTargets(group, params.exactExcludePaths, targetChunkSize !== null);
   if (targets.length === 0) {
     console.error(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
     return params.allowEmptyAfterExclude ? 0 : 1;
@@ -160,17 +183,29 @@ async function runPlanGroup(group, params) {
   console.log(
     `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${targets.length} targets)`,
   );
-  return await params.runGroup({
-    args: params.vitestArgs,
-    config: group.config,
-    env: createGroupEnv({
-      baseEnv: params.env,
-      group,
-      groupIndex: params.groupIndex,
-      useDedicatedCache: params.useDedicatedCache,
-    }),
-    targets,
-  });
+  const targetChunks = chunkTargets(targets, targetChunkSize);
+  for (const [index, chunk] of targetChunks.entries()) {
+    if (targetChunks.length > 1) {
+      console.log(
+        `[test-extension-batch] ${group.config}: chunk ${index + 1}/${targetChunks.length} (${chunk.length} targets)`,
+      );
+    }
+    const exitCode = await params.runGroup({
+      args: params.vitestArgs,
+      config: group.config,
+      env: createGroupEnv({
+        baseEnv: params.env,
+        group,
+        groupIndex: params.groupIndex,
+        useDedicatedCache: params.useDedicatedCache,
+      }),
+      targets: chunk,
+    });
+    if (exitCode !== 0) {
+      return exitCode;
+    }
+  }
+  return 0;
 }
 
 /**

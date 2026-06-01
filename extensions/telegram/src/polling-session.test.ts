@@ -2092,7 +2092,6 @@ describe("TelegramPollingSession", () => {
   });
 
   it("keeps active spooled lanes blocked across isolated ingress restarts", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
     let releaseRegularTurn: (() => void) | undefined;
@@ -2119,24 +2118,32 @@ describe("TelegramPollingSession", () => {
       },
     });
 
-    let workerTaskCalls = 0;
-    const createWorker = vi.fn(() => ({
-      onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => undefined),
-      task: vi.fn(async () => {
-        workerTaskCalls += 1;
-        if (workerTaskCalls === 1) {
-          return;
-        }
-        await new Promise<void>((resolve) => {
-          abort.signal.addEventListener("abort", () => resolve(), { once: true });
-        });
-      }),
-    }));
+    const workerStops: Array<() => void> = [];
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      workerStops.push(() => {
+        stopWorker?.();
+      });
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await workerDone;
+        }),
+      };
+    });
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    let runPromise: Promise<void> | undefined;
 
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
+        stallThresholdMs: 30_000,
         isolatedIngress: {
           enabled: true,
           spoolDir: tempDir,
@@ -2145,14 +2152,15 @@ describe("TelegramPollingSession", () => {
         },
       });
 
-      const runPromise = session.runUntilAbort();
+      runPromise = session.runUntilAbort();
       await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-      await vi.advanceTimersByTimeAsync(16_000);
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdogHarness.setNow(31_000);
+      watchdog();
       await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
       expect(handleUpdate).toHaveBeenCalledTimes(1);
 
       releaseRegularTurn?.();
-      await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(async () =>
         expect(
           (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map(
@@ -2161,11 +2169,15 @@ describe("TelegramPollingSession", () => {
         ).toEqual([]),
       );
       abort.abort();
-      await vi.advanceTimersByTimeAsync(20_000);
       await runPromise;
     } finally {
       releaseRegularTurn?.();
-      vi.useRealTimers();
+      for (const stopWorker of workerStops) {
+        stopWorker();
+      }
+      abort.abort();
+      watchdogHarness.restore();
+      await runPromise?.catch(() => undefined);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
