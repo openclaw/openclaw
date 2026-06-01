@@ -555,12 +555,15 @@ export class GatewayBrowserClient {
         errorCode: connectError?.code ?? "SOCKET_CLOSED",
       });
       this.ws = null;
+      const flushError = connectError
+        ? new GatewayRequestError(connectError)
+        : new Error(`gateway closed (${ev.code}): ${reason}`);
       if (this.pendingStartupReconnectDelayMs !== null) {
-        this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+        this.flushPending(flushError);
         this.scheduleReconnect();
         return;
       }
-      this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+      this.flushPending(flushError);
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
