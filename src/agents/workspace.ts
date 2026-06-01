@@ -596,8 +596,8 @@ async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string,
 
 async function buildWorkspaceAttestationContent(dir: string, now: Date): Promise<string> {
   const hashes = await collectGeneratedBootstrapHashes(dir);
-  const lines = [`${WORKSPACE_ATTESTATION_HEADER}`, now.toISOString()];
-  for (const [fileName, hash] of [...hashes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  const lines = [WORKSPACE_ATTESTATION_HEADER, now.toISOString()];
+  for (const [fileName, hash] of [...hashes.entries()].toSorted(([a], [b]) => a.localeCompare(b))) {
     lines.push(`generated:${fileName}:${hash}`);
   }
   return `${lines.join("\n")}\n`;
@@ -962,11 +962,13 @@ export async function ensureAgentWorkspace(params?: {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
-    if (
-      (Boolean(recentAttestationPath) &&
-        (await workspaceRequiredBootstrapLooksCustomized(dir, {
+    const hasRecentAttestedCustomization = recentAttestationPath
+      ? await workspaceRequiredBootstrapLooksCustomized(dir, {
           attestationPath: recentAttestationPath,
-        }))) ||
+        })
+      : false;
+    if (
+      hasRecentAttestedCustomization ||
       (await workspaceProfileLooksConfigured({
         dir,
         includeGitEvidence: true,
