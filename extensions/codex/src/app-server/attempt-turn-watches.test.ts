@@ -10,6 +10,7 @@ describe("Codex app-server attempt turn watches", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 

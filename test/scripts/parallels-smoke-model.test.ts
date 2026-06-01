@@ -1,13 +1,24 @@
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, join, win32 } from "node:path";
+import { basename, delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   modelProviderConfigBatchJson,
   readPositiveIntEnv,
+  resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
   resolveSnapshot,
@@ -82,6 +93,21 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   chmodSync(prlctlPath, 0o755);
   copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
+}
+
+class FakeHostServerChild extends EventEmitter {
+  exitCode: number | null = null;
+  readonly signals: string[] = [];
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.signals.push(String(signal));
+    return true;
+  }
+
+  exit(): void {
+    this.exitCode = 0;
+    this.emit("exit", 0, null);
+  }
 }
 
 function withEnv<T>(env: Record<string, string>, callback: () => T): T {
@@ -284,6 +310,58 @@ describe("Parallels smoke model selection", () => {
       12,
     );
     expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it("waits for host artifact server exit after SIGKILL before stop resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeHostServerChild();
+      const stop = hostServerTesting.stopHostServerChild(child as never, 100, 100);
+      expect(child.signals).toEqual(["SIGTERM"]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
+
+      let resolved = false;
+      void stop.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      child.exit();
+      await expect(stop).resolves.toBe(true);
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a temporary npmrc file and cleans it after resolving the latest package version", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-parallels-version-"));
+    let userConfigPath = "";
+    try {
+      const version = resolveLatestVersion("", {
+        createTempDir: (prefix) => {
+          expect(prefix).toBe(join(tmpdir(), "openclaw-npm-"));
+          return mkdtempSync(join(tempRoot, "npm-"));
+        },
+        runCommand: (command, args, options) => {
+          userConfigPath = args.at(-1) ?? "";
+          expect(command).toBe("npm");
+          expect(args).toEqual(["view", "openclaw", "version", "--userconfig", userConfigPath]);
+          expect(options).toEqual({ quiet: true });
+          expect(statSync(userConfigPath).isFile()).toBe(true);
+          return { status: 0, stderr: "", stdout: "2026.6.1\n" };
+        },
+      });
+
+      expect(version).toBe("2026.6.1");
+      expect(basename(userConfigPath)).toBe("npmrc");
+      expect(existsSync(userConfigPath)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it.runIf(process.platform !== "win32")(
@@ -602,10 +680,15 @@ if (isPrlctl) {
   it("clears phase timers and applies phase deadlines to guest commands", () => {
     const phaseRunner = readFileSync(TS_PATHS.phaseRunner, "utf8");
     const guestTransports = readFileSync(TS_PATHS.guestTransports, "utf8");
+    const parallelsVm = readFileSync(TS_PATHS.parallelsVm, "utf8");
+    const snapshots = readFileSync(TS_PATHS.snapshots, "utf8");
 
     expect(phaseRunner).toContain("clearTimeout(timer)");
     expect(phaseRunner).toContain("remainingTimeoutMs");
     expect(guestTransports).toContain("this.phases.remainingTimeoutMs");
+    expect(parallelsVm).toContain("PRLCTL_STATUS_TIMEOUT_MS");
+    expect(parallelsVm).toContain("probeTimeoutMs");
+    expect(snapshots).toContain("SNAPSHOT_LIST_TIMEOUT_MS");
 
     for (const scriptPath of OS_TS_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
@@ -614,6 +697,14 @@ if (isPrlctl) {
       expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
     }
+
+    const linux = readFileSync(TS_PATHS.linux, "utf8");
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+    expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(macos).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
+    expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
   });
 
   it("streams full phase logs to disk while bounding the failure tail", async () => {
