@@ -8,7 +8,7 @@ import {
   type UserInputQuestion,
 } from "./app-server/user-input-shared.js";
 
-const PENDING_CONTROL_TTL_MS = 10 * 60_000;
+export const CODEX_PENDING_CONTROL_TTL_MS = 10 * 60_000;
 const MAX_PENDING_CONTROLS = 200;
 const PROPOSED_PLAN_RE = /<proposed_plan>[\s\S]*?<\/proposed_plan>/i;
 const CODEX_INTERACTIVE_NAMESPACE = "codex";
@@ -48,6 +48,10 @@ export type CodexPlanDecisionResult =
 export type CodexPlanDecisionAction = "approve" | "approve-clean" | "stay";
 
 export type CodexUserInputCallbackResult =
+  | { matched: false }
+  | { matched: true; consumed: boolean; message: string };
+
+export type CodexUserInputFreeformResult =
   | { matched: false }
   | { matched: true; consumed: boolean; message: string };
 
@@ -144,11 +148,22 @@ export function createCodexUserInputPrompt(params: {
   scope: ControlScope;
   resolveText: (text: string) => void;
 }): ReplyPayload {
+  return createCodexUserInputPromptControl(params).payload;
+}
+
+export function createCodexUserInputPromptControl(params: {
+  questions: UserInputQuestion[];
+  scope: ControlScope;
+  resolveText: (text: string) => void;
+}): { token: string; payload: ReplyPayload } {
   const token = createPendingUserInput(params);
   const presentation = buildUserInputInteractive(params.questions, token);
   return {
-    text: formatUserInputPrompt(params.questions),
-    ...(presentation ? { presentation } : {}),
+    token,
+    payload: {
+      text: formatUserInputPrompt(params.questions),
+      ...(presentation ? { presentation } : {}),
+    },
   };
 }
 
@@ -199,6 +214,51 @@ export function resolveCodexUserInputCallback(params: {
     now: params.now,
   });
   return { matched: true, ...result };
+}
+
+export function answerCodexUserInputFreeform(params: {
+  answerText: string;
+  ctx: Pick<
+    PluginCommandContext,
+    "senderId" | "channel" | "accountId" | "sessionKey" | "messageThreadId"
+  >;
+  sessionFile?: string;
+  now?: number;
+}): CodexUserInputFreeformResult {
+  const answerText = params.answerText.trim();
+  if (!answerText || answerText.startsWith("/")) {
+    return { matched: false };
+  }
+  pruneExpiredControls(params.now);
+  const matches = [...pendingUserInputs.values()].filter((pending) => {
+    if (!pending.questions.some((question) => question.isOther)) {
+      return false;
+    }
+    return !readControlScopeMismatch(pending, params.ctx, params.sessionFile);
+  });
+  if (matches.length === 0) {
+    return { matched: false };
+  }
+  if (matches.length > 1) {
+    return {
+      matched: true,
+      consumed: false,
+      message:
+        "More than one Codex input request is pending here. Use a button or /codex input with the request token.",
+    };
+  }
+  const pending = matches[0];
+  if (!pending) {
+    return { matched: false };
+  }
+  pendingUserInputs.delete(pending.token);
+  pending.resolveText(answerText);
+  return { matched: true, consumed: true, message: "Sent answer to Codex." };
+}
+
+export function cancelCodexUserInput(params: { token: string; now?: number }): boolean {
+  pruneExpiredControls(params.now);
+  return pendingUserInputs.delete(params.token);
 }
 
 export function buildCodexUserInputCallbackValue(params: {
@@ -391,7 +451,7 @@ function pruneExpiredControls(now = Date.now()): void {
 
 function pruneExpired<T extends { createdAt: number }>(entries: Map<string, T>, now: number): void {
   for (const [token, entry] of entries) {
-    if (now - entry.createdAt >= PENDING_CONTROL_TTL_MS) {
+    if (now - entry.createdAt >= CODEX_PENDING_CONTROL_TTL_MS) {
       entries.delete(token);
     }
   }

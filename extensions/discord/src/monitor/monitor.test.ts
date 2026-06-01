@@ -948,6 +948,94 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
+  it("lets plugin Discord interactions disable source components after acknowledging", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "codex:approve" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        respond: {
+          acknowledge: () => Promise<void>;
+          disableComponents: () => Promise<void>;
+        };
+      };
+      await typedParams.respond.acknowledge();
+      await typedParams.respond.disableComponents();
+      return {
+        matched: true,
+        handled: true,
+        duplicate: false,
+      };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const update = vi.fn().mockResolvedValue(undefined);
+    const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
+      string,
+      unknown
+    >;
+    const interaction = {
+      ...baseInteraction,
+      acknowledge,
+      reply,
+      update,
+      message: {
+        id: "msg-1",
+        rawData: {
+          components: [
+            {
+              type: 17,
+              components: [
+                { type: 10, content: "Pick one" },
+                {
+                  type: 1,
+                  components: [
+                    { type: 2, label: "Runtime", custom_id: "occomp:cid=btn_1", style: 1 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    } as unknown as ButtonInteraction;
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledTimes(1);
+    const payload = firstMockArg(reply as unknown as MockWithCalls, "reply");
+    const component = (
+      payload as {
+        components?: Array<{ isV2?: boolean; serialize: () => Record<string, unknown> }>;
+      }
+    ).components?.[0];
+    expect(component?.isV2).toBe(true);
+    expect(component?.serialize()).toEqual({
+      type: 17,
+      components: [
+        { type: 10, content: "Pick one" },
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              label: "Runtime",
+              custom_id: "occomp:cid=btn_1",
+              style: 1,
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
   it("falls through to built-in Discord component routing when a plugin declines handling", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],

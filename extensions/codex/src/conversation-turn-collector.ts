@@ -24,6 +24,8 @@ export function createCodexConversationTurnCollector(
   let completed = false;
   let failedError: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let waitTimeoutMs = 0;
+  let timeoutSuspended = 0;
   const assistantTextByItem = new Map<string, string>();
   const planTextByItem = new Map<string, string>();
   const itemPhaseById = new Map<string, string>();
@@ -62,8 +64,30 @@ export function createCodexConversationTurnCollector(
       clearTimeout(timeout);
       timeout = undefined;
     }
+    waitTimeoutMs = 0;
+    timeoutSuspended = 0;
     resolveCompletion = undefined;
     rejectCompletion = undefined;
+  };
+  const scheduleTimeout = () => {
+    if (!rejectCompletion || completed || timeoutSuspended > 0) {
+      return;
+    }
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(() => {
+      completed = true;
+      rejectCompletion?.(new Error("codex app-server bound turn timed out"));
+      clearWaitState();
+    }, waitTimeoutMs);
+    timeout.unref?.();
+  };
+  const resetTimeout = () => {
+    if (!rejectCompletion || !waitTimeoutMs || completed || timeoutSuspended > 0) {
+      return;
+    }
+    scheduleTimeout();
   };
   const finish = () => {
     if (completed) {
@@ -97,6 +121,7 @@ export function createCodexConversationTurnCollector(
     if (!isNotificationForTurn(params, threadId, turnId)) {
       return;
     }
+    resetTimeout();
     if (notification.method === "item/agentMessage/delta") {
       const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
       const delta = readTextString(params, "delta");
@@ -219,16 +244,28 @@ export function createCodexConversationTurnCollector(
       return new Promise<{ replyText: string; planText: string }>((resolve, reject) => {
         resolveCompletion = resolve;
         rejectCompletion = reject;
-        timeout = setTimeout(
-          () => {
-            completed = true;
-            reject(new Error("codex app-server bound turn timed out"));
-            clearWaitState();
-          },
-          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
-        );
-        timeout.unref?.();
+        waitTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+        scheduleTimeout();
       });
+    },
+    suspendTimeout(): () => void {
+      if (completed) {
+        return () => undefined;
+      }
+      timeoutSuspended += 1;
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      let resumed = false;
+      return () => {
+        if (resumed) {
+          return;
+        }
+        resumed = true;
+        timeoutSuspended = Math.max(0, timeoutSuspended - 1);
+        scheduleTimeout();
+      };
     },
   };
 

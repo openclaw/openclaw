@@ -75,6 +75,7 @@ import {
 } from "./conversation-binding.js";
 import {
   answerCodexUserInputCallback,
+  createCodexUserInputPrompt,
   resetCodexConversationChatControlsForTests,
 } from "./conversation-chat-controls.js";
 
@@ -1507,6 +1508,84 @@ describe("codex conversation binding", () => {
       }),
     );
     expect(userInputResponse).toEqual({ answers: { q1: { answers: ["Execute"] } } });
+  });
+
+  it("routes typed other replies to the pending Codex user-input request", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    createCodexUserInputPrompt({
+      scope: {
+        sessionFile,
+        threadId: "thread-1",
+        channel: "telegram",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        messageThreadId: "chat-1",
+      },
+      resolveText,
+      questions: [
+        {
+          id: "q1",
+          header: "Other",
+          question: "Type an answer",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "Runtime", description: "" }],
+        },
+      ],
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "can openmanager execute?",
+        bodyForAgent: "can openmanager execute?",
+        channel: "telegram",
+        senderId: "user-1",
+        accountId: "default",
+        threadId: "chat-1",
+        sessionKey: "session-key",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "Sent answer to Codex." } });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    await expect(answered).resolves.toBe("can openmanager execute?");
   });
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {

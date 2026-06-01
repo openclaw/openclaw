@@ -140,6 +140,81 @@ describe("BaseInteraction", () => {
     });
   });
 
+  it("uses with_components when editing acknowledged component messages with disabled V2 controls", async () => {
+    const post = vi.fn(async () => undefined);
+    const patch = vi.fn(async () => undefined);
+    const client = createInternalTestClient();
+    attachRestMock(client, { patch, post });
+    const interaction = createInteraction(
+      client,
+      createInternalComponentInteractionPayload({
+        id: "interaction1",
+        token: "token1",
+        data: {
+          component_type: ComponentType.Button,
+          custom_id: "button1",
+        },
+      }),
+    );
+
+    await interaction.acknowledge();
+    await interaction.reply({
+      components: [
+        {
+          isV2: true,
+          serialize: () => ({
+            type: 17,
+            components: [
+              { type: 10, content: "Pick one" },
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    label: "Runtime",
+                    custom_id: "button1",
+                    style: 1,
+                    disabled: true,
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      ],
+    });
+
+    expect(patch).toHaveBeenCalledWith(
+      "/webhooks/app1/token1/messages/%40original",
+      {
+        body: {
+          components: [
+            {
+              type: 17,
+              components: [
+                { type: 10, content: "Pick one" },
+                {
+                  type: 1,
+                  components: [
+                    {
+                      type: 2,
+                      label: "Runtime",
+                      custom_id: "button1",
+                      style: 1,
+                      disabled: true,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          flags: MessageFlags.IsComponentsV2,
+        },
+      },
+      { with_components: true },
+    );
+  });
+
   it("rejects malformed interaction payloads at the boundary", () => {
     expect(() =>
       createInteraction(createInternalTestClient(), {

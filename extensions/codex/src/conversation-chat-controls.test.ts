@@ -1,6 +1,7 @@
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  answerCodexUserInputFreeform,
   answerCodexUserInputCallback,
   buildCodexPlanDecisionReply,
   consumeCodexPlanDecision,
@@ -208,6 +209,93 @@ describe("codex conversation chat controls", () => {
       "Sent answer to Codex.",
     );
     await expect(answered).resolves.toBe("3");
+  });
+
+  it("consumes scoped freeform replies only for prompts that allow other answers", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    createCodexUserInputPrompt({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "target",
+          header: "Plan Target",
+          question: "Which plan?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "Runtime", description: "" }],
+        },
+      ],
+    });
+
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "can openmanager execute?",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe("can openmanager execute?");
+  });
+
+  it("leaves typed messages alone for non-other prompts and slash commands", () => {
+    createCodexUserInputPrompt({
+      scope,
+      resolveText: () => undefined,
+      questions: [
+        {
+          id: "target",
+          header: "Plan Target",
+          question: "Which plan?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Runtime", description: "" }],
+        },
+      ],
+    });
+
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "Runtime",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: false });
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "/codex input token Runtime",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: false });
+  });
+
+  it("does not consume freeform replies from another control scope", () => {
+    createCodexUserInputPrompt({
+      scope,
+      resolveText: () => undefined,
+      questions: [
+        {
+          id: "target",
+          header: "Plan Target",
+          question: "Which plan?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "Runtime", description: "" }],
+        },
+      ],
+    });
+
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "custom answer",
+        ctx: { ...ctx, senderId: "user-2" },
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: false });
   });
 
   it("omits buttons for secret, freeform-only, or multi-question prompts", () => {

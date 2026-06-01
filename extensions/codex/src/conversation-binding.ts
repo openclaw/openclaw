@@ -68,8 +68,11 @@ import {
   type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
 import {
+  answerCodexUserInputFreeform,
   buildCodexPlanDecisionReply,
-  createCodexUserInputPrompt,
+  cancelCodexUserInput,
+  CODEX_PENDING_CONTROL_TTL_MS,
+  createCodexUserInputPromptControl,
   hasCodexProposedPlan,
 } from "./conversation-chat-controls.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
@@ -258,6 +261,22 @@ export async function handleCodexConversationInboundClaim(
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
+  }
+  if (data.kind === "codex-app-server-session") {
+    const inputResult = answerCodexUserInputFreeform({
+      answerText: prompt,
+      ctx: {
+        channel: event.channel,
+        senderId: event.senderId ?? ctx.senderId,
+        accountId: event.accountId ?? ctx.accountId,
+        sessionKey: event.sessionKey ?? ctx.sessionKey,
+        messageThreadId: event.threadId,
+      },
+      sessionFile: data.sessionFile,
+    });
+    if (inputResult.matched) {
+      return { handled: true, reply: { text: inputResult.message } };
+    }
   }
   const nativeExecutionBlock =
     data.kind === "codex-cli-node-session"
@@ -616,7 +635,21 @@ async function runBoundTurn(params: {
           return emptyUserInputResponse();
         }
         return await new Promise<JsonValue>((resolve) => {
-          const payload = createCodexUserInputPrompt({
+          const resumeTurnTimeout = collector.suspendTimeout();
+          let inputTimeout: ReturnType<typeof setTimeout> | undefined;
+          let resolved = false;
+          const finish = (response: JsonValue) => {
+            if (resolved) {
+              return;
+            }
+            resolved = true;
+            if (inputTimeout) {
+              clearTimeout(inputTimeout);
+            }
+            resumeTurnTimeout();
+            resolve(response);
+          };
+          const { token, payload } = createCodexUserInputPromptControl({
             questions: requestParams.questions,
             scope: {
               sessionFile: params.data.sessionFile,
@@ -627,9 +660,17 @@ async function runBoundTurn(params: {
               sessionKey: params.event.sessionKey ?? params.ctx.sessionKey,
               messageThreadId: params.event.threadId,
             },
-            resolveText: (text) => resolve(buildUserInputResponse(requestParams.questions, text)),
+            resolveText: (text) => finish(buildUserInputResponse(requestParams.questions, text)),
           });
-          void sendProgressReply(payload).catch(() => resolve(emptyUserInputResponse()));
+          inputTimeout = setTimeout(() => {
+            cancelCodexUserInput({ token });
+            finish(emptyUserInputResponse());
+          }, CODEX_PENDING_CONTROL_TTL_MS);
+          inputTimeout.unref?.();
+          void sendProgressReply(payload).catch(() => {
+            cancelCodexUserInput({ token });
+            finish(emptyUserInputResponse());
+          });
         });
       }
       if (

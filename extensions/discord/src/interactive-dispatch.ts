@@ -38,6 +38,7 @@ export type DiscordInteractiveHandlerContext = {
       components?: ChannelStructuredComponents;
     }) => Promise<void>;
     clearComponents: (params?: { text?: string }) => Promise<void>;
+    disableComponents?: () => Promise<void>;
   };
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,

@@ -16,6 +16,12 @@ import {
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 
+type DiscordRawComponent = Record<string, unknown> & {
+  components?: unknown[];
+  accessory?: unknown;
+  disabled?: unknown;
+};
+
 async function loadConversationRuntime() {
   conversationRuntimePromise ??= import("./agent-components.runtime.js");
   return await conversationRuntimePromise;
@@ -55,6 +61,21 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       throw new Error("Discord interaction cannot update the source message");
     }
     await params.interaction.update(payload);
+  };
+  const readCurrentMessageComponents = (): DiscordRawComponent[] | undefined => {
+    const components = params.interaction.message?.rawData?.components;
+    return Array.isArray(components) ? (components as DiscordRawComponent[]) : undefined;
+  };
+  const disableCurrentMessageComponents = async () => {
+    const components = readCurrentMessageComponents();
+    if (!components?.length) {
+      await respond.clearComponents?.();
+      return;
+    }
+    responded = true;
+    await updateOriginalMessage({
+      components: wrapDiscordRawTopLevelComponents(disableDiscordRawComponents(components)),
+    });
   };
   const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
@@ -96,6 +117,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
         components: [],
       });
     },
+    disableComponents: disableCurrentMessageComponents,
   };
   const conversationRuntime = await loadConversationRuntime();
   const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
@@ -184,4 +206,40 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     return "handled";
   }
   return "unmatched";
+}
+
+function disableDiscordRawComponents(components: DiscordRawComponent[]): DiscordRawComponent[] {
+  return components.map((component) => disableDiscordRawComponent(component));
+}
+
+function disableDiscordRawComponent(component: DiscordRawComponent): DiscordRawComponent {
+  const next: DiscordRawComponent = { ...component };
+  if (Array.isArray(component.components)) {
+    next.components = component.components.map((entry) =>
+      isDiscordRawComponent(entry) ? disableDiscordRawComponent(entry) : entry,
+    );
+  }
+  if (isDiscordRawComponent(component.accessory)) {
+    next.accessory = disableDiscordRawComponent(component.accessory);
+  }
+  if (isDiscordInteractiveLeaf(component)) {
+    next.disabled = true;
+  }
+  return next;
+}
+
+function isDiscordRawComponent(value: unknown): value is DiscordRawComponent {
+  return Boolean(value) && typeof value === "object";
+}
+
+function isDiscordInteractiveLeaf(component: DiscordRawComponent): boolean {
+  const type = component.type;
+  return type === 2 || type === 3 || type === 5 || type === 6 || type === 7 || type === 8;
+}
+
+function wrapDiscordRawTopLevelComponents(components: DiscordRawComponent[]): TopLevelComponents[] {
+  return components.map((component) => ({
+    isV2: component.type === 17,
+    serialize: () => component,
+  }));
 }

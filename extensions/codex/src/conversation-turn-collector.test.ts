@@ -266,6 +266,96 @@ describe("codex conversation turn collector", () => {
     }
   });
 
+  it("resets the timeout when active-turn notifications keep arriving", async () => {
+    vi.useFakeTimers();
+    try {
+      const collector = createCodexConversationTurnCollector("thread-1");
+      collector.setTurnId("turn-1");
+      const completion = collector.wait({ timeoutMs: 100 });
+
+      await vi.advanceTimersByTimeAsync(90);
+      collector.handleNotification({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "tool-1", type: "toolCall", tool: "shell" },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(90);
+      collector.handleNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "answer", text: "done" }],
+          },
+        },
+      });
+
+      await expect(completion).resolves.toEqual({ replyText: "done", planText: "" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reset the timeout for ignored notifications", async () => {
+    vi.useFakeTimers();
+    try {
+      const collector = createCodexConversationTurnCollector("thread-1");
+      collector.setTurnId("turn-1");
+      const completion = collector.wait({ timeoutMs: 100 });
+      const assertion = expect(completion).rejects.toThrow("codex app-server bound turn timed out");
+
+      await vi.advanceTimersByTimeAsync(90);
+      collector.handleNotification({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          item: { id: "tool-1", type: "toolCall", tool: "shell" },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(10);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suspends the timeout while user input is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const collector = createCodexConversationTurnCollector("thread-1");
+      collector.setTurnId("turn-1");
+      const completion = collector.wait({ timeoutMs: 100 });
+
+      await vi.advanceTimersByTimeAsync(90);
+      const resume = collector.suspendTimeout();
+      await vi.advanceTimersByTimeAsync(1_000);
+      resume();
+      await vi.advanceTimersByTimeAsync(90);
+      collector.handleNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "answer", text: "done" }],
+          },
+        },
+      });
+
+      await expect(completion).resolves.toEqual({ replyText: "done", planText: "" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clamps oversized turn wait timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {

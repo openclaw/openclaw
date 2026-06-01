@@ -219,7 +219,45 @@ describe("codex plugin", () => {
     await expect(answered).resolves.toBe("2");
   });
 
-  it("clears Discord Codex input controls after a consumed callback", async () => {
+  it("clears stale Telegram Codex input controls after an expired callback", async () => {
+    const registerInteractiveHandler = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const telegramRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "telegram");
+
+    const reply = vi.fn(async () => undefined);
+    const clearButtons = vi.fn(async () => undefined);
+    await telegramRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      callback: { payload: "input:missing-token:1" },
+      respond: { reply, clearButtons },
+    });
+
+    expect(clearButtons).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      text: "No pending Codex input request was found. The request may have expired.",
+    });
+  });
+
+  it("disables Discord Codex input controls after a consumed callback", async () => {
     const registerInteractiveHandler = vi.fn();
     plugin.register(
       createTestPluginApi({
@@ -275,14 +313,16 @@ describe("codex plugin", () => {
 
     const reply = vi.fn(async () => undefined);
     const clearComponents = vi.fn(async () => undefined);
+    const disableComponents = vi.fn(async () => undefined);
     await discordRegistration.handler({
       accountId: "default",
       senderId: "user-1",
       interaction: { payload: buttonValue?.slice("codex:".length) },
-      respond: { reply, clearComponents },
+      respond: { reply, clearComponents, disableComponents },
     });
 
-    expect(clearComponents).toHaveBeenCalledTimes(1);
+    expect(disableComponents).toHaveBeenCalledTimes(1);
+    expect(clearComponents).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({ text: "Sent answer to Codex.", ephemeral: true });
     await expect(answered).resolves.toBe("1");
   });
@@ -357,7 +397,7 @@ describe("codex plugin", () => {
     await expect(answered).resolves.toBe("2");
   });
 
-  it("clears Codex plan controls after a consumed callback", async () => {
+  it("disables Discord Codex plan controls after a consumed callback", async () => {
     const registerInteractiveHandler = vi.fn();
     handleCodexPlanDecisionCallbackMock.mockResolvedValueOnce({
       handled: true,
@@ -387,12 +427,13 @@ describe("codex plugin", () => {
 
     const reply = vi.fn(async () => undefined);
     const clearComponents = vi.fn(async () => undefined);
+    const disableComponents = vi.fn(async () => undefined);
     await discordRegistration.handler({
       accountId: "default",
       senderId: "user-1",
       auth: { isAuthorizedSender: true },
       interaction: { payload: "plan:token-1:stay" },
-      respond: { reply, clearComponents },
+      respond: { reply, clearComponents, disableComponents },
       requestConversationBinding: async () => ({ status: "error", message: "unused" }),
       detachConversationBinding: async () => ({ removed: false }),
       getCurrentConversationBinding: async () => null,
@@ -404,7 +445,8 @@ describe("codex plugin", () => {
         pluginConfig: {},
       }),
     );
-    expect(clearComponents).toHaveBeenCalledTimes(1);
+    expect(disableComponents).toHaveBeenCalledTimes(1);
+    expect(clearComponents).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledWith({
       text: "Codex will stay in plan mode.",
       ephemeral: true,

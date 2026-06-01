@@ -267,7 +267,7 @@ function registerCodexUserInputInteractiveHandlers(
         },
       });
       if (result.matched) {
-        if (result.consumed) {
+        if (shouldClearResolvedCodexControl(result)) {
           await ctx.respond.clearButtons?.();
         }
         await ctx.respond.reply({ text: result.message });
@@ -310,6 +310,7 @@ function registerCodexUserInputInteractiveHandlers(
         respond: {
           reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
           clearComponents?: (params?: { text?: string }) => Promise<void>;
+          disableComponents?: () => Promise<void>;
         };
       } & CodexInteractiveConversationBindingHelpers;
       const result = resolveCodexUserInputCallback({
@@ -321,8 +322,12 @@ function registerCodexUserInputInteractiveHandlers(
         },
       });
       if (result.matched) {
-        if (result.consumed) {
-          await ctx.respond.clearComponents?.();
+        if (shouldClearResolvedCodexControl(result)) {
+          if (ctx.respond.disableComponents) {
+            await ctx.respond.disableComponents();
+          } else {
+            await ctx.respond.clearComponents?.();
+          }
         }
         await ctx.respond.reply({ text: result.message, ephemeral: true });
         return { handled: true };
@@ -343,7 +348,11 @@ function registerCodexUserInputInteractiveHandlers(
         return { handled: false };
       }
       if (planResult.consumed) {
-        await ctx.respond.clearComponents?.();
+        if (ctx.respond.disableComponents) {
+          await ctx.respond.disableComponents();
+        } else {
+          await ctx.respond.clearComponents?.();
+        }
       }
       if (planResult.reply.text) {
         await ctx.respond.reply({ text: planResult.reply.text, ephemeral: true });
@@ -376,7 +385,7 @@ function registerCodexUserInputInteractiveHandlers(
         },
       });
       if (result.matched) {
-        if (result.consumed) {
+        if (shouldClearResolvedCodexControl(result)) {
           await ctx.respond.editMessage?.({ blocks: [] });
         }
         await ctx.respond.reply({ text: result.message });
@@ -407,6 +416,10 @@ function registerCodexUserInputInteractiveHandlers(
       return { handled: true };
     },
   });
+}
+
+function shouldClearResolvedCodexControl(result: { consumed: boolean; message: string }): boolean {
+  return result.consumed || result.message.startsWith("No pending Codex ");
 }
 
 let codexPlanDecisionCallbackPromise:
