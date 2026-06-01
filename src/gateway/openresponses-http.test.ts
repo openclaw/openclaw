@@ -345,6 +345,73 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resChannelHeader);
 
       mockAgentOnce([{ text: "hello" }]);
+      const sessionConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      if (!sessionConfigPath) {
+        throw new Error("OPENCLAW_CONFIG_PATH is required for session context test");
+      }
+      const sessionStorePath = path.join(
+        path.dirname(sessionConfigPath),
+        "openresponses-session-context-sessions.json",
+      );
+      const sourceSessionKey = "agent:main:telegram:default:direct:12345";
+      await writeGatewayConfig({ session: { store: sessionStorePath } });
+      await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
+      await fs.writeFile(
+        sessionStorePath,
+        JSON.stringify(
+          {
+            [sourceSessionKey]: {
+              sessionId: "source-session",
+              updatedAt: Date.now(),
+              deliveryContext: {
+                channel: "telegram",
+                to: "telegram:12345",
+                accountId: "default",
+              },
+              lastChannel: "telegram",
+              lastTo: "telegram:12345",
+              origin: {
+                provider: "telegram",
+                surface: "telegram",
+                chatType: "direct",
+                to: "telegram:12345",
+                from: "telegram:12345",
+                accountId: "default",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      const sessionContextPort = await getFreePort();
+      const sessionContextServer = await startServer(sessionContextPort, {
+        openResponsesEnabled: true,
+      });
+      try {
+        const resSessionContext = await postResponses(
+          sessionContextPort,
+          { model: "openclaw", input: "callback result" },
+          { "x-openclaw-session-key": sourceSessionKey },
+        );
+        expect(resSessionContext.status).toBe(200);
+        const optsSessionContext = firstAgentOpts();
+        expect((optsSessionContext as { messageChannel?: string }).messageChannel).toBe("telegram");
+        expect(
+          (optsSessionContext as { runContext?: { currentChannelId?: string } }).runContext
+            ?.currentChannelId,
+        ).toBe("telegram:12345");
+        expect(
+          (optsSessionContext as { runContext?: { accountId?: string } }).runContext?.accountId,
+        ).toBe("default");
+        await ensureResponseConsumed(resSessionContext);
+      } finally {
+        await sessionContextServer.close({ reason: "responses session context test done" });
+        await writeGatewayConfig({});
+      }
+
+      mockAgentOnce([{ text: "hello" }]);
       const resModelOverride = await postResponses(
         port,
         {

@@ -9,8 +9,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
-import type { ImageContent } from "../agents/command/types.js";
+import type { AgentRunContext, ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -65,6 +66,7 @@ import {
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -233,6 +235,64 @@ export const testing = {
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function resolveSessionBoundRunContext(sessionKey: string): AgentRunContext | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+
+  try {
+    const { entry } = loadSessionEntry(normalizedSessionKey);
+    if (!entry) {
+      return undefined;
+    }
+
+    const deliveryContext = entry.deliveryContext as
+      | { channel?: unknown; to?: unknown; accountId?: unknown; threadId?: unknown }
+      | undefined;
+    const origin = entry.origin as
+      | {
+          provider?: unknown;
+          to?: unknown;
+          from?: unknown;
+          accountId?: unknown;
+          threadId?: unknown;
+        }
+      | undefined;
+
+    const messageChannel =
+      normalizeOptionalString(deliveryContext?.channel) ??
+      normalizeOptionalString(entry.lastChannel) ??
+      normalizeOptionalString(entry.channel) ??
+      normalizeOptionalString(origin?.provider);
+    const currentChannelId =
+      normalizeOptionalString(deliveryContext?.to) ??
+      normalizeOptionalString(entry.lastTo) ??
+      normalizeOptionalString(origin?.to) ??
+      normalizeOptionalString(origin?.from);
+    const accountId =
+      normalizeOptionalString(deliveryContext?.accountId) ??
+      normalizeOptionalString(origin?.accountId);
+    const currentThreadTs = normalizeOptionalString(deliveryContext?.threadId ?? origin?.threadId);
+
+    if (!messageChannel && !currentChannelId && !accountId && !currentThreadTs) {
+      return undefined;
+    }
+
+    return {
+      ...(messageChannel ? { messageChannel } : {}),
+      ...(currentChannelId ? { currentChannelId } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(currentThreadTs ? { currentThreadTs } : {}),
+    };
+  } catch (error) {
+    logWarn(
+      `openresponses: failed to load session context for ${normalizedSessionKey}: ${String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 type ResolvedResponsesLimits = {
@@ -409,6 +469,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  runContext?: AgentRunContext;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -424,6 +485,7 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
+      runContext: params.runContext,
       bestEffortDeliver: false,
       allowModelOverride: true,
       abortSignal: params.abortSignal,
@@ -644,7 +706,8 @@ export async function handleOpenResponsesHttpRequest(
     responseSessionScope,
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
-  const messageChannel = resolved.messageChannel;
+  const runContext = resolveSessionBoundRunContext(sessionKey);
+  const messageChannel = runContext?.messageChannel ?? resolved.messageChannel;
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
@@ -705,6 +768,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        runContext,
         deps,
         abortSignal: abortController.signal,
       });
@@ -1044,6 +1108,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        runContext,
         deps,
         abortSignal: abortController.signal,
       });
