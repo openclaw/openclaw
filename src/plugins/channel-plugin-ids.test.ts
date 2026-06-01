@@ -1451,6 +1451,38 @@ describe("resolveGatewayStartupPluginIds", () => {
     ).toEqual(["workspace-demo-channel-plugin"]);
   });
 
+  it("includes auto-enabled deferred channel owners in full startup scope", () => {
+    const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
+    const rawConfig = {
+      channels: {
+        "demo-channel": {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          "workspace-demo-channel-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      env: createPluginPlanningTestEnv(),
+      index: createInstalledPluginIndexFixture(registry),
+      manifestRegistry: registry,
+    });
+
+    expect(plan.configuredDeferredChannelPluginIds).toEqual(["workspace-demo-channel-plugin"]);
+    expect(plan.pluginIds).toContain("workspace-demo-channel-plugin");
+  });
+
   it("preserves explicit bundled channel config under restrictive allowlists", () => {
     expectStartupPluginIdsCase({
       config: {

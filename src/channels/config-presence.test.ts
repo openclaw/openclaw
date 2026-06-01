@@ -74,6 +74,19 @@ describe("config presence", () => {
     });
   });
 
+  it("treats enabled-only channel config as an explicit presence signal", () => {
+    const env = {} as NodeJS.ProcessEnv;
+    const cfg = { channels: { matrix: { enabled: true } } };
+
+    expectPotentialConfiguredChannelCase({
+      cfg,
+      env,
+      expectedIds: ["matrix"],
+      expectedConfigured: true,
+      options: { includePersistedAuthState: false },
+    });
+  });
+
   it("lists explicitly disabled channel ids case-insensitively", () => {
     const cfg = {
       channels: {

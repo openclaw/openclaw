@@ -1580,16 +1580,17 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     plugins: activationSourcePlugins,
     rootConfig: activationSourceConfig,
   };
+  const configuredChannelActivationSource = {
+    plugins: pluginsConfig,
+    rootConfig: params.config,
+  };
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromPrepared({
     config: params.config,
     index: params.index,
     configuredChannelIds,
     pluginsConfig,
-    activationSource: {
-      plugins: pluginsConfig,
-      rootConfig: params.config,
-    },
+    activationSource: configuredChannelActivationSource,
     manifestLookup,
     platform: params.platform,
   });
@@ -1634,7 +1635,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           plugin,
           config: params.config,
           pluginsConfig,
-          activationSource,
+          activationSource: configuredChannelActivationSource,
           manifestLookup,
           platform: params.platform,
         });

@@ -43,6 +43,10 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
+function hasExplicitChannelPresenceConfig(value: unknown): boolean {
+  return isRecord(value) && (value.enabled === true || hasMeaningfulChannelConfig(value));
+}
+
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (!channels) {
@@ -138,7 +142,7 @@ export function listPotentialConfiguredChannelPresenceSignals(
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
-      if (hasMeaningfulChannelConfig(value)) {
+      if (hasExplicitChannelPresenceConfig(value)) {
         configuredChannelIds.add(key);
         addSignal(key, "config");
       }
@@ -203,7 +207,7 @@ export function hasPotentialConfiguredChannels(
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
-      if (hasMeaningfulChannelConfig(value)) {
+      if (hasExplicitChannelPresenceConfig(value)) {
         return true;
       }
     }

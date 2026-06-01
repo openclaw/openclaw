@@ -181,6 +181,32 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes.join("\n")).toContain("apn configured, enabled automatically.");
     });
 
+    it("auto-enables a third-party channel plugin from enabled-only channel config", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            "openclaw-weixin": { enabled: true },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "openclaw-weixin",
+            channels: ["openclaw-weixin"],
+            channelConfigs: {
+              "openclaw-weixin": {
+                schema: { type: "object" },
+                label: "Weixin",
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("Weixin configured, enabled automatically.");
+    });
+
     it("does not double-enable when plugin is already enabled under its plugin id", () => {
       const result = applyWithApnChannelConfig({
         plugins: { entries: { "apn-channel": { enabled: true } } },
