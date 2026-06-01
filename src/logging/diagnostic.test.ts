@@ -2748,6 +2748,46 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.hasActiveEmbeddedRun).toBe(true);
   });
 
+  it("preserves fresh same-session tool activity rearmed after recovery starts", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+        emitDiagnosticEvent({
+          type: "tool.execution.started",
+          runId: sessionId,
+          sessionId,
+          sessionKey,
+          toolName: "FreshTool",
+          toolCallId: "fresh-tool",
+        });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBe("tool_call");
+    expect(activity.hasActiveEmbeddedRun).toBe(true);
+    expect(activity.activeToolName).toBe("FreshTool");
+  });
+
   it("keeps fresh tool markers when a different embedded owner blocks recovery clearing", async () => {
     logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });

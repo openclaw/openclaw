@@ -25,6 +25,7 @@ type ActiveTool = {
   runId?: string;
   sessionId?: string;
   sessionKey?: string;
+  sequence?: number;
   toolName: string;
   toolCallId?: string;
   startedAt: number;
@@ -35,6 +36,7 @@ type ActiveModelCall = {
   runId?: string;
   sessionId?: string;
   sessionKey?: string;
+  sequence?: number;
 };
 
 type DiagnosticToolStartedActivityEvent = Pick<
@@ -213,6 +215,7 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     runId: event.runId,
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
+    sequence: event.seq,
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     startedAt: now,
@@ -247,6 +250,7 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
     runId: event.runId,
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
+    sequence: event.seq,
   });
   touchSessionActivity(activity, "model_call:started");
 }
@@ -360,6 +364,13 @@ function embeddedRunStartedAfter(
   return sequence !== undefined && embeddedRun.sequence > sequence;
 }
 
+function activityMarkerStartedAfter(
+  marker: { sequence?: number },
+  sequence: number | undefined,
+): boolean {
+  return sequence !== undefined && marker.sequence !== undefined && marker.sequence > sequence;
+}
+
 function clearRecoveredOwnerEmbeddedRuns(
   activity: SessionActivity,
   ownerRefs: Set<string>,
@@ -394,17 +405,27 @@ function hasEmbeddedRunStartedAfter(
   return false;
 }
 
-function clearRecoveredOwnerMarkers(activity: SessionActivity, ownerRefs: Set<string>): void {
+function clearRecoveredOwnerMarkers(
+  activity: SessionActivity,
+  ownerRefs: Set<string>,
+  recoveryStartedAfterSequence: number | undefined,
+): void {
   if (ownerRefs.size === 0) {
     return;
   }
   for (const [key, tool] of activity.activeTools) {
-    if (markerBelongsToRecoveredOwner(tool, ownerRefs)) {
+    if (
+      markerBelongsToRecoveredOwner(tool, ownerRefs) &&
+      !activityMarkerStartedAfter(tool, recoveryStartedAfterSequence)
+    ) {
       activity.activeTools.delete(key);
     }
   }
   for (const [key, modelCall] of activity.activeModelCalls) {
-    if (markerBelongsToRecoveredOwner(modelCall, ownerRefs)) {
+    if (
+      markerBelongsToRecoveredOwner(modelCall, ownerRefs) &&
+      !activityMarkerStartedAfter(modelCall, recoveryStartedAfterSequence)
+    ) {
       activity.activeModelCalls.delete(key);
     }
   }
@@ -496,7 +517,11 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     ownerRefs,
     params.recoveryStartedAfterEmbeddedRunSequence,
   );
-  clearRecoveredOwnerMarkers(activity, ownerRefs);
+  clearRecoveredOwnerMarkers(
+    activity,
+    ownerRefs,
+    params.recoveryStartedAfterDiagnosticEventSequence,
+  );
   if (activity.activeEmbeddedRuns.size > 0) {
     if (hasEmbeddedRunStartedAfter(activity, params.recoveryStartedAfterEmbeddedRunSequence)) {
       touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
