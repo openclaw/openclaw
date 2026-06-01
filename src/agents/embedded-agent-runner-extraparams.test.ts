@@ -2919,6 +2919,33 @@ describe("applyExtraParamsToAgent", () => {
     expect(capturedOptions?.replayResponsesItemIds).toBe(true);
   });
 
+  it("disables Responses replay item ids when custom Responses routes strip store", () => {
+    let capturedOptions:
+      | (SimpleStreamOptions & {
+          replayResponsesItemIds?: boolean;
+        })
+      | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+
+    void streamFn(
+      {
+        api: "openai-responses",
+        provider: "codex-ai02",
+        id: "gpt-5.5",
+        baseUrl: "https://custom.example.com/v1",
+        compat: { supportsStore: false },
+      } as unknown as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(capturedOptions?.replayResponsesItemIds).toBe(false);
+  });
+
   it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai",
