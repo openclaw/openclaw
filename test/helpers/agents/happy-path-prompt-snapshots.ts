@@ -134,6 +134,10 @@ const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
     path: path.join(WORKSPACE_DIR, "TOOLS.md"),
     content: "<TOOLS.md contents will be here>",
   },
+  {
+    path: path.join(WORKSPACE_DIR, "TOOLS_SHARED.md"),
+    content: "<TOOLS_SHARED.md contents will be here>",
+  },
 ] as const;
 
 const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
@@ -157,7 +161,7 @@ const CODEX_HEARTBEAT_CONTEXT_FILE = {
 } as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md and TOOLS_SHARED.md are provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -793,7 +797,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md`/`TOOLS_SHARED.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",

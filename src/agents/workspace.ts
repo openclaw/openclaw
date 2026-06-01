@@ -26,6 +26,7 @@ export {
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
+export const DEFAULT_TOOLS_SHARED_FILENAME = "TOOLS_SHARED.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
@@ -66,7 +67,9 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  cacheKey?: string;
 }): Promise<WorkspaceGuardedReadResult> {
+  const cacheKey = params.cacheKey ?? params.filePath;
   const opened = await openRootFile({
     absolutePath: params.filePath,
     rootPath: params.workspaceDir,
@@ -74,12 +77,12 @@ async function readWorkspaceFileWithGuards(params: {
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
   if (!opened.ok) {
-    workspaceFileCache.delete(params.filePath);
+    workspaceFileCache.delete(cacheKey);
     return opened;
   }
 
   const identity = workspaceFileIdentity(opened.stat, opened.path);
-  const cached = workspaceFileCache.get(params.filePath);
+  const cached = workspaceFileCache.get(cacheKey);
   if (cached && cached.identity === identity) {
     syncFs.closeSync(opened.fd);
     return { ok: true, content: cached.content };
@@ -87,13 +90,57 @@ async function readWorkspaceFileWithGuards(params: {
 
   try {
     const content = syncFs.readFileSync(opened.fd, "utf-8");
-    workspaceFileCache.set(params.filePath, { content, identity });
+    workspaceFileCache.set(cacheKey, { content, identity });
     return { ok: true, content };
   } catch (error) {
-    workspaceFileCache.delete(params.filePath);
+    workspaceFileCache.delete(cacheKey);
     return { ok: false, reason: "io", error };
   } finally {
     syncFs.closeSync(opened.fd);
+  }
+}
+
+async function readWorkspaceBootstrapFileWithGuards(params: {
+  name: WorkspaceBootstrapFileName;
+  filePath: string;
+  workspaceDir: string;
+}): Promise<WorkspaceGuardedReadResult> {
+  const loaded = await readWorkspaceFileWithGuards({
+    filePath: params.filePath,
+    workspaceDir: params.workspaceDir,
+  });
+  if (loaded.ok || params.name !== DEFAULT_TOOLS_SHARED_FILENAME) {
+    return loaded;
+  }
+
+  // TOOLS_SHARED.md is the one supported cross-workspace bootstrap link:
+  // <agent>/TOOLS_SHARED.md -> ../shared/TOOLS.md.
+  try {
+    const linkStat = await fs.lstat(params.filePath);
+    if (!linkStat.isSymbolicLink()) {
+      return loaded;
+    }
+    const linkTarget = await fs.readlink(params.filePath);
+    const resolvedTarget = path.resolve(path.dirname(params.filePath), linkTarget);
+    const allowedTarget = path.join(
+      path.dirname(params.workspaceDir),
+      "shared",
+      DEFAULT_TOOLS_FILENAME,
+    );
+    const [targetRealPath, allowedRealPath] = await Promise.all([
+      fs.realpath(resolvedTarget),
+      fs.realpath(allowedTarget),
+    ]);
+    if (targetRealPath !== allowedRealPath) {
+      return loaded;
+    }
+    return await readWorkspaceFileWithGuards({
+      filePath: allowedTarget,
+      workspaceDir: path.dirname(allowedTarget),
+      cacheKey: params.filePath,
+    });
+  } catch {
+    return loaded;
   }
 }
 
@@ -153,6 +200,7 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_AGENTS_FILENAME
   | typeof DEFAULT_SOUL_FILENAME
   | typeof DEFAULT_TOOLS_FILENAME
+  | typeof DEFAULT_TOOLS_SHARED_FILENAME
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
   | typeof DEFAULT_HEARTBEAT_FILENAME
@@ -190,6 +238,7 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
+  DEFAULT_TOOLS_SHARED_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
@@ -199,6 +248,7 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
 
 const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_SHARED_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
@@ -1028,6 +1078,10 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
     },
     {
+      name: DEFAULT_TOOLS_SHARED_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_TOOLS_SHARED_FILENAME),
+    },
+    {
       name: DEFAULT_IDENTITY_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
     },
@@ -1052,12 +1106,19 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     if (
+      entry.name === DEFAULT_TOOLS_SHARED_FILENAME &&
+      !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_TOOLS_SHARED_FILENAME))
+    ) {
+      continue;
+    }
+    if (
       entry.name === DEFAULT_MEMORY_FILENAME &&
       !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
     ) {
       continue;
     }
-    const loaded = await readWorkspaceFileWithGuards({
+    const loaded = await readWorkspaceBootstrapFileWithGuards({
+      name: entry.name,
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
     });
@@ -1075,11 +1136,16 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_TOOLS_SHARED_FILENAME,
+]);
 
 const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_TOOLS_FILENAME,
+  DEFAULT_TOOLS_SHARED_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
@@ -1238,7 +1304,8 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       });
       continue;
     }
-    const loaded = await readWorkspaceFileWithGuards({
+    const loaded = await readWorkspaceBootstrapFileWithGuards({
+      name: baseName as WorkspaceBootstrapFileName,
       filePath,
       workspaceDir: resolvedDir,
     });

@@ -11,6 +11,7 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_SHARED_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -106,12 +107,19 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+  expect(names).toStrictEqual(["AGENTS.md", "TOOLS.md", "TOOLS_SHARED.md"]);
 }
 
 function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
+  expect(names).toStrictEqual([
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "TOOLS_SHARED.md",
+    "IDENTITY.md",
+    "USER.md",
+  ]);
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -673,6 +681,8 @@ describe("ensureAgentWorkspace", () => {
 describe("loadWorkspaceBootstrapFiles", () => {
   const getMemoryEntries = (files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>) =>
     files.filter((file) => file.name === DEFAULT_MEMORY_FILENAME);
+  const getSharedToolsEntries = (files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>) =>
+    files.filter((file) => file.name === DEFAULT_TOOLS_SHARED_FILENAME);
 
   const expectSingleMemoryEntry = (
     files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>,
@@ -705,6 +715,102 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expect(getMemoryEntries(files)).toHaveLength(0);
+  });
+
+  it("omits TOOLS_SHARED.md when no workspace entry exists", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    expect(getSharedToolsEntries(files)).toHaveLength(0);
+  });
+
+  it("loads workspace-local TOOLS_SHARED.md files", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_TOOLS_SHARED_FILENAME,
+      content: "shared tool rules",
+    });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+
+    const sharedToolsEntries = getSharedToolsEntries(files);
+    expect(sharedToolsEntries).toHaveLength(1);
+    expect(sharedToolsEntries[0]).toMatchObject({
+      name: DEFAULT_TOOLS_SHARED_FILENAME,
+      path: path.join(tempDir, DEFAULT_TOOLS_SHARED_FILENAME),
+      content: "shared tool rules",
+      missing: false,
+    });
+  });
+
+  it("loads TOOLS_SHARED.md symlinks to sibling shared/TOOLS.md", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-shared-tools-"));
+    try {
+      const workspaceDir = path.join(rootDir, "jonathan");
+      const sharedDir = path.join(rootDir, "shared");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sharedDir, DEFAULT_TOOLS_FILENAME),
+        "shared sibling tools",
+        "utf-8",
+      );
+      await fs.symlink(
+        path.join("..", "shared", DEFAULT_TOOLS_FILENAME),
+        path.join(workspaceDir, DEFAULT_TOOLS_SHARED_FILENAME),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+
+      const sharedToolsEntries = getSharedToolsEntries(files);
+      expect(sharedToolsEntries).toHaveLength(1);
+      expect(sharedToolsEntries[0]).toMatchObject({
+        name: DEFAULT_TOOLS_SHARED_FILENAME,
+        path: path.join(workspaceDir, DEFAULT_TOOLS_SHARED_FILENAME),
+        content: "shared sibling tools",
+        missing: false,
+      });
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects TOOLS_SHARED.md symlinks to non-shared sibling files", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-shared-tools-"));
+    try {
+      const workspaceDir = path.join(rootDir, "jonathan");
+      const maxDir = path.join(rootDir, "max");
+      const sharedDir = path.join(rootDir, "shared");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(maxDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(path.join(maxDir, DEFAULT_TOOLS_FILENAME), "max tools", "utf-8");
+      await fs.writeFile(path.join(sharedDir, DEFAULT_TOOLS_FILENAME), "shared tools", "utf-8");
+      await fs.symlink(
+        path.join("..", "max", DEFAULT_TOOLS_FILENAME),
+        path.join(workspaceDir, DEFAULT_TOOLS_SHARED_FILENAME),
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(workspaceDir);
+
+      const sharedToolsEntries = getSharedToolsEntries(files);
+      expect(sharedToolsEntries).toHaveLength(1);
+      expect(sharedToolsEntries[0]).toMatchObject({
+        name: DEFAULT_TOOLS_SHARED_FILENAME,
+        path: path.join(workspaceDir, DEFAULT_TOOLS_SHARED_FILENAME),
+        missing: true,
+      });
+      expect(sharedToolsEntries[0]?.content).toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("treats hardlinked bootstrap aliases as missing", async () => {
@@ -744,6 +850,7 @@ describe("filterBootstrapFilesForSession", () => {
     { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
     { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
     { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
+    { name: "TOOLS_SHARED.md", path: "/w/TOOLS_SHARED.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
     { name: "HEARTBEAT.md", path: "/w/HEARTBEAT.md", content: "", missing: false },
