@@ -2331,13 +2331,21 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
     let hookCalls = 0;
-    const beforePromptBuild = vi.fn(async () => {
-      hookCalls += 1;
-      return {
-        systemPrompt: `custom codex system ${hookCalls}`,
-        prependContext: `queued context ${hookCalls}`,
-      };
-    });
+    const beforePromptBuild = vi.fn(
+      async (event: {
+        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+      }) => {
+        hookCalls += 1;
+        event.messages?.push({
+          role: "assistant",
+          content: [{ type: "text", text: `hook-side mutation ${hookCalls}` }],
+        });
+        return {
+          systemPrompt: `custom codex system ${hookCalls}`,
+          prependContext: `queued context ${hookCalls}`,
+        };
+      },
+    );
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
@@ -2356,7 +2364,9 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(beforePromptBuild).toHaveBeenCalled();
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    const [, secondHookInput] = beforePromptBuild.mock.calls.map(([event]) => event);
+    expect(JSON.stringify(secondHookInput?.messages ?? [])).not.toContain("hook-side mutation 1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
