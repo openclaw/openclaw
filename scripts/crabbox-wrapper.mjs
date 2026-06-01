@@ -24,12 +24,9 @@ import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
-const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
-const binary =
-  repoLocal ??
-  pathLocal ??
-  resolveGitCommonCrabboxBinary(process.env, process.platform) ??
-  "crabbox";
+const pathLocals = resolvePathBinaries("crabbox", process.env, process.platform);
+const binaryCandidates = crabboxBinaryCandidates(process.env, process.platform);
+let binary = binaryCandidates[0] ?? "crabbox";
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -61,16 +58,39 @@ function resolveCrabboxBinary(env, platform) {
 }
 
 function resolvePathBinary(command, env, platform) {
+  return resolvePathBinaries(command, env, platform)[0] ?? null;
+}
+
+function resolvePathBinaries(command, env, platform) {
   const pathValue = env[resolvePathEnvKey(env)] ?? "";
+  const paths = [];
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     for (const candidate of commandCandidates(command, platform)) {
       const fullPath = resolve(dir, candidate);
       if (isExecutableFile(fullPath, platform)) {
-        return fullPath;
+        paths.push(fullPath);
+        break;
       }
     }
   }
-  return null;
+  return paths;
+}
+
+function pushUnique(values, value) {
+  if (value && !values.includes(value)) {
+    values.push(value);
+  }
+}
+
+function crabboxBinaryCandidates(env, platform) {
+  const candidates = [];
+  pushUnique(candidates, repoLocal);
+  for (const candidate of pathLocals) {
+    pushUnique(candidates, candidate);
+  }
+  pushUnique(candidates, resolveGitCommonCrabboxBinary(env, platform));
+  pushUnique(candidates, "crabbox");
+  return candidates;
 }
 
 function resolveGitCommonCrabboxBinary(env, platform) {
@@ -2137,8 +2157,6 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   return false;
 }
 
-const version = checkedOutput(binary, ["--version"]);
-const help = checkedOutput(binary, ["run", "--help"]);
 const providerAliases = new Map([
   ["blacksmith", "blacksmith-testbox"],
   ["cf", "cloudflare"],
@@ -2228,8 +2246,34 @@ function isProviderAdvertised(provider, advertisedProviders) {
   );
 }
 
-const providers = parseProvidersFromHelp(help.text);
-const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
+function displayBinaryPath(path) {
+  return path === "crabbox" ? "crabbox" : relative(repoRoot, path);
+}
+
+function selectBlacksmithCapableBinary(candidates, currentBinary) {
+  for (const candidate of candidates) {
+    if (candidate === currentBinary) {
+      continue;
+    }
+    const candidateVersion = checkedOutput(candidate, ["--version"]);
+    const candidateHelp = checkedOutput(candidate, ["run", "--help"]);
+    if (candidateVersion.status !== 0 || candidateHelp.status !== 0) {
+      continue;
+    }
+    if (!satisfiesMinimumCrabboxVersion(candidateVersion.text, minimumBlacksmithCrabboxVersion)) {
+      continue;
+    }
+    if (!isProviderAdvertised("blacksmith-testbox", parseProvidersFromHelp(candidateHelp.text))) {
+      continue;
+    }
+    return { binary: candidate, version: candidateVersion, help: candidateHelp };
+  }
+  return null;
+}
+
+let version = checkedOutput(binary, ["--version"]);
+let help = checkedOutput(binary, ["run", "--help"]);
+let providers = parseProvidersFromHelp(help.text);
 const provider = selectedProvider(args, providers);
 const canonicalProvider = providerAliases.get(provider) ?? provider;
 const commandProviderValue = commandProvider(args);
@@ -2237,6 +2281,24 @@ let normalizedArgs = ensureAwsMacOnDemandMarket(
   ensureAzureWindowsProvider(args, provider, providers),
   provider,
 );
+
+if (
+  canonicalProvider === "blacksmith-testbox" &&
+  !satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)
+) {
+  const alternate = selectBlacksmithCapableBinary(binaryCandidates, binary);
+  if (alternate) {
+    console.error(
+      `[crabbox] selected ${displayBinaryPath(binary)} is too old for blacksmith-testbox; using ${displayBinaryPath(alternate.binary)} instead`,
+    );
+    binary = alternate.binary;
+    version = alternate.version;
+    help = alternate.help;
+    providers = parseProvidersFromHelp(help.text);
+  }
+}
+
+const displayBinary = displayBinaryPath(binary);
 
 console.error(
   `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,

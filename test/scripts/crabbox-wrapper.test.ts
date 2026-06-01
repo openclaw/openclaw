@@ -188,6 +188,37 @@ function makeSlowVersionCrabbox(helpText: string): string {
   return binDir;
 }
 
+function makeFixedVersionCrabbox(helpText: string, version: string): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fixed-crabbox-"));
+  tempDirs.push(binDir);
+  const crabboxPath = path.join(binDir, "crabbox");
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "--version") {',
+    `  console.log(${JSON.stringify(version)});`,
+    "  process.exit(0);",
+    "}",
+    'if (args[0] === "run" && args[1] === "--help") {',
+    `  process.stdout.write(${JSON.stringify(helpText)});`,
+    "  process.exit(0);",
+    "}",
+    'if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {',
+    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerAuth":"configured"}\');',
+    "  process.exit(0);",
+    "}",
+    "console.log(JSON.stringify({ args, cwd: process.cwd() }));",
+  ].join("\n");
+  writeFileSync(crabboxPath, `${script}\n`, "utf8");
+  writeFileSync(
+    `${crabboxPath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0crabbox" %*\r\n`,
+    "utf8",
+  );
+  chmodSync(crabboxPath, 0o755);
+  return binDir;
+}
+
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -408,6 +439,23 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected binary reported version=crabbox 0.21.9");
   });
 
+  it("uses a newer PATH Crabbox for Blacksmith Testbox when the first candidate is stale", () => {
+    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    const staleCrabbox = makeFixedVersionCrabbox(helpText, "crabbox 0.21.9");
+    const result = runWrapper(
+      helpText,
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      {
+        extraPathEntries: [staleCrabbox],
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("is too old for blacksmith-testbox; using");
+    expect(result.stderr).toContain("version=crabbox 0.22.1");
+    expect(parseFakeCrabboxOutput(result).args).toContain("blacksmith-testbox");
+  });
+
   it("applies the Blacksmith version gate to provider aliases", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -597,6 +645,23 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain(
       "crabbox login --url https://crabbox.openclaw.ai --provider aws",
     );
+  });
+
+  it("preserves direct Azure proof without broker auth", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "azure", "--", "echo ok"],
+      { configJson: { coordinator: "", brokerAuth: "missing" } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--provider",
+      "azure",
+      "--",
+      "echo ok",
+    ]);
   });
 
   it("allows explicit direct AWS debugging without broker auth", () => {
