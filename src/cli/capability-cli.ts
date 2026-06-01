@@ -1519,7 +1519,7 @@ async function injectTtsAuthProfileApiKey(params: {
     return params.cfg;
   }
   if (existingProviderConfig?.scope === "channel") {
-    const channels = { ...(params.cfg.channels ?? {}) };
+    const channels = { ...params.cfg.channels };
     const channel = channels[existingProviderConfig.channelKey];
     if (!isObjectRecord(channel)) {
       return params.cfg;
@@ -1541,7 +1541,7 @@ async function injectTtsAuthProfileApiKey(params: {
       },
     };
   }
-  const messages = { ...(params.cfg.messages ?? {}) };
+  const messages = { ...params.cfg.messages };
   const nextTts = buildTtsConfigWithHydratedProvider({
     tts: messages.tts,
     existingProviderConfig,
