@@ -36,7 +36,6 @@ import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
   normalizeToolModelOverride,
-  readNonNegativeIntegerParam,
   readStringParam,
   ToolInputError,
 } from "./common.js";
