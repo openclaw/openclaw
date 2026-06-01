@@ -63,7 +63,28 @@ on:
       - "bun.lockb"
       - "pnpm-lock.yaml"
       - ".github/workflows/build-runtime-image.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      rollout_tenant_id:
+        description: "Optional single tenant id to roll after the image push"
+        required: false
+        type: string
+      rollout_canary_count:
+        description: "Optional canary tenant count for this rollout"
+        required: false
+        type: string
+      rollout_canary_wait_sec:
+        description: "Optional canary health wait seconds for this rollout"
+        required: false
+        type: string
+      rollout_wave_delay_sec:
+        description: "Optional delay seconds between rollout waves"
+        required: false
+        type: string
+      rollout_wave_size:
+        description: "Optional tenant count per post-canary wave"
+        required: false
+        type: string
   repository_dispatch:
     # Fired by saml212/platform-skills when its `main` updates, so the
     # baked-in skills overlay gets a fresh build. The dispatcher
@@ -72,12 +93,14 @@ on:
 
 concurrency:
   group: build-runtime-image
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      image_ref: ${{ steps.image.outputs.image_ref }}
     permissions:
       contents: read
       packages: write
@@ -107,15 +130,16 @@ jobs:
           token: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
           fetch-depth: 1
 
+      - name: Start setup timer
+        id: setup_timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Free up runner disk
         run: |
           # GH default runners come with caches/SDKs we don't need for this build.
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
           df -h
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -132,6 +156,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start build timer
+        id: build_timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -150,6 +178,12 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      - name: Record pushed image ref
+        id: image
+        run: |
+          image_ref="${{ env.IMAGE }}:${{ github.sha }}"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
 
       - name: Record runtime image platform proof
         env:
@@ -222,10 +256,15 @@ jobs:
 
       - name: Summary
         run: |
+          build_elapsed=$(( $(date +%s) - ${{ steps.build_timer.outputs.started_at }} ))
+          setup_elapsed=$(( ${{ steps.build_timer.outputs.started_at }} - ${{ steps.setup_timer.outputs.started_at }} ))
           echo "## Pushed runtime image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- setup duration: \`${setup_elapsed}s\`" >> $GITHUB_STEP_SUMMARY
+          echo "- build+push duration: \`${build_elapsed}s\`" >> $GITHUB_STEP_SUMMARY
+          echo "- queue metadata: run \`${{ github.run_id }}\` attempt \`${{ github.run_attempt }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Set \`ROCKIELAB_RUNTIME_IMAGE=${{ env.IMAGE }}:${{ github.sha }}\` in platform-context's Hetzner .env to roll forward." >> $GITHUB_STEP_SUMMARY
 
@@ -288,6 +327,11 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       ROCKIELAB_TENANT_DEV_TOKEN: ${{ secrets.ROCKIELAB_TENANT_DEV_TOKEN }}
       IMAGE_TAG: ghcr.io/saml212/rockielab-runtime-multitenant:${{ github.sha }}
+      ROLLOUT_TENANT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_tenant_id || '' }}
+      ROLLOUT_CANARY_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_count || '' }}
+      ROLLOUT_CANARY_WAIT_SEC: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_wait_sec || '' }}
+      ROLLOUT_WAVE_DELAY_SEC: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_wave_delay_sec || '' }}
+      ROLLOUT_WAVE_SIZE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_wave_size || '' }}
       ROLLOUT_ARTIFACT_DIR: .artifacts/runtime-rollout
       ROLLOUT_MAX_ATTEMPTS: "5"
       ROLLOUT_CURL_MAX_TIME: "180"
@@ -346,7 +390,22 @@ jobs:
 
       - name: Roll every tenant to the new image SHA
         if: steps.preflight.outputs.skipped == 'false'
-        run: node scripts/runtime-rollout.mjs
+        run: |
+          started_at="$(date +%s)"
+          set +e
+          node scripts/runtime-rollout.mjs
+          rc=$?
+          set -e
+          elapsed=$(( $(date +%s) - started_at ))
+          {
+            echo ""
+            echo "## Runtime rollout timing"
+            echo ""
+            echo "- image: \`${IMAGE_TAG}\`"
+            echo "- rollout duration: \`${elapsed}s\`"
+            echo "- rollout exit code: \`${rc}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
       - name: Upload rollout summary artifact
         if: always()

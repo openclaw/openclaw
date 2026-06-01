@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.19
 #
 # Per-tenant runtime image for Rockielab / Pebble ML.
 #
@@ -68,7 +68,7 @@ RUN set -eux; \
     find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
       (echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)
 
-COPY . .
+COPY --exclude=apps/broker --exclude=apps/broker/** . .
 
 RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \
       if [ -d "$dir" ]; then \

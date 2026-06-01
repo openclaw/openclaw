@@ -82,6 +82,10 @@ function requireEnv(name) {
   return value;
 }
 
+function optionalEnv(name) {
+  return process.env[name]?.trim() || "";
+}
+
 function artifactPaths(dir) {
   return {
     attemptsJsonl: path.join(dir, "attempts.jsonl"),
@@ -125,8 +129,76 @@ async function appendAttempt(attempts, entry) {
   attempts.push(entry);
 }
 
-function adminRolloutUrl(base, image) {
-  return `${base}/api/admin/tenants/rollout?image=${encodeURIComponent(image)}`;
+export function rolloutOptionsFromEnv() {
+  return {
+    tenantId: optionalEnv("ROLLOUT_TENANT_ID"),
+    canaryCount: optionalEnv("ROLLOUT_CANARY_COUNT"),
+    canaryWaitSec: optionalEnv("ROLLOUT_CANARY_WAIT_SEC"),
+    waveDelaySec: optionalEnv("ROLLOUT_WAVE_DELAY_SEC"),
+    waveSize: optionalEnv("ROLLOUT_WAVE_SIZE"),
+  };
+}
+
+export function hasScopedRolloutOptions(options) {
+  return Boolean(
+    options?.tenantId ||
+    options?.canaryCount ||
+    options?.canaryWaitSec ||
+    options?.waveDelaySec ||
+    options?.waveSize,
+  );
+}
+
+export function expectedAcknowledgedRolloutOptions(options) {
+  const expected = {};
+  if (options.tenantId) {
+    expected.tenant_id = options.tenantId;
+  }
+  if (options.canaryCount) {
+    expected.canary_count = Number(options.canaryCount);
+  }
+  if (options.canaryWaitSec) {
+    expected.canary_wait_sec = Number(options.canaryWaitSec);
+  }
+  if (options.waveDelaySec) {
+    expected.wave_delay_sec = Number(options.waveDelaySec);
+  }
+  if (options.waveSize) {
+    expected.wave_size = Number(options.waveSize);
+  }
+  return expected;
+}
+
+export function validateAcknowledgedRolloutOptions(options, responseJson) {
+  const expected = expectedAcknowledgedRolloutOptions(options);
+  const actual = responseJson?.rollout_options;
+  const mismatches = [];
+  for (const [key, value] of Object.entries(expected)) {
+    if (actual?.[key] !== value) {
+      mismatches.push(`${key}: expected ${value}, got ${actual?.[key] ?? "<missing>"}`);
+    }
+  }
+  return mismatches;
+}
+
+export function adminRolloutUrl(base, image, options = {}) {
+  const params = new URLSearchParams({ image });
+  if (options.tenantId) {
+    params.set("tenant_id", options.tenantId);
+  }
+  if (options.canaryCount) {
+    params.set("canary_count", options.canaryCount);
+  }
+  if (options.canaryWaitSec) {
+    params.set("canary_wait_sec", options.canaryWaitSec);
+  }
+  if (options.waveDelaySec) {
+    params.set("wave_delay_sec", options.waveDelaySec);
+  }
+  if (options.waveSize) {
+    params.set("wave_size", options.waveSize);
+  }
+  return `${base}/api/admin/tenants/rollout?${params.toString()}`;
 }
 
 function tenantImageUrl(base, tenantId) {
@@ -312,6 +384,8 @@ function renderMarkdown(summary) {
     `Image: \`${summary.image}\``,
     `Image SHA: \`${summary.image_sha}\``,
     "",
+    `- duration: ${summary.duration_ms}ms`,
+    `- scoped/manual rollout: ${summary.scoped_rollout ? "yes" : "no"}`,
     `- final result: ${summary.final_result}`,
     `- final response code: ${summary.final_response_code}`,
     `- response codes: ${summary.response_codes.join(",")}`,
@@ -341,6 +415,16 @@ function renderMarkdown(summary) {
       `Triggered by: ${summary.fallback.trigger}`,
       `Tenant source: ${summary.fallback.tenant_source}`,
       'Request body: `{ "image": "<target>" }` (no mode/binary fields, so subscription tenants keep their BINARY env).',
+    );
+  }
+
+  if (summary.scoped_rollout) {
+    lines.push(
+      "",
+      "### Scoped rollout",
+      "",
+      "Per-tenant Fly fallback is disabled for scoped/manual rollouts so a canary or selected-tenant run cannot broaden to all tenants after an admin rollout transient.",
+      `Options: \`${JSON.stringify(summary.rollout_options)}\``,
     );
   }
 
@@ -393,6 +477,9 @@ export async function runRollout() {
   const tenantDevToken = process.env.ROCKIELAB_TENANT_DEV_TOKEN?.trim() || "";
   const flyOrgSlug = process.env.FLY_ORG_SLUG?.trim() || DEFAULT_FLY_ORG_SLUG;
   const flyApiBase = process.env.FLY_MACHINES_API?.trim() || DEFAULT_FLY_MACHINES_API;
+  const rolloutOptions = rolloutOptionsFromEnv();
+  const scopedRollout = hasScopedRolloutOptions(rolloutOptions);
+  const startedAtMs = Date.now();
   const attempts = [];
   const responseCodes = [];
   let retryCount = 0;
@@ -407,7 +494,7 @@ export async function runRollout() {
   let failed = [];
   let errorDetails = {};
 
-  console.log(`POST ${adminRolloutUrl(base, image)}`);
+  console.log(`POST ${adminRolloutUrl(base, image, rolloutOptions)}`);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const supersession = await detectSuperseded();
@@ -417,7 +504,7 @@ export async function runRollout() {
       break;
     }
 
-    const response = await request("POST", adminRolloutUrl(base, image), {
+    const response = await request("POST", adminRolloutUrl(base, image, rolloutOptions), {
       timeoutMs,
       headers: {
         "X-Admin-Token": adminToken,
@@ -441,6 +528,21 @@ export async function runRollout() {
     console.log(`admin rollout attempt ${attempt} response code: ${response.code}`);
 
     if (response.code === "200") {
+      const acknowledgementMismatches = scopedRollout
+        ? validateAcknowledgedRolloutOptions(rolloutOptions, finalJson)
+        : [];
+      if (acknowledgementMismatches.length > 0) {
+        finalResult = "failed-rollout-options-not-acknowledged";
+        errorDetails = {
+          rollout_options: acknowledgementMismatches.join("; "),
+        };
+        finalBody = [
+          finalBody,
+          "",
+          `Scoped rollout options were not acknowledged: ${acknowledgementMismatches.join("; ")}`,
+        ].join("\n");
+        break;
+      }
       finalResult = "succeeded";
       updated = Array.isArray(finalJson?.updated) ? finalJson.updated : [];
       skipped = Array.isArray(finalJson?.skipped) ? finalJson.skipped : [];
@@ -454,7 +556,7 @@ export async function runRollout() {
       break;
     }
 
-    if (attempt >= fallbackAfterTransients && flyToken) {
+    if (attempt >= fallbackAfterTransients && flyToken && !scopedRollout) {
       console.warn(
         `admin rollout returned transient HTTP ${response.code} ${attempt} time(s); switching to per-tenant fallback`,
       );
@@ -516,6 +618,9 @@ export async function runRollout() {
   const summary = {
     image,
     image_sha: image.split(":").at(-1),
+    duration_ms: Date.now() - startedAtMs,
+    rollout_options: rolloutOptions,
+    scoped_rollout: scopedRollout,
     response_codes: responseCodes,
     retry_count: retryCount,
     final_result: finalResult,

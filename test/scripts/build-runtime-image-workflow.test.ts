@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const WORKFLOW_PATH = ".github/workflows/build-runtime-image.yml";
+const DOCKERFILE_PATH = "Dockerfile.multitenant";
 const ROLLOUT_SCRIPT_PATH = "scripts/runtime-rollout.mjs";
 
 type WorkflowStep = {
@@ -20,7 +21,13 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  concurrency?: Record<string, unknown>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    workflow_dispatch?: {
+      inputs?: Record<string, unknown>;
+    };
+  };
 };
 
 function readWorkflow(): Workflow {
@@ -40,6 +47,56 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
 }
 
 describe("build-runtime-image rollout workflow", () => {
+  it("keeps broker-only edits out of the expensive OpenClaw/UI build copy", () => {
+    const dockerfile = readFileSync(DOCKERFILE_PATH, "utf8");
+
+    expect(dockerfile).toContain("# syntax=docker/dockerfile:1.19");
+    expect(dockerfile).toContain("COPY --exclude=apps/broker --exclude=apps/broker/** . .");
+    expect(dockerfile).toContain("COPY apps/broker/go.mod apps/broker/go.sum ./");
+    expect(dockerfile).toContain("COPY apps/broker/ ./");
+  });
+
+  it("cancels superseded image builds and avoids unnecessary QEMU setup", () => {
+    const workflow = readWorkflow();
+    expect(workflow.concurrency).toMatchObject({
+      group: "build-runtime-image",
+      "cancel-in-progress": true,
+    });
+
+    const text = readFileSync(WORKFLOW_PATH, "utf8");
+    expect(text).not.toContain("docker/setup-qemu-action");
+    expect(text).toContain("Start setup timer");
+    expect(text).toContain("Start build timer");
+    expect(text).toContain("setup duration");
+    expect(text).toContain("build+push duration");
+    expect(text).toContain("queue metadata");
+  });
+
+  it("exposes event-safe manual rollout inputs", () => {
+    const workflow = readWorkflow();
+    expect(workflow.on?.workflow_dispatch?.inputs).toMatchObject({
+      rollout_tenant_id: expect.any(Object),
+      rollout_canary_count: expect.any(Object),
+      rollout_canary_wait_sec: expect.any(Object),
+      rollout_wave_delay_sec: expect.any(Object),
+      rollout_wave_size: expect.any(Object),
+    });
+
+    const job = rolloutJob();
+    expect(job.env).toMatchObject({
+      ROLLOUT_TENANT_ID:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.rollout_tenant_id || '' }}",
+      ROLLOUT_CANARY_COUNT:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_count || '' }}",
+      ROLLOUT_CANARY_WAIT_SEC:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_wait_sec || '' }}",
+      ROLLOUT_WAVE_DELAY_SEC:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.rollout_wave_delay_sec || '' }}",
+      ROLLOUT_WAVE_SIZE:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.rollout_wave_size || '' }}",
+    });
+  });
+
   it("delegates rollout to the tested runtime rollout script", () => {
     const job = rolloutJob();
     expect(job.permissions).toMatchObject({
@@ -53,7 +110,9 @@ describe("build-runtime-image rollout workflow", () => {
     const rollout = workflowStep(rolloutJob(), "Roll every tenant to the new image SHA");
     const run = rollout.run ?? "";
 
-    expect(run).toBe("node scripts/runtime-rollout.mjs");
+    expect(run).toContain("node scripts/runtime-rollout.mjs");
+    expect(run).toContain("rollout duration");
+    expect(run).toContain("rollout exit code");
   });
 
   it("writes and uploads a rollout summary artifact with retry metadata", () => {
@@ -73,6 +132,8 @@ describe("build-runtime-image rollout workflow", () => {
     expect(run).toContain("response_codes");
     expect(run).toContain("retry_count");
     expect(run).toContain("final_result");
+    expect(run).toContain("duration_ms");
+    expect(run).toContain("scoped_rollout");
     expect(run).toContain("image_sha");
     expect(run).toContain("buckets");
     expect(run).toContain("updated");
