@@ -752,7 +752,7 @@ export async function ensureAgentWorkspace(params?: {
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const paths = [...templatePaths, path.join(dir, "memory"), path.join(dir, ".git")];
+    const paths = [...templatePaths, path.join(dir, "memory")];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -787,7 +787,6 @@ export async function ensureAgentWorkspace(params?: {
       (await workspaceRequiredBootstrapLooksCustomized(dir)) ||
       (await workspaceProfileLooksConfigured({
         dir,
-        includeGitEvidence: true,
       }));
     if (!hasWorkspaceEvidence) {
       throw new WorkspaceVanishedError({

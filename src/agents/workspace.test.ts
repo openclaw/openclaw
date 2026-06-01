@@ -166,6 +166,20 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS));
   });
 
+  it("refuses to re-seed a recently attested workspace after only generated git metadata survives", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
   it("accepts a recently attested workspace when customized AGENTS.md survives", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
