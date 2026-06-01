@@ -16,6 +16,7 @@ import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
+  normalizeExecAsk,
   requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
@@ -1610,8 +1611,15 @@ export function createExecTool(
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
+      const requestedAsk = normalizeExecAsk(params.ask);
       const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
       let ask = hostAsk;
+      // Per-call ask hardening is preserved for trusted callers but ignored
+      // for channel-origin model runs so a model-supplied `ask: "always"`
+      // cannot escalate past configured `ask: off` in Telegram/webchat.
+      if (requestedAsk && (hostAsk !== "off" || !defaults?.messageProvider)) {
+        ask = maxAsk(hostAsk, requestedAsk);
+      }
       const bypassApprovals =
         elevatedRequested &&
         elevatedMode === "full" &&

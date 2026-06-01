@@ -127,6 +127,41 @@ describe("exec security floor", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("honors per-call ask hardening for trusted callers without messageProvider", async () => {
+    const root = tempRoot ?? os.tmpdir();
+    const binDir = path.join(root, "bin");
+    const openclawDir = path.join(root, ".openclaw");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(openclawDir, { recursive: true });
+    const gogPath = path.join(binDir, "gog");
+    fs.writeFileSync(gogPath, "#!/bin/sh\nprintf 'gog-ok %s\\n' \"$*\"\n", { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(openclawDir, "exec-approvals.json"),
+      `${JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "allowlist" },
+        agents: { "*": { allowlist: [{ pattern: gogPath }] } },
+      })}\n`,
+    );
+    // No messageProvider → direct/trusted caller; per-call ask should be honored.
+    const tool = createExecTool({
+      host: "gateway",
+      security: "allowlist",
+      ask: "off",
+      safeBins: [],
+      pathPrepend: [binDir],
+    });
+
+    const result = await tool.execute("call-trusted-ask-always", {
+      command: "gog tasks add tasklist --title test",
+      ask: "always",
+    });
+
+    // Trusted caller's per-call ask: "always" triggers an approval request.
+    expect(callGatewayTool).toHaveBeenCalled();
+    expect(result.details.status).toBe("approval-pending");
+  });
+
   it("ignores model-supplied deny security when configured security is allowlist", async () => {
     const tool = createExecTool({
       security: "allowlist",
