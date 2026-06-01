@@ -5518,9 +5518,10 @@ module.exports = {
     expect(fs.existsSync(marker)).toBe(false);
     expect(registry.channelSetups).toHaveLength(0);
     expect(registry.channels).toHaveLength(0);
-    expect(registry.plugins.find((entry) => entry.id === "workspace-shadow")?.status).toBe(
-      "disabled",
-    );
+    expect(registry.plugins.find((entry) => entry.id === "workspace-shadow")).toMatchObject({
+      status: "disabled",
+      error: "workspace plugin (disabled by default)",
+    });
   });
 
   it("keeps trusted setup-only workspace channel plugins available when explicitly scoped", () => {
