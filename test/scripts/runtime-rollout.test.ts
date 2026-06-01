@@ -43,13 +43,15 @@ describe("scripts/runtime-rollout", () => {
     expect(body).not.toHaveProperty("binary");
   });
 
-  it("adds tenant token header only when direct fallback token is present", () => {
-    expect(tenantImageRequestHeaders("api-password")).toEqual({
+  it("sends both admin auth gates and only adds tenant token when present", () => {
+    expect(tenantImageRequestHeaders("api-password", "admin-token")).toEqual({
+      "X-Admin-Token": "admin-token",
       Authorization: "Bearer api-password",
       Accept: "application/json",
       "Content-Type": "application/json",
     });
-    expect(tenantImageRequestHeaders("api-password", " tenant-dev-token ")).toEqual({
+    expect(tenantImageRequestHeaders("api-password", "admin-token", " tenant-dev-token ")).toEqual({
+      "X-Admin-Token": "admin-token",
       Authorization: "Bearer api-password",
       Accept: "application/json",
       "Content-Type": "application/json",

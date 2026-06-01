@@ -32,8 +32,9 @@ export function tenantImageRequestBody(image) {
   return JSON.stringify({ image });
 }
 
-export function tenantImageRequestHeaders(apiPassword, tenantDevToken = "") {
+export function tenantImageRequestHeaders(apiPassword, adminToken, tenantDevToken = "") {
   const headers = {
+    "X-Admin-Token": adminToken,
     Authorization: `Bearer ${apiPassword}`,
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -196,13 +197,14 @@ async function rollTenantDirectly({
   tenantId,
   image,
   apiPassword,
+  adminToken,
   tenantDevToken,
   timeoutMs,
   attempts,
 }) {
   const response = await request("POST", tenantImageUrl(base, tenantId), {
     timeoutMs,
-    headers: tenantImageRequestHeaders(apiPassword, tenantDevToken),
+    headers: tenantImageRequestHeaders(apiPassword, adminToken, tenantDevToken),
     body: tenantImageRequestBody(image),
   });
   const outcome = outcomeFromTenantImageResponse(response);
@@ -225,6 +227,7 @@ async function runPerTenantFallback({
   base,
   image,
   apiPassword,
+  adminToken,
   tenantDevToken,
   flyToken,
   flyOrgSlug,
@@ -264,6 +267,7 @@ async function runPerTenantFallback({
       tenantId,
       image,
       apiPassword,
+      adminToken,
       tenantDevToken,
       timeoutMs,
       attempts,
@@ -460,6 +464,7 @@ export async function runRollout() {
           base,
           image,
           apiPassword,
+          adminToken,
           tenantDevToken,
           flyToken,
           flyOrgSlug,
