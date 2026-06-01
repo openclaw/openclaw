@@ -3425,6 +3425,29 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
   });
 
+  test("sanitizeForMemoryCapture strips current message reply context before envelopes", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"channel":"telegram"}',
+      "```",
+      "",
+      "Current message:",
+      '[Replying to: "quoted status body"]',
+      "#34974 obviyus: [Telegram group:-100] obviyus: I prefer dark mode",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture strips message-tool delivery hints before envelopes", () => {
+    const input = [
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      "",
+      "[Telegram Alice] I prefer dark mode",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
   test("sanitizeForMemoryCapture preserves user text after back-to-back sentinels at start", () => {
     // Two sentinels at the very start (no user content before either) must
     // both be stripped so the body that follows survives.

@@ -693,6 +693,17 @@ const INBOUND_META_SENTINELS = [
   "Chat history since last reply (untrusted, for context):",
 ] as const;
 
+const MESSAGE_TOOL_DELIVERY_HINTS = [
+  "Delivery: to send a message, use the `message` tool.",
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+] as const;
+const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
+  `^\\s*(?:${MESSAGE_TOOL_DELIVERY_HINTS.map((hint) =>
+    hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  ).join("|")})\\s*$`,
+  "m",
+);
+
 const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
 
 /**
@@ -717,6 +728,8 @@ const INBOUND_META_LABEL_JSON_BLOCK_RE =
 const LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE =
   /^\s*[^\n]{1,100}\(untrusted, chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
 const BRACKETED_LINE_PREFIX_RE = /^\[[^\]\n]{1,500}\]\s/gm;
+const BRACKETED_PREFIX_RE = /\[[^\]\n]{1,500}\]\s/g;
+const LEADING_CURRENT_MESSAGE_CONTEXT_RE = /^\s*Current message:[ \t]*(?:\n|$)/;
 
 const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
 
@@ -838,6 +851,10 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
+  if (MESSAGE_TOOL_DELIVERY_HINT_RE.test(text)) {
+    return true;
+  }
+
   // Check for active-turn-recovery boilerplate
   if (ACTIVE_TURN_RECOVERY_RE.test(text)) {
     return true;
@@ -915,8 +932,63 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
   return body;
 }
 
-function stripLeadingInboundEnvelope(text: string): string {
+function stripLeadingMessageToolDeliveryHints(text: string): string {
+  const lines = text.split("\n");
+  let index = 0;
+  let stripped = false;
+  while (index < lines.length) {
+    const trimmed = lines[index]?.trim();
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+    if (!MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => hint === trimmed)) {
+      break;
+    }
+    stripped = true;
+    index += 1;
+  }
+  return stripped ? lines.slice(index).join("\n") : text;
+}
+
+function findFirstInboundEnvelopeIndex(text: string, options?: { skipReplyQuoteLine?: boolean }) {
+  for (const match of text.matchAll(BRACKETED_PREFIX_RE)) {
+    const index = match.index;
+    if (options?.skipReplyQuoteLine) {
+      const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+      if (text.slice(lineStart, index).includes("[Replying to:")) {
+        continue;
+      }
+    }
+    const candidate = text.slice(index);
+    if (
+      INBOUND_ENVELOPE_PREFIX_RE.test(candidate) ||
+      INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.test(candidate)
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
   const candidateText = text.trimStart();
+  if (!LEADING_CURRENT_MESSAGE_CONTEXT_RE.test(candidateText)) {
+    return text;
+  }
+  const envelopeIndex = findFirstInboundEnvelopeIndex(candidateText, { skipReplyQuoteLine: true });
+  if (envelopeIndex === -1) {
+    return text;
+  }
+  // `Current message:` is current-turn transport context. Strip it only when a
+  // real inbound envelope follows; otherwise preserve the text for normal capture.
+  return candidateText.slice(envelopeIndex);
+}
+
+function stripLeadingInboundEnvelope(text: string): string {
+  const candidateText = stripLeadingCurrentMessageContextBeforeEnvelope(
+    stripLeadingMessageToolDeliveryHints(text),
+  ).trimStart();
   const envelopePrefixMatch =
     candidateText.match(INBOUND_ENVELOPE_PREFIX_RE) ??
     (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE
