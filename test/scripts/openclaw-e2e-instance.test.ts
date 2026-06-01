@@ -485,7 +485,8 @@ exit 1
   it("wraps logged OpenClaw E2E commands with the configured timeout", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-run-logged-"));
     const logLabel = path.basename(tempDir);
-    const logPath = `/tmp/openclaw-onboard-${logLabel}.log`;
+    const logDir = path.join(tempDir, "logs");
+    const logPathFile = path.join(tempDir, "log-path.txt");
     try {
       const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
       const commandArgsPath = path.join(tempDir, "command-args.txt");
@@ -524,12 +525,14 @@ exit 1
             "set -euo pipefail",
             `source ${shellQuote(helperPath)}`,
             `openclaw_e2e_run_logged ${shellQuote(logLabel)} fixture-command one two`,
+            `printf "%s" "$OPENCLAW_E2E_LAST_LOG_PATH" > ${shellQuote(logPathFile)}`,
           ].join("; "),
         ],
         {
           encoding: "utf8",
           env: shellTestEnv({
             PATH: `${tempDir}:${hostPath}`,
+            OPENCLAW_E2E_LOG_DIR: logDir,
             OPENCLAW_E2E_COMMAND_TIMEOUT: "17s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
@@ -543,10 +546,12 @@ exit 1
         "--kill-after=30s 17s fixture-command one two",
       );
       expect(fs.readFileSync(commandArgsPath, "utf8").trim()).toBe("one two");
+      const logPath = fs.readFileSync(logPathFile, "utf8");
+      expect(logPath.startsWith(`${logDir}${path.sep}`)).toBe(true);
+      expect(path.basename(logPath)).toMatch(new RegExp(`^openclaw-${logLabel}\\..+\\.log$`, "u"));
       expect(fs.readFileSync(logPath, "utf8")).toContain("fixture output");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
-      fs.rmSync(logPath, { force: true });
     }
   });
 

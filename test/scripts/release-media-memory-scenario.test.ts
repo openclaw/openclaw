@@ -23,4 +23,16 @@ describe("release media memory scenario", () => {
 
     expect(script).not.toContain("-printf");
   });
+
+  it("uses a per-run temp root for generated media artifacts", () => {
+    const script = readFileSync(SCENARIO, "utf8");
+
+    expect(script).toContain('media_root="$(mktemp -d /tmp/openclaw-release-media-memory.XXXXXX)"');
+    expect(script).toContain('rm -rf "$media_root"');
+    expect(script).toContain('--file "$media_root/input.png"');
+    expect(script).toContain('--output "$media_root/generated.png"');
+    expect(script).not.toContain(
+      'mkdir -p "$OPENCLAW_STATE_DIR/workspace/memory" /tmp/openclaw-release-media-memory',
+    );
+  });
 });

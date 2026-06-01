@@ -791,7 +791,7 @@ async function waitForCodexSubagentStarted(params: {
   childSessionKey: string;
   events: CapturedAgentEvent[];
 }): Promise<void> {
-  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 120_000);
+  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (hasCodexAppServerLifecycleEvent(params)) {
       return;
@@ -876,6 +876,7 @@ async function verifyCodexSubagentProbe(params: {
         mode: "run",
         cleanup: "keep",
         context: "isolated",
+        lightContext: true,
         expectsCompletionMessage: false,
         runTimeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
       },

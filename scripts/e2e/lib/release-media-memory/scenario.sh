@@ -26,9 +26,13 @@ export SUCCESS_MARKER MOCK_REQUEST_LOG
 
 mock_pid=""
 gateway_pid=""
+media_root=""
 cleanup() {
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
+  if [ -n "${media_root:-}" ]; then
+    rm -rf "$media_root"
+  fi
 }
 trap cleanup EXIT
 
@@ -111,11 +115,12 @@ openclaw plugins list --json >/tmp/openclaw-release-media-memory-plugins.json \
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-media-memory-plugins.json memory-core
 node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai "$MOCK_PORT"
 
-mkdir -p "$OPENCLAW_STATE_DIR/workspace/memory" /tmp/openclaw-release-media-memory
-printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=' | base64 -d > /tmp/openclaw-release-media-memory/input.png
+mkdir -p "$OPENCLAW_STATE_DIR/workspace/memory"
+media_root="$(mktemp -d /tmp/openclaw-release-media-memory.XXXXXX)"
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=' | base64 -d >"$media_root/input.png"
 
 openclaw infer image describe \
-  --file /tmp/openclaw-release-media-memory/input.png \
+  --file "$media_root/input.png" \
   --model openai/gpt-5.5 \
   --prompt "Describe this image and return marker $SUCCESS_MARKER" \
   --json >/tmp/openclaw-release-media-memory-describe.json 2>/tmp/openclaw-release-media-memory-describe.stderr.log
@@ -124,7 +129,7 @@ node scripts/e2e/lib/release-scenarios/assertions.mjs assert-image-describe /tmp
 openclaw infer image generate \
   --model openai/gpt-image-1 \
   --prompt "Generate a tiny test image for $SUCCESS_MARKER" \
-  --output /tmp/openclaw-release-media-memory/generated.png \
+  --output "$media_root/generated.png" \
   --json >/tmp/openclaw-release-media-memory-generate.json 2>/tmp/openclaw-release-media-memory-generate.stderr.log
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-image-generate /tmp/openclaw-release-media-memory-generate.json "$MOCK_REQUEST_LOG"
 

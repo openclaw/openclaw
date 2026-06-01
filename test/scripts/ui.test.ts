@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,38 @@ import {
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
 } from "../../scripts/ui.js";
+
+async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`timed out waiting for ${label}`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+}
+
+async function waitForExit(
+  child: ChildProcess,
+  timeoutMs = 3_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("timed out waiting for child exit"));
+    }, timeoutMs);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
 
 describe("scripts/ui windows spawn behavior", () => {
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
@@ -160,4 +192,51 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(output).not.toContain("Missing UI runner");
     expect(output).toContain("vite");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "terminates the pnpm child on wrapper SIGTERM",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-wrapper-signals-"));
+      const runnerPath = path.join(tempDir, "pnpm.mjs");
+      const readyFile = path.join(tempDir, "ready");
+      const signaledFile = path.join(tempDir, "signaled");
+
+      fs.writeFileSync(
+        runnerPath,
+        [
+          "import fs from 'node:fs';",
+          "process.on('SIGTERM', () => {",
+          "  fs.writeFileSync(process.env.SIGNALED_FILE, 'SIGTERM');",
+          "  setTimeout(() => process.exit(0), 25);",
+          "});",
+          "fs.writeFileSync(process.env.READY_FILE, process.argv.slice(2).join(' '));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+
+      const wrapper = spawn(process.execPath, ["scripts/ui.js", "install"], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          npm_execpath: runnerPath,
+          READY_FILE: readyFile,
+          SIGNALED_FILE: signaledFile,
+        },
+        stdio: "ignore",
+      });
+
+      try {
+        await waitFor(() => fs.existsSync(readyFile), "UI runner readiness");
+        expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
+        wrapper.kill("SIGTERM");
+
+        const exit = await waitForExit(wrapper);
+        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
+        expect(fs.readFileSync(signaledFile, "utf8")).toBe("SIGTERM");
+      } finally {
+        wrapper.kill("SIGKILL");
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 });

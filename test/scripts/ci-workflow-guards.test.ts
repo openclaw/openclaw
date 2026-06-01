@@ -146,6 +146,35 @@ describe("ci workflow guards", () => {
     expect(buildArtifactSteps.some((step) => step.run === "pnpm ui:build")).toBe(false);
   });
 
+  it("restores the dist build cache before building and saves only cache misses", () => {
+    const workflow = readCiWorkflow();
+    const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const stepNames = buildArtifactSteps.map((step) => step.name);
+    const restoreStep = buildArtifactSteps.find((step) => step.name === "Restore dist build cache");
+    const buildDistStep = buildArtifactSteps.find((step) => step.name === "Build dist");
+    const saveStep = buildArtifactSteps.find((step) => step.name === "Save dist build cache");
+
+    expect(stepNames.indexOf("Restore dist build cache")).toBeLessThan(
+      stepNames.indexOf("Build dist"),
+    );
+    expect(stepNames.indexOf("Build dist")).toBeLessThan(
+      stepNames.indexOf("Pack built runtime artifacts"),
+    );
+    expect(stepNames.indexOf("Run built artifact checks")).toBeLessThan(
+      stepNames.indexOf("Save dist build cache"),
+    );
+    expect(restoreStep.uses).toBe("actions/cache/restore@v5");
+    expect(buildDistStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(saveStep.uses).toBe("actions/cache/save@v5");
+    expect(saveStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(saveStep.with.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
+    expect(restoreStep.with.path).toContain("dist/");
+    expect(restoreStep.with.path).toContain("dist-runtime/");
+    expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
+    expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
+    expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
+  });
+
   it("gives quiet Node test shards enough no-output runway", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];

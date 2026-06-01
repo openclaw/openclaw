@@ -1361,6 +1361,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (
     provider === "anthropic" ||
     provider === "minimax" ||
+    provider === "minimax-portal" ||
     provider === "opencode" ||
     provider === "opencode-go" ||
     provider === "openrouter" ||
@@ -1380,6 +1381,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
   it.each([
     { modelKey: "anthropic/claude-opus-4-6", expected: true },
     { modelKey: "minimax/minimax-m1", expected: true },
+    { modelKey: "minimax-portal/MiniMax-M3", expected: true },
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
     { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },

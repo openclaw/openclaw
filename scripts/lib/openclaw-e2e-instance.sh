@@ -388,8 +388,14 @@ openclaw_e2e_assert_log_not_contains() {
   ! grep -q "$2" "$1" || { echo "Unexpected log output: $2"; exit 1; }
 }
 openclaw_e2e_run_logged() {
-  local label="$1" log_path="/tmp/openclaw-onboard-${1}.log"
+  local label="$1" log_root="${OPENCLAW_E2E_LOG_DIR:-${TMPDIR:-/tmp}}" log_path safe_label
   shift
+  safe_label="${label//[^A-Za-z0-9_.-]/-}"
+  [ -n "$safe_label" ] || safe_label="command"
+  mkdir -p "$log_root"
+  log_path="$(mktemp "$log_root/openclaw-${safe_label}.XXXXXX.log")"
+  OPENCLAW_E2E_LAST_LOG_PATH="$log_path"
+  export OPENCLAW_E2E_LAST_LOG_PATH
   openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
 }
 openclaw_e2e_run_command() {

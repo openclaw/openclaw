@@ -42,7 +42,14 @@ describe("e2e shell tempfile hygiene", () => {
   it("checks local onboarding logs for systemd noise", async () => {
     const contents = await readFile("scripts/e2e/lib/onboard/scenario.sh", "utf8");
 
-    expect(contents).toContain("validate_local_basic_log /tmp/openclaw-onboard-local-basic.log");
+    expect(contents).toContain(
+      'ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"',
+    );
+    expect(contents).toContain('OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"');
+    expect(contents).toContain('validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"');
+    expect(contents).not.toContain(
+      "validate_local_basic_log /tmp/openclaw-onboard-local-basic.log",
+    );
     expect(contents).toContain(
       'openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"',
     );
