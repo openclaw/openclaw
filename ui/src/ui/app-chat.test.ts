@@ -1501,6 +1501,42 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("do not send on rollback");
   });
 
+  it("does not restore canceled attachments onto new draft text after model update failure", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const file = new File(["private"], "private.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "private-att",
+        mimeType: "text/plain",
+        fileName: "private.txt",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:text/plain;base64,cHJpdmF0ZQ==",
+      file,
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "send this attachment",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    host.chatMessage = "new unrelated draft";
+
+    switchUpdate.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("new unrelated draft");
+    expect(host.chatAttachments).toStrictEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
   it("does not restore a canceled model-wait send into a different session", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
