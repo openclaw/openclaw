@@ -29,6 +29,8 @@ type DeliveryRequest = DeliveryIntentCallbackParams & {
   queuePolicy?: string;
   replyToId?: string;
   threadId?: string | number;
+  gatewayClientScopes?: readonly string[];
+  targetWritebackAuthority?: "internal";
 };
 
 const cfg = {} as OpenClawConfig;
@@ -207,6 +209,37 @@ describe("withDurableMessageSendContext", () => {
     const request = latestDeliveryRequest();
     expect(request.abortSignal).toBe(abortController.signal);
     expect(request.queuePolicy).toBe("required");
+  });
+
+  it("treats durable sends without gateway scopes as internal target writeback", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId: "msg-1" }]);
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "hello" }],
+    });
+
+    expectBatchStatus(result, "sent");
+    expect(latestDeliveryRequest().targetWritebackAuthority).toBe("internal");
+  });
+
+  it("does not infer internal target writeback for scoped gateway sends", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId: "msg-1" }]);
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "hello" }],
+      gatewayClientScopes: [],
+    });
+
+    expectBatchStatus(result, "sent");
+    const request = latestDeliveryRequest();
+    expect(request.gatewayClientScopes).toEqual([]);
+    expect(request.targetWritebackAuthority).toBeUndefined();
   });
 
   it("maps best-effort durability to best-effort queue policy", async () => {
