@@ -114,6 +114,22 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     return;
   }
   const state = getDiagnosticSessionState(params.request);
+  // The idle declaration is authoritative for the recovered owner only. If a
+  // different embedded owner appeared under the same session key while recovery
+  // awaited abort/drain, keep the lane active instead of erasing fresh work.
+  const activityClear = clearDiagnosticEmbeddedRunActivityForSession({
+    sessionId: state.sessionId,
+    sessionKey: state.sessionKey,
+    activeSessionId: params.outcome.activeSessionId,
+  });
+  if (activityClear.blockedByActiveEmbeddedRun) {
+    emitSessionRecoveryCompleted({
+      request: params.request,
+      outcome: params.outcome,
+      stale: true,
+    });
+    return;
+  }
   const prevState = state.state;
   state.state = "idle";
   state.lastActivity = Date.now();
@@ -127,14 +143,6 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     : preserveQueuedIdleWork
       ? Math.max(state.queueDepth, params.request.queueDepth ?? 0)
       : Math.max(0, state.queueDepth - 1);
-  // The idle declaration is authoritative: reconcile the activity store so an
-  // embedded run cleared without markDiagnosticEmbeddedRunEnded cannot leave the
-  // lane reporting idle/embedded_run and re-triggering recovery forever. The
-  // guard above already excludes any newer run that re-armed activity.
-  clearDiagnosticEmbeddedRunActivityForSession({
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-  });
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,

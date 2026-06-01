@@ -295,22 +295,33 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
 export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   sessionId?: string;
   sessionKey?: string;
-}): void {
+  activeSessionId?: string;
+}): { cleared: boolean; blockedByActiveEmbeddedRun: boolean } {
   const activity = resolveSessionActivity(params);
   if (!activity) {
-    return;
+    return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
   if (
     activity.activeEmbeddedRuns.size === 0 &&
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0
   ) {
-    return;
+    return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
-  activity.activeEmbeddedRuns.clear();
+  const recoveredWorkKey = resolveEmbeddedRunWorkKey({
+    sessionId: params.activeSessionId ?? params.sessionId ?? "",
+  });
+  if (recoveredWorkKey) {
+    activity.activeEmbeddedRuns.delete(recoveredWorkKey);
+  }
+  if (activity.activeEmbeddedRuns.size > 0) {
+    touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
+    return { cleared: false, blockedByActiveEmbeddedRun: true };
+  }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   touchSessionActivity(activity, "embedded_run:ended");
+  return { cleared: true, blockedByActiveEmbeddedRun: false };
 }
 
 export function getDiagnosticSessionActivitySnapshot(

@@ -2467,4 +2467,39 @@ describe("stuck session recovery activity reconciliation", () => {
       "embedded_run",
     );
   });
+
+  it("preserves reply work that re-armed activity without a session generation bump", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        markDiagnosticEmbeddedRunStarted({
+          sessionId: "reply-run-1",
+          sessionKey,
+          workKey: `reply:${sessionKey}`,
+        });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBe("embedded_run");
+    expect(activity.hasActiveEmbeddedRun).toBe(true);
+  });
 });
