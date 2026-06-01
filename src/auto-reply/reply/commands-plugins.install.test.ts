@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../config/home-env.test-harness.js";
+import {
+  expectObjectFields,
+  mockFirstObjectArg,
+} from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
@@ -65,6 +69,12 @@ function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string)
   });
 }
 
+function expectPersistedInstall(pluginId: string, expectedInstall: Record<string, unknown>): void {
+  const persisted = mockFirstObjectArg(persistPluginInstallMock);
+  expect(persisted.pluginId).toBe(pluginId);
+  expectObjectFields(persisted.install, expectedInstall);
+}
+
 describe("handleCommands /plugins install", () => {
   afterEach(async () => {
     installPluginFromNpmSpecMock.mockReset();
@@ -96,22 +106,13 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "path-install-plugin"');
-      expect(installPluginFromPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: pluginDir,
-        }),
-      );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "path-install-plugin",
-          install: expect.objectContaining({
-            source: "path",
-            sourcePath: pluginDir,
-            installPath: "/tmp/path-install-plugin",
-            version: "0.0.1",
-          }),
-        }),
-      );
+      expect(mockFirstObjectArg(installPluginFromPathMock).path).toBe(pluginDir);
+      expectPersistedInstall("path-install-plugin", {
+        source: "path",
+        sourcePath: pluginDir,
+        installPath: "/tmp/path-install-plugin",
+        version: "0.0.1",
+      });
     });
   });
 
@@ -147,26 +148,48 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "clawhub-demo"');
-      expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "clawhub:@openclaw/clawhub-demo@1.2.3",
-        }),
+      expect(mockFirstObjectArg(installPluginFromClawHubMock).spec).toBe(
+        "clawhub:@openclaw/clawhub-demo@1.2.3",
       );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "clawhub-demo",
-          install: expect.objectContaining({
-            source: "clawhub",
-            spec: "clawhub:@openclaw/clawhub-demo@1.2.3",
-            installPath: "/tmp/clawhub-demo",
-            version: "1.2.3",
-            integrity: "sha512-demo",
-            clawhubPackage: "@openclaw/clawhub-demo",
-            clawhubChannel: "official",
-          }),
-        }),
-      );
+      expectPersistedInstall("clawhub-demo", {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/clawhub-demo@1.2.3",
+        installPath: "/tmp/clawhub-demo",
+        version: "1.2.3",
+        integrity: "sha512-demo",
+        clawhubPackage: "@openclaw/clawhub-demo",
+        clawhubChannel: "official",
+      });
     });
+  });
+
+  it("refuses plugin installs in Nix mode before package installer side effects", async () => {
+    const previousNixMode = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await withTempHome("openclaw-command-plugins-home-", async () => {
+        const workspaceDir = await workspaceHarness.createWorkspace();
+        const params = buildPluginsParams("/plugins install @acme/demo", workspaceDir);
+        const result = await handlePluginsCommand(params, true);
+        if (result === null) {
+          throw new Error("expected plugin install result");
+        }
+
+        expect(result.reply?.text).toContain("OPENCLAW_NIX_MODE=1");
+        expect(result.reply?.text).toContain("nix-openclaw#quick-start");
+        expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+        expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+        expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+        expect(persistPluginInstallMock).not.toHaveBeenCalled();
+      });
+    } finally {
+      if (previousNixMode === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previousNixMode;
+      }
+    }
   });
 
   it("installs from an explicit git: spec", async () => {
@@ -196,25 +219,18 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "git-demo"');
-      expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "git:github.com/acme/git-demo@v1.2.3",
-        }),
+      expect(mockFirstObjectArg(installPluginFromGitSpecMock).spec).toBe(
+        "git:github.com/acme/git-demo@v1.2.3",
       );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "git-demo",
-          install: expect.objectContaining({
-            source: "git",
-            spec: "git:github.com/acme/git-demo@v1.2.3",
-            installPath: "/tmp/git-demo",
-            version: "1.2.3",
-            gitUrl: "https://github.com/acme/git-demo.git",
-            gitRef: "v1.2.3",
-            gitCommit: "abc123",
-          }),
-        }),
-      );
+      expectPersistedInstall("git-demo", {
+        source: "git",
+        spec: "git:github.com/acme/git-demo@v1.2.3",
+        installPath: "/tmp/git-demo",
+        version: "1.2.3",
+        gitUrl: "https://github.com/acme/git-demo.git",
+        gitRef: "v1.2.3",
+        gitCommit: "abc123",
+      });
     });
   });
 
@@ -250,10 +266,8 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "alias-demo"');
-      expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "clawhub:@openclaw/alias-demo@1.0.0",
-        }),
+      expect(mockFirstObjectArg(installPluginFromClawHubMock).spec).toBe(
+        "clawhub:@openclaw/alias-demo@1.0.0",
       );
     });
   });
@@ -286,31 +300,21 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
-      expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "@wecom/wecom-openclaw-plugin@latest",
-          expectedPluginId: "wecom-openclaw-plugin",
-          trustedSourceLinkedOfficialInstall: true,
-        }),
-      );
-      expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-        expect.not.objectContaining({
-          expectedIntegrity: expect.any(String),
-        }),
-      );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "wecom-openclaw-plugin",
-          install: expect.objectContaining({
-            source: "npm",
-            spec: "@wecom/wecom-openclaw-plugin@latest",
-            installPath: "/tmp/wecom-openclaw-plugin",
-            version: "2026.4.23",
-            resolvedName: "@wecom/wecom-openclaw-plugin",
-            resolvedVersion: "2026.4.23",
-          }),
-        }),
-      );
+      const npmInstallArgs = mockFirstObjectArg(installPluginFromNpmSpecMock);
+      expectObjectFields(npmInstallArgs, {
+        spec: "@wecom/wecom-openclaw-plugin@latest",
+        expectedPluginId: "wecom-openclaw-plugin",
+        trustedSourceLinkedOfficialInstall: true,
+      });
+      expect(npmInstallArgs.expectedIntegrity).toBeUndefined();
+      expectPersistedInstall("wecom-openclaw-plugin", {
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@latest",
+        installPath: "/tmp/wecom-openclaw-plugin",
+        version: "2026.4.23",
+        resolvedName: "@wecom/wecom-openclaw-plugin",
+        resolvedVersion: "2026.4.23",
+      });
     });
   });
 });

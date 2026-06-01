@@ -1,9 +1,7 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
@@ -26,34 +24,52 @@ afterEach(async () => {
   tmpRoots.length = 0;
 });
 
-async function tarEntries(entries: Record<string, string>): Promise<string> {
-  const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "node-policy-tar-")));
-  tmpRoots.push(tmpRoot);
+afterAll(() => {
+  vi.doUnmock("./audit.js");
+  vi.doUnmock("./policy.js");
+  vi.resetModules();
+});
+
+function tarEntries(entries: Record<string, string>): string {
+  const blocks: Buffer[] = [];
   for (const [relPath, contents] of Object.entries(entries)) {
-    const absPath = path.join(tmpRoot, relPath);
-    await fs.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.writeFile(absPath, contents);
+    const payload = Buffer.from(contents);
+    blocks.push(createTarFileHeader(relPath, payload.byteLength), payload);
+    const padding = (512 - (payload.byteLength % 512)) % 512;
+    if (padding > 0) {
+      blocks.push(Buffer.alloc(padding));
+    }
   }
-  return await new Promise<string>((resolve, reject) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, ["-czf", "-", "-C", tmpRoot, "."], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const chunks: Buffer[] = [];
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`tar exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve(Buffer.concat(chunks).toString("base64"));
-    });
-    child.on("error", reject);
-  });
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks)).toString("base64");
+}
+
+function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
+  header.write(value.slice(0, length), offset, length, "utf8");
+}
+
+function writeTarOctal(header: Buffer, offset: number, length: number, value: number): void {
+  const text = value.toString(8).padStart(length - 1, "0");
+  header.write(`${text}\0`.slice(-length), offset, length, "ascii");
+}
+
+function createTarFileHeader(name: string, size: number): Buffer {
+  const header = Buffer.alloc(512);
+  writeTarString(header, 0, 100, name);
+  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, size);
+  writeTarOctal(header, 136, 12, 0);
+  header.fill(" ", 148, 156);
+  header.write("0", 156, 1, "ascii");
+  header.write("ustar\0", 257, 6, "ascii");
+  header.write("00", 263, 2, "ascii");
+  const checksum = header.reduce((sum, byte) => sum + byte, 0);
+  header.write(checksum.toString(8).padStart(6, "0"), 148, 6, "ascii");
+  header[154] = 0;
+  header[155] = 0x20;
+  return header;
 }
 
 function createCtx(overrides: {
@@ -101,6 +117,32 @@ function createCtx(overrides: {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectResultFields(result: unknown, fields: Record<string, unknown>) {
+  expectRecordFields(requireRecord(result, "policy result"), fields);
+}
+
+function requireInvokeParams(
+  invokeNode: ReturnType<typeof vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>>,
+  callIndex: number,
+) {
+  const call = (invokeNode.mock.calls as unknown[][])[callIndex]?.[0];
+  const request = requireRecord(call, `invoke call ${callIndex + 1}`);
+  return requireRecord(request.params, `invoke call ${callIndex + 1} params`);
+}
+
 describe("file-transfer node invoke policy", () => {
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
@@ -129,13 +171,84 @@ describe("file-transfer node invoke policy", () => {
     });
   });
 
+  it("normalizes string maxBytes before invoking the node", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: "1024" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/tmp/**"],
+          },
+        },
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expect(result.ok).toBe(true);
+    expect(invokeNode).toHaveBeenNthCalledWith(1, {
+      params: {
+        path: "/tmp/file.txt",
+        maxBytes: 1024,
+        followSymlinks: false,
+        preflightOnly: true,
+      },
+    });
+  });
+
+  it("rejects malformed maxBytes before invoking the node", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: "1024.5" },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: "maxBytes must be a positive integer",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed maxBytes before requesting approval", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const approvals = {
+      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
+    };
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/new.txt", maxBytes: "1024.5" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            ask: "on-miss",
+            allowReadPaths: ["/allowed/**"],
+          },
+        },
+      },
+      approvals,
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: "maxBytes must be a positive integer",
+    });
+    expect(approvals.request).not.toHaveBeenCalled();
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
   it("denies raw node.invoke before the node when plugin policy is missing", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({ pluginConfig: {} });
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "NO_POLICY" });
+    expectResultFields(result, { ok: false, code: "NO_POLICY" });
     expect(invokeNode).not.toHaveBeenCalled();
   });
 
@@ -161,13 +274,13 @@ describe("file-transfer node invoke policy", () => {
     const result = await policy.handle(ctx);
 
     expect(result.ok).toBe(true);
-    expect(approvals.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Read file: /tmp/new.txt",
-        severity: "info",
-        toolName: "file.fetch",
-      }),
-    );
+    const approvalCalls = approvals.request.mock.calls as unknown[][];
+    const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
+    expectRecordFields(approvalRequest, {
+      title: "Read file: /tmp/new.txt",
+      severity: "info",
+      toolName: "file.fetch",
+    });
     expect(invokeNode).toHaveBeenNthCalledWith(1, {
       params: {
         path: "/tmp/new.txt",
@@ -199,7 +312,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({
+    expectResultFields(result, {
       ok: false,
       code: "TIMEOUT",
       unavailable: true,
@@ -224,14 +337,12 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
+    expectResultFields(result, { ok: false, code: "SYMLINK_TARGET_DENIED" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: expect.objectContaining({
-        path: "/tmp/link.txt",
-        followSymlinks: false,
-        preflightOnly: true,
-      }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/tmp/link.txt",
+      followSymlinks: false,
+      preflightOnly: true,
     });
   });
 
@@ -243,14 +354,13 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: true });
+    expectResultFields(result, { ok: true });
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: expect.objectContaining({ path: "/tmp/file.txt", preflightOnly: true }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/tmp/file.txt",
+      preflightOnly: true,
     });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: expect.not.objectContaining({ preflightOnly: true }),
-    });
+    expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
   });
 
   it("checks file.write canonical policy before the mutating node call", async () => {
@@ -284,14 +394,12 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
+    expectResultFields(result, { ok: false, code: "SYMLINK_TARGET_DENIED" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: expect.objectContaining({
-        path: "/tmp/link/out.txt",
-        followSymlinks: true,
-        preflightOnly: true,
-      }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/tmp/link/out.txt",
+      followSymlinks: true,
+      preflightOnly: true,
     });
   });
 
@@ -338,14 +446,10 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: true });
+    expectResultFields(result, { ok: true });
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: expect.objectContaining({ preflightOnly: true }),
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: expect.not.objectContaining({ preflightOnly: true }),
-    });
+    expect(requireInvokeParams(invokeNode, 0).preflightOnly).toBe(true);
+    expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
   });
 
   it("checks every dir.fetch preflight entry before requesting the archive", async () => {
@@ -375,14 +479,14 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "PATH_POLICY_DENIED",
-      details: { path: "/home/me/.ssh/id_rsa" },
-    });
+    expectResultFields(result, { ok: false, code: "PATH_POLICY_DENIED" });
+    expect(
+      requireRecord(requireRecord(result, "policy result").details, "result details").path,
+    ).toBe("/home/me/.ssh/id_rsa");
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: expect.objectContaining({ path: "/home/me", preflightOnly: true }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/home/me",
+      preflightOnly: true,
     });
   });
 
@@ -411,7 +515,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "PREFLIGHT_ENTRIES_MISSING" });
+    expectResultFields(result, { ok: false, code: "PREFLIGHT_ENTRIES_MISSING" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 
@@ -441,7 +545,38 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "PREFLIGHT_ENTRY_INVALID" });
+    expectResultFields(result, { ok: false, code: "PREFLIGHT_ENTRY_INVALID" });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized dir.fetch preflight entry lists before requesting the archive", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const entries = Array.from({ length: 5001 }, (_, index) => `file-${index}.txt`);
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/home/me" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/home/me", "/home/me/**"],
+          },
+        },
+      },
+    });
+    invokeNode.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        path: "/home/me",
+        entries,
+        fileCount: entries.length,
+        preflightOnly: true,
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "PREFLIGHT_ENTRIES_TOO_MANY" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 
@@ -449,7 +584,7 @@ describe("file-transfer node invoke policy", () => {
     "continues dir.fetch after preflight without forwarding caller preflightOnly",
     async () => {
       const policy = createFileTransferNodeInvokePolicy();
-      const tarBase64 = await tarEntries({
+      const tarBase64 = tarEntries({
         "a.txt": "a",
         "sub/b.txt": "b",
       });
@@ -483,14 +618,13 @@ describe("file-transfer node invoke policy", () => {
 
       const result = await policy.handle(ctx);
 
-      expect(result).toMatchObject({ ok: true });
+      expectResultFields(result, { ok: true });
       expect(invokeNode).toHaveBeenCalledTimes(2);
-      expect(invokeNode).toHaveBeenNthCalledWith(1, {
-        params: expect.objectContaining({ path: "/tmp/project", preflightOnly: true }),
+      expectRecordFields(requireInvokeParams(invokeNode, 0), {
+        path: "/tmp/project",
+        preflightOnly: true,
       });
-      expect(invokeNode).toHaveBeenNthCalledWith(2, {
-        params: expect.not.objectContaining({ preflightOnly: true }),
-      });
+      expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
     },
   );
 
@@ -498,7 +632,7 @@ describe("file-transfer node invoke policy", () => {
     "checks final dir.fetch archive entries before returning the archive",
     async () => {
       const policy = createFileTransferNodeInvokePolicy();
-      const tarBase64 = await tarEntries({
+      const tarBase64 = tarEntries({
         "ok.txt": "ok",
         ".ssh/id_rsa": "secret",
       });
@@ -539,14 +673,58 @@ describe("file-transfer node invoke policy", () => {
 
       const result = await policy.handle(ctx);
 
-      expect(result).toMatchObject({
-        ok: false,
-        code: "PATH_POLICY_DENIED",
-        details: { path: "/home/me/.ssh/id_rsa" },
-      });
+      expectResultFields(result, { ok: false, code: "PATH_POLICY_DENIED" });
+      expect(
+        requireRecord(requireRecord(result, "policy result").details, "result details").path,
+      ).toBe("/home/me/.ssh/id_rsa");
       expect(invokeNode).toHaveBeenCalledTimes(2);
     },
   );
+
+  testUnlessWindows("rejects oversized final dir.fetch archive entry lists", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = tarEntries(
+      Object.fromEntries(Array.from({ length: 5001 }, (_, index) => [`file-${index}.txt`, "x"])),
+    );
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/tmp/project", "/tmp/project/**"],
+          },
+        },
+      },
+    });
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["file-0.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes: 7,
+          sha256: "c".repeat(64),
+          fileCount: 5001,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "ARCHIVE_ENTRIES_TOO_MANY" });
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+  });
 
   it("rejects final dir.fetch archive responses without readable archive entries", async () => {
     const policy = createFileTransferNodeInvokePolicy();
@@ -578,7 +756,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "ARCHIVE_ENTRIES_MISSING" });
+    expectResultFields(result, { ok: false, code: "ARCHIVE_ENTRIES_MISSING" });
     expect(invokeNode).toHaveBeenCalledTimes(2);
   });
 });

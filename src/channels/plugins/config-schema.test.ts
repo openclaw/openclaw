@@ -10,7 +10,18 @@ describe("buildChannelConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
     const schema = z.object({ enabled: z.boolean().default(true) });
     const result = buildChannelConfigSchema(schema);
-    expect(result.schema).toMatchObject({ type: "object" });
+    expect(result.schema).toEqual({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+          default: true,
+        },
+      },
+      required: ["enabled"],
+      additionalProperties: false,
+    });
   });
 
   it("falls back when toJSONSchema is missing (zod v3 plugin compatibility)", () => {
@@ -78,6 +89,24 @@ describe("buildJsonChannelConfigSchema", () => {
     expect(result.runtime?.safeParse({ enabled: "yes" })).toEqual({
       success: false,
       issues: [{ path: ["enabled"], message: "must be boolean" }],
+    });
+  });
+
+  it("keeps numeric-looking object keys outside array-index range as strings", () => {
+    const result = buildJsonChannelConfigSchema(
+      {
+        type: "object",
+        required: ["100001"],
+        properties: {
+          "100001": { type: "boolean" },
+        },
+      },
+      { cacheKey: "config-schema.test.large-numeric-key-channel" },
+    );
+
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: false,
+      issues: [{ path: ["100001"], message: "must have required property '100001'" }],
     });
   });
 });

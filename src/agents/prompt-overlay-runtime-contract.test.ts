@@ -4,7 +4,6 @@ import {
   NON_GPT5_CONTRACT_MODEL_ID,
   NON_OPENAI_CONTRACT_PROVIDER_ID,
   CODEX_CONTRACT_PROVIDER_ID,
-  OPENAI_CODEX_CONTRACT_PROVIDER_ID,
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
   sharedGpt5PersonalityConfig,
@@ -21,10 +20,10 @@ describe("GPT-5 prompt overlay runtime contract", () => {
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "This is a live chat, not a memo.",
+      "Live chat tone: short, natural, human.",
     );
     expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
   });
 
@@ -36,7 +35,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     });
 
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
   });
 
@@ -48,12 +47,12 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toEqual({});
+    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("scopes OpenAI plugin personality fallback to OpenAI-family GPT-5 providers", () => {
     const openAiContribution = resolveGpt5SystemPromptContribution({
-      providerId: OPENAI_CODEX_CONTRACT_PROVIDER_ID,
+      providerId: OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       config: openAiPluginPersonalityConfig("off"),
     });
@@ -64,10 +63,10 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     });
 
     expect(openAiContribution?.stablePrefix).toContain("<persona_latch>");
-    expect(openAiContribution?.sectionOverrides).toEqual({});
+    expect(openAiContribution?.sectionOverrides).toStrictEqual({});
     expect(nonOpenAiContribution?.stablePrefix).toContain("<persona_latch>");
     expect(nonOpenAiContribution?.sectionOverrides?.interaction_style).toContain(
-      "This is a live chat, not a memo.",
+      "Live chat tone: short, natural, human.",
     );
   });
 
@@ -79,7 +78,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toEqual({});
+    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("does not apply GPT-5 overlays to non-GPT-5 models", () => {

@@ -1,6 +1,7 @@
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-access.js";
@@ -19,9 +20,9 @@ export {
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 

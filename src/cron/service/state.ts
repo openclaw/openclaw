@@ -1,6 +1,11 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
+  CronAgentExecutionStarted,
+  CronFailureNotificationDelivery,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -8,7 +13,6 @@ import type {
   CronJobPatch,
   CronRunDiagnostics,
   CronMessageChannel,
-  CronAgentExecutionStarted,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -29,6 +33,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
@@ -75,7 +80,12 @@ export type CronServiceDeps = {
   startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      deliveryContext?: DeliveryContext;
+    },
   ) => void;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
@@ -85,7 +95,7 @@ export type CronServiceDeps = {
     agentId?: string;
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: { target?: string };
+    heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
@@ -100,6 +110,7 @@ export type CronServiceDeps = {
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   }) => Promise<
     {
       summary?: string;
@@ -148,13 +159,13 @@ export type CronServiceState = {
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /**
-   * Job ids whose missing `sessionTarget` was defaulted at load and warned
-   * about. Used to suppress duplicate warns across forceReload ticks so a
-   * single broken job does not spam the log on every scheduler cycle.
+   * Persisted job rows with non-canonical storage shape are skipped in memory
+   * until the runtime can quarantine and sanitize the active store.
    */
-  warnedMissingSessionTargetJobIds: Set<string>;
+  warnedInvalidPersistedJobKeys: Set<string>;
+  pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
+  lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
-  storeFileMtimeMs: number | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -165,9 +176,10 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
-    warnedMissingSessionTargetJobIds: new Set<string>(),
+    warnedInvalidPersistedJobKeys: new Set<string>(),
+    pendingQuarantineConfigJobs: [],
+    lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
-    storeFileMtimeMs: null,
   };
 }
 

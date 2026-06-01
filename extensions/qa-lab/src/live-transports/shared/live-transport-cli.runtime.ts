@@ -31,17 +31,9 @@ export function resolveLiveTransportQaRunOptions(
     fastMode: opts.fastMode,
     allowFailures: opts.allowFailures,
     scenarioIds: opts.scenarioIds,
+    listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccountId,
     credentialSource: opts.credentialSource?.trim(),
     credentialRole: opts.credentialRole?.trim(),
   };
-}
-
-export function printLiveTransportQaArtifacts(
-  laneLabel: string,
-  artifacts: Record<string, string>,
-) {
-  for (const [label, filePath] of Object.entries(artifacts)) {
-    process.stdout.write(`${laneLabel} ${label}: ${filePath}\n`);
-  }
 }

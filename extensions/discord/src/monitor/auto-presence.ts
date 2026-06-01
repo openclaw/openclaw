@@ -9,7 +9,7 @@ import {
 import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
@@ -298,7 +298,7 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedAt = 0;
 
   const runEvaluation = (options?: { force?: boolean }) => {
-    let decision: DiscordAutoPresenceDecision | null = null;
+    let decision: DiscordAutoPresenceDecision | null;
     try {
       decision = resolveDiscordAutoPresenceDecision({
         discordConfig: params.discordConfig,

@@ -1,4 +1,4 @@
-import type { WAMessage } from "@whiskeysockets/baileys";
+import type { WAMessage } from "baileys";
 import { extractText } from "./inbound/extract.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
@@ -167,20 +167,20 @@ export async function startWhatsAppQaDriverSession(params: {
         messageId: result.messageId,
       };
     },
-    async waitForMessage(params) {
-      const existing = observedMessages.find(params.match);
+    async waitForMessage(paramsLocal) {
+      const existing = observedMessages.find(paramsLocal.match);
       if (existing) {
         return existing;
       }
       return await new Promise<WhatsAppQaDriverObservedMessage>((resolve, reject) => {
         const waiter: Waiter = {
-          predicate: params.match,
+          predicate: paramsLocal.match,
           resolve,
           reject,
           timeout: setTimeout(() => {
             removeWaiter(waiter);
             reject(new Error("timed out waiting for WhatsApp QA driver message"));
-          }, params.timeoutMs),
+          }, paramsLocal.timeoutMs),
         };
         waiters.push(waiter);
       });

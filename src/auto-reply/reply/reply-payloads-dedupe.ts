@@ -1,5 +1,9 @@
-import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -9,10 +13,6 @@ import {
   type ChannelRouteTargetInput,
 } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
 export function filterMessagingToolDuplicates(params: {
@@ -35,43 +35,83 @@ export function filterMessagingToolMediaDuplicates(params: {
   payloads: ReplyPayload[];
   sentMediaUrls: string[];
 }): ReplyPayload[] {
-  const normalizeMediaForDedupe = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return "";
-    }
-    if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file://")) {
-      return trimmed;
-    }
-    try {
-      const parsed = new URL(trimmed);
-      if (parsed.protocol === "file:") {
-        return decodeURIComponent(parsed.pathname || "");
-      }
-    } catch {
-      // Keep fallback below for non-URL-like inputs.
-    }
-    return trimmed.replace(/^file:\/\//i, "");
-  };
-
   const { payloads, sentMediaUrls } = params;
   if (sentMediaUrls.length === 0) {
     return payloads;
   }
-  const sentSet = new Set(sentMediaUrls.map(normalizeMediaForDedupe).filter(Boolean));
-  return payloads.map((payload) => {
+  const sentSet = new Set<string>();
+  for (const sentMediaUrl of sentMediaUrls) {
+    const normalized = normalizeMediaForDedupe(sentMediaUrl);
+    if (normalized) {
+      sentSet.add(normalized);
+    }
+  }
+  if (sentSet.size === 0) {
+    return payloads;
+  }
+
+  let nextPayloads: ReplyPayload[] | undefined;
+  for (let index = 0; index < payloads.length; index++) {
+    const payload = payloads[index];
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
     const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
-    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(normalizeMediaForDedupe(u)));
-    if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
-      return payload;
+
+    let filteredUrls: string[] | undefined;
+    let strippedMediaUrls = false;
+    if (mediaUrls?.length) {
+      for (let mediaIndex = 0; mediaIndex < mediaUrls.length; mediaIndex++) {
+        const url = mediaUrls[mediaIndex];
+        if (sentSet.has(normalizeMediaForDedupe(url))) {
+          strippedMediaUrls = true;
+          if (!filteredUrls) {
+            filteredUrls = mediaUrls.slice(0, mediaIndex);
+          }
+          continue;
+        }
+        if (filteredUrls) {
+          filteredUrls.push(url);
+        }
+      }
     }
-    return Object.assign({}, payload, {
+
+    if (!stripSingle && !strippedMediaUrls) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
+
+    const nextPayload = Object.assign({}, payload, {
       mediaUrl: stripSingle ? undefined : mediaUrl,
       mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
     });
-  });
+    if (!nextPayloads) {
+      nextPayloads = payloads.slice(0, index);
+    }
+    nextPayloads.push(nextPayload);
+  }
+
+  return nextPayloads ?? payloads;
+}
+
+function normalizeMediaForDedupe(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file://")) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "file:") {
+      return decodeURIComponent(parsed.pathname || "");
+    }
+  } catch {
+    // Keep fallback below for non-URL-like inputs.
+  }
+  return trimmed.replace(/^file:\/\//i, "");
 }
 
 function normalizeProviderForComparison(value?: string): string | undefined {

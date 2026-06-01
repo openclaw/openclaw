@@ -20,9 +20,8 @@ export function createGatewayServerVitestConfig(env?: Record<string, string | un
         "src/gateway/server.startup-matrix-migration.integration.test.ts",
         "src/gateway/sessions-history-http.test.ts",
       ],
-      // Gateway server suites share process-level env, logger, and server helper state.
-      // Isolate files so parallel shards cannot cross-wire suite-scoped servers.
-      isolate: true,
+      fileParallelism: false,
+      isolate: false,
       name: "gateway-server",
     },
   );

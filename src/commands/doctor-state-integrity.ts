@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -25,14 +29,13 @@ import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
+import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
+import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
@@ -90,6 +93,12 @@ function resolveComparableTranscriptPath(filePath: string): string {
   return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
+function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
+  const leftRealPath = tryResolveNativeRealPath(leftPath);
+  const rightRealPath = tryResolveNativeRealPath(rightPath);
+  return leftRealPath !== null && leftRealPath === rightRealPath;
+}
+
 function isReachableConfiguredAgentDir(params: {
   agentsRoot: string;
   dirName: string;
@@ -126,6 +135,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   }
 
   const agentsRoot = path.join(stateDir, "agents");
+  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -135,8 +145,12 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         agentId: normalizeAgentId(entry.name),
       }))
       .filter(({ dirName, agentId }) => {
-        const hasNestedAgentDir = existsDir(path.join(agentsRoot, dirName, "agent"));
+        const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
+        const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {
@@ -204,8 +218,8 @@ function countJsonlLines(filePath: string): number {
       return 0;
     }
     let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
+    for (const char of raw) {
+      if (char === "\n") {
         count += 1;
       }
     }
@@ -224,7 +238,7 @@ function findOtherStateDirs(stateDir: string): string[] {
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
   for (const root of roots) {
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
     } catch {
@@ -839,7 +853,10 @@ export async function noteStateIntegrity(
     );
   }
 
-  const store = loadSessionStore(storePath);
+  // Read-only diagnostic load: skip the cache and the defensive return clone so a
+  // very large monolithic sessions.json is materialized once, not several times.
+  // Re-cloning a multi-hundred-MB store here is what made `doctor` OOM (#56827).
+  const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
@@ -913,12 +930,12 @@ export async function noteStateIntegrity(
         }
       }
 
-      const wedgedReasons = wedgedSubagentSessions
-        .map(([, entry]) => formatSubagentRecoveryWedgedReason(entry))
-        .filter((reason, index, all) => all.indexOf(reason) === index)
-        .slice(0, 2);
-      if (wedgedReasons.length > 0) {
-        warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
+      const wedgedReasons = wedgedSubagentSessions.map(([, entry]) =>
+        formatSubagentRecoveryWedgedReason(entry),
+      );
+      const visibleWedgedReasons = uniqueStrings(wedgedReasons).slice(0, 2);
+      if (visibleWedgedReasons.length > 0) {
+        warnings.push(visibleWedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
       }
     }
 
@@ -942,6 +959,10 @@ export async function noteStateIntegrity(
       warnings,
       changes,
     });
+
+    for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+      warnings.push(warning);
+    }
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
@@ -1036,20 +1057,24 @@ export async function noteStateIntegrity(
   }
 }
 
-export function noteWorkspaceBackupTip(workspaceDir: string) {
+export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
-    return;
+    return null;
   }
   const gitMarker = path.join(workspaceDir, ".git");
   if (fs.existsSync(gitMarker)) {
-    return;
+    return null;
   }
-  note(
-    [
-      "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-      "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-      "- Details: /concepts/agent-workspace#git-backup-recommended",
-    ].join("\n"),
-    "Workspace",
-  );
+  return [
+    "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+    "- Keep ~/.openclaw out of git; it contains credentials and session history.",
+    "- Details: /concepts/agent-workspace#git-backup-recommended",
+  ].join("\n");
+}
+
+export function noteWorkspaceBackupTip(workspaceDir: string) {
+  const tip = collectWorkspaceBackupTip(workspaceDir);
+  if (tip) {
+    note(tip, "Workspace");
+  }
 }

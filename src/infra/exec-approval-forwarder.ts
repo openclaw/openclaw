@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   getLoadedChannelPlugin,
@@ -17,7 +19,6 @@ import {
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -38,12 +39,14 @@ import {
   approvalDecisionLabel,
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
+  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
-type DeliverOutboundPayloads = typeof import("./outbound/deliver.js").deliverOutboundPayloads;
+type DeliverApprovalPayloads =
+  typeof import("../channels/message/runtime.js").sendDurableMessageBatch;
 type MaybePromise<T> = T | Promise<T>;
 type ResolveSessionTargetFn = (params: {
   cfg: OpenClawConfig;
@@ -129,7 +132,7 @@ export type ExecApprovalForwarder = {
 
 type ExecApprovalForwarderDeps = {
   getConfig?: () => OpenClawConfig;
-  deliver?: DeliverOutboundPayloads;
+  deliver?: DeliverApprovalPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: ResolveSessionTargetFn;
 };
@@ -237,10 +240,9 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   if (warningText) {
     lines.push("", warningText);
   }
-  const analysisWarningLines = request.request.commandAnalysis?.warningLines
-    .map((line) => sanitizeExecApprovalWarningText(line).trim())
-    .filter(Boolean)
-    .slice(0, 5);
+  const analysisWarningLines = normalizeStringEntries(
+    request.request.commandAnalysis?.warningLines.map(sanitizeExecApprovalWarningText),
+  ).slice(0, 5);
   if (analysisWarningLines && analysisWarningLines.length > 0) {
     lines.push("", "Command analysis:");
     for (const line of analysisWarningLines) {
@@ -284,7 +286,7 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
       : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
-  lines.push(`Reply with: /approve <id> ${decisionText}`);
+  lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
       "Allow Always is unavailable because the effective policy requires approval every time.",
@@ -359,7 +361,7 @@ async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
-  deliver: DeliverOutboundPayloads;
+  deliver: DeliverApprovalPayloads;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
 }) {
@@ -374,7 +376,7 @@ async function deliverToTargets(params: {
     try {
       const payload = params.buildPayload(target);
       await params.beforeDeliver?.(target, payload);
-      await params.deliver({
+      const send = await params.deliver({
         cfg: params.cfg,
         channel,
         to: target.to,
@@ -382,6 +384,9 @@ async function deliverToTargets(params: {
         threadId: target.threadId,
         payloads: [payload],
       });
+      if (send.status === "failed" || send.status === "partial_failed") {
+        throw send.error;
+      }
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
     }
@@ -461,6 +466,7 @@ function buildPluginPendingPayload(params: {
         request: params.request,
         nowMs: params.nowMs,
         text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(params.request.request),
       }),
   });
 }
@@ -527,7 +533,7 @@ function createApprovalHandlers<
 >(params: {
   strategy: ApprovalStrategy<TRequest, TResolved, TRouteRequest>;
   getConfig: () => OpenClawConfig;
-  deliver: DeliverOutboundPayloads;
+  deliver: DeliverApprovalPayloads;
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;
 }) {
@@ -574,7 +580,11 @@ function createApprovalHandlers<
           buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
           deliver: params.deliver,
         });
-      })();
+      })().catch((err: unknown) => {
+        log.error(
+          `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+        );
+      });
     }, expiresInMs);
     timeoutId.unref?.();
 
@@ -617,7 +627,7 @@ function createApprovalHandlers<
       },
       deliver: params.deliver,
       shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
       );
@@ -770,8 +780,8 @@ export function createExecApprovalForwarder(
   const deliver =
     deps.deliver ??
     (async (params) => {
-      const { deliverOutboundPayloads } = await loadExecApprovalForwarderRuntime();
-      return deliverOutboundPayloads(params);
+      const { sendDurableMessageBatch } = await loadExecApprovalForwarderRuntime();
+      return sendDurableMessageBatch(params);
     });
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;

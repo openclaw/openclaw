@@ -57,7 +57,7 @@ describe("promptYesNo", () => {
   it("asks the question and respects default", async () => {
     setYes(false);
     setVerbose(false);
-    expect(readline).toBeTruthy();
+    expect(readline.createInterface).toBe(readlineState.createInterface);
     readlineState.question.mockResolvedValueOnce("");
     const resultDefaultYes = await promptYesNo("Continue?", true);
     expect(resultDefaultYes).toBe(true);
@@ -72,12 +72,12 @@ describe("promptYesNo", () => {
   });
 
   it("rejects when input closes before an answer is received", async () => {
-    readlineState.question.mockReturnValueOnce(new Promise<string>(() => undefined));
+    readlineState.question.mockReturnValueOnce(new Promise<string>(() => {}));
 
     const result = promptYesNo("Continue?");
     readlineState.emit("close");
 
     await expect(result).rejects.toThrow(PromptInputClosedError);
-    expect(readlineState.close).toHaveBeenCalled();
+    expect(readlineState.close).toHaveBeenCalledTimes(1);
   });
 });

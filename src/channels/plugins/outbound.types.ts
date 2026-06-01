@@ -23,7 +23,7 @@ export type ChannelOutboundContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
-  /** Send image as document to avoid Telegram compression. */
+  /** Send image, GIF, or video as document to avoid channel compression. */
   forceDocument?: boolean;
   replyToId?: string | null;
   replyToIdSource?: "explicit" | "implicit";
@@ -42,11 +42,55 @@ export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
 };
 
 export type ChannelPresentationCapabilities = {
+  /** Whether the channel accepts structured presentation payloads at all. */
   supported?: boolean;
+  /** Whether the channel can render button action blocks natively. */
   buttons?: boolean;
+  /** Whether the channel can render select/menu blocks natively. */
   selects?: boolean;
+  /** Whether the channel can render low-emphasis context blocks natively. */
   context?: boolean;
+  /** Whether the channel can render divider blocks natively. */
   divider?: boolean;
+  /** Per-channel limits used to adapt portable presentation blocks before rendering. */
+  limits?: {
+    actions?: {
+      /** Maximum total button/select actions in one message. */
+      maxActions?: number;
+      /** Maximum buttons per rendered action row. */
+      maxActionsPerRow?: number;
+      /** Maximum action rows in one message. */
+      maxRows?: number;
+      /** Maximum user-visible button label length. */
+      maxLabelLength?: number;
+      /** Maximum callback/action value size in UTF-8 bytes. */
+      maxValueBytes?: number;
+      /** Whether action styles such as primary or danger are preserved. */
+      supportsStyles?: boolean;
+      /** Whether disabled button state is preserved. */
+      supportsDisabled?: boolean;
+      /** Whether priority/layout hints affect native rendering. */
+      supportsLayoutHints?: boolean;
+    };
+    selects?: {
+      /** Maximum options in one select/menu block. */
+      maxOptions?: number;
+      /** Maximum user-visible option label length. */
+      maxLabelLength?: number;
+      /** Maximum option callback value size in UTF-8 bytes. */
+      maxValueBytes?: number;
+    };
+    text?: {
+      /** Maximum text length for title, text, and context blocks. */
+      maxLength?: number;
+      /** Unit used by maxLength. Defaults to Unicode code points. */
+      encoding?: "characters" | "utf8-bytes" | "utf16-units";
+      /** Markdown dialect understood by rendered text blocks. */
+      markdownDialect?: "plain" | "markdown" | "html" | "slack-mrkdwn" | "discord-markdown";
+      /** Whether the channel can edit presentation text in-place. */
+      supportsEdit?: boolean;
+    };
+  };
 };
 
 export type ChannelDeliveryCapabilities = {
@@ -54,6 +98,7 @@ export type ChannelDeliveryCapabilities = {
   durableFinal?: {
     text?: boolean;
     media?: boolean;
+    poll?: boolean;
     payload?: boolean;
     silent?: boolean;
     replyTo?: boolean;
@@ -90,10 +135,17 @@ export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
+export type ChannelOutboundNormalizePayloadParams = {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
   textChunkLimit?: number;
@@ -101,7 +153,7 @@ export type ChannelOutboundAdapter = {
   pollMaxOptions?: number;
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
-  normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
+  normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
   sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
@@ -127,8 +179,10 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void> | void;
+  /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
+  /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {
     payload: ReplyPayload;
     presentation: MessagePresentation;
@@ -139,6 +193,7 @@ export type ChannelOutboundAdapter = {
     target: ChannelOutboundTargetRef;
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
+    gatewayClientScopes?: readonly string[];
   }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.

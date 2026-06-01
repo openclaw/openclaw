@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -53,6 +54,7 @@ type DiagnosticsTimelineSpanOptions = {
   attributes?: DiagnosticsTimelineAttributes;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  omitErrorMessage?: boolean;
 };
 
 type DiagnosticsTimelineOptions = {
@@ -60,8 +62,24 @@ type DiagnosticsTimelineOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+export type ActiveDiagnosticsTimelineSpan = {
+  name: string;
+  phase?: string;
+  spanId: string;
+  parentSpanId?: string;
+  attributes?: DiagnosticsTimelineAttributes;
+};
+
+type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  startedAt: number;
+  omitErrorMessage?: boolean;
+};
+
 let warnedAboutTimelineWrite = false;
 const createdTimelineDirs = new Set<string>();
+const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
 
 function resolveDiagnosticsTimelineOptions(
   options: DiagnosticsTimelineOptions = {},
@@ -177,58 +195,111 @@ export function emitDiagnosticsTimelineEvent(
   }
 }
 
+export function getActiveDiagnosticsTimelineSpan(): ActiveDiagnosticsTimelineSpan | undefined {
+  return activeDiagnosticsTimelineSpan.getStore();
+}
+
+function startDiagnosticsTimelineSpan(
+  name: string,
+  options: DiagnosticsTimelineSpanOptions,
+): StartedDiagnosticsTimelineSpan | undefined {
+  const env = options.env ?? process.env;
+  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
+    return undefined;
+  }
+  const activeSpan = getActiveDiagnosticsTimelineSpan();
+  const phase = options.phase ?? activeSpan?.phase;
+  const parentSpanId = options.parentSpanId ?? activeSpan?.spanId;
+  const span: StartedDiagnosticsTimelineSpan = {
+    name,
+    env,
+    ...(options.config ? { config: options.config } : {}),
+    spanId: randomUUID(),
+    startedAt: performance.now(),
+    ...(phase ? { phase } : {}),
+    ...(parentSpanId ? { parentSpanId } : {}),
+    ...(options.attributes ? { attributes: options.attributes } : {}),
+    ...(options.omitErrorMessage ? { omitErrorMessage: true } : {}),
+  };
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.start",
+      name: span.name,
+      phase: span.phase,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      attributes: span.attributes,
+    },
+    { config: span.config, env: span.env },
+  );
+  return span;
+}
+
+function runInDiagnosticsTimelineSpan<T>(span: StartedDiagnosticsTimelineSpan, run: () => T): T {
+  return activeDiagnosticsTimelineSpan.run(
+    {
+      name: span.name,
+      ...(span.phase ? { phase: span.phase } : {}),
+      spanId: span.spanId,
+      ...(span.parentSpanId ? { parentSpanId: span.parentSpanId } : {}),
+      ...(span.attributes ? { attributes: span.attributes } : {}),
+    },
+    run,
+  );
+}
+
+function emitFinishedDiagnosticsTimelineSpan(span: StartedDiagnosticsTimelineSpan): void {
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.end",
+      name: span.name,
+      phase: span.phase,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      durationMs: performance.now() - span.startedAt,
+      attributes: span.attributes,
+    },
+    { config: span.config, env: span.env },
+  );
+}
+
+function emitFailedDiagnosticsTimelineSpan(
+  span: StartedDiagnosticsTimelineSpan,
+  error: unknown,
+): void {
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.error",
+      name: span.name,
+      phase: span.phase,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      durationMs: performance.now() - span.startedAt,
+      attributes: span.attributes,
+      errorName: error instanceof Error ? error.name : typeof error,
+      ...(span.omitErrorMessage
+        ? {}
+        : { errorMessage: error instanceof Error ? error.message : String(error) }),
+    },
+    { config: span.config, env: span.env },
+  );
+}
+
 export async function measureDiagnosticsTimelineSpan<T>(
   name: string,
   run: () => Promise<T> | T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): Promise<T> {
-  const env = options.env ?? process.env;
-  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
+  const span = startDiagnosticsTimelineSpan(name, options);
+  if (!span) {
     return await run();
   }
-  const spanId = randomUUID();
-  const startedAt = performance.now();
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name,
-      phase: options.phase,
-      spanId,
-      parentSpanId: options.parentSpanId,
-      attributes: options.attributes,
-    },
-    { config: options.config, env },
-  );
   try {
-    const result = await run();
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.end",
-        name,
-        phase: options.phase,
-        spanId,
-        parentSpanId: options.parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-      },
-      { config: options.config, env },
-    );
+    const result = await runInDiagnosticsTimelineSpan(span, () => run());
+    emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.error",
-        name,
-        phase: options.phase,
-        spanId,
-        parentSpanId: options.parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      },
-      { config: options.config, env },
-    );
+    emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
 }
@@ -238,53 +309,16 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   run: () => T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): T {
-  const env = options.env ?? process.env;
-  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
+  const span = startDiagnosticsTimelineSpan(name, options);
+  if (!span) {
     return run();
   }
-  const spanId = randomUUID();
-  const startedAt = performance.now();
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name,
-      phase: options.phase,
-      spanId,
-      parentSpanId: options.parentSpanId,
-      attributes: options.attributes,
-    },
-    { config: options.config, env },
-  );
   try {
-    const result = run();
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.end",
-        name,
-        phase: options.phase,
-        spanId,
-        parentSpanId: options.parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-      },
-      { config: options.config, env },
-    );
+    const result = runInDiagnosticsTimelineSpan(span, run);
+    emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.error",
-        name,
-        phase: options.phase,
-        spanId,
-        parentSpanId: options.parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      },
-      { config: options.config, env },
-    );
+    emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
 }

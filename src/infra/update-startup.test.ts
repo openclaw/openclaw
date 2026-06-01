@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
@@ -57,6 +58,14 @@ describe("update-startup", () => {
   let getUpdateAvailable: (typeof import("./update-startup.js"))["getUpdateAvailable"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
+
+  function requireFirstRunCommandCall(): Parameters<typeof runCommandWithTimeout> {
+    const [call] = vi.mocked(runCommandWithTimeout).mock.calls;
+    if (!call) {
+      throw new Error("expected update command run");
+    }
+    return call;
+  }
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -151,6 +160,19 @@ describe("update-startup", () => {
     return { log, parsed };
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    let statError: NodeJS.ErrnoException | undefined;
+    try {
+      await fs.stat(targetPath);
+    } catch (error) {
+      statError = error as NodeJS.ErrnoException;
+    }
+    expect(statError).toBeInstanceOf(Error);
+    expect(statError?.code).toBe("ENOENT");
+    expect(statError?.path).toBe(targetPath);
+    expect(statError?.syscall).toBe("stat");
+  }
+
   function createAutoUpdateSuccessMock() {
     return vi.fn().mockResolvedValue({
       ok: true,
@@ -213,11 +235,63 @@ describe("update-startup", () => {
     const { log, parsed } = await runUpdateCheckAndReadState(channel);
 
     expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("update available (latest): v2.0.0"),
+      `update available (latest): v2.0.0 (current v1.0.0). Run: ${formatCliCommand("openclaw update")}`,
     );
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
     expect(parsed.lastAvailableVersion).toBe("2.0.0");
     expect(parsed.lastNotifiedTag).toBe("latest");
+  });
+
+  it("falls back when the update-check clock is outside Date range", async () => {
+    mockPackageUpdateStatus("latest", "2.0.0");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+  });
+
+  it("does not throttle invalid update-check clocks against persisted state", async () => {
+    const statePath = path.join(tempDir, "update-check.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          lastCheckedAt: "2026-01-17T09:30:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    mockPackageUpdateStatus("latest", "2.0.0");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {
@@ -295,7 +369,7 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
-    await expect(fs.stat(path.join(tempDir, "update-check.json"))).rejects.toThrow();
+    await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
   it("defers stable auto-update until rollout window is due", async () => {
@@ -386,13 +460,16 @@ describe("update-startup", () => {
     });
 
     expect(runAutoUpdate).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
+    const disabledLogCall = log.info.mock.calls.find(
+      ([message]) => message === "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
+    );
+    expect(disabledLogCall).toEqual([
       "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
-      expect.objectContaining({
+      {
         version: "2.0.0-beta.1",
         tag: "beta",
-      }),
-    );
+      },
+    ]);
   });
 
   it("uses current runtime + entrypoint for default auto-update command execution", async () => {
@@ -417,26 +494,26 @@ describe("update-startup", () => {
       process.argv = originalArgv;
     }
 
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [
-        process.execPath,
-        "/opt/openclaw/dist/entry.js",
-        "update",
-        "--yes",
-        "--channel",
-        "beta",
-        "--json",
-      ],
-      expect.objectContaining({
-        timeoutMs: 45 * 60 * 1000,
-        env: expect.objectContaining({
-          OPENCLAW_AUTO_UPDATE: "1",
-        }),
-      }),
-    );
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+    const [argv, options] = requireFirstRunCommandCall();
+    expect(argv).toEqual([
+      process.execPath,
+      "/opt/openclaw/dist/entry.js",
+      "update",
+      "--yes",
+      "--channel",
+      "beta",
+      "--json",
+    ]);
+    expect(options).toEqual({
+      timeoutMs: 45 * 60 * 1000,
+      env: {
+        OPENCLAW_AUTO_UPDATE: "1",
+      },
+    });
   });
 
-  it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
+  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
     const stop = scheduleGatewayUpdateCheck({
@@ -444,7 +521,6 @@ describe("update-startup", () => {
       log: { info: vi.fn() },
       isNixMode: false,
     });
-    expect(typeof stop).toBe("function");
     stop();
   });
 });

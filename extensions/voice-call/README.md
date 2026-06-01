@@ -10,11 +10,9 @@ Providers:
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
-Plugin system: `https://docs.openclaw.ai/plugin`
+Plugin system: `https://docs.openclaw.ai/tools/plugin`
 
-## Install (local dev)
-
-### Option A: install via OpenClaw (recommended)
+## Install
 
 ```bash
 openclaw plugins install @openclaw/voice-call
@@ -22,7 +20,7 @@ openclaw plugins install @openclaw/voice-call
 
 Restart the Gateway afterwards.
 
-### Option B: copy into your global extensions folder (dev)
+## Local dev install
 
 ```bash
 PLUGIN_HOME=~/.openclaw/extensions
@@ -106,6 +104,8 @@ Notes:
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
 - `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh.
+- `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
+- `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
 
 ## Stale call reaper
 

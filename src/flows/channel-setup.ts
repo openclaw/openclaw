@@ -35,6 +35,7 @@ import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   maybeConfigureDmPolicies,
@@ -232,13 +233,13 @@ export async function setupChannels(
       });
   const { statusByChannel, statusLines } = statusSummary;
   if (!options?.skipStatusNote && statusLines.length > 0) {
-    await prompter.note(statusLines.join("\n"), "Channel status");
+    await prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
   }
 
   const shouldConfigure = options?.skipConfirm
     ? true
     : await prompter.confirm({
-        message: "Configure chat channels now?",
+        message: t("wizard.channels.setupConfirm"),
         initialValue: true,
       });
   if (!shouldConfigure) {
@@ -373,8 +374,12 @@ export async function setupChannels(
     const disabledHint = resolveConfigDisabledHint(channel);
     if (disabledHint) {
       await prompter.note(
-        `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
-        "Channel setup",
+        t("wizard.channels.disabledDuringSetup", {
+          channel,
+          hint: disabledHint,
+          command: formatCliCommand("openclaw channels add"),
+        }),
+        t("wizard.channels.setupTitle"),
       );
       return false;
     }
@@ -382,8 +387,12 @@ export async function setupChannels(
     next = result.config;
     if (!result.enabled) {
       await prompter.note(
-        `Cannot enable ${channel}: ${result.reason ?? "plugin disabled"}.`,
-        "Channel setup",
+        t("wizard.channels.pluginEnableFailed", {
+          channel,
+          reason: result.reason ?? "plugin disabled",
+          command: formatCliCommand("openclaw plugins list"),
+        }),
+        t("wizard.channels.setupTitle"),
       );
       return false;
     }
@@ -392,15 +401,20 @@ export async function setupChannels(
     if (!plugin) {
       if (adapter) {
         await prompter.note(
-          `${channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run \`${formatCliCommand(
-            "openclaw plugins list",
-          )}\` and \`${formatCliCommand("openclaw plugins enable " + channel)}\`, then restart the gateway.`,
-          "Channel setup",
+          t("wizard.channels.pluginMissingRecoverable", {
+            channel,
+            listCommand: formatCliCommand("openclaw plugins list"),
+            enableCommand: formatCliCommand("openclaw plugins enable " + channel),
+          }),
+          t("wizard.channels.setupTitle"),
         );
         await refreshStatus(channel);
         return true;
       }
-      await prompter.note(`${channel} plugin not available.`, "Channel setup");
+      await prompter.note(
+        t("wizard.channels.pluginNotAvailable", { channel }),
+        t("wizard.channels.setupTitle"),
+      );
       return false;
     }
     await refreshStatus(channel);
@@ -447,7 +461,13 @@ export async function setupChannels(
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
-      await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");
+      await prompter.note(
+        t("wizard.channels.noInteractiveSetup", {
+          channel,
+          command: formatCliCommand(`openclaw channels add --channel ${channel} --help`),
+        }),
+        t("wizard.channels.setupTitle"),
+      );
       return;
     }
     const result = await adapter.configure({
@@ -505,7 +525,10 @@ export async function setupChannels(
     }
 
     if (action === "delete" && !supportsDelete) {
-      await prompter.note(`${label} does not support deleting config entries.`, "Remove channel");
+      await prompter.note(
+        t("wizard.channels.configuredDeleteUnsupported", { label }),
+        t("wizard.channels.removeTitle"),
+      );
       return;
     }
 
@@ -529,7 +552,7 @@ export async function setupChannels(
 
     if (action === "delete") {
       const confirmed = await prompter.confirm({
-        message: `Delete ${label} account "${accountLabel}"?`,
+        message: t("wizard.channels.deleteAccount", { label, account: accountLabel }),
         initialValue: false,
       });
       if (!confirmed) {
@@ -565,8 +588,11 @@ export async function setupChannels(
       : undefined;
     if (deferredDisabledHint) {
       await prompter.note(
-        `${channel} cannot be configured while ${deferredDisabledHint}. Enable it before setup.`,
-        "Channel setup",
+        t("wizard.channels.disabledBeforeSetup", {
+          channel,
+          hint: deferredDisabledHint,
+        }),
+        t("wizard.channels.setupTitle"),
       );
       return "done";
     }
@@ -603,8 +629,8 @@ export async function setupChannels(
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
           await prompter.note(
-            `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
-            "Channel setup",
+            t("wizard.channels.disabledBeforeSetup", { channel, hint: disabledHint }),
+            t("wizard.channels.setupTitle"),
           );
           return "done";
         }
@@ -627,7 +653,10 @@ export async function setupChannels(
         );
       }
       if (!plugin) {
-        await prompter.note(`${channel} plugin not available.`, "Channel setup");
+        await prompter.note(
+          t("wizard.channels.pluginNotAvailable", { channel }),
+          t("wizard.channels.setupTitle"),
+        );
         return "done";
       }
       await refreshStatus(channel);
@@ -640,7 +669,7 @@ export async function setupChannels(
       // disk keeps it out of `installedCatalogEntries`. Before falling back
       // to the bundled-plugin enable path, consult the catalog directly so
       // users with a stale config entry for an externalized channel (qqbot,
-      // bluebubbles, discord, whatsapp, ...) still get auto-install instead
+      // imessage, discord, whatsapp, ...) still get auto-install instead
       // of a dead-end "plugin not available" note.
       const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
         cfg: next,
@@ -655,8 +684,8 @@ export async function setupChannels(
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
           await prompter.note(
-            `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
-            "Channel setup",
+            t("wizard.channels.disabledBeforeSetup", { channel, hint: disabledHint }),
+            t("wizard.channels.setupTitle"),
           );
           return "done";
         }
@@ -717,7 +746,7 @@ export async function setupChannels(
     while (true) {
       const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
-        message: "Select channel (QuickStart)",
+        message: t("wizard.channels.selectQuickstart"),
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
@@ -726,8 +755,10 @@ export async function setupChannels(
           }).map((contribution) => contribution.option),
           {
             value: "__skip__",
-            label: "Skip for now",
-            hint: `You can add channels later via \`${formatCliCommand("openclaw channels add")}\``,
+            label: t("common.skipForNow"),
+            hint: t("wizard.channels.skipLaterHint", {
+              command: formatCliCommand("openclaw channels add"),
+            }),
           },
         ],
         initialValue: quickstartDefault,
@@ -746,7 +777,7 @@ export async function setupChannels(
     while (true) {
       const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
-        message: "Select a channel",
+        message: t("wizard.channels.select"),
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
@@ -755,8 +786,8 @@ export async function setupChannels(
           }).map((contribution) => contribution.option),
           {
             value: doneValue,
-            label: "Finished",
-            hint: selection.length > 0 ? "Done" : "Skip for now",
+            label: t("common.finished"),
+            hint: selection.length > 0 ? t("wizard.channels.doneHint") : t("common.skipForNow"),
           },
         ],
         initialValue,
@@ -776,7 +807,7 @@ export async function setupChannels(
     selection,
   });
   if (selectedLines.length > 0) {
-    await prompter.note(selectedLines.join("\n"), "Selected channels");
+    await prompter.note(selectedLines.join("\n"), t("wizard.channels.selectedTitle"));
   }
 
   if (!options?.skipDmPolicyPrompt) {

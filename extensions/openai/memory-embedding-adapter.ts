@@ -19,9 +19,10 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
+    const resolvedProvider = options.provider ?? "openai";
     const { provider, client } = await createOpenAiEmbeddingProvider({
       ...options,
-      provider: "openai",
+      provider: resolvedProvider,
       fallback: "none",
     });
     return {
@@ -29,9 +30,10 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       runtime: {
         id: "openai",
         cacheKeyData: {
-          provider: "openai",
+          provider: resolvedProvider,
           baseUrl: client.baseUrl,
           model: client.model,
+          outputDimensionality: client.outputDimensionality,
           documentInputType: client.documentInputType ?? client.inputType,
           headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
         },
@@ -47,6 +49,9 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               body: {
                 model: client.model,
                 input: chunk.text,
+                ...(typeof client.outputDimensionality === "number"
+                  ? { dimensions: client.outputDimensionality }
+                  : {}),
                 ...(inputType ? { input_type: inputType } : {}),
               },
             })),

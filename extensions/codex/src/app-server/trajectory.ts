@@ -1,17 +1,18 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness";
-import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   appendRegularFile,
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
+import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 
-type CodexTrajectoryRecorder = {
+export type CodexTrajectoryRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
@@ -163,6 +164,7 @@ export function createCodexTrajectoryRecorder(
   });
   let queue = Promise.resolve();
   let seq = 0;
+  const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
 
   return {
     filePath,
@@ -180,9 +182,9 @@ export function createCodexTrajectoryRecorder(
         sessionKey: params.attempt.sessionKey,
         runId: params.attempt.runId,
         workspaceDir: params.cwd,
-        provider: params.attempt.provider,
+        provider: attribution.provider,
         modelId: params.attempt.modelId,
-        modelApi: params.attempt.model.api,
+        modelApi: attribution.api,
         data: data ? sanitizeValue(data) : undefined,
       };
       const line = boundedTrajectoryLine(event);
@@ -333,8 +335,8 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
   }
   if (typeof value === "object") {
     const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value).slice(0, 100)) {
-      next[key] = sanitizeValue(child, depth + 1, key);
+    for (const [keyLocal, child] of Object.entries(value).slice(0, 100)) {
+      next[keyLocal] = sanitizeValue(child, depth + 1, keyLocal);
     }
     return next;
   }

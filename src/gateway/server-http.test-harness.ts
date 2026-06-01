@@ -111,7 +111,10 @@ export async function dispatchRequest(
   server.emit("request", req, res);
   try {
     await Promise.race([
-      responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
+      responseEndPromises.get(res) ??
+        new Promise((resolve) => {
+          setImmediate(resolve);
+        }),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
           reject(new Error(`gateway test request timed out: ${req.method ?? "GET"} ${req.url}`));
@@ -141,7 +144,6 @@ export function createTestGatewayServer(options: {
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
   return createGatewayHttpServer({
-    canvasHost: null,
     clients: new Set(),
     controlUiEnabled: false,
     controlUiBasePath: "/__control__",

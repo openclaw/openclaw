@@ -4,6 +4,14 @@ import { resolveRequestUrl } from "./request-url.js";
 
 const asFetch = (fn: unknown): typeof fetch => fn as typeof fetch;
 
+function fetchCall(fetchFn: ReturnType<typeof vi.fn>, index: number): [unknown, RequestInit?] {
+  const call = fetchFn.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call as [unknown, RequestInit?];
+}
+
 describe("fetchWithBearerAuthScopeFallback", () => {
   it("rejects non-https urls when https is required", async () => {
     await expect(
@@ -85,7 +93,7 @@ describe("fetchWithBearerAuthScopeFallback", () => {
       if (expectedAuthHeader === null) {
         return;
       }
-      const secondCallInit = fetchFn.mock.calls.at(1)?.[1] as RequestInit | undefined;
+      const secondCallInit = fetchCall(fetchFn, 1)[1];
       const secondHeaders = new Headers(secondCallInit?.headers);
       expect(secondHeaders.get("authorization")).toBe(expectedAuthHeader);
     },
@@ -114,6 +122,42 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
     expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(1, "https://first.example");
     expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(2, "https://second.example");
+  });
+
+  it("normalizes symbol-bearing request headers across unauthenticated and retry attempts", async () => {
+    const headers = { Accept: "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["accept"]),
+      enumerable: false,
+    });
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
+      const normalizedHeaders = new Headers(init?.headers);
+      expect(normalizedHeaders.get("accept")).toBe("application/json");
+      return fetchFn.mock.calls.length === 1
+        ? new Response("unauthorized", { status: 401 })
+        : new Response("ok", { status: 200 });
+    });
+    const tokenProvider = { getAccessToken: vi.fn(async () => "token-1") };
+
+    const response = await fetchWithBearerAuthScopeFallback({
+      url: "https://graph.microsoft.com/v1.0/me",
+      scopes: ["https://graph.microsoft.com"],
+      fetchFn: asFetch(fetchFn),
+      tokenProvider,
+      requestInit: { headers },
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(Object.getOwnPropertySymbols(fetchCall(fetchFn, 0)[1]?.headers as object)).toStrictEqual(
+      [],
+    );
+    expect(new Headers(fetchCall(fetchFn, 1)[1]?.headers).get("authorization")).toBe(
+      "Bearer token-1",
+    );
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });
 });
 

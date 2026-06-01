@@ -31,7 +31,7 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./usage-render-overview.ts";
-import {
+import type {
   SessionLogEntry,
   SessionLogRole,
   UsageColumnId,
@@ -155,10 +155,16 @@ export function renderUsage(props: UsageProps) {
     return valB - valA;
   });
 
+  const agentScopedSessions = filters.agentId
+    ? sortedSessions.filter(
+        (s) => normalizeQueryText(s.agentId ?? "") === normalizeQueryText(filters.agentId ?? ""),
+      )
+    : sortedSessions;
+
   // Filter sessions by selected days
   const dayFilteredSessions =
     filters.selectedDays.length > 0
-      ? sortedSessions.filter((s) => {
+      ? agentScopedSessions.filter((s) => {
           if (s.usage?.activityDates?.length) {
             return s.usage.activityDates.some((d) => filters.selectedDays.includes(d));
           }
@@ -169,7 +175,7 @@ export function renderUsage(props: UsageProps) {
           const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
           return filters.selectedDays.includes(sessionDate);
         })
-      : sortedSessions;
+      : agentScopedSessions;
 
   const hourFilteredSessions =
     filters.selectedHours.length > 0
@@ -184,7 +190,7 @@ export function renderUsage(props: UsageProps) {
   const queryWarnings = queryResult.warnings;
   const querySuggestions = buildQuerySuggestions(
     filters.queryDraft,
-    sortedSessions,
+    agentScopedSessions,
     data.aggregates,
   );
   const queryTerms = extractQueryTerms(filters.query);
@@ -204,15 +210,18 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
-  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
-  const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
+  const agentOptions = unique([...data.agents, ...sortedSessions.map((s) => s.agentId)]).slice(
+    0,
+    12,
+  );
+  const channelOptions = unique(agentScopedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
-    ...sortedSessions.map((s) => s.modelProvider),
-    ...sortedSessions.map((s) => s.providerOverride),
+    ...agentScopedSessions.map((s) => s.modelProvider),
+    ...agentScopedSessions.map((s) => s.providerOverride),
     ...(data.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
   ]).slice(0, 12);
   const modelOptions = unique([
-    ...sortedSessions.map((s) => s.model),
+    ...agentScopedSessions.map((s) => s.model),
     ...(data.aggregates?.byModel.map((entry) => entry.model) ?? []),
   ]).slice(0, 12);
   const toolOptions = unique(data.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
@@ -244,7 +253,7 @@ export function renderUsage(props: UsageProps) {
   // Compute display totals and count based on filters
   let displayTotals: UsageTotals | null;
   let displaySessionCount: number;
-  const totalSessions = sortedSessions.length;
+  const totalSessions = agentScopedSessions.length;
 
   if (filters.selectedSessions.length > 0) {
     // Sessions selected - compute totals from selected sessions
@@ -263,6 +272,9 @@ export function renderUsage(props: UsageProps) {
   } else if (hasQuery) {
     displayTotals = computeSessionTotals(filteredSessions);
     displaySessionCount = filteredSessions.length;
+  } else if (filters.agentId) {
+    displayTotals = computeSessionTotals(agentScopedSessions);
+    displaySessionCount = totalSessions;
   } else {
     // No filters - show all
     displayTotals = data.totals;
@@ -316,6 +328,8 @@ export function renderUsage(props: UsageProps) {
     { label: t("usage.presets.today"), days: 1 },
     { label: t("usage.presets.last7d"), days: 7 },
     { label: t("usage.presets.last30d"), days: 30 },
+    { label: t("usage.presets.last90d"), days: 90 },
+    { label: t("usage.presets.last1y"), days: 365 },
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
@@ -323,6 +337,10 @@ export function renderUsage(props: UsageProps) {
     start.setDate(start.getDate() - (days - 1));
     filterActions.onStartDateChange(formatIsoDate(start));
     filterActions.onEndDateChange(formatIsoDate(end));
+  };
+  const applyAllRange = () => {
+    filterActions.onStartDateChange("1970-01-01");
+    filterActions.onEndDateChange(formatIsoDate(new Date()));
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {
@@ -411,15 +429,39 @@ export function renderUsage(props: UsageProps) {
       </details>
     `;
   };
+  const renderAgentScopeSelect = () => {
+    const selected = filters.agentId ?? "";
+    return html`
+      <details class="usage-filter-select">
+        <summary>
+          <span>${t("usage.filters.agent")}</span>
+          <span class="usage-filter-badge">${selected || t("usage.filters.all")}</span>
+        </summary>
+        <div class="usage-filter-popover">
+          <div class="usage-filter-options">
+            ${["", ...agentOptions].map((value) => {
+              const checked = selected === value;
+              return html`
+                <label class="usage-filter-option">
+                  <input
+                    type="radio"
+                    name="usage-agent-scope"
+                    .checked=${checked}
+                    @change=${() => filterActions.onAgentChange(value || null)}
+                  />
+                  <span>${value || t("usage.filters.all")}</span>
+                </label>
+              `;
+            })}
+          </div>
+        </div>
+      </details>
+    `;
+  };
   const exportStamp = formatIsoDate(new Date());
 
   return html`
     <div class="usage-page">
-      <section class="usage-page-header">
-        <div class="usage-page-title">${t("tabs.usage")}</div>
-        <div class="usage-page-subtitle">${t("usage.page.subtitle")}</div>
-      </section>
-
       <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
         <div class="usage-header-row">
           <div class="usage-header-title">
@@ -550,6 +592,7 @@ export function renderUsage(props: UsageProps) {
                   </button>
                 `,
               )}
+              <button class="btn btn--sm" @click=${applyAllRange}>${t("usage.presets.all")}</button>
             </div>
             <div class="usage-date-range">
               <input
@@ -585,6 +628,22 @@ export function renderUsage(props: UsageProps) {
               <option value="local">${t("usage.filters.timeZoneLocal")}</option>
               <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
             </select>
+            <div class="chart-toggle">
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
+                title=${t("usage.scope.instanceHint")}
+                @click=${() => filterActions.onScopeChange("instance")}
+              >
+                ${t("usage.scope.instance")}
+              </button>
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
+                title=${t("usage.scope.familyHint")}
+                @click=${() => filterActions.onScopeChange("family")}
+              >
+                ${t("usage.scope.family")}
+              </button>
+            </div>
             <div class="chart-toggle">
               <button
                 class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
@@ -651,7 +710,7 @@ export function renderUsage(props: UsageProps) {
             </div>
           </div>
           <div class="usage-filter-row">
-            ${renderFilterSelect("agent", t("usage.filters.agent"), agentOptions)}
+            ${renderAgentScopeSelect()}
             ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
             ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
             ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}

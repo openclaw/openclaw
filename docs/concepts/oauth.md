@@ -45,9 +45,11 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
-  `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
-  the local refresh token is canonical; other integrations can remain
-  externally managed and re-read their CLI auth store
+  `openai:default` profile, but once OpenClaw has a local OAuth profile,
+  the local refresh token is canonical. If that local refresh token is rejected,
+  OpenClaw can use a usable same-account Codex CLI token as a runtime-only
+  fallback; other integrations can remain externally managed and re-read their
+  CLI auth store
 - status and startup paths that already know the configured provider set scope
   external CLI discovery to that set, so an unrelated CLI login store is not
   probed for a single-provider setup
@@ -93,7 +95,7 @@ plan](https://support.anthropic.com/en/articles/11845131-using-claude-code-with-
 If you want other subscription-style options in OpenClaw, see [OpenAI
 Codex](/providers/openai), [Qwen Cloud Coding
 Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
-and [Z.AI / GLM Coding Plan](/providers/glm).
+and [Z.AI / GLM Coding Plan](/providers/zai).
 </Warning>
 
 OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.
@@ -105,7 +107,7 @@ Claude login on the host, onboarding/configure can reuse it directly.
 
 ## OAuth exchange (how login works)
 
-OpenClaw's interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
+OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm` and wired into the wizards/commands.
 
 ### Anthropic setup-token
 
@@ -129,7 +131,7 @@ Flow shape (PKCE):
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
-Wizard path is `openclaw onboard` → auth choice `openai-codex`.
+Wizard path is `openclaw onboard` → auth choice `openai`.
 
 ## Refresh + expiry
 
@@ -145,8 +147,10 @@ At runtime:
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical.
+  `openai:default` profile, then OpenClaw-owned refreshes keep the local
+  profile canonical. If the local Codex refresh fails and Codex CLI has a
+  usable token for the same account, OpenClaw may use that token for the current
+  runtime request without writing it back to `auth-profiles.json`.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

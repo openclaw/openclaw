@@ -1,4 +1,5 @@
 import os from "node:os";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -10,6 +11,12 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import {
+  areRuntimeModelRefsEquivalent,
+  shouldPreferActiveRuntimeAliasAuthLabel,
+} from "../agents/model-runtime-aliases.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -26,7 +33,6 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -43,7 +49,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
   "github-copilot",
   "google-gemini-cli",
-  "openai-codex",
+  "openai",
 ]);
 
 let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
@@ -109,6 +115,23 @@ function shouldLoadUsageSummary(params: {
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
 }
 
+function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
+  const auth = normalizeOptionalLowercaseString(authLabel);
+  if (!auth) {
+    return undefined;
+  }
+  if (auth.startsWith("oauth")) {
+    return "oauth";
+  }
+  if (auth.startsWith("token")) {
+    return "token";
+  }
+  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
+    return "api_key";
+  }
+  return undefined;
+}
+
 function formatSessionTaskLine(sessionKey: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
@@ -146,20 +169,23 @@ async function resolveStatusHarnessId(params: {
       agentHarnessId: params.sessionEntry?.agentHarnessId,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
-    return id && id !== "pi" ? id : undefined;
+    return id || undefined;
   } catch {
     return undefined;
   }
 }
 
-function resolveStatusAuthProvider(params: {
+function resolveStatusRuntimeProvider(params: {
   provider: string;
   effectiveHarness?: string;
 }): string {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
   const provider = normalizeOptionalLowercaseString(params.provider);
-  if (harness === "codex" && provider === "openai") {
-    return "openai-codex";
+  if (harness === "codex" && (provider === "openai" || provider === "codex")) {
+    return "openai";
+  }
+  if (harness === "claude-cli" && provider === "anthropic") {
+    return "claude-cli";
   }
   return params.provider;
 }
@@ -226,13 +252,30 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionKey,
       sessionEntry,
     }));
-  const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
+  const selectedStatusProvider = resolveStatusRuntimeProvider({
+    provider,
+    effectiveHarness,
+  });
+  const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider,
+    harnessRuntime: effectiveHarness,
+    config: cfg,
+  });
+  const activeProvider = modelRefs.active.provider || provider;
+  const activeStatusProvider = resolveStatusRuntimeProvider({
+    provider: activeProvider,
+    effectiveHarness,
+  });
+  const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: activeProvider,
+    harnessRuntime: effectiveHarness,
+    config: cfg,
+  });
+  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
-        provider: resolveStatusAuthProvider({
-          provider,
-          effectiveHarness,
-        }),
+        provider: selectedStatusProvider,
+        acceptedProviderIds: selectedAuthProviders,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
@@ -243,10 +286,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
       ? resolveModelAuthLabel({
-          provider: resolveStatusAuthProvider({
-            provider: modelRefs.active.provider,
-            effectiveHarness,
-          }),
+          provider: activeStatusProvider,
+          acceptedProviderIds: activeAuthProviders,
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
@@ -254,19 +295,31 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
-  const currentUsageProvider = (() => {
-    try {
-      return resolveUsageProviderId(provider);
-    } catch {
-      return undefined;
-    }
-  })();
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    modelRefs.selected.label,
+    modelRefs.active.label,
+    { config: cfg },
+  );
+  if (
+    shouldPreferActiveRuntimeAliasAuthLabel({
+      runtimeAliasModelEquivalent,
+      selectedAuthLabel: selectedModelAuth,
+      activeAuthLabel: activeModelAuth,
+    })
+  ) {
+    selectedModelAuth = activeModelAuth;
+  }
+  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const usageCredentialType = resolveUsageCredentialType(usageAuthLabel);
+  const currentUsageProvider =
+    resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
+    resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
-      selectedModelAuth,
+      selectedModelAuth: usageAuthLabel,
     })
   ) {
     try {
@@ -290,7 +343,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         }
       });
       const usageEntry = usageSummary.providers[0];
-      if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
+      if (
+        usageEntry &&
+        !usageEntry.error &&
+        (usageEntry.windows.length > 0 || Boolean(usageEntry.summary?.trim()))
+      ) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),
           maxWindows: 2,
@@ -352,17 +409,19 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionEntry,
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
+  const configuredDefaultRef = resolveDefaultModelForAgent({
+    cfg,
+    agentId: statusAgentId,
+    allowPluginNormalization: false,
+  });
+  const configuredDefaultModelLabel = `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const runtimeContextProvider = resolveStatusAuthProvider({
-    provider: modelRefs.active.provider || provider,
-    effectiveHarness,
-  });
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
-    provider: runtimeContextProvider,
+    provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
   return buildStatusMessage({
@@ -381,6 +440,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
+    configuredDefaultModelLabel,
     explicitConfiguredContextTokens:
       typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
         ? agentDefaults.contextTokens

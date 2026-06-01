@@ -25,10 +25,8 @@ describe("toModelRow", () => {
       tags: [],
     });
 
-    expect(row).toMatchObject({
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-    });
+    expect(row.contextWindow).toBe(400_000);
+    expect(row.contextTokens).toBe(272_000);
   });
 
   it("marks models available from auth profiles without loading model discovery", () => {
@@ -40,5 +38,21 @@ describe("toModelRow", () => {
     });
 
     expect(row.available).toBe(true);
+  });
+
+  it("marks bracketed IPv6 loopback base URLs as local", () => {
+    for (const baseUrl of ["http://[::1]:11434/v1", "http://[::]:11434/v1"]) {
+      const row = toModelRow({
+        model: {
+          ...OPENROUTER_MODEL,
+          provider: "ollama",
+          baseUrl,
+        } as never,
+        key: "ollama/llama3.2",
+        tags: [],
+      });
+
+      expect(row.local).toBe(true);
+    }
   });
 });

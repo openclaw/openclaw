@@ -1,19 +1,21 @@
-import { type Context, complete } from "@mariozechner/pi-ai";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { complete } from "../../llm/stream.js";
+import type { Context } from "../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { ToolInputError } from "./common.js";
+import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
@@ -52,25 +54,27 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
+const PDF_REMOTE_READ_IDLE_TIMEOUT_MS = 120_000;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
 
 export const PdfToolSchema = Type.Object({
   prompt: Type.Optional(Type.String()),
-  pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
+  pdf: Type.Optional(Type.String({ description: "One PDF path/URL." })),
   pdfs: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Multiple PDF paths or URLs (up to 10).",
+      description: "PDF paths/URLs; max 10.",
     }),
   ),
   pages: Type.Optional(
     Type.String({
-      description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
+      description: 'Pages, e.g. "1-5", "1,3,5-7"; default all.',
     }),
   ),
+  password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: Type.Optional(Type.Number()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
 
 // ---------------------------------------------------------------------------
@@ -90,7 +94,14 @@ function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
 // Build context for extraction fallback path
 // ---------------------------------------------------------------------------
 
-function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedContent[]): Context {
+const CODEX_PDF_INSTRUCTIONS =
+  "Analyze the provided PDF content and answer the user's request accurately.";
+
+function buildPdfExtractionContext(
+  prompt: string,
+  extractions: PdfExtractedContent[],
+  model?: { api?: string },
+): Context {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
@@ -110,7 +121,11 @@ function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedCont
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
+  const systemPrompt =
+    model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+
   return {
+    ...(systemPrompt ? { systemPrompt } : {}),
     messages: [{ role: "user", content, timestamp: Date.now() }],
   };
 }
@@ -132,6 +147,7 @@ async function runPdfPrompt(params: {
   modelOverride?: string;
   prompt: string;
   pdfBuffers: Array<{ base64: string; filename: string }>;
+  password?: string;
   pageNumbers?: number[];
   getExtractions: () => Promise<PdfExtractedContent[]>;
 }): Promise<{
@@ -146,7 +162,7 @@ async function runPdfPrompt(params: {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
 
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {
@@ -169,6 +185,11 @@ async function runPdfPrompt(params: {
       });
 
       if (providerSupportsNativePdf(provider)) {
+        if (params.password) {
+          throw new Error(
+            `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
+          );
+        }
         if (params.pageNumbers && params.pageNumbers.length > 0) {
           throw new Error(
             `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
@@ -217,7 +238,7 @@ async function runPdfPrompt(params: {
           text: e.text,
           images: [],
         }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
+        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
         const message = await complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -226,7 +247,7 @@ async function runPdfPrompt(params: {
         return { text, provider, model: modelId, native: false };
       }
 
-      const context = buildPdfExtractionContext(params.prompt, extractions);
+      const context = buildPdfExtractionContext(params.prompt, extractions, model);
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -304,7 +325,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";
+    "Analyze PDFs with model. Anthropic/Google native PDF when supported; else text/image extraction. Use pdf for one, pdfs for max 10; prompt says what to inspect.";
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {
@@ -335,15 +356,17 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
-      const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
-        typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
-          ? maxBytesMbRaw
-          : configuredMaxBytesMb;
+        readFiniteNumberParam(record, "maxBytesMb", {
+          min: 0,
+          minExclusive: true,
+          message: "maxBytesMb must be greater than 0",
+        }) ?? configuredMaxBytesMb;
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
+      const password = typeof record.password === "string" ? record.password : undefined;
 
       const pdfModelConfig =
         registrationPdfModelConfig ??
@@ -434,6 +457,7 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
+              ...(isHttpUrl ? { readIdleTimeoutMs: PDF_REMOTE_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
             });
 
@@ -473,6 +497,7 @@ export function createPdfTool(options?: {
             maxPages: configuredMaxPages,
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
+            ...(password ? { password } : {}),
             pageNumbers,
             config: options?.config,
           });
@@ -489,6 +514,7 @@ export function createPdfTool(options?: {
         modelOverride,
         prompt: promptRaw,
         pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),
+        ...(password ? { password } : {}),
         pageNumbers,
         getExtractions,
       });

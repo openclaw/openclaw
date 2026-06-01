@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
@@ -17,6 +17,11 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-path");
+let dualFormatArchiveCase: {
+  nodeModulesExists: boolean;
+  result: Awaited<ReturnType<typeof installPluginFromPath>>;
+  runCalls: unknown[][];
+};
 
 function setupBundleInstallFixture(params: {
   bundleFormat: "codex" | "claude" | "cursor";
@@ -152,6 +157,40 @@ afterAll(() => {
   suiteTempRootTracker.cleanup();
 });
 
+beforeAll(async () => {
+  const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
+    bundleFormat: "claude",
+  });
+  const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "dual-format.tgz");
+
+  await packToArchive({
+    pkgDir: pluginDir,
+    outDir: path.dirname(archivePath),
+    outName: path.basename(archivePath),
+  });
+
+  const run = vi.mocked(runCommandWithTimeout);
+  run.mockReset();
+  run.mockResolvedValue({
+    code: 0,
+    stdout: "",
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit",
+  });
+
+  const result = await installPluginFromPath({
+    path: archivePath,
+    extensionsDir,
+  });
+  dualFormatArchiveCase = {
+    nodeModulesExists: result.ok && fs.existsSync(path.join(result.targetDir, "node_modules")),
+    result,
+    runCalls: [...run.mock.calls],
+  };
+});
+
 beforeEach(() => {
   resetGlobalHookRunner();
   vi.clearAllMocks();
@@ -187,7 +226,8 @@ describe("installPluginFromPath", () => {
 
     expect(result.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+    const [installContext, installMetadata] = handler.mock.calls[0] ?? [];
+    expect(installContext).toEqual({
       targetName: "payload",
       targetType: "plugin",
       origin: "plugin-file",
@@ -200,6 +240,11 @@ describe("installPluginFromPath", () => {
       },
       builtinScan: {
         status: "ok",
+        scannedFiles: 1,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
       },
       plugin: {
         contentType: "file",
@@ -207,7 +252,7 @@ describe("installPluginFromPath", () => {
         extensions: ["payload.js"],
       },
     });
-    expect(handler.mock.calls[0]?.[1]).toEqual({
+    expect(installMetadata).toEqual({
       origin: "plugin-file",
       targetType: "plugin",
       requestKind: "plugin-file",
@@ -221,6 +266,7 @@ describe("installPluginFromPath", () => {
 
     const sourcePath = path.join(baseDir, "payload.js");
     fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
+    const expectedFinding = `Dynamic code execution detected (${sourcePath}:1)`;
 
     const { result, warnings } = await installFromFileWithWarnings({
       filePath: sourcePath,
@@ -230,9 +276,13 @@ describe("installPluginFromPath", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('Plugin file "payload" installation blocked');
+      expect(result.error).toBe(
+        `Plugin file "payload" installation blocked: dangerous code patterns detected: ${expectedFinding}`,
+      );
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual([
+      `WARNING: Plugin file "payload" contains dangerous code patterns: ${expectedFinding}`,
+    ]);
   });
 
   it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {
@@ -242,6 +292,7 @@ describe("installPluginFromPath", () => {
 
     const sourcePath = path.join(baseDir, "payload.js");
     fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
+    const expectedFinding = `Dynamic code execution detected (${sourcePath}:1)`;
 
     const { result, warnings } = await installFromFileWithWarnings({
       filePath: sourcePath,
@@ -250,13 +301,10 @@ describe("installPluginFromPath", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes(
-          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-        ),
-      ),
-    ).toBe(true);
+    expect(warnings).toEqual([
+      `WARNING: Plugin file "payload" contains dangerous code patterns: ${expectedFinding}`,
+      `WARNING: Plugin file "payload" installation forced despite dangerous code patterns via --dangerously-force-unsafe-install: ${expectedFinding}`,
+    ]);
   });
 
   it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
@@ -339,38 +387,15 @@ describe("installPluginFromPath", () => {
   });
 
   it("prefers native package metadata without installing dependencies for dual-format archives", async () => {
-    const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
-      bundleFormat: "claude",
-    });
-    const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "dual-format.tgz");
+    const { nodeModulesExists, result, runCalls } = dualFormatArchiveCase;
 
-    await packToArchive({
-      pkgDir: pluginDir,
-      outDir: path.dirname(archivePath),
-      outName: path.basename(archivePath),
-    });
-
-    const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const result = await installPluginFromPath({
-      path: archivePath,
-      extensionsDir,
-    });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
     }
     expect(result.pluginId).toBe("native-dual");
-    expect(result.targetDir).toBe(path.join(extensionsDir, "native-dual"));
-    expect(run).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(result.targetDir, "node_modules"))).toBe(false);
+    expect(path.basename(result.targetDir)).toBe("native-dual");
+    expect(runCalls).toHaveLength(0);
+    expect(nodeModulesExists).toBe(false);
   });
 });

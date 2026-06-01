@@ -1,10 +1,24 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateCronAddParams,
+  validateCronGetParams,
+  validateCronListParams,
+  validateCronRemoveParams,
+  validateCronRunParams,
+  validateCronRunsParams,
+  validateCronStatusParams,
+  validateCronUpdateParams,
+  validateWakeParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
+  isInvalidCronRunLogJobIdError,
   readCronRunLogEntriesPage,
   readCronRunLogEntriesPageAll,
-  resolveCronRunLogPath,
 } from "../../cron/run-log.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
@@ -16,21 +30,24 @@ import {
   validateTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateCronAddParams,
-  validateCronListParams,
-  validateCronRemoveParams,
-  validateCronRunParams,
-  validateCronRunsParams,
-  validateCronStatusParams,
-  validateCronUpdateParams,
-  validateWakeParams,
-} from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+
+type CronJobIdParams = { id?: string; jobId?: string };
+
+type CronRunsRequestParams = CronJobIdParams & {
+  scope?: "job" | "all";
+  runId?: string;
+  limit?: number;
+  offset?: number;
+  statuses?: Array<"ok" | "error" | "skipped">;
+  status?: "all" | "ok" | "error" | "skipped";
+  deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
+  deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
+  query?: string;
+  sortDir?: "asc" | "desc";
+};
 
 function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
@@ -44,6 +61,8 @@ function assertConfiguredAnnounceChannel(params: {
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel";
 }) {
+  // `last` defers channel selection to runtime session context; every concrete
+  // announce channel must be one the gateway can actually deliver through.
   if (params.channel === "last") {
     return;
   }
@@ -74,6 +93,8 @@ function resolveAnnounceValidationChannel(params: {
   channel?: string;
   to?: string;
 }): string | undefined {
+  // A target like `telegram:...` is enough to validate the announce channel
+  // even when the explicit channel field is omitted.
   if (params.channel && params.channel !== "last") {
     return params.channel;
   }
@@ -149,6 +170,8 @@ function assertValidCronUpdateDelivery(params: {
     return;
   }
 
+  // Validate the post-patch job, not just the sparse patch, because delivery
+  // fields can be split across the existing job and the update payload.
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
@@ -157,6 +180,36 @@ function assertValidCronUpdateDelivery(params: {
     cfg: params.cfg,
     delivery: nextJob.delivery,
   });
+}
+
+function resolveCronJobId(params: CronJobIdParams): string | undefined {
+  return params.id ?? params.jobId;
+}
+
+function respondInvalidCronParams(respond: RespondFn, method: string, reason: string): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params: ${reason}`),
+  );
+}
+
+function respondMissingCronJobId(respond: RespondFn, method: string): void {
+  respondInvalidCronParams(respond, method, "missing id");
+}
+
+function cronRunLogPageFilters(params: CronRunsRequestParams) {
+  return {
+    limit: params.limit,
+    offset: params.offset,
+    statuses: params.statuses,
+    status: params.status,
+    runId: params.runId,
+    deliveryStatuses: params.deliveryStatuses,
+    deliveryStatus: params.deliveryStatus,
+    query: params.query,
+    sortDir: params.sortDir,
+  };
 }
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -175,8 +228,24 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
+      sessionKey?: string;
     };
-    const result = context.cron.wake({ mode: p.mode, text: p.text });
+    const sessionKey = p.sessionKey?.trim() || undefined;
+    if (sessionKey && isSubagentSessionKey(sessionKey)) {
+      // Wake requests resume user-visible sessions only; subagent sessions are
+      // internal task execution targets and should not receive operator wakes.
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "wake sessionKey cannot target a subagent session"),
+      );
+      return;
+    }
+    const result = context.cron.wake({
+      mode: p.mode,
+      text: p.text,
+      ...(sessionKey ? { sessionKey } : {}),
+    });
     respond(true, result, undefined);
   },
   "cron.list": async ({ params, respond, context }) => {
@@ -197,6 +266,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       offset?: number;
       query?: string;
       enabled?: "all" | "enabled" | "disabled";
+      scheduleKind?: "all" | "at" | "every" | "cron";
+      lastRunStatus?: "all" | "ok" | "error" | "skipped" | "unknown";
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
@@ -207,6 +278,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       offset: p.offset,
       query: p.query,
       enabled: p.enabled,
+      scheduleKind: p.scheduleKind,
+      lastRunStatus: p.lastRunStatus,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
       agentId: p.agentId,
@@ -232,6 +305,31 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const status = await context.cron.status();
     respond(true, status, undefined);
+  },
+  "cron.get": async ({ params, respond, context }) => {
+    if (!validateCronGetParams(params)) {
+      respondInvalidCronParams(
+        respond,
+        "cron.get",
+        formatValidationErrors(validateCronGetParams.errors),
+      );
+      return;
+    }
+    const jobId = resolveCronJobId(params as CronJobIdParams);
+    if (!jobId) {
+      respondMissingCronJobId(respond, "cron.get");
+      return;
+    }
+    const job = await context.cron.readJob(jobId);
+    if (!job) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `cron job not found: ${jobId}`),
+      );
+      return;
+    }
+    respond(true, job, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
     const sessionKey =
@@ -407,52 +505,43 @@ export const cronHandlers: GatewayRequestHandlers = {
   },
   "cron.remove": async ({ params, respond, context }) => {
     if (!validateCronRemoveParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.remove params: ${formatValidationErrors(validateCronRemoveParams.errors)}`,
-        ),
+      respondInvalidCronParams(
+        respond,
+        "cron.remove",
+        formatValidationErrors(validateCronRemoveParams.errors),
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string };
-    const jobId = p.id ?? p.jobId;
+    const jobId = resolveCronJobId(params as CronJobIdParams);
     if (!jobId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.remove params: missing id"),
-      );
+      respondMissingCronJobId(respond, "cron.remove");
       return;
     }
     const result = await context.cron.remove(jobId);
-    if (result.removed) {
-      context.logGateway.info("cron: job removed", { jobId });
+    if (!result.removed) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.remove params: id not found"),
+      );
+      return;
     }
+    context.logGateway.info("cron: job removed", { jobId });
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context }) => {
     if (!validateCronRunParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.run params: ${formatValidationErrors(validateCronRunParams.errors)}`,
-        ),
+      respondInvalidCronParams(
+        respond,
+        "cron.run",
+        formatValidationErrors(validateCronRunParams.errors),
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
-    const jobId = p.id ?? p.jobId;
+    const p = params as CronJobIdParams & { mode?: "due" | "force" };
+    const jobId = resolveCronJobId(p);
     if (!jobId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.run params: missing id"),
-      );
+      respondMissingCronJobId(respond, "cron.run");
       return;
     }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
@@ -469,38 +558,19 @@ export const cronHandlers: GatewayRequestHandlers = {
   },
   "cron.runs": async ({ params, respond, context }) => {
     if (!validateCronRunsParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.runs params: ${formatValidationErrors(validateCronRunsParams.errors)}`,
-        ),
+      respondInvalidCronParams(
+        respond,
+        "cron.runs",
+        formatValidationErrors(validateCronRunsParams.errors),
       );
       return;
     }
-    const p = params as {
-      scope?: "job" | "all";
-      id?: string;
-      jobId?: string;
-      limit?: number;
-      offset?: number;
-      statuses?: Array<"ok" | "error" | "skipped">;
-      status?: "all" | "ok" | "error" | "skipped";
-      deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
-      deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
-      query?: string;
-      sortDir?: "asc" | "desc";
-    };
+    const p = params as CronRunsRequestParams;
     const explicitScope = p.scope;
-    const jobId = p.id ?? p.jobId;
+    const jobId = resolveCronJobId(p);
     const scope: "job" | "all" = explicitScope ?? (jobId ? "job" : "all");
     if (scope === "job" && !jobId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: missing id"),
-      );
+      respondMissingCronJobId(respond, "cron.runs");
       return;
     }
     if (scope === "all") {
@@ -512,44 +582,28 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       const page = await readCronRunLogEntriesPageAll({
         storePath: context.cronStorePath,
-        limit: p.limit,
-        offset: p.offset,
-        statuses: p.statuses,
-        status: p.status,
-        deliveryStatuses: p.deliveryStatuses,
-        deliveryStatus: p.deliveryStatus,
-        query: p.query,
-        sortDir: p.sortDir,
+        ...cronRunLogPageFilters(p),
         jobNameById,
       });
       respond(true, page, undefined);
       return;
     }
-    let logPath: string;
     try {
-      logPath = resolveCronRunLogPath({
+      const page = await readCronRunLogEntriesPage({
         storePath: context.cronStorePath,
         jobId: jobId as string,
+        ...cronRunLogPageFilters(p),
       });
-    } catch {
+      respond(true, page, undefined);
+    } catch (err) {
+      if (!isInvalidCronRunLogJobIdError(err)) {
+        throw err;
+      }
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: invalid id"),
       );
-      return;
     }
-    const page = await readCronRunLogEntriesPage(logPath, {
-      limit: p.limit,
-      offset: p.offset,
-      jobId: jobId as string,
-      statuses: p.statuses,
-      status: p.status,
-      deliveryStatuses: p.deliveryStatuses,
-      deliveryStatus: p.deliveryStatus,
-      query: p.query,
-      sortDir: p.sortDir,
-    });
-    respond(true, page, undefined);
   },
 };

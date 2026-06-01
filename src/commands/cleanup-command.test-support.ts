@@ -1,10 +1,11 @@
 import { vi } from "vitest";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const resolveCleanupPlanFromDisk = vi.fn();
 const removePath = vi.fn();
 const listAgentSessionDirs = vi.fn();
-const removeStateAndLinkedPaths = vi.fn();
+export const removeStateAndLinkedPaths = vi.fn();
 const removeWorkspaceDirs = vi.fn();
 
 vi.mock("../config/config.js", () => ({
@@ -45,4 +46,9 @@ export function resetCleanupCommandMocks() {
 export function silenceCleanupCommandRuntime(runtime: RuntimeEnv) {
   vi.spyOn(runtime, "log").mockImplementation(() => {});
   vi.spyOn(runtime, "error").mockImplementation(() => {});
+}
+
+export function cleanupCommandLogMessages(runtime: RuntimeEnv): string[] {
+  const calls = (runtime.log as MockFn<(...args: unknown[]) => void>).mock.calls;
+  return calls.map((call) => String(call[0]));
 }

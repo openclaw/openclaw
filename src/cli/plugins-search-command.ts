@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   searchClawHubPackages,
   type ClawHubPackageFamily,
@@ -5,8 +7,6 @@ import {
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { theme } from "../terminal/theme.js";
 
 export type PluginsSearchOptions = {
   json?: boolean;
@@ -33,7 +33,25 @@ function mergePackageSearchResults(
       byName.set(entry.package.name, entry);
     }
   }
-  return [...byName.values()].toSorted((a, b) => b.score - a.score).slice(0, limit);
+  const selected: ClawHubPackageSearchResult[] = [];
+  for (const entry of byName.values()) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (entry.score > selected[index].score) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < limit) {
+      selected.splice(insertAt, 0, entry);
+      if (selected.length > limit) {
+        selected.pop();
+      }
+    } else if (selected.length < limit) {
+      selected.push(entry);
+    }
+  }
+  return selected;
 }
 
 function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {

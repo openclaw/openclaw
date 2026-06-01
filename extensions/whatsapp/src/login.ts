@@ -1,8 +1,8 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
@@ -26,7 +26,7 @@ export async function loginWeb(
       .then((output) => {
         runtime.log(output.endsWith("\n") ? output.slice(0, -1) : output);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
       });
   };

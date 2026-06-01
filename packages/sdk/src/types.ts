@@ -28,7 +28,7 @@ export type ConnectableOpenClawTransport = OpenClawTransport & {
 
 export type RuntimeSelection =
   | "auto"
-  | { type: "embedded"; id: "pi" | "codex" | (string & {}) }
+  | { type: "embedded"; id: "openclaw" | "codex" | (string & {}) }
   | { type: "cli"; id: "claude-cli" | (string & {}) }
   | { type: "acp"; harness: "claude" | "cursor" | "gemini" | "opencode" | (string & {}) }
   | { type: "managed"; provider: "local" | "node" | "testbox" | "cloud" | (string & {}) };
@@ -101,9 +101,9 @@ export type ArtifactSummary = {
 };
 
 export type ArtifactQuery =
-  | { sessionKey: string; runId?: string; taskId?: string }
-  | { runId: string; sessionKey?: string; taskId?: string }
-  | { taskId: string; sessionKey?: string; runId?: string };
+  | { sessionKey: string; runId?: string; taskId?: string; agentId?: string }
+  | { runId: string; sessionKey?: string; taskId?: string; agentId?: string }
+  | { taskId: string; sessionKey?: string; runId?: string; agentId?: string };
 
 export type ArtifactsListResult = {
   artifacts: ArtifactSummary[];
@@ -118,6 +118,56 @@ export type ArtifactsDownloadResult = {
   encoding?: "base64";
   data?: string;
   url?: string;
+};
+
+export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
+
+export type TaskSummary = {
+  id: string;
+  taskId?: string;
+  kind?: string;
+  runtime?: string;
+  status: TaskStatus;
+  title?: string;
+  agentId?: string;
+  sessionKey?: string;
+  childSessionKey?: string;
+  ownerKey?: string;
+  runId?: string;
+  flowId?: string;
+  parentTaskId?: string;
+  sourceId?: string;
+  createdAt?: RunTimestamp;
+  updatedAt?: RunTimestamp;
+  startedAt?: RunTimestamp;
+  endedAt?: RunTimestamp;
+  progressSummary?: string;
+  terminalSummary?: string;
+  error?: string;
+};
+
+export type TasksListParams = {
+  status?: TaskStatus | TaskStatus[];
+  agentId?: string;
+  sessionKey?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+export type TasksListResult = {
+  tasks: TaskSummary[];
+  nextCursor?: string;
+};
+
+export type TasksGetResult = {
+  task: TaskSummary;
+};
+
+export type TasksCancelResult = {
+  found: boolean;
+  cancelled: boolean;
+  reason?: string;
+  task?: TaskSummary;
 };
 
 export type SDKError = {

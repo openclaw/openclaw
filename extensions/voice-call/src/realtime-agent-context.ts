@@ -1,12 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import { root } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
-
-type AgentEntryLike = {
-  id?: unknown;
-  systemPromptOverride?: unknown;
-};
 
 type VoiceIdentityLike = {
   name?: unknown;
@@ -15,31 +12,6 @@ type VoiceIdentityLike = {
   creature?: unknown;
   vibe?: unknown;
 };
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readAgentEntries(cfg: CoreConfig): AgentEntryLike[] {
-  const agents = (cfg as { agents?: { list?: unknown } }).agents;
-  return Array.isArray(agents?.list)
-    ? agents.list.filter((entry): entry is AgentEntryLike =>
-        Boolean(entry && typeof entry === "object"),
-      )
-    : [];
-}
-
-function resolveAgentSystemPromptOverride(cfg: CoreConfig, agentId: string): string | undefined {
-  const entries = readAgentEntries(cfg);
-  const entry = entries.find((candidate) => normalizeString(candidate.id) === agentId);
-  return (
-    normalizeString(entry?.systemPromptOverride) ??
-    normalizeString(
-      (cfg as { agents?: { defaults?: { systemPromptOverride?: unknown } } }).agents?.defaults
-        ?.systemPromptOverride,
-    )
-  );
-}
 
 function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
@@ -76,28 +48,6 @@ async function readWorkspaceVoiceContextFiles(params: {
   return sections;
 }
 
-function buildConsultPolicyGuidance(
-  config: Pick<VoiceCallConfig["realtime"], "consultPolicy" | "toolPolicy">,
-): string | undefined {
-  if (config.toolPolicy === "none" || config.consultPolicy === "auto") {
-    return undefined;
-  }
-  if (config.consultPolicy === "always") {
-    return [
-      "Consult behavior:",
-      "- Call openclaw_agent_consult before every substantive answer.",
-      "- You may answer directly only for greetings, acknowledgements, brief latency tests, or filler while waiting for the consult result.",
-      "- After the consult result arrives, speak that result concisely.",
-    ].join("\n");
-  }
-  return [
-    "Consult behavior:",
-    "- Answer directly for greetings, acknowledgements, simple conversational glue, and brief latency tests.",
-    "- Call openclaw_agent_consult before answering requests that need facts, memory, current information, tools, workspace state, or the user's OpenClaw-specific context.",
-    "- Keep spoken replies concise and natural.",
-  ].join("\n");
-}
-
 export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
@@ -106,7 +56,7 @@ export async function buildRealtimeVoiceInstructions(params: {
 }): Promise<string> {
   const { config } = params;
   const sections: string[] = [params.baseInstructions];
-  const consultGuidance = buildConsultPolicyGuidance(config.realtime);
+  const consultGuidance = buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime);
   if (consultGuidance) {
     sections.push(consultGuidance);
   }
@@ -140,13 +90,6 @@ export async function buildRealtimeVoiceInstructions(params: {
     ].filter(Boolean);
     if (identityLines.length > 0) {
       capsule.push(`Configured identity:\n${identityLines.join("\n")}`);
-    }
-  }
-
-  if (contextConfig.includeSystemPrompt) {
-    const systemPrompt = resolveAgentSystemPromptOverride(params.coreConfig, agentId);
-    if (systemPrompt) {
-      capsule.push(`Configured system prompt override:\n${systemPrompt}`);
     }
   }
 

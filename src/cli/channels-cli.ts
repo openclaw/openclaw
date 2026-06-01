@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
@@ -100,7 +100,9 @@ export async function registerChannelsCli(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw channels list", "List configured channels and auth profiles."],
+          ["openclaw channels list", "List configured channels."],
+          ["openclaw channels list --all", "Show configured, bundled, and installable channels."],
+          ["openclaw channels add", "Open guided channel setup."],
           ["openclaw channels status --probe", "Run channel status checks and probes."],
           [
             "openclaw channels add --channel telegram --token <token>",
@@ -115,8 +117,8 @@ export async function registerChannelsCli(
 
   channels
     .command("list")
-    .description("List configured channels + auth profiles")
-    .option("--no-usage", "Skip model provider usage/quota snapshots")
+    .description("List chat channels (configured by default; pass --all for installable catalog)")
+    .option("--all", "Include bundled and installable catalog channels", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
@@ -128,6 +130,7 @@ export async function registerChannelsCli(
   channels
     .command("status")
     .description("Show gateway channel status (use status --deep for local)")
+    .option("--channel <name>", `Only show one channel (${formatCliChannelOptions(["all"])})`)
     .option("--probe", "Probe channel credentials", false)
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
@@ -193,6 +196,18 @@ export async function registerChannelsCli(
   const addCommand = channels
     .command("add")
     .description("Add or update a channel account")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw channels add", "Open guided setup for available chat channels."],
+          [
+            "openclaw channels add --channel telegram --token <token>",
+            "Add or update Telegram non-interactively.",
+          ],
+          ["openclaw channels list --all", "Find channel ids before using --channel."],
+        ])}\n`,
+    )
     .option("--channel <name>", `Channel (${channelNames})`)
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account")

@@ -1,7 +1,15 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
+  appendBoundedShellCapture,
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
+  dockerPreflightContainerNames,
+  parseDockerAllCliArgs,
+  SHELL_CAPTURE_MAX_CHARS,
 } from "../../scripts/test-docker-all.mjs";
 
 const limits = {
@@ -29,6 +37,89 @@ function activePool({
 }
 
 describe("scripts/test-docker-all scheduler", () => {
+  it("parses the supported CLI options", () => {
+    expect(parseDockerAllCliArgs([])).toEqual({
+      help: false,
+      planJson: false,
+    });
+    expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
+      help: false,
+      planJson: true,
+    });
+    expect(parseDockerAllCliArgs(["--help"])).toEqual({
+      help: true,
+      planJson: false,
+    });
+  });
+
+  it("prints CLI help without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
+    expect(result.stdout).toContain("OPENCLAW_DOCKER_ALL_* env vars");
+  });
+
+  it("rejects unknown CLI options without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--bogus"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown argument: --bogus");
+    expect(result.stderr).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
+    expect(result.stderr).not.toContain("at ");
+  });
+
+  it("rejects loose numeric runner env vars without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--plan-json"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_PARALLELISM: "1e3",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
+    expect(result.stderr).not.toContain("at ");
+  });
+
+  it("rejects loose numeric resource limit env vars before scheduling lanes", () => {
+    const logDir = mkdtempSync(`${tmpdir()}/openclaw-docker-all-`);
+    try {
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_DOCKER_LIMIT: "1e3",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "OPENCLAW_DOCKER_ALL_DOCKER_LIMIT must be a positive integer",
+      );
+      expect(result.stderr).not.toContain("at ");
+    } finally {
+      rmSync(logDir, { force: true, recursive: true });
+    }
+  });
+
   it("allows an overweight lane to start alone under low parallelism", () => {
     expect(
       canStartSchedulerLane(
@@ -158,6 +249,41 @@ describe("scripts/test-docker-all scheduler", () => {
         limits,
       ),
     ).toBe(false);
+  });
+
+  it("serializes live OpenAI Docker lanes by default", () => {
+    expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
+  });
+
+  it("cleans stale stopped containers from all named Docker E2E lanes", () => {
+    expect(
+      dockerPreflightContainerNames(`
+openclaw-gateway-e2e-123 Exited (1) 2 minutes ago
+openclaw-config-reload-e2e-234 Created
+openclaw-plugin-binding-command-escape-e2e-345 Dead
+openclaw-kitchen-sink-rpc-e2e-456 Exited (137) 10 seconds ago
+openclaw-openwebui-gateway-567 Exited (1) 3 minutes ago
+openclaw-openwebui-678 Created
+openclaw-not-an-e2e-container Exited (1) 2 minutes ago
+postgres Created
+`),
+    ).toEqual([
+      "openclaw-gateway-e2e-123",
+      "openclaw-config-reload-e2e-234",
+      "openclaw-plugin-binding-command-escape-e2e-345",
+      "openclaw-kitchen-sink-rpc-e2e-456",
+      "openclaw-openwebui-gateway-567",
+      "openclaw-openwebui-678",
+    ]);
+  });
+
+  it("bounds captured preflight command output while keeping the newest tail", () => {
+    const first = appendBoundedShellCapture("abc", "def", 8);
+    expect(first).toEqual({ text: "abcdef", truncated: false });
+
+    const second = appendBoundedShellCapture(first.text, "ghijkl", 8);
+    expect(second).toEqual({ text: "efghijkl", truncated: true });
+    expect(SHELL_CAPTURE_MAX_CHARS).toBeGreaterThan(1024);
   });
 
   it("describes effective scheduler limits for operator errors", () => {

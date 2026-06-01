@@ -1,4 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
@@ -106,8 +110,20 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     normalized.model = model;
   }
   const voice = normalizeOptionalString(source.voice);
+  const speakerVoice = normalizeOptionalString(source.speakerVoice) ?? voice;
+  const speakerVoiceId = normalizeOptionalString(source.speakerVoiceId);
+  if (speakerVoice) {
+    normalized.speakerVoice = speakerVoice;
+  }
+  if (speakerVoiceId) {
+    normalized.speakerVoiceId = speakerVoiceId;
+  }
   if (voice) {
     normalized.voice = voice;
+  }
+  const instructions = normalizeOptionalString(source.instructions);
+  if (instructions) {
+    normalized.instructions = instructions;
   }
   if (source.mode === "realtime" || source.mode === "stt-tts" || source.mode === "transcription") {
     normalized.mode = source.mode;
@@ -126,6 +142,12 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     source.brain === "none"
   ) {
     normalized.brain = source.brain;
+  }
+  if (
+    source.consultRouting === "provider-direct" ||
+    source.consultRouting === "force-agent-consult"
+  ) {
+    normalized.consultRouting = source.consultRouting;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -156,6 +178,20 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   }
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
+  }
+  const consultThinkingLevel = normalizeThinkLevel(
+    normalizeOptionalString(source.consultThinkingLevel),
+  );
+  if (consultThinkingLevel) {
+    normalized.consultThinkingLevel = consultThinkingLevel;
+  }
+  const rawConsultFastMode = source.consultFastMode;
+  const consultFastMode =
+    typeof rawConsultFastMode === "boolean" || typeof rawConsultFastMode === "string"
+      ? normalizeFastMode(rawConsultFastMode)
+      : undefined;
+  if (consultFastMode !== undefined) {
+    normalized.consultFastMode = consultFastMode;
   }
   const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
   if (silenceTimeoutMs !== undefined) {
@@ -224,6 +260,12 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
   if (typeof normalized?.silenceTimeoutMs === "number") {
     payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
+  }
+  if (typeof normalized?.consultThinkingLevel === "string") {
+    payload.consultThinkingLevel = normalized.consultThinkingLevel;
+  }
+  if (typeof normalized?.consultFastMode === "boolean") {
+    payload.consultFastMode = normalized.consultFastMode;
   }
   if (typeof normalized?.speechLocale === "string") {
     payload.speechLocale = normalized.speechLocale;

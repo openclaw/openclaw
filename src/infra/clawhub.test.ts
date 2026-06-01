@@ -7,9 +7,12 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  fetchClawHubSkillCard,
+  fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
   fetchClawHubPackageReadiness,
   fetchClawHubPackageSecurity,
+  fetchClawHubSkillVerification,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -20,10 +23,46 @@ import {
   searchClawHubSkills,
 } from "./clawhub.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  expect((statError as { code?: unknown }).code).toBe("ENOENT");
+}
+
+function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: Uint8Array }): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+} {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(params.firstChunk);
+    },
+    cancel(reason) {
+      cancel(reason);
+    },
+  });
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers: params.headers,
+    }),
+    cancel,
+  };
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
   afterEach(() => {
+    delete process.env.OPENCLAW_CLAWHUB_URL;
     delete process.env.OPENCLAW_CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
@@ -103,7 +142,18 @@ describe("clawhub helpers", () => {
   it("treats OpenClaw CalVer correction versions as stable plugin API hosts", () => {
     expect(satisfiesPluginApiRange("2026.5.3-1", ">=2026.5.3")).toBe(true);
     expect(satisfiesPluginApiRange("2026.5.3-2", ">=2026.5.3")).toBe(true);
-    expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-alpha.1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-rc.1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.2-beta.1", ">=2026.5.3")).toBe(false);
+  });
+
+  it("preserves prerelease ordering for explicit plugin API prerelease floors", () => {
+    expect(satisfiesPluginApiRange("2026.3.24-beta.1", ">=2026.3.24-beta.2")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24-beta.2", ">=2026.3.24-beta.2")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.24-1", ">=2026.3.24-beta.2")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.24", ">=2026.3.24-beta.2")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.24-beta.1", ">=2026.3.24")).toBe(true);
   });
 
   it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
@@ -237,7 +287,241 @@ describe("clawhub helpers", () => {
       });
     };
 
-    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
+  });
+
+  it("preserves the configured ClawHub base URL path prefix", async () => {
+    process.env.OPENCLAW_CLAWHUB_URL = "https://internal.example.com/clawhub";
+    let requestedUrl = "";
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toStrictEqual([]);
+
+    const url = new URL(requestedUrl);
+    expect(url.origin).toBe("https://internal.example.com");
+    expect(url.pathname).toBe("/clawhub/api/v1/search");
+    expect(url.searchParams.get("q")).toBe("calendar");
+  });
+
+  it("fetches skill verification reports and lets version take precedence over tag", async () => {
+    let requestedUrl = "";
+    const envelope = {
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
+      publisher: { handle: "openclaw" },
+      version: { version: "1.2.3", tag: "stable" },
+      card: {
+        available: true,
+        url: "https://clawhub.ai/api/v1/skills/agentreceipt/card?version=1.2.3",
+      },
+      artifact: {
+        sourceFingerprint: "source-fp",
+        bundleFingerprints: ["generated-bundle-fp"],
+      },
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    };
+
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "agentreceipt",
+        version: "1.2.3",
+        tag: "stable",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(JSON.stringify(envelope), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toEqual(envelope);
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/agentreceipt/verify");
+    expect(url.searchParams.get("version")).toBe("1.2.3");
+    expect(url.searchParams.has("tag")).toBe(false);
+  });
+
+  it("posts bulk skill security verdict requests", async () => {
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+    const envelope = {
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          requestedSlug: "agentreceipt",
+          slug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          version: "1.2.3",
+          security: { status: "clean", passed: true },
+        },
+      ],
+    };
+
+    await expect(
+      fetchClawHubSkillSecurityVerdicts({
+        items: [{ slug: "agentreceipt", version: "1.2.3" }],
+        fetchImpl: async (input, init) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          requestedInit = init;
+          return new Response(JSON.stringify(envelope), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toEqual(envelope);
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/-/security-verdicts");
+    expect(requestedInit?.method).toBe("POST");
+    expect(requestedInit?.headers).toMatchObject({ "Content-Type": "application/json" });
+    expect(requestedInit?.body).toBe(
+      JSON.stringify({ items: [{ slug: "agentreceipt", version: "1.2.3" }] }),
+    );
+  });
+
+  it("can post bulk skill security verdict requests without resolved auth", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    let requestedInit: RequestInit | undefined;
+    const envelope = {
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [],
+    };
+
+    await expect(
+      fetchClawHubSkillSecurityVerdicts({
+        items: [{ slug: "agentreceipt", version: "1.2.3" }],
+        skipAuth: true,
+        fetchImpl: async (_input, init) => {
+          requestedInit = init;
+          return new Response(JSON.stringify(envelope), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toEqual(envelope);
+
+    expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
+  });
+
+  it("returns failed skill verification reports with missing card reasons", async () => {
+    const envelope = {
+      schema: "clawhub.skill.verify.v1",
+      ok: false,
+      decision: "fail",
+      reasons: ["card.missing"],
+      skill: { slug: "agentreceipt" },
+      publisher: null,
+      version: { version: "1.2.3" },
+      card: { available: false },
+      artifact: null,
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    };
+
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "agentreceipt",
+        fetchImpl: async () =>
+          new Response(JSON.stringify(envelope), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).resolves.toEqual(envelope);
+  });
+
+  it("fetches generated Skill Card markdown and applies tag queries", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        tag: "latest",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response("# Agent Receipt\n\nVerified by ClawHub.\n", {
+            status: 200,
+            headers: { "content-type": "text/markdown; charset=utf-8" },
+          });
+        },
+      }),
+    ).resolves.toBe("# Agent Receipt\n\nVerified by ClawHub.\n");
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/agentreceipt/card");
+    expect(url.searchParams.get("tag")).toBe("latest");
+    expect(url.searchParams.has("version")).toBe(false);
+  });
+
+  it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillCard({
+        url: "https://cards.example.test/generated/agentreceipt.md",
+        baseUrl: "https://clawhub.ai",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response("# Agent Receipt\n", {
+            status: 200,
+            headers: { "content-type": "text/markdown; charset=utf-8" },
+          });
+        },
+      }),
+    ).resolves.toBe("# Agent Receipt\n");
+
+    expect(requestedUrl).toBe("https://cards.example.test/generated/agentreceipt.md");
+  });
+
+  it("wraps non-200 skill card responses", async () => {
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response("card missing", { status: 404 }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/card failed (404): card missing");
+  });
+
+  it("rejects oversized generated Skill Card markdown", async () => {
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response("x".repeat(256 * 1024 + 1)),
+      }),
+    ).rejects.toThrow(
+      "ClawHub skill card for agentreceipt exceeded 262144 bytes (262145 bytes received)",
+    );
+  });
+
+  it("wraps non-200 skill verification responses", async () => {
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response("not found", { status: 404 }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 
   it("fetches typed package readiness reports", async () => {
@@ -359,7 +643,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -398,7 +682,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -448,6 +732,19 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
+  it("wraps malformed successful ClawHub JSON responses", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(
@@ -480,6 +777,63 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded$/);
   });
 
+  it("times out and cancels stalled skill archive body reads", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new Uint8Array([4]),
+      headers: { "content-type": "application/zip" },
+    });
+
+    await expect(
+      downloadClawHubSkillArchive({
+        slug: "agentreceipt",
+        version: "1.0.0",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(/skill archive download for agentreceipt body stalled after 5ms/i);
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("times out and cancels stalled package archive body reads", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new Uint8Array([1]),
+      headers: { "content-type": "application/zip" },
+    });
+
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "@hyf/zai-external-alpha",
+        version: "0.0.1",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(
+      /package archive download for @hyf\/zai-external-alpha body stalled after 5ms/i,
+    );
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("times out and cancels stalled ClawPack artifact body reads", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new Uint8Array([7]),
+      headers: { "content-type": "application/octet-stream" },
+    });
+
+    await expect(
+      downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact: "clawpack",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(/ClawPack download for demo@1.2.3 body stalled after 5ms/i);
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
       slug: "agentreceipt",
@@ -497,7 +851,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 });

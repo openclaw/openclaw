@@ -1,6 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -37,6 +38,7 @@ export type PluginCliRegistryLoadResult = PluginCliLoadContext & {
 
 export type PluginCliCommandGroupEntry = {
   pluginId: string;
+  parentPath: readonly string[];
   placeholders: readonly OpenClawPluginCliCommandDescriptor[];
   names: readonly string[];
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
@@ -90,19 +92,18 @@ function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: str
   if (!normalizedPrimary) {
     return [];
   }
-  return [
-    ...new Set(
-      registry.cliRegistrars
-        .filter((entry) => {
-          const roots = [
-            ...entry.commands,
-            ...entry.descriptors.map((descriptor) => descriptor.name),
-          ].map(normalizePluginCliRootName);
-          return roots.includes(normalizedPrimary);
-        })
-        .map((entry) => entry.pluginId),
-    ),
-  ];
+  return uniqueStrings(
+    registry.cliRegistrars
+      .filter((entry) => {
+        const parentPath = entry.parentPath ?? [];
+        const roots =
+          parentPath.length > 0
+            ? [parentPath[0]]
+            : [...entry.commands, ...entry.descriptors.map((descriptor) => descriptor.name)];
+        return roots.includes(normalizedPrimary);
+      })
+      .map((entry) => entry.pluginId),
+  );
 }
 
 async function resolvePrimaryCommandPluginIds(
@@ -196,11 +197,13 @@ function buildPluginCliCommandGroupEntries(params: {
 }): PluginCliCommandGroupEntry[] {
   return params.registry.cliRegistrars.map((entry) => ({
     pluginId: entry.pluginId,
+    parentPath: entry.parentPath ?? [],
     placeholders: entry.descriptors,
     names: entry.commands,
     register: async (program) => {
       await entry.register({
         program,
+        parentPath: entry.parentPath ?? [],
         config: params.config,
         workspaceDir: params.workspaceDir,
         logger: params.logger,
@@ -225,7 +228,9 @@ export async function loadPluginCliDescriptors(
       params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
-      registry.cliRegistrars.map((entry) => entry.descriptors),
+      registry.cliRegistrars
+        .filter((entry) => (entry.parentPath ?? []).length === 0)
+        .map((entry) => entry.descriptors),
     );
   } catch {
     return [];

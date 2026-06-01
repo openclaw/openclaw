@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clearDeviceAuthTokenFromStore,
+  coerceDeviceAuthStore,
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
   type DeviceAuthStoreAdapter,
@@ -40,7 +41,12 @@ describe("device-auth-store", () => {
         deviceId: "device-1",
         role: "  operator  ",
       }),
-    ).toMatchObject({ token: "secret" });
+    ).toEqual({
+      token: "secret",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    });
     expect(
       loadDeviceAuthTokenFromStore({
         adapter,
@@ -78,6 +84,71 @@ describe("device-auth-store", () => {
         role: "operator",
       }),
     ).toBeNull();
+  });
+
+  it("normalizes malformed persisted token metadata before returning entries", () => {
+    const { adapter } = createAdapter({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: "secret",
+          role: { nested: "bad" },
+          scopes: ["operator.write", 42, "", "operator.read"],
+          updatedAtMs: "bad-time",
+        },
+      },
+    } as never);
+
+    expect(
+      loadDeviceAuthTokenFromStore({
+        adapter,
+        deviceId: "device-1",
+        role: "operator",
+      }),
+    ).toEqual({
+      token: "secret",
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+      updatedAtMs: 0,
+    });
+  });
+
+  it("coerces raw persisted stores into canonical token maps", () => {
+    expect(
+      coerceDeviceAuthStore({
+        version: 1,
+        deviceId: "device-1",
+        tokens: {
+          " operator ": {
+            token: "operator-token",
+            role: { nested: "bad" },
+            scopes: ["operator.write", "operator.read", 42],
+            updatedAtMs: "bad-time",
+          },
+          broken: {
+            token: 123,
+            role: "broken",
+            scopes: [],
+            updatedAtMs: 1,
+          },
+        },
+      }),
+    ).toEqual({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: "operator-token",
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+          updatedAtMs: 0,
+        },
+      },
+    });
+
+    expect(coerceDeviceAuthStore({ version: 2, deviceId: "device-1", tokens: {} })).toBeNull();
+    expect(coerceDeviceAuthStore({ version: 1, deviceId: "device-1", tokens: [] })).toBeNull();
   });
 
   it("stores normalized roles and deduped sorted scopes while preserving same-device tokens", () => {
@@ -125,7 +196,51 @@ describe("device-auth-store", () => {
     });
   });
 
+  it("canonicalizes same-device persisted tokens while storing new entries", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5678);
+    const { adapter, readStore } = createAdapter({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        node: {
+          token: "node-token",
+          role: { nested: "bad" },
+          scopes: ["node.invoke", 123],
+          updatedAtMs: "bad-time",
+        },
+        broken: {
+          token: 123,
+          role: "broken",
+          scopes: [],
+          updatedAtMs: 1,
+        },
+      },
+    } as never);
+
+    const entry = storeDeviceAuthTokenInStore({
+      adapter,
+      deviceId: "device-1",
+      role: "operator",
+      token: "operator-token",
+    });
+
+    expect(readStore()).toEqual({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        node: {
+          token: "node-token",
+          role: "node",
+          scopes: ["node.invoke"],
+          updatedAtMs: 0,
+        },
+        operator: entry,
+      },
+    });
+  });
+
   it("replaces stale stores from other devices instead of merging them", () => {
+    vi.spyOn(Date, "now").mockReturnValue(3456);
     const { adapter, readStore } = createAdapter({
       version: 1,
       deviceId: "device-2",
@@ -154,7 +269,7 @@ describe("device-auth-store", () => {
           token: "node-token",
           role: "node",
           scopes: [],
-          updatedAtMs: expect.any(Number),
+          updatedAtMs: 3456,
         },
       },
     });

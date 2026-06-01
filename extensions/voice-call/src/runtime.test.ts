@@ -129,6 +129,82 @@ function createExternalProviderConfig(params: {
   return config;
 }
 
+type RealtimeConsultToolHandler = (
+  args: unknown,
+  callId: string,
+  context?: { partialUserTranscript?: string },
+) => Promise<unknown>;
+
+function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstCallParam(calls: readonly unknown[][], label: string) {
+  const call = firstMockCall(calls, label);
+  return call[0];
+}
+
+type MockSessionEntry = {
+  sessionId?: string;
+  updatedAt?: number;
+  [key: string]: unknown;
+};
+
+function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
+  return {
+    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+    loadSessionStore: vi.fn(() => sessionStore),
+    saveSessionStore: vi.fn(async () => {}),
+    updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
+      mutator(sessionStore as never),
+    ),
+    getSessionEntry: vi.fn(
+      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
+    ),
+    patchSessionEntry: vi.fn(
+      async ({
+        sessionKey,
+        fallbackEntry,
+        update,
+      }: {
+        sessionKey: string;
+        fallbackEntry: MockSessionEntry;
+        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
+      }) => {
+        const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
+        const patch = await update(current);
+        const next = { ...current, ...patch };
+        sessionStore[sessionKey] = next;
+        return next;
+      },
+    ),
+    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  };
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
+  const registeredToolHandler = firstMockCall(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
+    "realtime tool handler registration",
+  );
+  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
+  if (typeof registeredToolHandler[1] !== "function") {
+    throw new Error("expected realtime tool handler callback");
+  }
+  return registeredToolHandler[1] as RealtimeConsultToolHandler;
+}
+
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -314,7 +390,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Use the shipment status." }],
       meta: {},
     }));
@@ -326,14 +402,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -350,49 +420,48 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    expect(mocks.realtimeHandlerCtorArgs[0]?.[0]).toMatchObject({
-      tools: [
-        expect.objectContaining({ name: "openclaw_agent_consult" }),
-        expect.objectContaining({ name: "custom_tool" }),
-      ],
-    });
-    expect(mocks.realtimeHandlerRegisterToolHandler).toHaveBeenCalledWith(
-      "openclaw_agent_consult",
-      expect.any(Function),
+    const realtimeHandlerOptions = requireRecord(
+      mocks.realtimeHandlerCtorArgs[0]?.[0],
+      "realtime handler options",
     );
-
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
+    const tools = realtimeHandlerOptions.tools;
+    if (!Array.isArray(tools)) {
+      throw new Error("expected realtime handler tools to be an array");
+    }
+    expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
+      "openclaw_agent_consult",
+      "custom_tool",
+    ]);
+    const handler = requireRealtimeConsultToolHandler();
     await expect(
-      handler?.({ question: "What should I say?" }, "call-1", {
+      handler({ question: "What should I say?" }, "call-1", {
         partialUserTranscript: "Also check the ETA.",
       }),
     ).resolves.toEqual({
       text: "Use the shipment status.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "voice:15550009999",
-        spawnedBy: "agent:main:discord:channel:general",
-        messageProvider: "voice",
-        lane: "voice",
-        provider: "openai",
-        model: "gpt-5.4",
-        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-        extraSystemPrompt: expect.stringContaining("one or two bounded read-only queries"),
-        prompt: expect.stringContaining("Caller: Can you check shipment status?"),
-      }),
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
+      "embedded OpenClaw consult params",
     );
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: expect.stringContaining("Caller: Also check the ETA."),
-      }),
-    );
+    expect(consultParams.sessionKey).toBe("voice:15550009999");
+    expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
+    expect(consultParams.messageProvider).toBe("voice");
+    expect(consultParams.lane).toBe("voice");
+    expect(consultParams.provider).toBe("openai");
+    expect(consultParams.model).toBe("gpt-5.4");
+    expect(consultParams.toolsAllow).toEqual([
+      "read",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "memory_search",
+      "memory_get",
+    ]);
+    expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
+    expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
+    expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
   it("uses persisted per-call session keys for realtime consults", async () => {
@@ -400,7 +469,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
     config.sessionScope = "per-call";
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Per-call consult answer." }],
       meta: {},
     }));
@@ -413,14 +482,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -437,21 +500,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "What should I say?" }, "call-1")).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "voice:call:call-1",
-      }),
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(
+        runEmbeddedAgent.mock.calls as unknown[][],
+        "per-call embedded OpenClaw consult",
+      ),
+      "per-call embedded OpenClaw consult params",
     );
+    expect(consultParams.sessionKey).toBe("voice:call:call-1");
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
@@ -464,7 +525,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       sources: ["memory"],
       fallbackToConsult: false,
     };
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "slow answer" }],
       meta: {},
     }));
@@ -476,14 +537,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
-      runEmbeddedPiAgent,
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -505,18 +560,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "Are the basement lights on?" }, "call-1")).resolves.toEqual(
-      {
-        text: expect.stringContaining("The caller's basement lights are on."),
-      },
-    );
+    const handler = requireRealtimeConsultToolHandler();
+    const fastContextResult = await handler({ question: "Are the basement lights on?" }, "call-1");
+    const fastContextRecord = requireRecord(fastContextResult, "fast context result");
+    expect(fastContextRecord.text).toContain("The caller's basement lights are on.");
     expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
@@ -528,9 +575,68 @@ describe("createVoiceCallRuntime lifecycle", () => {
         sources: ["memory"],
         timeoutMs: 800,
       },
-      logger: expect.any(Object),
+      logger: {
+        info: console.log,
+        warn: console.warn,
+        error: console.error,
+        debug: console.debug,
+      },
       sessionKey: "voice:15550001234",
     });
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured realtime consult thinking level when set", async () => {
+    const config = createBaseConfig();
+    config.inboundPolicy = "allowlist";
+    config.realtime.enabled = true;
+    config.realtime.consultThinkingLevel = "low";
+    config.realtime.consultFastMode = true;
+    const sessionStore: Record<string, unknown> = {};
+    const runEmbeddedAgent = vi.fn(async () => ({
+      payloads: [{ text: "Done." }],
+      meta: {},
+    }));
+    const agentRuntime = {
+      defaults: { provider: "openai", model: "gpt-5.4" },
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: createMockSessionRuntime(sessionStore),
+      runEmbeddedAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-1",
+      direction: "outbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
+      text: "Done.",
+    });
+
+    expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(
+        runEmbeddedAgent.mock.calls as unknown[][],
+        "configured embedded OpenClaw consult",
+      ),
+      "configured embedded OpenClaw consult params",
+    );
+    expect(consultParams.thinkLevel).toBe("low");
+    expect(consultParams.fastMode).toBe(true);
   });
 });

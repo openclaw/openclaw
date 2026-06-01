@@ -1,20 +1,16 @@
-import { resolveEnvApiKey } from "../agents/model-auth-env.js";
-import type { OpenClawConfig } from "../config/types.js";
-import type { SecretInput } from "../config/types.secrets.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  resolveSecretInputModeForEnvSelection,
-  type SecretInputModePromptCopy,
-} from "./provider-auth-mode.js";
+import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import {
   extractEnvVarFromSourceLabel,
   promptSecretRefForSetup,
   resolveRefFallbackInput,
-  type SecretRefSetupPromptCopy,
 } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 

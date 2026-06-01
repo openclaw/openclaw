@@ -9,11 +9,9 @@ let authRevoked = false;
 let gatewayConfig: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  webchat: { chatHistoryMaxChars: number };
 } = {
   trustedProxies: ["10.0.0.1"],
   allowRealIpFallback: false,
-  webchat: { chatHistoryMaxChars: 2000 },
 };
 let authCheckCalls = 0;
 
@@ -43,10 +41,11 @@ vi.mock("./http-utils.js", () => ({
     const value = req.headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
   },
-  resolveTrustedHttpOperatorScopes: () => ["operator.read"],
+  resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
-    cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
+    cfg: { gateway: {} },
     requestAuth: { trustDeclaredOperatorScopes: true },
+    operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
     trustedProxies?: string[];
@@ -100,7 +99,7 @@ vi.mock("./session-history-state.js", () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
   SessionHistorySseState: {
-    fromRawSnapshot: () => ({
+    fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
       appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
         message,
@@ -169,7 +168,6 @@ afterEach(() => {
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
-    webchat: { chatHistoryMaxChars: 2000 },
   };
 });
 
@@ -196,7 +194,9 @@ describe("session history SSE auth revocation", () => {
       messageId: "m-1",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(res.writableEnded).toBe(true);
+    });
 
     const joined = res.writes.join("");
     expect(joined).not.toContain("event: message");
@@ -221,9 +221,7 @@ describe("session history SSE auth revocation", () => {
     expect(handled).toBe(true);
     expect(transcriptUpdateHandler).toBeTypeOf("function");
 
-    gatewayConfig = {
-      webchat: { chatHistoryMaxChars: 2000 },
-    };
+    gatewayConfig = {};
 
     transcriptUpdateHandler?.({
       sessionFile: "/tmp/session-1.jsonl",
@@ -231,7 +229,9 @@ describe("session history SSE auth revocation", () => {
       messageId: "m-2",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(res.writableEnded).toBe(true);
+    });
 
     const joined = res.writes.join("");
     expect(joined).not.toContain("event: message");
@@ -257,17 +257,13 @@ describe("session history SSE auth revocation", () => {
     expect(transcriptUpdateHandler).toBeTypeOf("function");
 
     authCheckCalls = 0;
-    gatewayConfig = {
-      webchat: { chatHistoryMaxChars: 2000 },
-    };
+    gatewayConfig = {};
 
     transcriptUpdateHandler?.({
       sessionFile: "/tmp/other-session.jsonl",
       message: { role: "assistant", content: [{ type: "text", text: "other session" }] },
       messageId: "m-3",
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const joined = res.writes.join("");
     expect(authCheckCalls).toBe(0);

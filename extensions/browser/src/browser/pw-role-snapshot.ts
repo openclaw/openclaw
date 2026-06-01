@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 type RoleRef = {
@@ -53,7 +53,9 @@ function matchInteractiveSnapshotLine(
   if (!match) {
     return null;
   }
-  const [, , roleRaw, name, suffix] = match;
+  const roleRaw = match[2];
+  const name = match[3];
+  const suffix = match[4];
   if (roleRaw.startsWith("/")) {
     return null;
   }
@@ -384,7 +386,9 @@ export function buildRoleSnapshotFromAiSnapshot(
       out.push(line);
       continue;
     }
-    const [, , roleRaw, name, suffix] = match;
+    const roleRaw = match[2];
+    const name = match[3];
+    const suffix = match[4];
     if (roleRaw.startsWith("/")) {
       out.push(line);
       continue;

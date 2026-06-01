@@ -91,8 +91,8 @@ const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
     manifestRegistry: pluginManifestRegistry,
     startup: {
-      configuredDeferredChannelPluginIds: [],
-      pluginIds: ["telegram"],
+      configuredDeferredChannelPluginIds: [] as string[],
+      pluginIds: ["telegram"] as string[],
     },
     metrics: pluginLookUpTableMetrics,
   })),
@@ -141,6 +141,10 @@ vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
 }));
 
+vi.mock("./methods/core-descriptors.js", () => ({
+  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
+}));
+
 vi.mock("./server-methods.js", () => ({
   coreGatewayHandlers: {},
 }));
@@ -162,6 +166,14 @@ function createLog() {
   };
 }
 
+function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
+}
+
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
@@ -170,8 +182,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
-        configuredDeferredChannelPluginIds: [],
-        pluginIds: ["telegram"],
+        configuredDeferredChannelPluginIds: [] as string[],
+        pluginIds: ["telegram"] as string[],
       },
       metrics: pluginLookUpTableMetrics,
     });
@@ -254,72 +266,127 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       env: process.env,
       manifestRegistry: pluginManifestRegistry,
     });
-    expect(loadPluginLookUpTable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activationSourceConfig: sourceConfig,
-        metadataSnapshot: pluginMetadataSnapshot,
-        config: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              enabled: true,
-              dmPolicy: "pairing",
-              groupPolicy: "allowlist",
-            }),
-          }),
-          plugins: expect.objectContaining({
-            allow: ["bench-plugin"],
-            entries: expect.objectContaining({
-              "bench-plugin": expect.objectContaining({
-                enabled: true,
-                config: {
-                  runtimeDefault: true,
-                },
-              }),
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: false,
-                  },
-                },
-              },
-            }),
-          }),
-        }),
-      }),
-    );
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activationSourceConfig: sourceConfig,
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              enabled: true,
-              dmPolicy: "pairing",
-              groupPolicy: "allowlist",
-            }),
-          }),
-          plugins: expect.objectContaining({
-            allow: ["bench-plugin"],
-            entries: expect.objectContaining({
-              "bench-plugin": expect.objectContaining({
-                enabled: true,
-                config: {
-                  runtimeDefault: true,
-                },
-              }),
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: false,
-                  },
-                },
-              },
-            }),
-          }),
-        }),
-      }),
-    );
+    const lookupInput = firstCallArg<{
+      activationSourceConfig?: OpenClawConfig;
+      metadataSnapshot?: PluginMetadataSnapshot;
+      config?: OpenClawConfig;
+    }>(loadPluginLookUpTable);
+    expect(lookupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(lookupInput.metadataSnapshot).toBe(pluginMetadataSnapshot);
+    expect(lookupInput.config?.channels?.telegram?.enabled).toBe(true);
+    expect(lookupInput.config?.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(lookupInput.config?.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(lookupInput.config?.plugins?.allow).toEqual(["bench-plugin"]);
+    expect(lookupInput.config?.plugins?.entries?.["bench-plugin"]?.enabled).toBe(true);
+    expect(lookupInput.config?.plugins?.entries?.["bench-plugin"]?.config).toEqual({
+      runtimeDefault: true,
+    });
+    expect(lookupInput.config?.plugins?.entries?.["memory-core"]?.config).toEqual({
+      dreaming: { enabled: false },
+    });
+
+    const startupInput = firstCallArg<{
+      activationSourceConfig?: OpenClawConfig;
+      cfg?: OpenClawConfig;
+      baseMethods?: string[];
+      coreGatewayMethodNames?: string[];
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(startupInput.baseMethods).toEqual(["ping"]);
+    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
+    expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
+    expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(startupInput.cfg?.plugins?.allow).toEqual(["bench-plugin"]);
+    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.enabled).toBe(true);
+    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.config).toEqual({
+      runtimeDefault: true,
+    });
+    expect(startupInput.cfg?.plugins?.entries?.["memory-core"]?.config).toEqual({
+      dreaming: { enabled: false },
+    });
   });
+
+  it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {
+    loadPluginLookUpTable.mockReturnValueOnce({
+      manifestRegistry: pluginManifestRegistry,
+      startup: {
+        configuredDeferredChannelPluginIds: ["slack"] as string[],
+        pluginIds: ["slack", "memory-core"] as string[],
+      },
+      metrics: {
+        ...pluginLookUpTableMetrics,
+        startupPluginCount: 2,
+        deferredChannelPluginCount: 1,
+      },
+    });
+    const cfg = {
+      channels: {
+        slack: { enabled: true, token: "token" },
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+      loadRuntimePlugins: false,
+      loadSetupRuntimePlugins: true,
+    });
+
+    expect(result.runtimePluginsLoaded).toBe(false);
+    const startupInput = firstCallArg<{
+      pluginIds?: string[];
+      preferSetupRuntimeForChannelPlugins?: boolean;
+      suppressPluginInfoLogs?: boolean;
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.pluginIds).toEqual(["slack"]);
+    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(true);
+    expect(startupInput.suppressPluginInfoLogs).toBe(true);
+  });
+
+  it("does not use setup-runtime preference for full bootstrap loads", async () => {
+    loadPluginLookUpTable.mockReturnValueOnce({
+      manifestRegistry: pluginManifestRegistry,
+      startup: {
+        configuredDeferredChannelPluginIds: ["slack"] as string[],
+        pluginIds: ["slack", "memory-core"] as string[],
+      },
+      metrics: {
+        ...pluginLookUpTableMetrics,
+        startupPluginCount: 2,
+        deferredChannelPluginCount: 1,
+      },
+    });
+    const cfg = {
+      channels: {
+        slack: { enabled: true, token: "token" },
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(result.runtimePluginsLoaded).toBe(true);
+    const startupInput = firstCallArg<{
+      pluginIds?: string[];
+      preferSetupRuntimeForChannelPlugins?: boolean;
+      suppressPluginInfoLogs?: boolean;
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.pluginIds).toEqual(["slack", "memory-core"]);
+    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
+    expect(startupInput.suppressPluginInfoLogs).toBe(false);
+  });
+
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
     const cfg = {
       channels: {
@@ -338,29 +405,29 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
 
-    await expect(
-      prepareGatewayPluginBootstrap({
-        cfgAtStart: cfg,
-        startupRuntimeConfig: cfg,
-        minimalTestGateway: false,
-        log,
-      }),
-    ).resolves.toMatchObject({
-      startupPluginIds: [],
-      deferredConfiguredChannelPluginIds: [],
-      pluginLookUpTable: undefined,
-      baseGatewayMethods: ["ping"],
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
     });
+    expect(result.startupPluginIds).toEqual([]);
+    expect(result.deferredConfiguredChannelPluginIds).toEqual([]);
+    expect(result.pluginLookUpTable).toBeUndefined();
+    expect(result.baseGatewayMethods).toEqual(["ping"]);
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg,
-        pluginIds: [],
-        pluginLookUpTable: undefined,
-        preferSetupRuntimeForChannelPlugins: false,
-        suppressPluginInfoLogs: false,
-      }),
-    );
+    const startupInput = firstCallArg<{
+      cfg?: OpenClawConfig;
+      pluginIds?: string[];
+      pluginLookUpTable?: unknown;
+      preferSetupRuntimeForChannelPlugins?: boolean;
+      suppressPluginInfoLogs?: boolean;
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.cfg).toStrictEqual(cfg);
+    expect(startupInput.pluginIds).toEqual([]);
+    expect(startupInput.pluginLookUpTable).toBeUndefined();
+    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
+    expect(startupInput.suppressPluginInfoLogs).toBe(false);
   });
 });

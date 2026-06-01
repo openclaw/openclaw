@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getWebAuthAgeMs,
+  hasWebCredsSync,
   logoutWeb,
   pickWebChannel,
+  readCredsJsonRaw,
   readWebAuthSnapshot,
   readWebAuthState,
+  readWebSelfId,
+  readWebSelfIdentity,
   restoreCredsFromBackupIfNeeded,
   webAuthExists,
   WhatsAppAuthUnstableError,
@@ -86,6 +91,29 @@ describe("auth-store", () => {
     });
   });
 
+  it("preserves valid large creds instead of treating them as corrupt", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-large-creds");
+    const credsPath = path.join(authDir, "creds.json");
+    const largeCreds = JSON.stringify({
+      me: { id: "15551234567@s.whatsapp.net" },
+      additionalData: "x".repeat(1024 * 1024 + 512),
+    });
+    fsSync.writeFileSync(credsPath, largeCreds, "utf-8");
+    fsSync.writeFileSync(
+      path.join(authDir, "creds.json.bak"),
+      JSON.stringify({ me: { id: "19990000000@s.whatsapp.net" } }),
+      "utf-8",
+    );
+
+    await expect(webAuthExists(authDir)).resolves.toBe(true);
+    await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe(largeCreds);
+    expect(readWebSelfId(authDir)).toMatchObject({
+      e164: "+15551234567",
+      jid: "15551234567@s.whatsapp.net",
+    });
+  });
+
   it("refuses to restore creds from a symlinked backup path", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-restore-symlink");
     const targetPath = path.join(authDir, "backup-target.json");
@@ -99,6 +127,27 @@ describe("auth-store", () => {
     expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not restore backup over a symlinked creds path",
+    async () => {
+      const authDir = createTempAuthDir("openclaw-wa-auth-restore-target-symlink");
+      const targetPath = path.join(authDir, "target-creds.json");
+      const credsPath = path.join(authDir, "creds.json");
+      const backupPath = path.join(authDir, "creds.json.bak");
+      fsSync.writeFileSync(targetPath, "{", "utf-8");
+      fsSync.symlinkSync(targetPath, credsPath);
+      fsSync.writeFileSync(
+        backupPath,
+        JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
+        "utf-8",
+      );
+
+      await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
+      expect(fsSync.lstatSync(credsPath).isSymbolicLink()).toBe(true);
+      expect(fsSync.readFileSync(targetPath, "utf-8")).toBe("{");
+    },
+  );
+
   it("reports linked auth state and snapshot from the shared read helper", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-linked");
     fsSync.writeFileSync(
@@ -108,12 +157,77 @@ describe("auth-store", () => {
     );
 
     await expect(readWebAuthState(authDir)).resolves.toBe("linked");
-    await expect(readWebAuthSnapshot(authDir)).resolves.toMatchObject({
+    const snapshot = await readWebAuthSnapshot(authDir);
+    expect(snapshot.authAgeMs).toBeTypeOf("number");
+    expect(snapshot.authAgeMs).toBeGreaterThanOrEqual(-1);
+    expect(snapshot).toEqual({
       state: "linked",
-      authAgeMs: expect.any(Number),
-      selfId: expect.objectContaining({ e164: "+15551234567" }),
+      authAgeMs: snapshot.authAgeMs,
+      selfId: {
+        e164: "+15551234567",
+        jid: "15551234567@s.whatsapp.net",
+        lid: null,
+      },
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "treats symlinked creds as missing across auth readers",
+    async () => {
+      const authDir = createTempAuthDir("openclaw-wa-auth-symlink-read");
+      const targetPath = path.join(authDir, "target-creds.json");
+      const credsPath = path.join(authDir, "creds.json");
+      fsSync.writeFileSync(
+        targetPath,
+        JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
+        "utf-8",
+      );
+      fsSync.symlinkSync(targetPath, credsPath);
+
+      expect(fsSync.lstatSync(credsPath).isSymbolicLink()).toBe(true);
+      expect(fsSync.statSync(credsPath).isFile()).toBe(true);
+      expect(hasWebCredsSync(authDir)).toBe(false);
+      expect(readCredsJsonRaw(credsPath)).toBeNull();
+      expect(getWebAuthAgeMs(authDir)).toBeNull();
+      expect(readWebSelfId(authDir)).toEqual({ e164: null, jid: null, lid: null });
+      await expect(readWebSelfIdentity(authDir)).resolves.toEqual({
+        e164: null,
+        jid: null,
+        lid: null,
+      });
+      await expect(webAuthExists(authDir)).resolves.toBe(false);
+      await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
+      await expect(readWebAuthSnapshot(authDir)).resolves.toEqual({
+        state: "not-linked",
+        authAgeMs: null,
+        selfId: { e164: null, jid: null, lid: null },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "treats creds under a symlinked auth directory as missing",
+    async () => {
+      const rootDir = createTempAuthDir("openclaw-wa-auth-symlink-parent");
+      const targetAuthDir = path.join(rootDir, "target-auth");
+      const authDir = path.join(rootDir, "linked-auth");
+      fsSync.mkdirSync(targetAuthDir);
+      fsSync.writeFileSync(
+        path.join(targetAuthDir, "creds.json"),
+        JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
+        "utf-8",
+      );
+      fsSync.symlinkSync(targetAuthDir, authDir, "dir");
+      const credsPath = path.join(authDir, "creds.json");
+
+      expect(fsSync.lstatSync(authDir).isSymbolicLink()).toBe(true);
+      expect(fsSync.lstatSync(credsPath).isFile()).toBe(true);
+      expect(hasWebCredsSync(authDir)).toBe(false);
+      expect(readCredsJsonRaw(credsPath)).toBeNull();
+      await expect(webAuthExists(authDir)).resolves.toBe(false);
+      await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
+    },
+  );
 
   it("reports unstable auth state when the shared barrier read times out", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-unstable-state");
@@ -301,8 +415,12 @@ describe("auth-store", () => {
   it("throws a typed unstable-auth error when channel selection times out", async () => {
     hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
 
-    await expect(pickWebChannel("auto", "/tmp/openclaw-wa-auth-unstable")).rejects.toEqual(
-      expect.objectContaining({
+    const error = await pickWebChannel("auto", "/tmp/openclaw-wa-auth-unstable").catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(WhatsAppAuthUnstableError);
+    expect(error).toEqual(
+      Object.assign(new WhatsAppAuthUnstableError(), {
         code: WHATSAPP_AUTH_UNSTABLE_CODE,
         name: WhatsAppAuthUnstableError.name,
       }),

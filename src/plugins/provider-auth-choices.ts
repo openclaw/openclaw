@@ -1,6 +1,6 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -19,11 +19,12 @@ export type ProviderAuthChoiceMetadata = {
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
+  onboardingFeatured?: boolean;
   optionKey?: string;
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: ("text-inference" | "image-generation")[];
+  onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type ProviderOnboardAuthFlag = {
@@ -94,6 +95,7 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.groupId ? { groupId: choice.groupId } : {}),
     ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
     ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+    ...(choice.onboardingFeatured ? { onboardingFeatured: true } : {}),
     ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
     ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),

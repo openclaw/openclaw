@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
@@ -91,7 +91,7 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   }
   const accounts = cfg.channels?.telegram?.accounts;
   const hasConfiguredAccounts =
-    !!accounts &&
+    Boolean(accounts) &&
     typeof accounts === "object" &&
     !Array.isArray(accounts) &&
     Object.keys(accounts).length > 0;
@@ -245,7 +245,7 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            !!inspected.token?.trim() &&
+            Boolean(inspected.token?.trim()) &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
         };

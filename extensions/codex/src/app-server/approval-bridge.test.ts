@@ -1,5 +1,9 @@
 import {
   callGatewayTool,
+  hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
+  runBeforeToolCallHook,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,9 +12,83 @@ import { buildApprovalResponse, handleCodexAppServerApprovalRequest } from "./ap
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: vi.fn(),
+  hasNativeHookRelayInvocation: vi.fn(() => false),
+  invokeNativeHookRelay: vi.fn(),
+  resolveNativeHookRelayDeferredToolApproval: vi.fn(),
+  runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
+    blocked: false,
+    params,
+  })),
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+const mockHasNativeHookRelayInvocation = vi.mocked(hasNativeHookRelayInvocation);
+const mockInvokeNativeHookRelay = vi.mocked(invokeNativeHookRelay);
+const mockResolveNativeHookRelayDeferredToolApproval = vi.mocked(
+  resolveNativeHookRelayDeferredToolApproval,
+);
+const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function gatewayCallAt(callIndex = 0) {
+  const call = mockCallGatewayTool.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected gateway call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function gatewayRequestPayload(callIndex = 0) {
+  return requireRecord(gatewayCallAt(callIndex)[2], `gateway request payload ${callIndex + 1}`);
+}
+
+function gatewayCallOptions(callIndex = 0) {
+  return gatewayCallAt(callIndex)[3];
+}
+
+function gatewayCallMethod(callIndex = 0) {
+  return gatewayCallAt(callIndex)[0];
+}
+
+function findApprovalEvent(
+  params: EmbeddedRunAttemptParams,
+  fields: {
+    status?: string;
+    approvalId?: string;
+    command?: string;
+    reason?: string;
+    message?: string;
+  },
+) {
+  const onAgentEvent = params.onAgentEvent as unknown as { mock?: { calls?: unknown[][] } };
+  const calls = onAgentEvent.mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error("Expected onAgentEvent mock calls");
+  }
+  for (const call of calls) {
+    const event = requireRecord(call[0], "agent event");
+    if (event.stream !== "approval") {
+      continue;
+    }
+    const data = requireRecord(event.data, "approval event data");
+    if (
+      (!fields.status || data.status === fields.status) &&
+      (!fields.approvalId || data.approvalId === fields.approvalId) &&
+      (!fields.command || data.command === fields.command) &&
+      (!fields.reason || data.reason === fields.reason) &&
+      (!fields.message || data.message === fields.message)
+    ) {
+      return data;
+    }
+  }
+  throw new Error(`Expected approval event ${JSON.stringify(fields)}`);
+}
 
 function createParams(): EmbeddedRunAttemptParams {
   return {
@@ -27,6 +105,73 @@ function createParams(): EmbeddedRunAttemptParams {
 describe("Codex app-server approval bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
+    mockHasNativeHookRelayInvocation.mockReset();
+    mockHasNativeHookRelayInvocation.mockReturnValue(false);
+    mockInvokeNativeHookRelay.mockReset();
+    mockResolveNativeHookRelayDeferredToolApproval.mockReset();
+    mockResolveNativeHookRelayDeferredToolApproval.mockResolvedValue(undefined);
+    mockRunBeforeToolCallHook.mockReset();
+    mockRunBeforeToolCallHook.mockImplementation(async ({ params }) => ({
+      blocked: false,
+      params,
+    }));
+  });
+
+  it("auto-accepts app-server command approvals in yolo mode without opening plugin approvals", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-yolo",
+        command: "/bin/bash -lc 'node -v'",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        approvalMode: "request",
+      }),
+    );
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
+  it("auto-accepts app-server file approvals in yolo mode without opening plugin approvals", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-yolo",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      reason: "needs write access",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
   });
 
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
@@ -53,30 +198,601 @@ describe("Codex app-server approval bridge", () => {
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+    expect(gatewayCallMethod()).toBe("plugin.approval.request");
+    expect(typeof gatewayCallAt(0)[1]).toBe("object");
+    const requestPayload = gatewayRequestPayload();
+    expect(requestPayload.pluginId).toBe("openclaw-codex-app-server");
+    expect(requestPayload.title).toBe("Codex app-server command approval");
+    expect(requestPayload.twoPhase).toBe(true);
+    expect(requestPayload.turnSourceChannel).toBe("telegram");
+    expect(requestPayload.turnSourceTo).toBe("chat-1");
+    expect(gatewayCallOptions()).toEqual({ expectFinal: false });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith({
+      toolName: "exec",
+      params: {
+        command: "pnpm test extensions/codex/src/app-server",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          command: "pnpm test extensions/codex/src/app-server",
+        },
+      },
+      toolCallId: "cmd-1",
+      approvalMode: "request",
+      signal: undefined,
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        channelId: "chat-1",
+      },
+    });
+    findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
+    findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
+  });
+
+  it("normalizes prefixed channel targets for OpenClaw tool policy context", async () => {
+    const params = createParams();
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.currentChannelId = "telegram:-100123";
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-prefixed", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-prefixed", decision: "allow-once" });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-prefixed",
+        command: "pnpm test extensions/codex/src/app-server",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          channelId: "-100123",
+        }),
+      }),
+    );
+    expect(gatewayRequestPayload().turnSourceTo).toBe("telegram:-100123");
+  });
+
+  it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: "blocked by policy",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-blocked",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("routes command approvals through the active native hook relay before prompting", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "blocked by native relay",
+        },
+      })}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay",
+        command: "cat /tmp/private_key",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledWith({
+      provider: "codex",
+      relayId: "relay-1",
+      generation: "generation-1",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        tool_name: "exec_command",
+        tool_use_id: "cmd-native-relay",
+        cwd: "/workspace",
+        turn_id: "turn-1",
+        tool_input: {
+          command: "cat /tmp/private_key",
+          cwd: "/workspace",
+          approval: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "cmd-native-relay",
+            command: "cat /tmp/private_key",
+            cwd: "/workspace",
+          },
+          cmd: "cat /tmp/private_key",
+        },
+      },
+      requireGeneration: true,
+    });
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "blocked by native relay",
+    });
+  });
+
+  it("falls through to plugin approval when the native hook relay has no decision", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-native-noop", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-native-noop", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-noop",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      toolUseId: "cmd-native-relay-noop",
+      signal: undefined,
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        pluginId: "openclaw-codex-app-server",
-        title: "Codex app-server command approval",
-        twoPhase: true,
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-      }),
-      { expectFinal: false },
-    );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({ status: "pending", approvalId: "plugin:approval-1" }),
-      }),
-    );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({ status: "approved", approvalId: "plugin:approval-1" }),
-      }),
-    );
+      "plugin.approval.waitDecision",
+    ]);
+    findApprovalEvent(params, {
+      status: "pending",
+      approvalId: "plugin:approval-native-noop",
+    });
+    findApprovalEvent(params, {
+      status: "approved",
+      approvalId: "plugin:approval-native-noop",
+    });
+  });
+
+  it("does not invoke the app-server relay when native PreToolUse already ran", async () => {
+    const params = createParams();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-native-observed", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-native-observed", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-observed",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockHasNativeHookRelayInvocation).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      event: "pre_tool_use",
+      toolUseId: "cmd-native-relay-observed",
+    });
+    expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
+      relayId: "relay-1",
+      toolUseId: "cmd-native-relay-observed",
+      signal: undefined,
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("accepts command approvals from deferred native PreToolUse plugin approvals", async () => {
+    const params = createParams();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockResolveNativeHookRelayDeferredToolApproval.mockResolvedValueOnce({
+      handled: true,
+      outcome: "approved-once",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-deferred",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval granted for this turn.",
+    });
+  });
+
+  it("fails closed when the native hook relay returns unreadable approval output", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "not-json",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-unreadable",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",
+    });
+  });
+
+  it("fails closed when the native hook relay returns a non-deny decision", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout:
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "allow",
+          },
+        }) + "\n",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-allow",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "OpenClaw native hook relay returned a non-deny Codex app-server approval decision.",
+    });
+  });
+
+  it("fails closed when the native hook relay exits non-zero", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockResolvedValueOnce({
+      stdout: "ignored stdout",
+      stderr: "blocked from stderr",
+      exitCode: 1,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-exit",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "blocked from stderr",
+    });
+  });
+
+  it("fails closed when the expected native hook relay cannot be invoked", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-missing",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-missing",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw native hook relay unavailable for Codex app-server approval: native hook relay not found",
+    });
+  });
+
+  it("keeps non-command approvals on the app-server approval route when a native relay is registered", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:file-approval", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:file-approval", decision: "allow-once" })
+      .mockResolvedValueOnce({ id: "plugin:permission-approval", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:permission-approval", decision: "deny" });
+    const nativeHookRelay = {
+      relayId: "relay-1",
+      generation: "generation-1",
+      allowedEvents: ["pre_tool_use" as const],
+    };
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-native-relay-registered",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay,
+    });
+    await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "permission-native-relay-registered",
+        permissions: {
+          network: { allowHosts: ["example.com"] },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay,
+    });
+
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("denies command approvals when OpenClaw tool policy rewrites params", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: {
+        command: "echo rewritten",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-rewritten",
+          command: "echo rewritten",
+        },
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-rewritten",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    });
+  });
+
+  it("keeps OpenClaw plugin allow-always approvals scoped to one Codex request", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: {
+        command: "pnpm test",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-needs-approval",
+          command: "pnpm test",
+        },
+      },
+      approvalResolution: "allow-always",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-needs-approval",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval granted for this turn.",
+    });
+  });
+
+  it("denies command approvals when OpenClaw tool policy requires approval", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Plugin approval required",
+    });
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-needs-approval",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "Plugin approval required",
+    });
   });
 
   it("describes command approvals from parsed command actions when available", async () => {
@@ -99,23 +815,16 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: expect.stringContaining("Command: pnpm test extensions/codex"),
-      }),
-    );
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: expect.not.stringContaining("bash -lc"),
-      }),
-    );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({ command: "pnpm test extensions/codex" }),
-      }),
-    );
+    const requestPayload = gatewayRequestPayload();
+    expect(String(requestPayload.description)).toContain("Command: pnpm test extensions/codex");
+    expect(String(requestPayload.description)).not.toContain("bash -lc");
+    expect(mockRunBeforeToolCallHook.mock.calls.at(0)?.[0]).toMatchObject({
+      toolName: "exec",
+      params: {
+        command: "bash -lc 'pnpm test extensions/codex'",
+      },
+    });
+    findApprovalEvent(params, { command: "pnpm test extensions/codex" });
   });
 
   it("describes command approval permission and policy amendments", async () => {
@@ -149,8 +858,7 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(result).toEqual({ decision: "acceptForSession" });
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain("Command: npm install");
     expect(description).toContain("Additional permissions: network, fileSystem");
     expect(description).toContain("High-risk targets: network access, filesystem root");
@@ -188,8 +896,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain("[preview truncated or unsafe content omitted]");
     expect(description).toContain("Additional permissions: network, fileSystem");
     expect(description).toContain("High-risk targets: network access, filesystem root");
@@ -214,22 +921,13 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description:
-          "Command: pnpm test --watch extensions/codex/src/app-server\nSession: agent:main:session-1",
-      }),
+    expect(gatewayRequestPayload().description).toBe(
+      "Command: pnpm test --watch extensions/codex/src/app-server\nSession: agent:main:session-1",
     );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({
-          status: "pending",
-          command: "pnpm test --watch extensions/codex/src/app-server",
-        }),
-      }),
-    );
+    findApprovalEvent(params, {
+      status: "pending",
+      command: "pnpm test --watch extensions/codex/src/app-server",
+    });
   });
 
   it("escapes command approval previews before forwarding approval text and events", async () => {
@@ -251,23 +949,16 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain(
       "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
     );
     expect(description).not.toContain("<@U123>");
     expect(description).not.toContain("[trusted](https://evil)");
     expect(description).not.toContain("@here");
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({
-          command:
-            "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
-        }),
-      }),
-    );
+    findApprovalEvent(params, {
+      command: "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
+    });
   });
 
   it("preserves visible OSC-8 link labels in command previews", async () => {
@@ -290,18 +981,10 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: "Command: prefix VISIBLE suffix\nSession: agent:main:session-1",
-      }),
+    expect(gatewayRequestPayload().description).toBe(
+      "Command: prefix VISIBLE suffix\nSession: agent:main:session-1",
     );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({ command: "prefix VISIBLE suffix" }),
-      }),
-    );
+    findApprovalEvent(params, { command: "prefix VISIBLE suffix" });
   });
 
   it("strips bidi and invisible formatting controls from command previews", async () => {
@@ -323,18 +1006,10 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: "Command: echo safe cod.exe hidden done\nSession: agent:main:session-1",
-      }),
+    expect(gatewayRequestPayload().description).toBe(
+      "Command: echo safe cod.exe hidden done\nSession: agent:main:session-1",
     );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({ command: "echo safe cod.exe hidden done" }),
-      }),
-    );
+    findApprovalEvent(params, { command: "echo safe cod.exe hidden done" });
   });
 
   it("marks oversized unsafe command previews as omitted", async () => {
@@ -358,21 +1033,11 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description:
-          "Command: [preview truncated or unsafe content omitted]\nSession: agent:main:session-1",
-      }),
+    expect(gatewayRequestPayload().description).toBe(
+      "Command: [preview truncated or unsafe content omitted]\nSession: agent:main:session-1",
     );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({
-          commandPreviewOmitted: true,
-        }),
-      }),
-    );
+    const omittedEvent = findApprovalEvent(params, {});
+    expect(omittedEvent.commandPreviewOmitted).toBe(true);
   });
 
   it("marks clipped command previews even when a safe prefix remains", async () => {
@@ -394,17 +1059,10 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain("[preview truncated or unsafe content omitted]");
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({
-          commandPreviewOmitted: true,
-        }),
-      }),
-    );
+    const omittedEvent = findApprovalEvent(params, {});
+    expect(omittedEvent.commandPreviewOmitted).toBe(true);
   });
 
   it("does not trust request-time decisions for two-phase command approvals", async () => {
@@ -435,15 +1093,10 @@ describe("Codex app-server approval bridge", () => {
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({
-          status: "denied",
-          approvalId: "plugin:approval-untrusted",
-        }),
-      }),
-    );
+    findApprovalEvent(params, {
+      status: "denied",
+      approvalId: "plugin:approval-untrusted",
+    });
   });
 
   it("only treats own null data-property request decisions as no-route", async () => {
@@ -560,12 +1213,7 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({ status: "unavailable", reason: "needs write access" }),
-      }),
-    );
+    findApprovalEvent(params, { status: "unavailable", reason: "needs write access" });
   });
 
   it("sanitizes reason previews before forwarding approval text and events", async () => {
@@ -588,21 +1236,13 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: "Reason: needs write access for /tmp please\nSession: agent:main:session-1",
-      }),
+    expect(gatewayRequestPayload().description).toBe(
+      "Reason: needs write access for /tmp please\nSession: agent:main:session-1",
     );
-    expect(params.onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "approval",
-        data: expect.objectContaining({
-          status: "unavailable",
-          reason: "needs write access for /tmp please",
-        }),
-      }),
-    );
+    findApprovalEvent(params, {
+      status: "unavailable",
+      reason: "needs write access for /tmp please",
+    });
   });
 
   it("fails closed for unsupported native approval methods without requesting plugin approval", async () => {
@@ -656,28 +1296,20 @@ describe("Codex app-server approval bridge", () => {
       },
       scope: "turn",
     });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        title: "Codex app-server permission approval",
-        toolName: "codex_permission_approval",
-        description: expect.stringContaining("Permissions: network, fileSystem"),
-      }),
-      { expectFinal: false },
-    );
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    expect(gatewayCallMethod()).toBe("plugin.approval.request");
+    expect(typeof gatewayCallAt(0)[1]).toBe("object");
+    const requestPayload = gatewayRequestPayload();
+    expect(requestPayload.title).toBe("Codex app-server permission approval");
+    expect(requestPayload.toolName).toBe("codex_permission_approval");
+    const description = String(requestPayload.description);
+    expect(description).toContain("Permissions: network, fileSystem");
+    expect(gatewayCallOptions()).toEqual({ expectFinal: false });
     expect(description).toContain("Network allowHosts: example.com, *.internal");
     expect(description).toContain("File system roots: /; writePaths: ~");
     expect(description).toContain(
       "High-risk targets: wildcard hosts, private-network wildcards, filesystem root",
     );
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: expect.not.stringContaining("agent:main:session-1"),
-      }),
-    );
+    expect(description).not.toContain("agent:main:session-1");
   });
 
   it("keeps permission detail bounded with truncated and compacted target samples", async () => {
@@ -713,13 +1345,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    expect(requestPayload).toEqual(
-      expect.objectContaining({
-        description: expect.any(String),
-      }),
-    );
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description.length).toBeLessThanOrEqual(700);
     expect(description).toContain("example.com");
     expect(description).not.toContain("secret-token");
@@ -775,8 +1401,7 @@ describe("Codex app-server approval bridge", () => {
       },
       scope: "turn",
     });
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain("Network enabled: true");
     expect(description).toContain("File system read: ~/.ssh/id_rsa; write: /");
     expect(description).toContain("entries: read /workspace/project, write /tmp/output (+1 more)");
@@ -807,8 +1432,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa, ~/project");
     expect(description).not.toContain("High-risk targets");
   });
@@ -835,8 +1459,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
     });
 
-    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
-    const description = (requestPayload as { description: string }).description;
+    const description = String(gatewayRequestPayload().description);
     expect(description).toContain("example.com");
     expect(description).toContain("safe .example.com");
     expect(description).toContain("/tmp/project");

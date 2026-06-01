@@ -15,6 +15,10 @@ safety interlock: commands are allowed only when policy + allowlist +
 tool policy and elevated gating (unless elevated is set to `full`, which
 skips approvals).
 
+For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
+Codex Guardian mapping, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
+
 <Note>
 Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults; if an approvals field is omitted, the `tools.exec` value is
@@ -56,7 +60,8 @@ Exec approvals are enforced locally on the execution host:
 
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
-- Exec approvals reduce accidental execution risk, but are **not** a per-user auth boundary.
+- Exec approvals reduce accidental execution risk, but are **not** a per-user auth boundary or filesystem read-only policy.
+- Once approved, a command can mutate files according to the selected host or sandbox filesystem permissions.
 - Approved node-host runs bind canonical execution context: canonical cwd, exact argv, env binding when present, and pinned executable path when applicable.
 - For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind one concrete local file operand. If that bound file changes after approval but before execution, the run is denied instead of executing drifted content.
 - File binding is intentionally best-effort, **not** a complete semantic model of every interpreter/runtime loader path. If approval mode cannot identify exactly one concrete local file to bind, it refuses to mint an approval-backed run instead of pretending full coverage.
@@ -113,6 +118,20 @@ Example schema:
 
 ## Policy knobs
 
+### `tools.exec.mode`
+
+`tools.exec.mode` is the preferred normalized policy surface for host exec.
+Values are:
+
+- `deny` - block host exec.
+- `allowlist` - run only allowlisted commands without asking.
+- `ask` - use allowlist policy and ask on misses.
+- `auto` - use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route.
+- `full` - run host exec without approval prompts.
+
+Legacy `tools.exec.security` / `tools.exec.ask` remain supported and still win
+when set at the narrower session or agent scope.
+
 ### `exec.security`
 
 <ParamField path="security" type='"deny" | "allowlist" | "full"'>
@@ -165,6 +184,20 @@ In strict mode these commands still need explicit approval, and
 `allow-always` does not persist new allowlist entries for them
 automatically.
 
+### `tools.exec.commandHighlighting`
+
+<ParamField path="commandHighlighting" type="boolean" default="false">
+  Controls only presentation in exec approval prompts. When enabled,
+  OpenClaw may attach parser-derived command spans so Web approval
+  prompts can highlight command tokens. Set it to `true` to enable
+  command text highlighting.
+</ParamField>
+
+This setting does **not** change `security`, `ask`, allowlist matching,
+strict inline-eval behavior, approval forwarding, or command execution.
+It can be set globally under `tools.exec.commandHighlighting` or per
+agent under `agents.list[].tools.exec.commandHighlighting`.
+
 ## YOLO mode (no-approval)
 
 If you want host exec to run without approval prompts, you must open
@@ -192,13 +225,15 @@ YOLO is the default host behavior unless you tighten it explicitly:
 
 CLI-backed providers that expose their own noninteractive permission mode
 can follow this policy. Claude CLI adds
-`--permission-mode bypassPermissions` when OpenClaw's requested exec
-policy is YOLO. Override that backend behavior with explicit Claude args
-under `agents.defaults.cliBackends.claude-cli.args` / `resumeArgs` -
-for example `--permission-mode default`, `acceptEdits`, or
-`bypassPermissions`.
+`--permission-mode bypassPermissions` when OpenClaw's effective exec
+policy is YOLO. For OpenClaw-managed Claude live sessions, OpenClaw's
+effective exec policy is authoritative over Claude's native permission mode:
+YOLO normalizes live launches to `--permission-mode bypassPermissions`, and
+restrictive effective exec policy normalizes live launches to
+`--permission-mode default`, even if raw Claude backend args specify another
+mode.
 
-If you want a more conservative setup, tighten either layer back to
+If you want a more conservative setup, tighten OpenClaw exec policy back to
 `allowlist` / `on-miss` or `deny`.
 
 ### Persistent gateway-host "never prompt" setup
@@ -272,7 +307,10 @@ EOF
 ### Session-only shortcut
 
 - `/exec security=full ask=off` changes only the current session.
-- `/elevated full` is a break-glass shortcut that also skips exec approvals for that session.
+- `/elevated full` is a break-glass shortcut that skips exec approvals only when
+  both the requested policy and the host approvals file resolve to
+  `security: "full"` and `ask: "off"`. A stricter host file, such as
+  `ask: "always"`, still prompts.
 
 If the host approvals file stays stricter than config, the stricter host
 policy still wins.
@@ -407,9 +445,15 @@ Exec lifecycle is surfaced as system messages:
 
 - `Exec running` (only if the command exceeds the running notice threshold).
 - `Exec finished`.
-- `Exec denied`.
 
 These are posted to the agent's session after the node reports the event.
+Denied exec approvals are terminal for the host command itself: the command
+does not run. For main-agent async approvals with an originating session,
+OpenClaw posts the denial back into that session as an internal followup so the
+agent can stop waiting on the async command and avoid a missing-result repair.
+If there is no session or the session cannot be resumed, OpenClaw can still
+report a concise denial to the operator or direct chat route. Denials for
+subagent sessions are not posted back into the subagent.
 Gateway-host exec approvals emit the same lifecycle events when the
 command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these
@@ -417,12 +461,12 @@ messages for easy correlation.
 
 ## Denied approval behavior
 
-When an async exec approval is denied, OpenClaw prevents the agent from
-reusing output from any earlier run of the same command in the session.
-The denial reason is passed with explicit guidance that no command output
-is available, which stops the agent from claiming there is new output or
-repeating the denied command with stale results from a prior successful
-run.
+When an async exec approval is denied, OpenClaw treats the host command as
+terminal and fail-closed. For main-agent sessions, the denial is delivered as an
+internal session followup that tells the agent the async command did not run.
+That preserves transcript continuity without exposing stale command output. If
+session delivery is unavailable, OpenClaw falls back to a concise operator or
+direct-chat denial when a safe route exists.
 
 ## Implications
 

@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -8,7 +9,6 @@ import {
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 
 export type PluginUninstallOptions = {
@@ -31,6 +31,8 @@ export async function runPluginUninstallCommand(
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+
   const {
     loadInstalledPluginIndexInstallRecords,
     removePluginInstallRecordFromRecords,

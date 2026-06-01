@@ -161,9 +161,29 @@ describe("MatrixVerificationManager", () => {
 
     const summary = manager.trackVerificationRequest(request);
 
-    expect(summary.id).toBeTruthy();
-    expect(summary.methods).toEqual([]);
+    expect(summary.id).toMatch(/^verification-\d+$/u);
+    expect(summary.methods).toStrictEqual([]);
     expect(summary.phaseName).toBe("requested");
+  });
+
+  it("tracks verification requests when the process clock is outside the Date range", () => {
+    const manager = new MatrixVerificationManager();
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    try {
+      const summary = manager.trackVerificationRequest(
+        new MockVerificationRequest({
+          transactionId: "txn-invalid-clock",
+          phase: VerificationPhase.Requested,
+        }),
+      );
+
+      expect(summary.createdAt).toBe("1970-01-01T00:00:00.000Z");
+      expect(summary.updatedAt).toBe("1970-01-01T00:00:00.000Z");
+      expect(manager.listVerifications()).toHaveLength(1);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("reuses the same tracked id for repeated transaction IDs", () => {
@@ -548,10 +568,13 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("confirmVerificationSas awaits the verifier's verify promise before resolving", async () => {
-    let resolveVerify!: () => void;
+    let resolveVerify: (() => void) | undefined;
     const verifyPromise = new Promise<void>((res) => {
       resolveVerify = res;
     });
+    if (!resolveVerify) {
+      throw new Error("Expected verification resolver to be initialized");
+    }
     const verifyImpl = vi.fn(() => verifyPromise);
     const { confirm, verifier } = createSasVerifierFixture({
       decimal: [111, 222, 333],

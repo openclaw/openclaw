@@ -6,10 +6,8 @@ import {
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import {
-  normalizeE164,
-  normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -34,12 +32,10 @@ export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSign
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
   defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-  clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+  clearBaseFields: ["account", "configPath", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    allowFrom
-      .map((entry) => normalizeStringifiedOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
+    normalizeStringifiedEntries(allowFrom)
       .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
       .filter(Boolean),
   resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,

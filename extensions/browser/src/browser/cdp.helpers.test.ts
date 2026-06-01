@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
@@ -25,6 +26,15 @@ describe("cdp helpers", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
   });
+
+  function requireGuardedFetchRequest() {
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    if (!call) {
+      throw new Error("expected guarded CDP fetch call");
+    }
+    const [request] = call;
+    return request;
+  }
 
   it("releases guarded CDP fetches after the response body is consumed", async () => {
     const release = vi.fn(async () => {});
@@ -105,15 +115,34 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:9222/json/version",
-        policy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    );
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.policy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["127.0.0.1"],
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends URL credentials as an auth header for guarded CDP fetches", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("http://openclaw:relay-token@127.0.0.1:9222/json/version", 250),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.init?.headers).toEqual({
+      Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
+    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -134,16 +163,13 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:9222/json/version",
-        policy: {
-          dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.corp.example"],
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    );
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.policy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.corp.example"],
+      allowedHostnames: ["127.0.0.1"],
+    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
@@ -223,6 +249,20 @@ describe("resolveCdpReachabilityTimeouts", () => {
       wsTimeoutMs: 3250,
     });
   });
+
+  it("caps remote reachability timeouts to timer-safe values", () => {
+    expect(
+      resolveCdpReachabilityTimeouts({
+        profileIsLoopback: false,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        remoteHttpTimeoutMs: Number.MAX_SAFE_INTEGER,
+        remoteHandshakeTimeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({
+      httpTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      wsTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
 });
 
 describe("CDP reachability policy", () => {
@@ -233,7 +273,7 @@ describe("CDP reachability policy", () => {
     expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
       allowedHostnames: ["172.29.128.1"],
     });
-    expect(browserPolicy).toEqual({});
+    expect(browserPolicy).toStrictEqual({});
     await expect(
       assertBrowserNavigationAllowed({
         url: "http://172.29.128.1/",

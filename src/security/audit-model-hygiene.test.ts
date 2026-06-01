@@ -62,14 +62,14 @@ describe("security audit model hygiene findings", () => {
             fallbacks: ["gpt-prev", "gpt-mini"],
           },
           models: {
-            "openai-codex/gpt-5.5": { alias: "gpt" },
-            "openai-codex/gpt-5.4": { alias: "gpt-prev" },
+            "openai/gpt-5.5": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt-prev" },
             "openai/gpt-5-mini": { alias: "gpt-mini" },
           },
         },
       },
     } satisfies OpenClawConfig);
 
-    expect(findings.some((finding) => finding.checkId === "models.weak_tier")).toBe(false);
+    expect(findings.map((finding) => finding.checkId)).not.toContain("models.weak_tier");
   });
 });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
   type Client,
@@ -47,7 +47,7 @@ export class DiscordMessageListener extends MessageCreateListener {
     // Per-session ordering is owned by the message run queue.
     void Promise.resolve()
       .then(() => this.handler(data, client))
-      .catch((err) => {
+      .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
       });
@@ -68,7 +68,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
     // or compaction without blocking later gateway events.
     void Promise.resolve()
       .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
-      .catch((err) => {
+      .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord interaction handler failed: ${String(err)}`));
       });

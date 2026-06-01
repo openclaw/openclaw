@@ -4,7 +4,7 @@
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
 # installs the prepared OpenClaw npm tarball into /app for built-app lanes.
 
-FROM node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb AS e2e-runner
+FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS e2e-runner
 
 # python3 covers package/plugin install paths that execute helper scripts.
 # procps provides pgrep for E2E watchdogs that assert no package-manager work is
@@ -46,8 +46,6 @@ COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/o
 # Preserve package self-reference imports such as openclaw/plugin-sdk/* after
 # copying the installed package out of npm's global node_modules tree.
 RUN npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit \
- && mkdir -p /app/node_modules \
- && cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/ \
  && cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/ \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \

@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import { replaceConfigFile } from "../config/mutate.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   hasConfiguredGatewayAuthSecretInput,
   resolveGatewayPasswordSecretRefValue,
@@ -19,6 +18,7 @@ import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
 export { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
+/** Merge sparse runtime auth overrides into persisted Gateway auth config. */
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
   override?: GatewayAuthConfig,
@@ -48,6 +48,7 @@ export function mergeGatewayAuthConfig(
   return merged;
 }
 
+/** Merge sparse runtime Tailscale overrides into persisted Gateway Tailscale config. */
 export function mergeGatewayTailscaleConfig(
   base?: GatewayTailscaleConfig,
   override?: GatewayTailscaleConfig,
@@ -61,6 +62,12 @@ export function mergeGatewayTailscaleConfig(
   }
   if (override.resetOnExit !== undefined) {
     merged.resetOnExit = override.resetOnExit;
+  }
+  if (override.serviceName !== undefined) {
+    merged.serviceName = override.serviceName;
+  }
+  if (override.preserveFunnel !== undefined) {
+    merged.preserveFunnel = override.preserveFunnel;
   }
   return merged;
 }
@@ -83,23 +90,7 @@ function resolveGatewayAuthFromConfig(params: {
   });
 }
 
-function shouldPersistGeneratedToken(params: {
-  persistRequested: boolean;
-  resolvedAuth: ResolvedGatewayAuth;
-}): boolean {
-  if (!params.persistRequested) {
-    return false;
-  }
-
-  // Keep CLI/runtime mode overrides ephemeral: startup should not silently
-  // mutate durable auth policy when mode was chosen by an override flag.
-  if (params.resolvedAuth.modeSource === "override") {
-    return false;
-  }
-
-  return true;
-}
-
+/** Check every source that can satisfy token auth before startup generates one. */
 function hasGatewayTokenCandidate(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -137,11 +128,16 @@ function hasGatewayPasswordOverrideCandidate(params: {
   );
 }
 
+/** Ensure startup has effective Gateway auth, generating only an ephemeral token if needed. */
 export async function ensureGatewayStartupAuth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
+  /**
+   * Legacy startup option retained for external callers. Startup-generated auth
+   * is runtime-only; durable auth changes must go through explicit config tools.
+   */
   persist?: boolean;
   baseHash?: string;
 }): Promise<{
@@ -152,8 +148,9 @@ export async function ensureGatewayStartupAuth(params: {
 }> {
   assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
   const env = params.env ?? process.env;
-  const persistRequested = params.persist === true;
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
+  // Resolve only refs that can satisfy the effective mode; inactive refs stay
+  // as refs so startup does not require unrelated secret providers.
   const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
     resolveGatewayTokenSecretRefValue({
       cfg: params.cfg,
@@ -213,17 +210,6 @@ export async function ensureGatewayStartupAuth(params: {
       },
     },
   };
-  const persist = shouldPersistGeneratedToken({
-    persistRequested,
-    resolvedAuth: resolved,
-  });
-  if (persist) {
-    await replaceConfigFile({
-      nextConfig: nextCfg,
-      baseHash: params.baseHash,
-    });
-  }
-
   const nextAuth = resolveGatewayAuthFromConfig({
     cfg: nextCfg,
     env,
@@ -240,10 +226,11 @@ export async function ensureGatewayStartupAuth(params: {
     cfg: nextCfg,
     auth: nextAuth,
     generatedToken,
-    persistedGeneratedToken: persist,
+    persistedGeneratedToken: false,
   };
 }
 
+/** Prevent hook ingress and Gateway auth from sharing the same bearer token. */
 export function assertHooksTokenSeparateFromGatewayAuth(params: {
   cfg: OpenClawConfig;
   auth: ResolvedGatewayAuth;

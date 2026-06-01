@@ -62,14 +62,29 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 }
 ```
 
-## Built-in catalog
+## Featured catalog
 
-| Model ref                                  | Name                         | Context | Max output |
-| ------------------------------------------ | ---------------------------- | ------- | ---------- |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144 | 8,192      |
-| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144 | 8,192      |
-| `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                 | 196,608 | 8,192      |
-| `nvidia/z-ai/glm5`                         | GLM 5                        | 202,752 | 8,192      |
+When an NVIDIA API key is configured, OpenClaw setup and model-selection paths
+try NVIDIA's public featured-model catalog from
+`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
+caches the ranked result for 24 hours. New featured models from build.nvidia.com
+therefore appear in setup and model-selection surfaces without waiting for an
+OpenClaw release.
+
+The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
+NVIDIA API key is configured, or if that public catalog is unavailable or
+malformed, OpenClaw falls back to the bundled catalog below.
+
+## Bundled fallback catalog
+
+| Model ref                                  | Name                         | Context | Max output | Notes                             |
+| ------------------------------------------ | ---------------------------- | ------- | ---------- | --------------------------------- |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144 | 8,192      | Featured fallback                 |
+| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144 | 8,192      | Featured fallback                 |
+| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608 | 8,192      | Featured fallback                 |
+| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752 | 8,192      | Featured fallback                 |
+| `nvidia/minimaxai/minimax-m2.5`            | MiniMax M2.5                 | 196,608 | 8,192      | Deprecated, upgrade compatibility |
+| `nvidia/z-ai/glm5`                         | GLM-5                        | 202,752 | 8,192      | Deprecated, upgrade compatibility |
 
 ## Advanced configuration
 
@@ -80,13 +95,48 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
   </Accordion>
 
   <Accordion title="Catalog and pricing">
-    The bundled catalog is static. Costs default to `0` in source since NVIDIA
-    currently offers free API access for the listed models.
+    OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
+    configured and caches it for 24 hours. The bundled fallback catalog is static
+    and keeps deprecated shipped refs for upgrade compatibility. Costs default to
+    `0` in source since NVIDIA currently offers free API access for the listed
+    models.
   </Accordion>
 
   <Accordion title="OpenAI-compatible endpoint">
     NVIDIA uses the standard `/v1` completions endpoint. Any OpenAI-compatible
     tooling should work out of the box with the NVIDIA base URL.
+  </Accordion>
+
+  <Accordion title="Slow custom provider responses">
+    Some NVIDIA-hosted custom models can take longer than the default model idle
+    watchdog before they emit a first response chunk. For custom NVIDIA provider
+    entries, raise the provider timeout instead of raising the whole agent
+    runtime timeout:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "custom-integrate-api-nvidia-com": {
+            baseUrl: "https://integrate.api.nvidia.com/v1",
+            api: "openai-completions",
+            apiKey: "NVIDIA_API_KEY",
+            timeoutSeconds: 300,
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "custom-integrate-api-nvidia-com/meta/llama-3.1-70b-instruct": {
+              params: { thinking: "off" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 </AccordionGroup>
 

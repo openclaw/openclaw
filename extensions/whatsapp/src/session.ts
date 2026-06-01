@@ -1,16 +1,15 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import type { Agent } from "node:https";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
-  resolveEnvHttpProxyUrl,
-  shouldUseEnvHttpProxyForUrl,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  createNodeProxyAgent,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readCredsJsonRaw,
   restoreCredsFromBackupIfNeeded,
@@ -18,15 +17,15 @@ import {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
 } from "./auth-store.js";
+import { assertWebCredsPathRegularFileOrMissing } from "./creds-files.js";
 import {
   enqueueCredsSave,
-  waitForCredsSaveQueue,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
-  type CredsQueueWaitResult,
+  writeWebCredsRawAtomically,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
-import { formatError, getStatusCode } from "./session-errors.js";
+import { getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -55,7 +54,6 @@ export {
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./auth-store.js";
 export {
@@ -69,6 +67,10 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+
+async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
+  await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
+}
 
 function enqueueSaveCreds(
   authDir: string,
@@ -98,12 +100,11 @@ async function safeSaveCreds(
     if (raw) {
       try {
         JSON.parse(raw);
-        fsSync.copyFileSync(credsPath, backupPath);
-        try {
-          fsSync.chmodSync(backupPath, 0o600);
-        } catch {
-          // best-effort on platforms that support it
-        }
+        await writeWebCredsRawAtomically({
+          filePath: backupPath,
+          content: raw,
+          tempPrefix: ".creds.backup",
+        });
       } catch {
         // keep existing backup
       }
@@ -143,14 +144,17 @@ export async function createWaSocket(
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
+  await rejectUnsafeWebCredsPath(authDir);
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   const queueResult = await waitForCredsSaveQueueWithTimeout(authDir);
   if (queueResult === "timed_out") {
     sessionLogger.warn({ authDir }, CREDS_FLUSH_TIMEOUT_MESSAGE);
   } else {
+    await rejectUnsafeWebCredsPath(authDir);
     await restoreCredsFromBackupIfNeeded(authDir);
   }
+  await rejectUnsafeWebCredsPath(authDir);
   const { state } = await useMultiFileAuthState(authDir);
   const saveCreds = async () => {
     await writeCredsJsonAtomically(authDir, state.creds);
@@ -184,16 +188,15 @@ export async function createWaSocket(
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
-  sock.ev.on(
-    "connection.update",
-    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+  sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
+    void (async () => {
       try {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-            void printTerminalQr(qr).catch((err) => {
+            void printTerminalQr(qr).catch((err: unknown) => {
               sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
             });
           }
@@ -214,8 +217,8 @@ export async function createWaSocket(
       } catch (err) {
         sessionLogger.error({ error: String(err) }, "connection.update handler error");
       }
-    },
-  );
+    })();
+  });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
   if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
@@ -230,15 +233,15 @@ export async function createWaSocket(
 async function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<Agent | undefined> {
-  if (!shouldUseEnvHttpProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET)) {
-    return undefined;
-  }
-  const proxyUrl = resolveEnvHttpProxyUrl("https");
-  if (!proxyUrl) {
-    return undefined;
-  }
   try {
-    const agent = new HttpsProxyAgent(proxyUrl) as Agent;
+    const agent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl: WHATSAPP_WEBSOCKET_PROXY_TARGET,
+      protocol: "https",
+    }) as Agent | undefined;
+    if (!agent) {
+      return undefined;
+    }
     logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     return agent;
   } catch (error) {
@@ -260,10 +263,7 @@ async function resolveEnvFetchDispatcher(
     return undefined;
   }
   try {
-    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
-    return proxyUrl
-      ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
-      : new EnvHttpProxyAgent({ allowH2: false });
+    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
   } catch (error) {
     logger.warn(
       { error: String(error) },
@@ -274,6 +274,15 @@ async function resolveEnvFetchDispatcher(
 }
 
 function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
+  if (
+    typeof agent === "object" &&
+    agent !== null &&
+    "getProxyForUrl" in agent &&
+    typeof agent.getProxyForUrl === "function"
+  ) {
+    const proxyUrl = agent.getProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET);
+    return typeof proxyUrl === "string" && proxyUrl.length > 0 ? proxyUrl : undefined;
+  }
   if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
     return undefined;
   }
@@ -310,14 +319,19 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     const evWithOff = sock.ev as unknown as OffCapable;
 
     const handler = (...args: unknown[]) => {
-      const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
+      const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
       if (update.connection === "open") {
         evWithOff.off?.("connection.update", handler);
         resolve();
       }
       if (update.connection === "close") {
         evWithOff.off?.("connection.update", handler);
-        reject(update.lastDisconnect ?? new Error("Connection closed"));
+        reject(
+          toLintErrorObject(
+            update.lastDisconnect ?? new Error("Connection closed"),
+            "Non-Error rejection",
+          ),
+        );
       }
     };
 
@@ -327,4 +341,18 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 
 export function newConnectionId() {
   return randomUUID();
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

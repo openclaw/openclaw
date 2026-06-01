@@ -82,6 +82,12 @@ export function createIMessagePluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
+      reactions: true,
+      edit: true,
+      unsend: true,
+      reply: true,
+      effects: true,
+      groupManagement: true,
     },
     reload: { configPrefixes: ["channels.imessage"] },
     configSchema: IMessageChannelConfigSchema,
@@ -100,10 +106,13 @@ export function createIMessagePluginBase(params: {
   return {
     ...base,
     messaging: {
-      resolveInboundAttachmentRoots: (params) =>
-        resolveIMessageAttachmentRoots({ accountId: params.accountId, cfg: params.cfg }),
-      resolveRemoteInboundAttachmentRoots: (params) =>
-        resolveIMessageRemoteAttachmentRoots({ accountId: params.accountId, cfg: params.cfg }),
+      resolveInboundAttachmentRoots: (paramsValue) =>
+        resolveIMessageAttachmentRoots({ accountId: paramsValue.accountId, cfg: paramsValue.cfg }),
+      resolveRemoteInboundAttachmentRoots: (paramsLocal) =>
+        resolveIMessageRemoteAttachmentRoots({
+          accountId: paramsLocal.accountId,
+          cfg: paramsLocal.cfg,
+        }),
     },
   } as Pick<
     ChannelPlugin<ResolvedIMessageAccount>,

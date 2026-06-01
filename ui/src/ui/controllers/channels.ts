@@ -1,4 +1,4 @@
-import { ChannelsStatusSnapshot } from "../types.ts";
+import type { ChannelsStatusSnapshot } from "../types.ts";
 import type { ChannelsState } from "./channels.types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -12,7 +12,9 @@ type LoadChannelsOptions = {
 };
 
 function delay(ms: number): Promise<"timeout"> {
-  return new Promise((resolve) => setTimeout(() => resolve("timeout"), ms));
+  return new Promise((resolve) => {
+    setTimeout(() => resolve("timeout"), ms);
+  });
 }
 
 export async function loadChannels(
@@ -23,10 +25,13 @@ export async function loadChannels(
   if (!state.client || !state.connected) {
     return;
   }
-  if (state.channelsLoading) {
+  if (state.channelsLoading && (!state.channelsLoadingProbe || probe)) {
     return;
   }
+  const refreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
+  state.channelsRefreshSeq = refreshSeq;
   state.channelsLoading = true;
+  state.channelsLoadingProbe = probe;
   state.channelsError = null;
   const refresh = (async () => {
     try {
@@ -34,9 +39,15 @@ export async function loadChannels(
         probe,
         timeoutMs: 8000,
       });
+      if (state.channelsRefreshSeq !== refreshSeq) {
+        return;
+      }
       state.channelsSnapshot = res;
       state.channelsLastSuccess = Date.now();
     } catch (err) {
+      if (state.channelsRefreshSeq !== refreshSeq) {
+        return;
+      }
       if (isMissingOperatorReadScopeError(err)) {
         state.channelsSnapshot = null;
         state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
@@ -44,7 +55,10 @@ export async function loadChannels(
         state.channelsError = String(err);
       }
     } finally {
-      state.channelsLoading = false;
+      if (state.channelsRefreshSeq === refreshSeq) {
+        state.channelsLoading = false;
+        state.channelsLoadingProbe = null;
+      }
     }
   })();
 

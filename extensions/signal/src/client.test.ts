@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/core", async () => {
@@ -51,6 +52,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -95,14 +97,21 @@ describe("signalRpcRequest", () => {
       res.end("not-json");
     });
 
-    await expect(
-      signalRpcRequest("version", undefined, {
+    let thrown: unknown;
+    try {
+      await signalRpcRequest("version", undefined, {
         baseUrl,
-      }),
-    ).rejects.toMatchObject({
-      message: "Signal RPC returned malformed JSON (status 502)",
-      cause: expect.any(SyntaxError),
-    });
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected malformed JSON request to throw an Error");
+    }
+    expect(thrown.message).toBe("Signal RPC returned malformed JSON (status 502)");
+    expect(thrown.cause).toBeInstanceOf(SyntaxError);
   });
 
   it("throws when RPC response envelope has neither result nor error", async () => {
@@ -214,6 +223,24 @@ describe("signalRpcRequest", () => {
       }),
     ).rejects.toThrow("Signal HTTP exceeded deadline after 25ms");
   });
+
+  it("caps oversized RPC request timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }));
+    });
+
+    await signalRpcRequest("version", undefined, {
+      baseUrl,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
 });
 
 describe("signalCheck", () => {
@@ -298,14 +325,18 @@ describe("streamSignalEvents", () => {
     const abortTimer = setTimeout(() => abortController.abort(), 25);
     abortTimer.unref?.();
 
-    await expect(
-      streamSignalEvents({
+    try {
+      await streamSignalEvents({
         baseUrl,
         timeoutMs: 0,
         abortSignal: abortController.signal,
         onEvent: () => {},
-      }),
-    ).rejects.toMatchObject({ name: "AbortError", message: "Signal SSE aborted" });
+      });
+      throw new Error("expected Signal SSE stream to abort");
+    } catch (error) {
+      expect((error as Error).name).toBe("AbortError");
+      expect((error as Error).message).toBe("Signal SSE aborted");
+    }
   });
 
   it("rejects oversized SSE line buffers by byte size", async () => {

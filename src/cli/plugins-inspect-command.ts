@@ -1,3 +1,5 @@
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -5,9 +7,8 @@ import {
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { formatMissingPluginMessage } from "./error-format.js";
 import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 
 export type PluginInspectOptions = {
@@ -232,7 +233,7 @@ export async function runPluginsInspectCommand(
   );
   const targetPlugin = snapshotReport.plugins.find((entry) => entry.id === id || entry.name === id);
   if (!targetPlugin) {
-    defaultRuntime.error(`Plugin not found: ${id}`);
+    defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
     return defaultRuntime.exit(1);
   }
   const report = runtimeInspect
@@ -254,7 +255,9 @@ export async function runPluginsInspectCommand(
     report,
   });
   if (!inspect) {
-    defaultRuntime.error(`Plugin not found: ${id}`);
+    defaultRuntime.error(
+      formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),
+    );
     return defaultRuntime.exit(1);
   }
   const install = installRecords[inspect.plugin.id];
@@ -340,7 +343,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
-  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(
       "MCP servers",

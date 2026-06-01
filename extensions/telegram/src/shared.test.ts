@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import { createTelegramPluginBase, telegramConfigAdapter } from "./shared.js";
@@ -56,8 +56,8 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     expect(channelData).toEqual({
       telegram: {
         buttons: [
-          [{ text: "ollama", callback_data: "/models add ollama" }],
-          [{ text: "lmstudio", callback_data: "/models add lmstudio" }],
+          [{ text: "ollama", callback_data: "tgcmd:/models add ollama" }],
+          [{ text: "lmstudio", callback_data: "tgcmd:/models add lmstudio" }],
         ],
       },
     });

@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSessionsListTool } from "./sessions-list-tool.js";
 
 const mocks = vi.hoisted(() => ({
   gatewayCall: vi.fn(),
@@ -52,12 +53,6 @@ function getSessionsListDetails(result: { details?: unknown }): SessionsListDeta
 }
 
 describe("sessions-list-tool", () => {
-  let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
-
-  beforeAll(async () => {
-    ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createAgentToAgentPolicy.mockReturnValue({});
@@ -190,13 +185,24 @@ describe("sessions-list-tool", () => {
     const result = await tool.execute("call-3", {});
     const details = getSessionsListDetails(result);
 
-    expect(details.sessions?.[0]).toMatchObject({
-      thinkingLevel: "high",
-      fastMode: true,
-      verboseLevel: "on",
-      reasoningLevel: "deep",
-      elevatedLevel: "on",
-      responseUsage: "full",
-    });
+    const session = details.sessions?.[0];
+    expect(session?.thinkingLevel).toBe("high");
+    expect(session?.fastMode).toBe(true);
+    expect(session?.verboseLevel).toBe("on");
+    expect(session?.reasoningLevel).toBe("deep");
+    expect(session?.elevatedLevel).toBe("on");
+    expect(session?.responseUsage).toBe("full");
+  });
+
+  it.each([
+    [{ limit: 1.5 }, "limit must be a positive integer"],
+    [{ activeMinutes: 0 }, "activeMinutes must be a positive integer"],
+    [{ messageLimit: 1.5 }, "messageLimit must be a non-negative integer"],
+    [{ messageLimit: -1 }, "messageLimit must be a non-negative integer"],
+  ])("rejects invalid numeric parameter %o", async (params, message) => {
+    const tool = createSessionsListTool({ config: {} as never });
+
+    await expect(tool.execute("call-4", params)).rejects.toThrow(message);
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
   });
 });

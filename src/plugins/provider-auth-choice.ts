@@ -1,14 +1,16 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
@@ -26,6 +28,8 @@ import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.j
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
 import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
+
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -118,13 +122,19 @@ async function noteDefaultModelResult(params: {
     params.previousPrimary !== params.selectedModel
   ) {
     await params.prompter.note(
-      `Kept existing default model ${params.previousPrimary}; ${selectedModelDisplay} is available.`,
-      "Model configured",
+      t("wizard.model.keptExistingDefault", {
+        current: params.previousPrimary,
+        selected: selectedModelDisplay,
+      }),
+      t("wizard.model.configuredTitle"),
     );
     return;
   }
 
-  await params.prompter.note(`Default model set to ${selectedModelDisplay}`, "Model configured");
+  await params.prompter.note(
+    t("wizard.model.defaultSet", { model: selectedModelDisplay }),
+    t("wizard.model.configuredTitle"),
+  );
 }
 
 async function applyDefaultModelFromAuthChoice(params: {
@@ -134,6 +144,8 @@ async function applyDefaultModelFromAuthChoice(params: {
   selectedModelDisplay?: string;
   preserveExistingDefaultModel: boolean | undefined;
   prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
   runSelectedModelHook: (config: OpenClawConfig) => Promise<void>;
 }): Promise<OpenClawConfig> {
   const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
@@ -146,11 +158,47 @@ async function applyDefaultModelFromAuthChoice(params: {
     params.preserveExistingDefaultModel === true
       ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
       : params.config;
-  const nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
+  let nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
+    const { CODEX_RUNTIME_PLUGIN_ID, ensureCodexRuntimePluginForModelSelection } =
+      await import("../commands/codex-runtime-plugin-install.js");
+    const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+      cfg: nextConfig,
+      model: params.selectedModel,
+      prompter: params.prompter,
+      runtime: params.runtime,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    nextConfig = codexInstall.cfg;
     await params.runSelectedModelHook(nextConfig);
+    if (codexInstall.installed) {
+      // Offer Codex CLI state migration whenever the harness is in place for
+      // the selected model, regardless of whether this run was a fresh install
+      // or a repair against an already-present harness. The user can always
+      // decline the prompt; surfacing it again costs nothing if there is no
+      // migratable state to find.
+      const { offerPostInstallMigrations } =
+        await import("../wizard/setup.post-install-migration.js");
+      const migrationResult = await offerPostInstallMigrations({
+        config: nextConfig,
+        runtime: params.runtime,
+        prompter: params.prompter,
+        installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+      });
+      nextConfig = migrationResult.config;
+    }
+    const { ensureCopilotRuntimePluginForModelSelection } =
+      await import("../commands/copilot-runtime-plugin-install.js");
+    const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
+      cfg: nextConfig,
+      model: params.selectedModel,
+      prompter: params.prompter,
+      runtime: params.runtime,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    nextConfig = copilotInstall.cfg;
   }
   await noteDefaultModelResult({
     previousPrimary,
@@ -193,7 +241,7 @@ function withProviderPluginId(provider: ProviderPlugin, pluginId: string): Provi
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
 }
 
-export const __testing = {
+export const testing = {
   resetDepsForTest(): void {
     providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
   },
@@ -253,7 +301,7 @@ export async function runProviderPluginAuthMethod(params: {
   }
 
   for (const profile of result.profiles) {
-    upsertAuthProfile({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir,
@@ -276,9 +324,13 @@ export async function runProviderPluginAuthMethod(params: {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
+  const defaultModel = result.defaultModel
+    ? normalizeAgentModelRefForConfig(result.defaultModel)
+    : undefined;
+
   return {
     config: nextConfig,
-    defaultModel: result.defaultModel,
+    ...(defaultModel ? { defaultModel } : {}),
   };
 }
 
@@ -335,7 +387,6 @@ export async function applyAuthChoiceLoadedPluginProvider(
       ...(manifestAuthChoice
         ? {
             onlyPluginIds: [manifestAuthChoice.pluginId],
-            providerRefs: [manifestAuthChoice.providerId],
           }
         : {}),
     });
@@ -425,6 +476,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
+        runtime: params.runtime,
+        workspaceDir,
         runSelectedModelHook: async (config) => {
           await runProviderModelSelectedHook({
             config,
@@ -517,6 +570,8 @@ export async function applyAuthChoicePluginProvider(
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
+        runtime: params.runtime,
+        workspaceDir,
         runSelectedModelHook: async (config) => {
           await runProviderModelSelectedHook({
             config,
@@ -531,8 +586,11 @@ export async function applyAuthChoicePluginProvider(
     }
     if (params.agentId) {
       await params.prompter.note(
-        `Default model set to ${selectedModelDisplay} for agent "${params.agentId}".`,
-        "Model configured",
+        t("wizard.model.defaultSetForAgent", {
+          agent: params.agentId,
+          model: selectedModelDisplay,
+        }),
+        t("wizard.model.configuredTitle"),
       );
     }
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
@@ -541,3 +599,13 @@ export async function applyAuthChoicePluginProvider(
 
   return { config: nextConfig };
 }
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
+export { testing as __testing };

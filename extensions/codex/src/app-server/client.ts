@@ -27,8 +27,10 @@ export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 30_000;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 type PendingRequest = {
   method: string;
@@ -42,11 +44,37 @@ export class CodexAppServerRpcError extends Error {
   readonly data?: JsonValue;
 
   constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
-    super(error.message || `${method} failed`);
+    super(formatCodexAppServerRpcErrorMessage(error, method));
     this.name = "CodexAppServerRpcError";
     this.code = error.code;
     this.data = error.data;
   }
+}
+
+function formatCodexAppServerRpcErrorMessage(
+  error: { message: string; data?: JsonValue },
+  method: string,
+): string {
+  const message = error.message || `${method} failed`;
+  const detail = readCodexAppServerRpcReloginDetail(error.data);
+  return detail && !message.includes(detail) ? `${message}: ${detail}` : message;
+}
+
+function readCodexAppServerRpcReloginDetail(data: JsonValue | undefined): string | undefined {
+  const record = isJsonObject(data) ? data : undefined;
+  const nested = isJsonObject(record?.error) ? record.error : record;
+  if (!nested) {
+    return undefined;
+  }
+  const isRelogin =
+    nested.action === "relogin" ||
+    (nested.reason === "cloudRequirements" && nested.errorCode === "Auth");
+  const detail = typeof nested.detail === "string" ? nested.detail.trim() : "";
+  return isRelogin && detail ? detail : undefined;
+}
+
+function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
@@ -74,10 +102,12 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private activeSharedLeaseCountProvider: (() => number | undefined) | undefined;
   private nextId = 1;
   private initialized = false;
   private closed = false;
   private closeError: Error | undefined;
+  private serverVersion: string | undefined;
   private stderrTail = "";
   private pendingParse:
     | {
@@ -150,9 +180,13 @@ export class CodexAppServerClient {
         experimentalApi: true,
       },
     } satisfies CodexInitializeParams);
-    assertSupportedCodexAppServerVersion(response);
+    this.serverVersion = assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
+  }
+
+  getServerVersion(): string | undefined {
+    return this.serverVersion;
   }
 
   request<M extends CodexAppServerRequestMethod>(
@@ -168,8 +202,9 @@ export class CodexAppServerClient {
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    optionsInput?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<T> {
+    let options = optionsInput;
     options ??= {};
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
@@ -227,7 +262,7 @@ export class CodexAppServerClient {
         return;
       }
       try {
-        this.writeMessage(message);
+        this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(error instanceof Error ? error : new Error(String(error)));
       }
@@ -246,6 +281,16 @@ export class CodexAppServerClient {
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
+  }
+
+  setActiveSharedLeaseCountProviderForUnscopedNotifications(
+    provider: (() => number | undefined) | undefined,
+  ): void {
+    this.activeSharedLeaseCountProvider = provider;
+  }
+
+  getActiveSharedLeaseCountForUnscopedNotifications(): number | undefined {
+    return this.activeSharedLeaseCountProvider?.();
   }
 
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
@@ -268,17 +313,21 @@ export class CodexAppServerClient {
     await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse): void {
+  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
     if (this.closed) {
       return;
     }
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    this.child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
-      if (error) {
-        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
-      }
-    });
+    this.child.stdin.write(
+      `${stringifyCodexAppServerMessage(message)}\n`,
+      (error?: Error | null) => {
+        if (error) {
+          embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+          onError?.(error);
+        }
+      },
+    );
   }
 
   private handleLine(line: string): void {
@@ -317,6 +366,7 @@ export class CodexAppServerClient {
     } catch (error) {
       const lineCount = pending.lineCount + 1;
       if (
+        shouldBufferCodexAppServerParseFailure(candidate.trim(), error) &&
         candidate.length <= CODEX_APP_SERVER_PARSE_BUFFER_MAX &&
         lineCount <= CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES
       ) {
@@ -512,6 +562,14 @@ function defaultServerRequestResponse(
   return {};
 }
 
+function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
+  return (
+    JSON.stringify(message, (_key, value) =>
+      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
+    ) ?? "null"
+  );
+}
+
 function timeoutServerRequestResponse(
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ): JsonValue | undefined {
@@ -529,18 +587,19 @@ function timeoutServerRequestResponse(
   };
 }
 
-function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
+function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
   if (!detectedVersion) {
     throw new Error(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
-  if (compareVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
+  if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
     throw new Error(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
+  return detectedVersion;
 }
 
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
@@ -553,7 +612,7 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
   return match?.[1];
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareCodexAppServerVersions(left: string, right: string): number {
   const leftVersion = parseVersionForComparison(left);
   const rightVersion = parseVersionForComparison(right);
   const leftParts = leftVersion.parts;
@@ -667,9 +726,10 @@ function formatExitValue(value: unknown): string {
   return "unknown";
 }
 
-export const __testing = {
+export const testing = {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
   redactCodexAppServerLinePreview,
 } as const;
+export { testing as __testing };

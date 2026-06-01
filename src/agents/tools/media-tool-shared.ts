@@ -1,21 +1,28 @@
-import { type Api, type Model } from "@mariozechner/pi-ai";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { getDefaultLocalRoots } from "../../media/web-media.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
-import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
+import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  findCapabilityProviderById,
+  resolveCapabilityModelRefForProviders,
+} from "../../../packages/media-generation-core/src/capability-model-ref.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import type { Model } from "../../llm/types.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
-import { normalizeProviderId } from "../provider-id.js";
 import {
   ToolInputError,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "./common.js";
@@ -27,7 +34,7 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
-  hasAuthForProvider,
+  hasProviderAuthForTool,
   hasToolModelConfig,
   resolveDefaultModelRef,
   type ToolModelConfig,
@@ -92,17 +99,9 @@ export function applyMusicGenerationModelConfigDefaults(
 }
 
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
-  const timeoutMs = readNumberParam(args, "timeoutMs", {
-    integer: true,
-    strict: true,
+  return readPositiveIntegerParam(args, "timeoutMs", {
+    message: "timeoutMs must be a positive integer in milliseconds.",
   });
-  if (timeoutMs === undefined) {
-    return undefined;
-  }
-  if (timeoutMs <= 0) {
-    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
-  }
-  return timeoutMs;
 }
 
 export function resolveRemoteMediaSsrfPolicy(
@@ -135,6 +134,7 @@ type CapabilityProvider = {
   id: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -145,16 +145,17 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-function findCapabilityProviderById<T extends CapabilityProvider>(params: {
-  providers: T[];
-  providerId?: string;
-}): T | undefined {
-  const selectedProvider = normalizeProviderId(params.providerId ?? "");
-  return params.providers.find(
-    (provider) =>
-      normalizeProviderId(provider.id) === selectedProvider ||
-      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
-  );
+function parseCapabilityModelRefForProviders(params: {
+  providers: CapabilityProvider[];
+  raw?: string;
+  parseModelRef: ParseGenerationModelRef;
+}): GenerationModelRef | null {
+  return resolveCapabilityModelRefForProviders({
+    providers: params.providers,
+    raw: params.raw,
+    parseModelRef: params.parseModelRef,
+    normalizeProviderId,
+  });
 }
 
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
@@ -162,6 +163,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -170,11 +172,14 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     findCapabilityProviderById({
       providers: params.providers,
       providerId: params.providerId,
+      normalizeProviderId,
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({
+      ? hasProviderAuthForTool({
           provider: params.providerId,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
         })
@@ -186,8 +191,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({
+  return hasProviderAuthForTool({
     provider: provider.id,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
@@ -200,18 +207,29 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
-    params.parseModelRef(params.modelOverride) ?? params.parseModelRef(params.modelConfig.primary);
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelOverride,
+      parseModelRef: params.parseModelRef,
+    }) ??
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelConfig.primary,
+      parseModelRef: params.parseModelRef,
+    });
   if (!selectedRef) {
     return undefined;
   }
   return findCapabilityProviderById({
     providers: params.providers,
     providerId: selectedRef.provider,
+    normalizeProviderId,
   });
 }
 
 function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   providers: CapabilityProvider[];
@@ -228,6 +246,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
         providers: params.providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       })
@@ -270,6 +289,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
 
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
@@ -287,10 +307,13 @@ export function resolveCapabilityModelConfigForTool(params: {
   };
   return buildToolModelConfigFromCandidates({
     explicit,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
       providers: getProviders(),
@@ -300,6 +323,7 @@ export function resolveCapabilityModelConfigForTool(params: {
         providers: getProviders(),
         providerId,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -328,6 +352,7 @@ export function hasGenerationToolAvailability(params: {
         providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -357,8 +382,10 @@ export function hasGenerationToolAvailability(params: {
     contract: params.providerKey,
     config: params.cfg,
   }).some((providerId) =>
-    hasAuthForProvider({
+    hasProviderAuthForTool({
       provider: providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
     }),
@@ -487,7 +514,12 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: {
+    workspaceOnly?: boolean;
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  },
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
@@ -495,7 +527,25 @@ export function resolveMediaToolLocalRoots(
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+}
+
+export function resolveMediaToolInboundRoots(options?: {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): string[] {
+  if (options?.workspaceOnly || !options?.cfg || !options.channelId) {
+    return [];
+  }
+  return normalizeInboundPathRoots(
+    resolveChannelInboundAttachmentRootsForChannel({
+      cfg: options.cfg,
+      channelId: options.channelId,
+      accountId: options.accountId,
+    }),
+  );
 }
 
 export function resolvePromptAndModelOverride(
@@ -531,19 +581,16 @@ export function resolveModelFromRegistry(params: {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
   provider: string;
   modelId: string;
-}): Model<Api> {
+}): Model {
   const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
     allowPluginNormalization: false,
   });
-  let model = params.modelRegistry.find(
-    resolvedRef.provider,
-    resolvedRef.model,
-  ) as Model<Api> | null;
+  let model = params.modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model | null;
   if (!model && !resolvedRef.model.includes("/")) {
     model = params.modelRegistry.find(
       resolvedRef.provider,
       `${resolvedRef.provider}/${resolvedRef.model}`,
-    ) as Model<Api> | null;
+    ) as Model | null;
   }
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
@@ -552,7 +599,7 @@ export function resolveModelFromRegistry(params: {
 }
 
 export async function resolveModelRuntimeApiKey(params: {
-  model: Model<Api>;
+  model: Model;
   cfg: OpenClawConfig | undefined;
   agentDir: string;
   authStorage: {

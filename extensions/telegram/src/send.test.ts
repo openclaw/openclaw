@@ -1,16 +1,32 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildTelegramConversationContext,
+  createTelegramMessageCache,
+  resolveTelegramMessageCacheScope,
+  resetTelegramMessageCacheBucketsForTest,
+} from "./message-cache.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
 import {
+  TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+  TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
   clearSentMessageCache,
   recordSentMessage,
   resetSentMessageCacheForTest,
+  setTelegramSentMessageStoreForTest,
   wasSentByBot,
 } from "./sent-message-cache.js";
 
@@ -18,6 +34,7 @@ installTelegramSendTestHooks();
 
 const {
   botApi,
+  botConfigUseSpy,
   botCtorSpy,
   imageMetadata,
   loadConfig,
@@ -25,6 +42,8 @@ const {
   maybePersistResolvedTelegramTarget,
   probeVideoDimensions,
 } = getTelegramSendTestMocks();
+const telegramSendModule = await importTelegramSendModule();
+const { resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env");
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -39,9 +58,39 @@ const {
   sendPollTelegram,
   sendStickerTelegram,
   unpinMessageTelegram,
-} = await importTelegramSendModule();
+} = telegramSendModule;
 
 const TELEGRAM_TEST_CFG = {};
+let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
+
+beforeEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
+  installTelegramStateRuntimeForTest();
+  sentMessageStore = createPluginStateSyncKeyedStoreForTests("telegram", {
+    namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+  });
+  sentMessageStore.clear();
+  setTelegramSentMessageStoreForTest(sentMessageStore);
+});
+
+function installTelegramStateRuntimeForTest(): void {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: ((options) =>
+        createPluginStateKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: ((options) =>
+        createPluginStateSyncKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
+}
 
 async function expectChatNotFoundWithChatId(
   action: Promise<unknown>,
@@ -102,10 +151,94 @@ function mockLoadedMedia({
   });
 }
 
+function requireMockCall<T extends unknown[]>(call: T | undefined, label: string): T {
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
+function mockCall(mock: ReturnType<typeof vi.fn>, index: number, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const resolvedIndex = index < 0 ? calls.length + index : index;
+  return requireMockCall(calls[resolvedIndex], label);
+}
+
+function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
+  return mockCall(mock, 0, label);
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label} to be a string`);
+  }
+  return value;
+}
+
+function mockCallText(call: unknown[], label: string): string {
+  return requireString(call[1], label);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMediaSendCall(
+  call: unknown[] | undefined,
+  label: string,
+  chatId: string,
+  expectedParams: Record<string, unknown>,
+): void {
+  const [actualChatId, media, actualParams] = requireMockCall(call, label);
+  expect(actualChatId).toBe(chatId);
+  if (media === undefined) {
+    throw new Error(`expected ${label} media`);
+  }
+  expect(actualParams).toEqual(expectedParams);
+}
+
+function expectPersistedTarget(fields: Record<string, unknown>): void {
+  const [target] = requireMockCall(
+    mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
+    "persisted Telegram target",
+  );
+  const record = requireRecord(target, "persisted Telegram target");
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+let logCaptureCounter = 0;
+
+function captureInfoLogs(): string {
+  logCaptureCounter += 1;
+  const logFile = `/tmp/openclaw-telegram-send-log-${process.pid}-${logCaptureCounter}.jsonl`;
+  fs.rmSync(logFile, { force: true });
+  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+  return logFile;
+}
+
+function capturedLogText(logFile: string): string {
+  return fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "";
+}
+
+afterEach(() => {
+  clearTelegramRuntime();
+  clearSentMessageCache();
+  setTelegramSentMessageStoreForTest(undefined);
+  resetPluginStateStoreForTests();
+  setLoggerOverride(null);
+  resetLogger();
+  resetTelegramMessageCacheBucketsForTest();
+  vi.restoreAllMocks();
+});
+
 describe("sent-message-cache", () => {
   afterEach(() => {
     vi.useRealTimers();
-    clearSentMessageCache();
   });
 
   it("records and retrieves sent messages", () => {
@@ -134,6 +267,41 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(false);
   });
 
+  it("keeps sent-message cache storage failures best-effort", () => {
+    setTelegramSentMessageStoreForTest({
+      ...sentMessageStore,
+      entries() {
+        throw new Error("read boom");
+      },
+      register() {
+        throw new Error("write boom");
+      },
+    });
+
+    expect(() => recordSentMessage(123, 1)).not.toThrow();
+    expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("persists sent-message rows with their remaining logical ttl", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-26T12:00:00.000Z"));
+    const ttlByMessageId = new Map<string, number>();
+    setTelegramSentMessageStoreForTest({
+      ...sentMessageStore,
+      register(key, value, options) {
+        sentMessageStore.register(key, value, options);
+        ttlByMessageId.set(value.messageId, options?.ttlMs ?? 0);
+      },
+    });
+
+    recordSentMessage(123, 1);
+    vi.advanceTimersByTime(60 * 60 * 1000);
+    recordSentMessage(123, 2);
+
+    expect(ttlByMessageId.get("1")).toBe(23 * 60 * 60 * 1000);
+    expect(ttlByMessageId.get("2")).toBe(24 * 60 * 60 * 1000);
+  });
+
   it("keeps sent-message ownership across restart", async () => {
     const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
     const sentMessageCfg = { session: { store: persistedStorePath } };
@@ -147,11 +315,13 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=restart",
     );
+    restartedCache.setTelegramSentMessageStoreForTest(sentMessageStore);
 
     try {
       expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
     } finally {
       restartedCache.clearSentMessageCache();
+      restartedCache.setTelegramSentMessageStoreForTest(undefined);
     }
   });
 
@@ -203,6 +373,8 @@ describe("sent-message-cache", () => {
       import.meta.url,
       "./sent-message-cache.js?scope=shared-b",
     );
+    cacheA.setTelegramSentMessageStoreForTest(sentMessageStore);
+    cacheB.setTelegramSentMessageStoreForTest(sentMessageStore);
 
     cacheA.clearSentMessageCache();
 
@@ -214,6 +386,8 @@ describe("sent-message-cache", () => {
       expect(cacheA.wasSentByBot(123, 1)).toBe(false);
     } finally {
       cacheA.clearSentMessageCache();
+      cacheA.setTelegramSentMessageStoreForTest(undefined);
+      cacheB.setTelegramSentMessageStoreForTest(undefined);
     }
   });
 });
@@ -278,6 +452,27 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "keeps url buttons",
+        input: [[{ text: "Open", url: "https://example.com" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
+        name: "keeps web app buttons",
+        input: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
+        expected: {
+          inline_keyboard: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
+        },
+      },
+      {
+        name: "prefers url over callback data when both are present",
+        input: [[{ text: "Open", callback_data: "cmd:open", url: "https://example.com" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
         name: "filters invalid buttons and empty rows",
         input: [
           [
@@ -285,6 +480,7 @@ describe("buildInlineKeyboard", () => {
             { text: "Ok", callback_data: "cmd:ok" },
           ],
           [{ text: "Missing data", callback_data: "" }],
+          [{ text: "Missing action" }],
           [],
         ],
         expected: {
@@ -484,12 +680,10 @@ describe("sendMessageTelegram", () => {
         chat: { id: "123" },
       });
       await sendMessageTelegram("123", "hi", { ...testCase.opts, cfg: testCase.cfg });
-      expect(botCtorSpy, testCase.name).toHaveBeenCalledWith(
-        "tok",
-        expect.objectContaining({
-          client: expect.objectContaining({ timeoutSeconds: testCase.expectedTimeout }),
-        }),
-      );
+      const [token, options] = firstMockCall(botCtorSpy, "bot constructor call");
+      expect(token, testCase.name).toBe("tok");
+      const client = requireRecord(requireRecord(options, "bot options").client, "bot client");
+      expect(client.timeoutSeconds, testCase.name).toBe(testCase.expectedTimeout);
     }
   });
 
@@ -510,11 +704,78 @@ describe("sendMessageTelegram", () => {
 
     await sendMessageTelegram("123", "hi", { cfg, token: "tok", accountId: "foo" });
 
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
-      }),
+    const [token, options] = firstMockCall(botCtorSpy, "bot constructor call");
+    expect(token).toBe("tok");
+    const client = requireRecord(requireRecord(options, "bot options").client, "bot client");
+    expect(client.apiRoot).toBe("https://api.telegram.org");
+  });
+
+  it("installs the shared grammY throttler on send clients", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
+
+    const [middleware] = firstMockCall(botConfigUseSpy, "bot config use call");
+    expect(middleware).toBeTypeOf("function");
+  });
+
+  it("records sent text messages into the Telegram prompt context cache", async () => {
+    const storePath = `/tmp/openclaw-telegram-send-context-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    botApi.sendMessage.mockResolvedValueOnce({
+      message_id: 1497,
+      date: 1_779_394_740,
+      chat: {
+        id: "-1003966283270",
+        type: "supergroup",
+        title: "Keshav and Kelaw - Keshav's Bot",
+      },
+      from: { id: 42, is_bot: true, first_name: "Kelaw", username: "keshavbotagent" },
+      text: "Done already: timeoutSeconds is now 7200s.",
+      message_thread_id: 1154,
+    });
+
+    await sendMessageTelegram("-1003966283270", "Done already: timeoutSeconds is now 7200s.", {
+      cfg,
+      token: "tok",
+      messageThreadId: 1154,
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: "-1003966283270",
+      threadId: 1154,
+      msg: {
+        chat: {
+          id: -1003966283270,
+          type: "supergroup",
+          title: "Keshav and Kelaw - Keshav's Bot",
+        },
+        message_thread_id: 1154,
+        message_id: 1521,
+        date: 1_779_425_460,
+        text: "Did all Amazon crons run fine",
+        from: { id: 5185575566, is_bot: false, first_name: "Keshav" },
+      },
+    });
+
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: "-1003966283270",
+      threadId: 1154,
+      messageId: "1521",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toContain("1497");
+    expect(context.map((entry) => entry.node.body)).toContain(
+      "Done already: timeoutSeconds is now 7200s.",
     );
   });
 
@@ -596,6 +857,66 @@ describe("sendMessageTelegram", () => {
       expect(res.chatId, testCase.name).toBe(testCase.chatId);
       expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
     }
+  });
+
+  it("derives plain-text fallback from html-mode anchors when Telegram rejects HTML", async () => {
+    const chatId = "123";
+    const htmlText =
+      'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &amp; One</a> <code>file.md</code>';
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 43, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, htmlText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      textMode: "html",
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, htmlText, { parse_mode: "HTML" });
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      chatId,
+      "Created: Task & One (https://example.com/a?x=1&y=2) file.md",
+    );
+    expect(res.chatId).toBe(chatId);
+    expect(res.messageId).toBe("43");
+  });
+
+  it("normalizes raw code language HTML before sending", async () => {
+    const chatId = "123";
+    const text = [
+      "Yep. Send these in order:",
+      "",
+      '<code class="language-text">/queue followup debounce:0',
+      "</code>",
+    ].join("\n");
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 44, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, text, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      chatId,
+      ["Yep. Send these in order:", "", "<code>/queue followup debounce:0", "</code>"].join("\n"),
+      { parse_mode: "HTML" },
+    );
+    expect(res.chatId).toBe(chatId);
+    expect(res.messageId).toBe("44");
   });
 
   it("keeps link_preview_options disabled for both html and plain-text fallback", async () => {
@@ -693,8 +1014,11 @@ describe("sendMessageTelegram", () => {
     });
     try {
       await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
-      const clientFetch = (botCtorSpy.mock.calls[0]?.[1] as { client?: { fetch?: unknown } })
-        ?.client?.fetch;
+      const clientFetch = (
+        firstMockCall(botCtorSpy, "bot constructor call")[1] as {
+          client?: { fetch?: unknown };
+        }
+      )?.client?.fetch;
       expect(clientFetch).toBeTypeOf("function");
       expect(clientFetch).not.toBe(fetchSpy);
     } finally {
@@ -749,13 +1073,11 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
       parse_mode: "HTML",
     });
-    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawTarget: "https://t.me/mychannel",
-        resolvedChatId: "-100123",
-        gatewayClientScopes: ["operator.write"],
-      }),
-    );
+    expectPersistedTarget({
+      rawTarget: "https://t.me/mychannel",
+      resolvedChatId: "-100123",
+      gatewayClientScopes: ["operator.write"],
+    });
   });
 
   it("fails clearly when a legacy target cannot be resolved", async () => {
@@ -797,7 +1119,7 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 99,
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: "photo in topic",
       parse_mode: "HTML",
       message_thread_id: 99,
@@ -834,7 +1156,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
@@ -873,7 +1195,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -910,7 +1232,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: shortText,
       parse_mode: "HTML",
     });
@@ -943,7 +1265,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
     });
@@ -981,7 +1303,12 @@ describe("sendMessageTelegram", () => {
         asVideoNote: true,
       });
 
-      expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+      expectMediaSendCall(
+        firstMockCall(sendVideoNote, "send video note call"),
+        "send video note call",
+        chatId,
+        {},
+      );
       expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
         parse_mode: "HTML",
       });
@@ -1012,10 +1339,15 @@ describe("sendMessageTelegram", () => {
         asVideoNote: false,
       });
 
-      expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
-        caption: expect.any(String),
-        parse_mode: "HTML",
-      });
+      const [actualChatId, media, videoParams] = firstMockCall(sendVideo, "send video call");
+      expect(actualChatId).toBe(chatId);
+      if (media === undefined) {
+        throw new Error("expected send video media");
+      }
+      const params = requireRecord(videoParams, "send video params");
+      expect(typeof params.caption).toBe("string");
+      expect(params.parse_mode).toBe("HTML");
+      expect(Object.keys(params).toSorted()).toEqual(["caption", "parse_mode"]);
       expect(res.messageId).toBe("201");
     }
   });
@@ -1046,7 +1378,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(probeVideoDimensions).toHaveBeenCalledWith(videoBuffer);
-    expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(firstMockCall(sendVideo, "send video call"), "send video call", chatId, {
       caption: "my caption",
       parse_mode: "HTML",
       width: 720,
@@ -1084,7 +1416,12 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(probeVideoDimensions).not.toHaveBeenCalled();
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+    expectMediaSendCall(
+      firstMockCall(sendVideoNote, "send video note call"),
+      "send video note call",
+      chatId,
+      {},
+    );
   });
 
   it("applies reply markup and thread options to split video-note sends", async () => {
@@ -1160,9 +1497,10 @@ describe("sendMessageTelegram", () => {
       }
       await sendMessageTelegram(chatId, testCase.text, sendOptions);
 
-      expect(sendVideoNote).toHaveBeenCalledWith(
+      expectMediaSendCall(
+        firstMockCall(sendVideoNote, "send video note call"),
+        "send video note call",
         chatId,
-        expect.anything(),
         testCase.expectedVideoNote,
       );
       expect(sendMessage).toHaveBeenCalledWith(chatId, testCase.text, testCase.expectedMessage);
@@ -1197,7 +1535,7 @@ describe("sendMessageTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(500);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -1300,10 +1638,15 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendAnimation).toHaveBeenCalledTimes(1);
-    expect(sendAnimation).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendAnimation, "send animation call"),
+      "send animation call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(probeVideoDimensions).not.toHaveBeenCalled();
     expect(res.messageId).toBe("9");
   });
@@ -1323,6 +1666,13 @@ describe("sendMessageTelegram", () => {
       fileName: "fun.gif",
       mediaUrl: "https://example.com/fun.gif",
     },
+    {
+      name: "videos",
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "clip.mp4",
+      mediaUrl: "https://example.com/clip.mp4",
+    },
   ])("sends $name as documents when forceDocument is true", async (testCase) => {
     const chatId = "123";
     const sendAnimation = vi.fn();
@@ -1331,10 +1681,12 @@ describe("sendMessageTelegram", () => {
       chat: { id: chatId },
     });
     const sendPhoto = vi.fn();
-    const api = { sendAnimation, sendDocument, sendPhoto } as unknown as {
+    const sendVideo = vi.fn();
+    const api = { sendAnimation, sendDocument, sendPhoto, sendVideo } as unknown as {
       sendAnimation: typeof sendAnimation;
       sendDocument: typeof sendDocument;
       sendPhoto: typeof sendPhoto;
+      sendVideo: typeof sendVideo;
     };
 
     mockLoadedMedia({
@@ -1351,13 +1703,20 @@ describe("sendMessageTelegram", () => {
       forceDocument: true,
     });
 
-    expect(sendDocument, testCase.name).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-      disable_content_type_detection: true,
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      `send document call ${testCase.name}`,
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+        disable_content_type_detection: true,
+      },
+    );
     expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
     expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(sendVideo, testCase.name).not.toHaveBeenCalled();
+    expect(probeVideoDimensions, testCase.name).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
 
@@ -1391,10 +1750,15 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      "send document call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(sendPhoto).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
@@ -1426,10 +1790,15 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      "send document call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(sendPhoto).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
@@ -1457,10 +1826,15 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/report.pdf",
     });
 
-    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      "send document call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(res.messageId).toBe("11");
   });
 
@@ -1577,9 +1951,10 @@ describe("sendMessageTelegram", () => {
 
       const called = testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
       const notCalled = testCase.expectedMethod === "sendVoice" ? sendAudio : sendVoice;
-      expect(called, testCase.name).toHaveBeenCalledWith(
+      expectMediaSendCall(
+        firstMockCall(called, "called mock call"),
+        `${testCase.expectedMethod} call ${testCase.name}`,
         testCase.chatId,
-        expect.anything(),
         testCase.expectedOptions,
       );
       expect(notCalled, testCase.name).not.toHaveBeenCalled();
@@ -1632,51 +2007,54 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("retries sends without message_thread_id on thread-not-found", async () => {
-    const cases = [
-      { name: "forum", chatId: "-100123", text: "hello forum", messageId: 58 },
-      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
-    ] as const;
+  it("fails topic sends instead of retrying without message_thread_id", async () => {
+    const cases = [{ name: "forum", chatId: "-100123", text: "hello forum" }] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
     for (const testCase of cases) {
-      const sendMessage = vi
-        .fn()
-        .mockRejectedValueOnce(threadErr)
-        .mockResolvedValueOnce({
-          message_id: testCase.messageId,
-          chat: { id: testCase.chatId },
-        });
+      const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
       const api = { sendMessage } as unknown as {
         sendMessage: typeof sendMessage;
       };
 
-      const res = await sendMessageTelegram(testCase.chatId, testCase.text, {
+      await expect(
+        sendMessageTelegram(testCase.chatId, testCase.text, {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "tok",
+          api,
+          messageThreadId: 271,
+        }),
+      ).rejects.toThrow("message thread not found");
+
+      expect(sendMessage, testCase.name).toHaveBeenCalledTimes(1);
+      expect(sendMessage, testCase.name).toHaveBeenCalledWith(testCase.chatId, testCase.text, {
+        parse_mode: "HTML",
+        message_thread_id: 271,
+      });
+    }
+  });
+
+  it("does not retry private DM topic sends without the topic id", async () => {
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram("123456789", "hello private", {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
         api,
         messageThreadId: 271,
-      });
+      }),
+    ).rejects.toThrow("message thread not found");
 
-      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
-        1,
-        testCase.chatId,
-        testCase.text,
-        {
-          parse_mode: "HTML",
-          message_thread_id: 271,
-        },
-      );
-      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
-        2,
-        testCase.chatId,
-        testCase.text,
-        {
-          parse_mode: "HTML",
-        },
-      );
-      expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
-    }
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("123456789", "hello private", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
   });
 
   it("does not retry on non-retriable thread/chat errors", async () => {
@@ -1800,16 +2178,146 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("retries media sends without message_thread_id when thread is missing", async () => {
+  it("logs successful outbound text delivery without the message body", async () => {
+    const logFile = captureInfoLogs();
+    const chatId = "-1001234567890";
+    const body = "incident reply body should stay private";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 321,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(`telegram:group:${chatId}:topic:271`, body, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "ops",
+      api,
+      replyToMessageId: 123,
+      silent: true,
+    });
+
+    const logs = capturedLogText(logFile);
+    expect(logs).toContain("outbound send ok");
+    expect(logs).toContain("accountId=ops");
+    expect(logs).toContain(`chatId=${chatId}`);
+    expect(logs).toContain("messageId=321");
+    expect(logs).toContain("operation=sendMessage");
+    expect(logs).toContain("threadId=271");
+    expect(logs).toContain("replyToMessageId=123");
+    expect(logs).toContain("silent=true");
+    expect(logs).toContain("chunkCount=1");
+    expect(logs).not.toContain(body);
+  });
+
+  it("does not log outbound success when topic text send fails thread lookup", async () => {
+    const logFile = captureInfoLogs();
+    const chatId = "-1001234567890";
+    const body = "topic reply body should stay private";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(`telegram:group:${chatId}:topic:271`, body, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        accountId: "ops",
+        api,
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(chatId, body, {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    const logs = capturedLogText(logFile);
+    expect(logs).not.toContain("outbound send ok");
+    expect(logs).not.toContain(body);
+  });
+
+  it("logs successful outbound media delivery without caption or media location", async () => {
+    const logFile = captureInfoLogs();
+    const chatId = "123";
+    const caption = "private media caption";
+    const mediaUrl = "https://example.com/private-photo.jpg";
+    const fileName = "private-photo.jpg";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 654,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName,
+    });
+
+    await sendMessageTelegram(chatId, caption, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "ops",
+      api,
+      mediaUrl,
+      messageThreadId: 45,
+    });
+
+    const logs = capturedLogText(logFile);
+    expect(logs).toContain("outbound send ok");
+    expect(logs).toContain("accountId=ops");
+    expect(logs).toContain(`chatId=${chatId}`);
+    expect(logs).toContain("messageId=654");
+    expect(logs).toContain("operation=sendPhoto");
+    expect(logs).toContain("deliveryKind=photo");
+    expect(logs).toContain("threadId=45");
+    expect(logs).not.toContain(caption);
+    expect(logs).not.toContain(mediaUrl);
+    expect(logs).not.toContain(fileName);
+  });
+
+  it("does not log outbound success when a chunked text delivery fails mid-send", async () => {
+    const logFile = captureInfoLogs();
+    const chatId = "123";
+    const body = "private chunked body ".repeat(260);
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 700,
+        chat: { id: chatId },
+      })
+      .mockRejectedValueOnce(new Error("telegram send failed"));
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(chatId, body, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        accountId: "ops",
+        api,
+      }),
+    ).rejects.toThrow(/telegram send failed/);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const logs = capturedLogText(logFile);
+    expect(logs).not.toContain("outbound send ok");
+    expect(logs).not.toContain(body);
+  });
+
+  it("fails media sends instead of retrying without message_thread_id", async () => {
+    const logFile = captureInfoLogs();
     const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendPhoto = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 59,
-        chat: { id: chatId },
-      });
+    const sendPhoto = vi.fn().mockRejectedValueOnce(threadErr);
     const api = { sendPhoto } as unknown as {
       sendPhoto: typeof sendPhoto;
     };
@@ -1820,24 +2328,29 @@ describe("sendMessageTelegram", () => {
       fileName: "photo.jpg",
     });
 
-    const res = await sendMessageTelegram(chatId, "photo", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      mediaUrl: "https://example.com/photo.jpg",
-      messageThreadId: 271,
-    });
+    await expect(
+      sendMessageTelegram(chatId, "photo", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.jpg",
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow("message thread not found");
 
-    expect(sendPhoto).toHaveBeenNthCalledWith(1, chatId, expect.anything(), {
-      caption: "photo",
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-    expect(sendPhoto).toHaveBeenNthCalledWith(2, chatId, expect.anything(), {
-      caption: "photo",
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("59");
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expectMediaSendCall(
+      firstMockCall(sendPhoto, "first send photo call"),
+      "first send photo call",
+      chatId,
+      {
+        caption: "photo",
+        parse_mode: "HTML",
+        message_thread_id: 271,
+      },
+    );
+    const logs = capturedLogText(logFile);
+    expect(logs).not.toContain("outbound send ok");
   });
 
   it("defaults outbound media uploads to 100MB", async () => {
@@ -1863,10 +2376,12 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "https://example.com/photo.jpg",
-      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+    const [mediaUrl, options] = requireMockCall(
+      firstMockCall(loadWebMedia, "loadWebMedia call"),
+      "load web media call",
     );
+    expect(mediaUrl).toBe("https://example.com/photo.jpg");
+    expect(requireRecord(options, "load web media options").maxBytes).toBe(100 * 1024 * 1024);
   });
 
   it("uses configured telegram mediaMaxMb for outbound uploads", async () => {
@@ -1900,10 +2415,12 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "https://example.com/photo.jpg",
-      expect.objectContaining({ maxBytes: 42 * 1024 * 1024 }),
+    const [mediaUrl, options] = requireMockCall(
+      firstMockCall(loadWebMedia, "loadWebMedia call"),
+      "load web media call",
     );
+    expect(mediaUrl).toBe("https://example.com/photo.jpg");
+    expect(requireRecord(options, "load web media options").maxBytes).toBe(42 * 1024 * 1024);
   });
 
   it("chunks long html-mode text and keeps buttons on the last chunk only", async () => {
@@ -1925,14 +2442,14 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
+    const secondCall = mockCall(sendMessage, 1, "second sendMessage call");
+    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
+    const secondParams = requireRecord(secondCall[2], "second sendMessage params");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
-    expect(firstCall[2]?.reply_markup).toBeUndefined();
-    expect(secondCall[2]?.reply_markup).toEqual({
+    expect(firstParams.reply_markup).toBeUndefined();
+    expect(secondParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -1956,18 +2473,20 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
-    expect(String(firstCall[1] ?? "").length).toBeLessThanOrEqual(4000);
-    expect(String(secondCall[1] ?? "").length).toBeLessThanOrEqual(4000);
-    expect(firstCall[2]?.parse_mode).toBe("HTML");
-    expect(secondCall[2]?.parse_mode).toBe("HTML");
-    expect(String(firstCall[1] ?? "")).toMatch(/^<b>[\s\S]*<\/b>$/);
-    expect(String(secondCall[1] ?? "")).toMatch(/^<b>[\s\S]*<\/b>$/);
-    expect(firstCall[2]?.reply_markup).toBeUndefined();
-    expect(secondCall[2]?.reply_markup).toEqual({
+    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
+    const secondCall = mockCall(sendMessage, 1, "second sendMessage call");
+    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
+    const secondParams = requireRecord(secondCall[2], "second sendMessage params");
+    const firstText = requireString(firstCall[1], "first sendMessage text");
+    const secondText = requireString(secondCall[1], "second sendMessage text");
+    expect(firstText.length).toBeLessThanOrEqual(4000);
+    expect(secondText.length).toBeLessThanOrEqual(4000);
+    expect(firstParams.parse_mode).toBe("HTML");
+    expect(secondParams.parse_mode).toBe("HTML");
+    expect(firstText).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(secondText).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(firstParams.reply_markup).toBeUndefined();
+    expect(secondParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -1997,9 +2516,15 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.every((call) => !String(call?.[1] ?? "").includes("<"))).toBe(true);
+    const plainFallbackCalls = [
+      mockCall(sendMessage, 1, "first plain fallback sendMessage call"),
+      mockCall(sendMessage, 3, "second plain fallback sendMessage call"),
+    ];
+    const plainFallbackText = plainFallbackCalls
+      .map((call) => mockCallText(call, "plain fallback text"))
+      .join("");
+    expect(plainFallbackText).toBe(plainText);
+    expect(plainFallbackText).not.toContain("<");
     expect(res.messageId).toBe("91");
   });
 
@@ -2027,10 +2552,18 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    expect(String(sendMessage.mock.calls[0]?.[1] ?? "")).toMatch(/^&/);
-    const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
+    expect(
+      requireString(firstMockCall(sendMessage, "sendMessage call")[1], "sendMessage text"),
+    ).toMatch(/^&/);
+    const plainFallbackCalls = [
+      mockCall(sendMessage, 1, "first plain fallback sendMessage call"),
+      mockCall(sendMessage, 3, "second plain fallback sendMessage call"),
+    ];
+    const plainFallbackTexts = plainFallbackCalls.map((call) =>
+      mockCallText(call, "plain fallback text"),
+    );
+    expect(plainFallbackTexts.join("")).toBe(plainText);
+    expect(plainFallbackTexts.filter((text) => text === "")).toEqual([]);
     expect(res.messageId).toBe("93");
   });
 
@@ -2054,7 +2587,11 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === undefined)).toBe(true);
+    expect(sendMessage.mock.calls.map((call) => call[2]?.parse_mode)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });
@@ -2120,12 +2657,10 @@ describe("reactMessageTelegram", () => {
     expect(setMessageReaction).toHaveBeenCalledWith("-100123", 456, [
       { type: "emoji", emoji: "✅" },
     ]);
-    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawTarget: "@mychannel",
-        resolvedChatId: "-100123",
-      }),
-    );
+    expectPersistedTarget({
+      rawTarget: "@mychannel",
+      resolvedChatId: "-100123",
+    });
   });
 });
 
@@ -2146,10 +2681,11 @@ describe("deleteMessageTelegram", () => {
     });
 
     expect(deleteMessage).toHaveBeenCalledWith("123", 456);
-    expect(result).toMatchObject({
-      ok: false,
-      warning: expect.stringContaining(message),
-    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected delete warning result");
+    }
+    expect(result.warning).toContain(message);
   });
 
   it("throws non-benign delete errors", async () => {
@@ -2163,6 +2699,20 @@ describe("deleteMessageTelegram", () => {
         api,
       }),
     ).rejects.toThrow(/Internal Server Error/);
+  });
+
+  it("rejects partial message id strings", async () => {
+    const deleteMessage = vi.fn();
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    await expect(
+      deleteMessageTelegram("123", "456abc", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/Message id is required/);
+    expect(deleteMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -2213,32 +2763,27 @@ describe("sendStickerTelegram", () => {
     }
   });
 
-  it("retries sticker sends without message_thread_id when thread is missing", async () => {
+  it("fails sticker sends instead of retrying without message_thread_id", async () => {
     const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendSticker = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 109,
-        chat: { id: chatId },
-      });
+    const sendSticker = vi.fn().mockRejectedValueOnce(threadErr);
     const api = { sendSticker } as unknown as {
       sendSticker: typeof sendSticker;
     };
 
-    const res = await sendStickerTelegram(chatId, "fileId123", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
+    await expect(
+      sendStickerTelegram(chatId, "fileId123", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow("message thread not found");
 
-    expect(sendSticker).toHaveBeenNthCalledWith(1, chatId, "fileId123", {
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", {
       message_thread_id: 271,
     });
-    expect(sendSticker).toHaveBeenNthCalledWith(2, chatId, "fileId123", undefined);
-    expect(res.messageId).toBe("109");
   });
 
   it("fails when sticker send returns no message_id", async () => {
@@ -2306,7 +2851,7 @@ describe("sendStickerTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "109", chatId });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1000);
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(1000);
     expect(sendSticker).toHaveBeenCalledTimes(2);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
@@ -2567,28 +3112,27 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
-    expect(botCtorSpy.mock.calls[0]?.[0], testCase.name).toBe("tok");
+    expect(firstMockCall(botCtorSpy, "bot constructor call")[0], testCase.name).toBe("tok");
     expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
 
-    const firstParams = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
-    expect(firstParams, testCase.name).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    const firstParams = requireRecord(
+      firstMockCall(botApi.editMessageText, "editMessageText call")[3],
+      "first edit params",
+    );
+    expect(firstParams.parse_mode, testCase.name).toBe("HTML");
     if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
       expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
     }
     if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
-      expect(firstParams, testCase.name).toEqual(
-        expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
-      );
+      expect(firstParams.reply_markup, testCase.name).toEqual(testCase.firstExpectReplyMarkup);
     }
 
     if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
-      const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
-        string,
-        unknown
-      >;
-      expect(secondParams, testCase.name).toEqual(
-        expect.objectContaining({ reply_markup: testCase.secondExpectReplyMarkup }),
+      const secondParams = requireRecord(
+        mockCall(botApi.editMessageText, 1, "second editMessageText call")[3],
+        "second edit params",
       );
+      expect(secondParams.reply_markup, testCase.name).toEqual(testCase.secondExpectReplyMarkup);
     }
   });
 
@@ -2606,6 +3150,73 @@ describe("editMessageTelegram", () => {
       }),
     ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses editMessageCaption when requested for media captions", async () => {
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "Media **caption**", {
+      token: "tok",
+      cfg: {},
+      editMode: "caption",
+      buttons: [[{ text: "Open", url: "https://example.com" }]],
+    });
+
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const captionParams = requireRecord(
+      firstMockCall(botApi.editMessageCaption, "editMessageCaption call")[2],
+      "caption edit params",
+    );
+    expect(captionParams.caption).toBe("Media <b>caption</b>");
+    expect(captionParams.parse_mode).toBe("HTML");
+    expect(captionParams.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+    });
+  });
+
+  it("falls back to editMessageCaption when Telegram reports a media message has no text", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: there is no text in the message to edit"),
+    );
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "New caption", {
+      token: "tok",
+      cfg: {},
+      editMode: "auto",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const captionParams = requireRecord(
+      firstMockCall(botApi.editMessageCaption, "fallback editMessageCaption call")[2],
+      "fallback caption edit params",
+    );
+    expect(captionParams.caption).toBe("New caption");
+    expect(captionParams.parse_mode).toBe("HTML");
+  });
+
+  it("derives readable plain text when Telegram rejects edited HTML", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram(
+      "123",
+      1,
+      'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &lt;id&gt;</a>',
+      {
+        token: "tok",
+        cfg: {},
+        textMode: "html",
+      },
+    );
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
+    expect(mockCall(botApi.editMessageText, 1, "plain edit fallback")[2]).toBe(
+      "Created: Task <id> (https://example.com/a?x=1&y=2)",
+    );
   });
 
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {
@@ -2634,13 +3245,12 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
-    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
-    expect(params).toEqual(
-      expect.objectContaining({
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      }),
+    const params = requireRecord(
+      firstMockCall(botApi.editMessageText, "editMessageText call")[3],
+      "edit params",
     );
+    expect(params.parse_mode).toBe("HTML");
+    expect(params.link_preview_options).toEqual({ is_disabled: true });
   });
 });
 
@@ -2663,13 +3273,11 @@ describe("sendPollTelegram", () => {
     );
 
     expect(api.getChat).toHaveBeenCalledWith("@mychannel");
-    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawTarget: "https://t.me/mychannel",
-        resolvedChatId: "-100321",
-        gatewayClientScopes: ["operator.admin"],
-      }),
-    );
+    expectPersistedTarget({
+      rawTarget: "https://t.me/mychannel",
+      resolvedChatId: "-100321",
+      gatewayClientScopes: ["operator.admin"],
+    });
   });
 
   it("maps durationSeconds to open_period", async () => {
@@ -2686,43 +3294,38 @@ describe("sendPollTelegram", () => {
     expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
     const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
-    expect(sendPollMock.mock.calls[0]?.[0]).toBe("123");
-    expect(sendPollMock.mock.calls[0]?.[1]).toBe("Q");
-    expect(sendPollMock.mock.calls[0]?.[2]).toEqual(["A", "B"]);
-    expect(sendPollMock.mock.calls[0]?.[3]).toMatchObject({ open_period: 60 });
+    const sendPollCall = firstMockCall(sendPollMock, "send poll call");
+    expect(sendPollCall[0]).toBe("123");
+    expect(sendPollCall[1]).toBe("Q");
+    expect(sendPollCall[2]).toEqual(["A", "B"]);
+    expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
   });
 
-  it("retries without message_thread_id on thread-not-found", async () => {
+  it("fails poll sends instead of retrying without message_thread_id", async () => {
     const api = {
-      sendPoll: vi.fn(
-        async (_chatId: string, _question: string, _options: string[], params: unknown) => {
-          const p = params as { message_thread_id?: unknown } | undefined;
-          if (p?.message_thread_id) {
-            throw new Error("400: Bad Request: message thread not found");
-          }
-          return { message_id: 1, chat: { id: 2 }, poll: { id: "p2" } };
-        },
-      ),
+      sendPoll: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found")),
     };
 
-    const res = await sendPollTelegram(
-      "-100123",
-      { question: "Q", options: ["A", "B"] },
-      {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "t",
-        api: api as unknown as Bot["api"],
-        messageThreadId: 99,
-      },
-    );
+    await expect(
+      sendPollTelegram(
+        "-100123",
+        { question: "Q", options: ["A", "B"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          messageThreadId: 99,
+        },
+      ),
+    ).rejects.toThrow("message thread not found");
 
-    expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
-    expect(api.sendPoll).toHaveBeenCalledTimes(2);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
     expect(
-      (api.sendPoll.mock.calls[1]?.[3] as { message_thread_id?: unknown } | undefined)
-        ?.message_thread_id,
-    ).toBeUndefined();
+      requireRecord(firstMockCall(api.sendPoll, "send poll call")[3], "send poll params")
+        .message_thread_id,
+    ).toBe(99);
   });
 
   it("rejects durationHours for Telegram polls", async () => {

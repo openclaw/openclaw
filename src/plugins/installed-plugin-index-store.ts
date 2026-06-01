@@ -5,10 +5,10 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-reader.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -16,6 +16,7 @@ import {
 import {
   diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
+  hasMissingConfigPathActivationMetadata,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -28,6 +29,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 export {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -49,6 +51,19 @@ const InstalledPluginIndexStartupSchema = z.object({
   memory: z.boolean(),
   deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
   agentHarnesses: StringArraySchema,
+  configPaths: StringArraySchema.optional(),
+});
+
+const InstalledPluginIndexContributionSchema = z.object({
+  channels: StringArraySchema,
+  channelConfigs: StringArraySchema,
+  providers: StringArraySchema,
+  modelCatalogProviders: StringArraySchema,
+  modelSupportPrefixes: StringArraySchema,
+  modelSupportPatterns: StringArraySchema,
+  autoEnableProviderIds: StringArraySchema,
+  commandAliases: StringArraySchema,
+  contracts: z.record(z.string(), StringArraySchema),
 });
 
 const InstalledPluginFileSignatureSchema = z.object({
@@ -86,6 +101,7 @@ const InstalledPluginIndexRecordSchema = z.object({
   enabledByDefaultOnPlatforms: StringArraySchema.optional(),
   syntheticAuthRefs: StringArraySchema.optional(),
   startup: InstalledPluginIndexStartupSchema,
+  contributions: InstalledPluginIndexContributionSchema.optional(),
   compat: z.array(z.string()),
 });
 
@@ -186,7 +202,8 @@ export async function writePersistedInstalledPluginIndex(
       mode: 0o600,
     },
   );
-  clearCurrentPluginMetadataSnapshotState();
+  clearPluginMetadataLifecycleCaches();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
   return filePath;
 }
 
@@ -196,7 +213,8 @@ export function writePersistedInstalledPluginIndexSync(
 ): string {
   const filePath = resolveInstalledPluginIndexStorePath(options);
   saveJsonFile(filePath, { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING });
-  clearCurrentPluginMetadataSnapshotState();
+  clearPluginMetadataLifecycleCaches();
+  clearLoadInstalledPluginIndexInstallRecordsCache();
   return filePath;
 }
 
@@ -223,7 +241,8 @@ function canRefreshPersistedPolicyState(
     persisted.version !== INSTALLED_PLUGIN_INDEX_VERSION ||
     persisted.hostContractVersion !== resolveCompatibilityHostVersion(env) ||
     persisted.compatRegistryVersion !== resolveCompatRegistryVersion() ||
-    persisted.migrationVersion !== INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION
+    persisted.migrationVersion !== INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION ||
+    hasMissingConfigPathActivationMetadata(persisted)
   ) {
     return false;
   }

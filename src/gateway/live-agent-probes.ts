@@ -1,9 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 const execFileAsync = promisify(execFile);
+const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
 
 type CronListCliResult = {
   jobs?: Array<{
@@ -38,6 +43,22 @@ export function assertLiveImageProbeReply(text: string): void {
   }
 }
 
+export function shouldRunLiveImageProbe(params: { agent: string; override?: string }): boolean {
+  const override = params.override?.trim();
+  if (override) {
+    switch (normalizeOptionalLowercaseString(override)) {
+      case "1":
+      case "on":
+      case "true":
+      case "yes":
+        return true;
+      default:
+        return false;
+    }
+  }
+  return normalizeOptionalLowercaseString(params.agent) !== "opencode";
+}
+
 export function createLiveCronProbeSpec(
   params: {
     agentId?: string;
@@ -48,7 +69,9 @@ export function createLiveCronProbeSpec(
   const normalizedNonce = normalizeOptionalLowercaseString(nonce) ?? "";
   const name = `live-mcp-${normalizedNonce}`;
   const message = `probe-${normalizedNonce}`;
-  const at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const at = resolveTimestampMsToIsoString(
+    resolveExpiresAtMsFromDurationSeconds(LIVE_CRON_PROBE_DELAY_SECONDS) ?? Date.now(),
+  );
   const argsJson = JSON.stringify({
     action: "add",
     job: {

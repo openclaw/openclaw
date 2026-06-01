@@ -61,6 +61,7 @@ private enum class ConnectInputMode {
   Manual,
 }
 
+/** Gateway connection screen for setup-code and manual endpoint pairing. */
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
@@ -100,8 +101,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       containerColor = mobileCardSurface,
       title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
       text = {
+        val message =
+          if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+            "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}"
+          } else {
+            "The gateway TLS certificate changed. Only continue if you expected this.\n\nOld SHA-256 fingerprint:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256 fingerprint:\n${prompt.fingerprintSha256}"
+          }
         Text(
-          "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
+          message,
           style = mobileCallout,
           color = mobileText,
         )
@@ -285,6 +292,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 
           validationText = null
           if (inputMode == ConnectInputMode.SetupCode) {
+            // Setup-code auth should replace old bootstrap/shared credentials;
+            // manual reconnects keep existing typed credentials.
             viewModel.resetGatewaySetupAuth()
           }
           viewModel.setManualEnabled(true)

@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { tryReadJson, writeJson } from "./json-files.js";
+import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
+type InstallSourceHardlinks = "package-manager" | "reject";
+
+const DEFAULT_INSTALL_SOURCE_HARDLINKS: InstallSourceHardlinks = "reject";
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
@@ -19,10 +24,6 @@ type HiddenProjectConfigFile = {
   originalPath: string;
   hiddenPath: string;
 } | null;
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, "package.json");
@@ -105,6 +106,10 @@ function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
 }
 
+function resolveMoveSourceHardlinks(policy: InstallSourceHardlinks): "allow" | "reject" {
+  return policy === "package-manager" ? "allow" : "reject";
+}
+
 async function assertInstallBaseStable(params: {
   installBaseDir: string;
   expectedRealPath: string;
@@ -151,6 +156,7 @@ export async function installPackageDir(params: {
   logger?: { info?: (message: string) => void; warn?: (message: string) => void };
   copyErrorPrefix: string;
   hasDeps: boolean;
+  sourceHardlinks?: InstallSourceHardlinks;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (
@@ -189,6 +195,9 @@ export async function installPackageDir(params: {
 
   let stageDir: string | null = null;
   let backupDir: string | null = null;
+  const sourceHardlinks = resolveMoveSourceHardlinks(
+    params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS,
+  );
   const fail = async (error: string, cause?: unknown) => {
     const installBaseChanged = isInstallBaseChangedError(cause);
     if (installBaseChanged) {
@@ -202,15 +211,19 @@ export async function installPackageDir(params: {
     }
     return { ok: false as const, error };
   };
-  const failWithCode = async (params: { error: string; code?: string }, cause?: unknown) => {
-    const failed = await fail(params.error, cause);
-    return params.code ? { ...failed, code: params.code } : failed;
+  const failWithCode = async (paramsLocal: { error: string; code?: string }, cause?: unknown) => {
+    const failed = await fail(paramsLocal.error, cause);
+    return paramsLocal.code ? { ...failed, code: paramsLocal.code } : failed;
   };
   const restoreBackup = async () => {
     if (!backupDir) {
       return;
     }
-    await fs.rename(backupDir, canonicalTargetDir).catch(() => undefined);
+    await movePathWithCopyFallback({
+      from: backupDir,
+      sourceHardlinks,
+      to: canonicalTargetDir,
+    }).catch(() => undefined);
     backupDir = null;
   };
 
@@ -254,7 +267,7 @@ export async function installPackageDir(params: {
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
-              env: createSafeNpmInstallEnv(process.env),
+              env: createSafeNpmInstallEnv(process.env, { npmConfigCwd: stageDir }),
             },
           );
         } finally {
@@ -293,7 +306,11 @@ export async function installPackageDir(params: {
         installBaseDir,
         expectedRealPath: installBaseRealPath,
       });
-      await fs.rename(canonicalTargetDir, backupDir);
+      await movePathWithCopyFallback({
+        from: canonicalTargetDir,
+        sourceHardlinks,
+        to: backupDir,
+      });
     } catch (err) {
       return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
     }
@@ -304,7 +321,11 @@ export async function installPackageDir(params: {
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
-    await fs.rename(stageDir, canonicalTargetDir);
+    await movePathWithCopyFallback({
+      from: stageDir,
+      sourceHardlinks,
+      to: canonicalTargetDir,
+    });
     stageDir = null;
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
@@ -344,8 +365,10 @@ export async function installPackageDirWithManifestDeps(params: {
   manifestDependencies?: Record<string, unknown>;
   afterCopy?: (installedDir: string) => void | Promise<void>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir({
     ...params,
-    hasDeps: Object.keys(params.manifestDependencies ?? {}).length > 0,
+    hasDeps,
+    sourceHardlinks: hasDeps ? "package-manager" : "reject",
   });
 }

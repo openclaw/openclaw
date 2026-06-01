@@ -2,16 +2,16 @@ import { normalizeTalkTransport } from "../../../../src/talk/talk-session-contro
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
-import {
-  type RealtimeTalkCallbacks,
-  type RealtimeTalkEvent,
-  type RealtimeTalkGatewayRelaySessionResult,
-  type RealtimeTalkJsonPcmWebSocketSessionResult,
-  type RealtimeTalkSessionResult,
-  type RealtimeTalkStatus,
-  type RealtimeTalkTransport,
-  type RealtimeTalkTransportContext,
-  type RealtimeTalkWebRtcSdpSessionResult,
+import type {
+  RealtimeTalkCallbacks,
+  RealtimeTalkEvent,
+  RealtimeTalkGatewayRelaySessionResult,
+  RealtimeTalkJsonPcmWebSocketSessionResult,
+  RealtimeTalkSessionResult,
+  RealtimeTalkStatus,
+  RealtimeTalkTransport,
+  RealtimeTalkTransportContext,
+  RealtimeTalkWebRtcSdpSessionResult,
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
@@ -20,6 +20,17 @@ export type {
   RealtimeTalkEvent,
   RealtimeTalkSessionResult,
   RealtimeTalkStatus,
+};
+
+export type RealtimeTalkLaunchOptions = {
+  provider?: string;
+  model?: string;
+  voice?: string;
+  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  vadThreshold?: number;
+  silenceDurationMs?: number;
+  prefixPaddingMs?: number;
+  reasoningEffort?: string;
 };
 
 function createTransport(
@@ -53,6 +64,12 @@ function resolveTransport(session: RealtimeTalkSessionResult): string {
   return normalizeTalkTransport((session as { transport?: string }).transport) ?? "webrtc";
 }
 
+function compactLaunchParams(
+  params: RealtimeTalkLaunchOptions & { sessionKey: string; mode?: string; brain?: string },
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
+}
+
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
@@ -61,6 +78,7 @@ export class RealtimeTalkSession {
     private readonly client: GatewayBrowserClient,
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks = {},
+    private readonly options: RealtimeTalkLaunchOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -74,23 +92,36 @@ export class RealtimeTalkSession {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
+      consultThinkingLevel: session.consultThinkingLevel,
+      consultFastMode: session.consultFastMode,
     });
     await this.transport.start();
   }
 
   private async createSession(): Promise<RealtimeTalkSessionResult> {
     try {
-      return await this.client.request<RealtimeTalkSessionResult>("talk.client.create", {
-        sessionKey: this.sessionKey,
-      });
-    } catch (error) {
-      try {
-        return await this.client.request<RealtimeTalkSessionResult>("talk.session.create", {
+      return await this.client.request<RealtimeTalkSessionResult>(
+        "talk.client.create",
+        compactLaunchParams({
           sessionKey: this.sessionKey,
-          mode: "realtime",
-          transport: "gateway-relay",
-          brain: "agent-consult",
-        });
+          ...this.options,
+        }),
+      );
+    } catch (error) {
+      if (this.options.transport && this.options.transport !== "gateway-relay") {
+        throw error;
+      }
+      try {
+        return await this.client.request<RealtimeTalkSessionResult>(
+          "talk.session.create",
+          compactLaunchParams({
+            sessionKey: this.sessionKey,
+            ...this.options,
+            mode: "realtime",
+            transport: this.options.transport ?? "gateway-relay",
+            brain: "agent-consult",
+          }),
+        );
       } catch {
         throw error;
       }

@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
@@ -28,9 +33,33 @@ function createApi(params: {
     runtime: {
       state: {
         resolveStateDir: () => params.stateDir,
+        openKeyedStore: (options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests("phone-control", {
+            ...options,
+            env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+          }),
       },
       config: {
         current: () => params.getConfig(),
+        mutateConfigFile: async ({
+          mutate,
+        }: {
+          mutate: (draft: Record<string, unknown>) => void;
+        }) => {
+          const nextConfig = structuredClone(params.getConfig());
+          mutate(nextConfig);
+          await params.writeConfig(nextConfig);
+          return {
+            path: "/tmp/openclaw.json",
+            previousHash: null,
+            persistedHash: null,
+            snapshot: {},
+            nextConfig,
+            afterWrite: { mode: "auto" },
+            followUp: { mode: "auto", requiresRestart: false },
+            result: undefined,
+          };
+        },
         replaceConfigFile: ({ nextConfig }: { nextConfig: unknown }) =>
           params.writeConfig(nextConfig as Record<string, unknown>),
       },
@@ -107,9 +136,15 @@ async function withRegisteredPhoneControl(
 }
 
 describe("phone-control plugin", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("arms sms.send as part of the writes group", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");
+      expect(command.requiredScopes).toBeUndefined();
+      expect(command.exposeSenderIsOwner).toBe(true);
 
       const res = await command.handler({
         ...createCommandContext("arm writes 30s"),
@@ -126,7 +161,7 @@ describe("phone-control plugin", () => {
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
       expect(nodes.allowCommands).toEqual([...WRITE_COMMANDS]);
-      expect(nodes.denyCommands).toEqual([]);
+      expect(nodes.denyCommands).toStrictEqual([]);
       expect(text).toContain("sms.send");
     });
   });
@@ -144,26 +179,54 @@ describe("phone-control plugin", () => {
     });
   });
 
-  it("allows external channel callers without operator.admin to mutate phone control", async () => {
+  it("blocks external non-owner callers without operator.admin from mutating phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
         ...createCommandContext("arm writes 30s"),
         channel: "telegram",
+        senderIsOwner: false,
       });
 
-      expect(res?.text ?? "").toContain("Phone control: armed");
-      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(res?.text ?? "").toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
 
-  it("allows external channel callers without operator.admin to disarm phone control", async () => {
+  it("blocks external non-owner callers without operator.admin from disarming phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
         ...createCommandContext("disarm"),
         channel: "telegram",
+        senderIsOwner: false,
+      });
+
+      expect(res?.text ?? "").toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external non-owner callers without operator.admin to read phone control status", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("status"),
+        channel: "telegram",
+        senderIsOwner: false,
       });
 
       expect(res?.text ?? "").toContain("Phone control: disarmed.");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external non-owner callers without operator.admin to read phone control help", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("help"),
+        channel: "telegram",
+        senderIsOwner: false,
+      });
+
+      expect(res?.text ?? "").toContain("/phone status");
       expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
@@ -197,6 +260,57 @@ describe("phone-control plugin", () => {
       });
 
       expect(res?.text ?? "").toContain("sms.send");
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("rejects invalid arm durations without mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const typoRes = await command.handler({
+        ...createCommandContext("arm writes forever"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+      const overflowRes = await command.handler({
+        ...createCommandContext("arm writes 9007199254740993d"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(typoRes?.text ?? "").toContain("Invalid duration");
+      expect(overflowRes?.text ?? "").toContain("Invalid duration");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects arm requests when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+        const res = await command.handler({
+          ...createCommandContext("arm writes 30s"),
+          channel: "webchat",
+          gatewayClientScopes: ["operator.admin"],
+        });
+
+        expect(res?.text ?? "").toContain("Invalid duration");
+        expect(writeConfigFile).not.toHaveBeenCalled();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows external owner callers without gateway scopes to mutate phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "telegram",
+        senderIsOwner: true,
+      });
+
+      expect(res?.text ?? "").toContain("Phone control: armed");
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
     });
   });

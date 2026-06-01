@@ -2,6 +2,7 @@ import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-regi
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
@@ -35,6 +36,7 @@ type GatewayPluginBootstrapParams = {
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
@@ -81,6 +83,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
+    discovery: params.pluginLookUpTable?.discovery,
   });
   const resolvedConfig =
     activationSourceConfig === params.cfg
@@ -101,6 +104,9 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     }),
     ...(params.coreGatewayMethodNames !== undefined && {
       coreGatewayMethodNames: params.coreGatewayMethodNames,
+    }),
+    ...(params.hostServices !== undefined && {
+      hostServices: params.hostServices,
     }),
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,

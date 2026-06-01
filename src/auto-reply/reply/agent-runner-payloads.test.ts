@@ -4,8 +4,10 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const baseParams = {
   isHeartbeat: false,
@@ -14,6 +16,16 @@ const baseParams = {
   blockReplyPipeline: null,
   replyToMode: "off" as const,
 };
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
 
 async function expectSameTargetRepliesDelivered(params: { provider: string; to: string }) {
   const { replyPayloads } = await buildReplyPayloads({
@@ -68,13 +80,44 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "⚠️ API rate limit reached.",
       replyToId: "msg-1",
     });
-    expect(getReplyPayloadMetadata(replyPayloads[0])).toMatchObject({
+    expectFields(getReplyPayloadMetadata(replyPayloads[0]), {
       deliverDespiteSourceReplySuppression: true,
     });
+  });
+
+  it("sanitizes source reply transcript mirror text with final payload text", async () => {
+    const text = [
+      "Visible",
+      "<function_response>",
+      'Searching for: "what skills matter most in the age of AI"',
+      "...",
+      "</function_response>",
+      "Done",
+    ].join("\n");
+    const payload = setReplyPayloadMetadata(
+      { text },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          text,
+        },
+      },
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [payload],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Visible\n\nDone");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.sourceReplyTranscriptMirror?.text).toBe(
+      "Visible\n\nDone",
+    );
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
@@ -118,7 +161,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "hello",
       mediaUrl: undefined,
       mediaUrls: undefined,
@@ -143,13 +186,13 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(2);
-    expect(replyPayloads[0]).toMatchObject({
-      text: "keep text",
+    expectFields(replyPayloads[0], {
+      text: "keep text\n⚠️ Media failed.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
     });
-    expect(replyPayloads[1]).toMatchObject({
+    expectFields(replyPayloads[1], {
       text: "keep second",
     });
   });
@@ -174,7 +217,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "hello world!",
       mediaUrl: "file:///tmp/photo.jpg",
     });
@@ -287,7 +330,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "photo",
       mediaUrl: undefined,
       mediaUrls: undefined,
@@ -407,7 +450,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "caption",
       mediaUrl: undefined,
       mediaUrls: undefined,
@@ -492,7 +535,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       mediaUrl: "/tmp/generated.png",
       text: undefined,
     });
@@ -520,6 +563,32 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("drops final caption and media already sent as one coalesced block payload", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+    pipeline.enqueue({ text: "Preview" });
+    pipeline.enqueue({ text: "below" });
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    await pipeline.flush({ force: true });
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "Preview below", mediaUrls: ["file:///photo.png"] }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("preserves post-stream error payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
@@ -541,7 +610,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "Agent couldn't generate a response. Please try again.",
       isError: true,
     });
@@ -557,6 +626,26 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps error payloads during silent turns", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [
+        { text: "normal maintenance reply" },
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+      isError: true,
+    });
+  });
+
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
@@ -565,7 +654,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: undefined,
       mediaUrl: "file:///tmp/voice.opus",
       audioAsVoice: true,
@@ -596,6 +685,26 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("surfaces a warning when non-silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async () => {
+      throw new Error("file not found");
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "MEDIA: ./missing.png" }],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ Media failed.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
+  });
+
   it("extracts markdown image replies into final payload media urls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
@@ -604,7 +713,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "Here you go",
       mediaUrl: "https://example.com/chart.png",
       mediaUrls: ["https://example.com/chart.png"],
@@ -619,7 +728,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "Look now",
       mediaUrl: "https://example.com/chart.png",
       mediaUrls: ["https://example.com/chart.png"],
@@ -635,7 +744,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text,
     });
     expect(replyPayloads[0]?.mediaUrl).toBeUndefined();

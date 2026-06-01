@@ -1,4 +1,4 @@
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
@@ -149,17 +149,25 @@ export function requestSafeGatewayRestart(
   opts: {
     reason?: string;
     delayMs?: number;
+    skipDeferral?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(skipDeferral ? { skipDeferral: true } : {}),
   });
+  const status = restart.coalesced
+    ? "coalesced"
+    : skipDeferral || preflight.safe
+      ? "scheduled"
+      : "deferred";
   return {
     ok: true,
-    status: restart.coalesced ? "coalesced" : preflight.safe ? "scheduled" : "deferred",
+    status,
     preflight,
     restart,
   };

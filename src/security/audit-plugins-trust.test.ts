@@ -165,6 +165,17 @@ describe("security audit install metadata findings", () => {
     return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
   };
 
+  const requireInstallFinding = (
+    findings: Awaited<ReturnType<typeof runInstallMetadataAudit>>,
+    checkId: string,
+  ) => {
+    const finding = findings.find((entry) => entry.checkId === checkId);
+    if (!finding) {
+      throw new Error(`Expected ${checkId} finding`);
+    }
+    return finding;
+  };
+
   const writePluginIndexInstallRecords = async (
     stateDir: string,
     records: Record<string, PluginInstallRecord>,
@@ -285,6 +296,42 @@ describe("security audit install metadata findings", () => {
         ],
       },
       {
+        name: "still warns when active npm specs are unpinned even with resolved metadata",
+        run: async () => {
+          const stateDir = await makeTmpDir("unpinned-active-spec-resolved-plugin-index");
+          await writePluginIndexInstallRecords(stateDir, {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              resolvedSpec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+            },
+          });
+          return runInstallMetadataAudit(
+            {
+              hooks: {
+                internal: {
+                  installs: {
+                    "test-hooks": {
+                      source: "npm",
+                      spec: "@openclaw/test-hooks",
+                      resolvedSpec: "@openclaw/test-hooks@1.2.3",
+                      integrity: "sha512-hook",
+                    },
+                  },
+                },
+              },
+            },
+            stateDir,
+          );
+        },
+        expectedPresent: [
+          "plugins.installs_unpinned_npm_specs",
+          "hooks.installs_unpinned_npm_specs",
+        ],
+        expectedAbsent: ["plugins.installs_missing_integrity", "hooks.installs_missing_integrity"],
+      },
+      {
         name: "warns when install records drift from installed package versions",
         run: async () => {
           const stateDir = await makeTmpDir("drift-plugin-index");
@@ -362,12 +409,10 @@ describe("security audit install metadata findings", () => {
       },
       reportedStateDir,
     );
-    const phantomFinding = reportedFindings.find(
-      (finding) => finding.checkId === "plugins.allow_phantom_entries",
-    );
-    expect(phantomFinding?.severity).toBe("warn");
-    expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
-    expect(phantomFinding?.detail).not.toContain("installed-plugin");
+    const phantomFinding = requireInstallFinding(reportedFindings, "plugins.allow_phantom_entries");
+    expect(phantomFinding.severity).toBe("warn");
+    expect(phantomFinding.detail).toContain("ghost-plugin-xyz");
+    expect(phantomFinding.detail).not.toContain("installed-plugin");
   });
 
   it("ignores install backup and debris dirs when auditing installed plugin roots", async () => {
@@ -387,15 +432,14 @@ describe("security audit install metadata findings", () => {
 
     const findings = await runInstallMetadataAudit({}, stateDir);
 
-    const noAllowlist = findings.find(
-      (finding) => finding.checkId === "plugins.extensions_no_allowlist",
-    );
-    expect(noAllowlist?.detail).toContain("Found 1 extension(s)");
+    const noAllowlist = requireInstallFinding(findings, "plugins.extensions_no_allowlist");
+    expect(noAllowlist.detail).toContain("Found 1 extension(s)");
 
-    const toolsReachable = findings.find(
-      (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+    const toolsReachable = requireInstallFinding(
+      findings,
+      "plugins.tools_reachable_permissive_policy",
     );
-    expect(toolsReachable?.detail).toContain("Enabled extension plugins: live-plugin.");
+    expect(toolsReachable.detail).toContain("Enabled extension plugins: live-plugin.");
     expect(findings.map((finding) => finding.detail).join("\n")).not.toContain(
       ".openclaw-install-backups",
     );

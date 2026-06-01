@@ -2,8 +2,8 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
-} from "openclaw/plugin-sdk/channel-message";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+} from "openclaw/plugin-sdk/channel-outbound";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
@@ -36,7 +36,34 @@ const cfg = {
   },
 } as OpenClawConfig;
 
+function lastMatrixSendOptions() {
+  const options = mocks.sendMessageMatrix.mock.lastCall?.[2];
+  if (!options || typeof options !== "object") {
+    throw new Error("Expected Matrix send options");
+  }
+  return options as Record<string, unknown>;
+}
+
 describe("matrix channel message adapter", () => {
+  beforeAll(async () => {
+    mocks.sendMessageMatrix.mockResolvedValue({ messageId: "$warmup", roomId: "!room:example" });
+    const sendText = matrixPlugin.message?.send?.text;
+    if (!sendText) {
+      throw new Error("Expected Matrix message adapter text sender");
+    }
+    await sendText({
+      cfg,
+      to: "room:!room:example",
+      text: "warmup",
+      accountId: "default",
+    });
+    mocks.sendMessageMatrix.mockReset();
+  });
+
+  it("declares Matrix markdown rendering support for shared reply payloads", () => {
+    expect(matrixPlugin.meta.markdownCapable).toBe(true);
+  });
+
   beforeEach(() => {
     mocks.sendMessageMatrix.mockReset();
     mocks.sendMessageMatrix.mockResolvedValue({ messageId: "$event-1", roomId: "!room:example" });
@@ -44,28 +71,33 @@ describe("matrix channel message adapter", () => {
 
   it("backs declared durable-final capabilities with runtime outbound proofs", async () => {
     const adapter = matrixPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter?.send?.text || !adapter.send.media) {
+      throw new Error("Expected Matrix message adapter send capabilities.");
+    }
+    const sendText = adapter.send.text;
+    const sendMedia = adapter.send.media;
 
     const proveText = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await sendText({
         cfg,
         to: "room:!room:example",
         text: "hello",
         accountId: "default",
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "hello",
-        expect.objectContaining({ cfg, accountId: "default" }),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("hello");
+      const options = lastMatrixSendOptions();
+      expect(options.cfg).toBe(cfg);
+      expect(options.accountId).toBe("default");
       expect(result.receipt.platformMessageIds).toEqual(["$event-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
 
     const proveMedia = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter!.send!.media!({
+      const result = await sendMedia({
         cfg,
         to: "room:!room:example",
         text: "caption",
@@ -74,22 +106,20 @@ describe("matrix channel message adapter", () => {
         accountId: "default",
         audioAsVoice: true,
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "caption",
-        expect.objectContaining({
-          cfg,
-          mediaUrl: "file:///tmp/cat.png",
-          mediaLocalRoots: ["/tmp/openclaw"],
-          audioAsVoice: true,
-        }),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("caption");
+      const options = lastMatrixSendOptions();
+      expect(options.cfg).toBe(cfg);
+      expect(options.mediaUrl).toBe("file:///tmp/cat.png");
+      expect(options.mediaLocalRoots).toEqual(["/tmp/openclaw"]);
+      expect(options.audioAsVoice).toBe(true);
       expect(result.receipt.parts[0]?.kind).toBe("voice");
     };
 
     const proveReplyThread = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await sendText({
         cfg,
         to: "room:!room:example",
         text: "threaded",
@@ -97,30 +127,91 @@ describe("matrix channel message adapter", () => {
         replyToId: "$reply",
         threadId: "$thread",
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "threaded",
-        expect.objectContaining({
-          cfg,
-          replyToId: "$reply",
-          threadId: "$thread",
-        }),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("threaded");
+      const options = lastMatrixSendOptions();
+      expect(options.cfg).toBe(cfg);
+      expect(options.replyToId).toBe("$reply");
+      expect(options.threadId).toBe("$thread");
       expect(result.receipt.replyToId).toBe("$reply");
       expect(result.receipt.threadId).toBe("$thread");
     };
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "matrixMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
         replyTo: proveReplyThread,
         thread: proveReplyThread,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send?.text).toBeTypeOf("function");
         },
+      },
+    });
+  });
+
+  it("forwards presentation payload hooks through the registered outbound adapter", async () => {
+    const outbound = matrixPlugin.outbound;
+    expect(outbound?.presentationCapabilities?.supported).toBe(true);
+    expect(outbound?.presentationCapabilities?.buttons).toBe(true);
+    expect(outbound?.presentationCapabilities?.selects).toBe(true);
+    expect(outbound?.presentationCapabilities?.context).toBe(true);
+    expect(outbound?.presentationCapabilities?.divider).toBe(true);
+    if (!outbound?.renderPresentation || !outbound.sendPayload) {
+      throw new Error("Expected Matrix outbound presentation payload hooks.");
+    }
+
+    const presentation = {
+      title: "Select thinking level",
+      tone: "info" as const,
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Low", value: "/think low" }],
+        },
+      ],
+    };
+    const rendered = await outbound.renderPresentation({
+      payload: { text: "fallback", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    const matrixChannelData = rendered?.channelData?.matrix as
+      | { extraContent?: Record<string, unknown> }
+      | undefined;
+    expect(matrixChannelData?.extraContent).toEqual({
+      "com.openclaw.presentation": {
+        ...presentation,
+        version: 1,
+        type: "message.presentation",
+      },
+    });
+
+    await outbound.sendPayload({
+      cfg,
+      to: "room:!room:example",
+      text: rendered?.text ?? "",
+      payload: rendered!,
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe(rendered?.text);
+    const options = lastMatrixSendOptions();
+    expect(options.cfg).toBe(cfg);
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("$thread");
+    expect(options.extraContent).toEqual({
+      "com.openclaw.presentation": {
+        ...presentation,
+        version: 1,
+        type: "message.presentation",
       },
     });
   });
@@ -165,5 +256,9 @@ describe("matrix channel message adapter", () => {
         },
       },
     });
+  });
+
+  it("declares bullets as the markdown table default", () => {
+    expect(matrixPlugin.messaging?.defaultMarkdownTableMode).toBe("bullets");
   });
 });

@@ -13,7 +13,9 @@ export {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ReplyRuntimeConfigSchemaShape,
+  requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";

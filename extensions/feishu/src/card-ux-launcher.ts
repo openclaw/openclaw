@@ -1,4 +1,8 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
@@ -96,7 +100,17 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
     return false;
   }
 
-  const expiresAt = (params.now ?? Date.now()) + FEISHU_QUICK_ACTION_CARD_TTL_MS;
+  const now = asDateTimestampMs(params.now ?? Date.now());
+  const expiresAt =
+    now === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(FEISHU_QUICK_ACTION_CARD_TTL_MS, { nowMs: now });
+  if (expiresAt === undefined) {
+    params.runtime?.log?.(
+      `feishu[${params.accountId ?? "default"}]: failed to open quick-action launcher for ${params.operatorOpenId}: invalid expiry clock`,
+    );
+    return false;
+  }
   try {
     await sendCardFeishu({
       cfg: params.cfg,

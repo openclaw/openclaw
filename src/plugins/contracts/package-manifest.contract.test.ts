@@ -3,10 +3,9 @@ import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
-  { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
+    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -49,13 +48,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   {
     pluginId: "msteams",
-    pluginLocalRuntimeDeps: [
-      "@azure/identity",
-      "@microsoft/teams.api",
-      "@microsoft/teams.apps",
-      "jsonwebtoken",
-      "jwks-rsa",
-    ],
+    pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -77,7 +70,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
+    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

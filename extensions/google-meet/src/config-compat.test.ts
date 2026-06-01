@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   legacyConfigRules,
@@ -46,7 +46,7 @@ describe("google-meet config compatibility", () => {
     ]);
     expect(
       (
-        migration?.config.plugins?.entries?.["google-meet"] as {
+        migration!.config.plugins!.entries!["google-meet"] as {
           config?: { realtime?: Record<string, unknown> };
         }
       ).config?.realtime,
@@ -82,10 +82,10 @@ describe("google-meet config compatibility", () => {
 
     const migration = normalizeCompatibilityConfig({ cfg: config });
 
-    expect(migration.changes).toEqual([]);
+    expect(migration.changes).toStrictEqual([]);
     expect(
       (
-        migration.config.plugins?.entries?.["google-meet"] as {
+        migration.config.plugins!.entries!["google-meet"] as {
           config?: { realtime?: Record<string, unknown> };
         }
       ).config?.realtime,

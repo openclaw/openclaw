@@ -7,6 +7,7 @@ export type {
   GeneratedImageAsset,
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
+  ImageGenerationProviderOptions,
   ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,
@@ -24,7 +25,6 @@ export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
-export { parseGeminiAuth } from "../infra/gemini-auth.js";
 export {
   getImageGenerationProvider,
   listImageGenerationProviders,

@@ -1,18 +1,23 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import {
   type ModelAliasIndex,
+  buildConfiguredModelCatalog,
   modelKey,
   normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -28,6 +33,98 @@ import {
 } from "./directive-handling.model-picker.js";
 export { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+
+function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
+  return auth.label === "missing" && auth.source === "missing";
+}
+
+function resolveStatusHarnessRuntime(params: {
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+  defaultRuntime: string;
+}): string {
+  const sessionRuntime = normalizeOptionalAgentRuntimeId(
+    params.sessionEntry?.agentRuntimeOverride ?? params.sessionEntry?.agentHarnessId,
+  );
+  if (sessionRuntime) {
+    return sessionRuntime;
+  }
+  return params.defaultRuntime;
+}
+
+function resolveStatusAcceptedProfileTypes(params: {
+  provider: string;
+  harnessRuntime: string;
+}): readonly AuthProfileCredential["type"][] | undefined {
+  if (normalizeProviderId(params.provider) !== "openai" || params.harnessRuntime === "codex") {
+    return undefined;
+  }
+  return ["api_key"];
+}
+
+async function resolveStatusAuthLabel(params: {
+  provider: string;
+  modelId: string;
+  cfg: OpenClawConfig;
+  modelsPath: string;
+  agentDir: string;
+  activeAgentId: string;
+  authMode: ModelAuthDetailMode;
+  workspaceDir?: string;
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+}): Promise<string> {
+  const provider = normalizeProviderId(params.provider);
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider,
+    modelId: params.modelId,
+    config: params.cfg,
+    agentId: params.activeAgentId,
+  });
+  const harnessRuntime = resolveStatusHarnessRuntime({
+    sessionEntry: params.sessionEntry,
+    defaultRuntime: harnessPolicy.runtime,
+  });
+  const auth = await resolveAuthLabel(
+    params.provider,
+    params.cfg,
+    params.modelsPath,
+    params.agentDir,
+    params.authMode,
+    params.workspaceDir,
+    {
+      acceptedProfileTypes: resolveStatusAcceptedProfileTypes({
+        provider,
+        harnessRuntime,
+      }),
+    },
+  );
+  if (!isMissingAuthLabel(auth)) {
+    return formatAuthLabel(auth);
+  }
+
+  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+    provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    harnessRuntime,
+  });
+  const effectiveAuthProvider = runtimeAuthPlan.harnessAuthProvider;
+  if (!effectiveAuthProvider || effectiveAuthProvider === provider) {
+    return formatAuthLabel(auth);
+  }
+
+  const runtimeAuth = await resolveAuthLabel(
+    effectiveAuthProvider,
+    params.cfg,
+    params.modelsPath,
+    params.agentDir,
+    params.authMode,
+    params.workspaceDir,
+  );
+  if (isMissingAuthLabel(runtimeAuth)) {
+    return formatAuthLabel(auth);
+  }
+  return `via ${harnessRuntime} runtime / ${effectiveAuthProvider} ${formatAuthLabel(runtimeAuth)}`;
+}
 
 function pushUniqueCatalogEntry(params: {
   keys: Set<string>;
@@ -190,6 +287,46 @@ function buildModelPickerCatalog(params: {
   return out;
 }
 
+function filterMissingAuthNestedProviderDuplicates(params: {
+  cfg: OpenClawConfig;
+  entries: ModelPickerCatalogEntry[];
+  authByProvider: Map<string, string>;
+}): ModelPickerCatalogEntry[] {
+  const configuredKeys = new Set(
+    buildConfiguredModelCatalog({ cfg: params.cfg }).map((entry) =>
+      modelKey(entry.provider, entry.id),
+    ),
+  );
+  const wrapperKeys = new Set<string>();
+  for (const entry of params.entries) {
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const slash = id.indexOf("/");
+    if (slash <= 0) {
+      continue;
+    }
+    const nestedProvider = normalizeProviderId(id.slice(0, slash));
+    const nestedModel = normalizeOptionalString(id.slice(slash + 1)) ?? "";
+    const wrapperProvider = normalizeProviderId(entry.provider);
+    if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
+      continue;
+    }
+    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
+  }
+  if (wrapperKeys.size === 0) {
+    return params.entries;
+  }
+
+  return params.entries.filter((entry) => {
+    const provider = normalizeProviderId(entry.provider);
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const key = modelKey(provider, id);
+    if (configuredKeys.has(key)) {
+      return true;
+    }
+    return params.authByProvider.get(provider) !== "missing" || !wrapperKeys.has(key);
+  });
+}
+
 export async function maybeHandleModelDirectiveInfo(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -204,7 +341,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
   resetModelOverride: boolean;
   workspaceDir?: string;
   surface?: string;
-  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
+  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model"> &
+    Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">>;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -302,15 +440,18 @@ export async function maybeHandleModelDirectiveInfo(params: {
     if (authByProvider.has(provider)) {
       continue;
     }
-    const auth = await resolveAuthLabel(
+    const authLabel = await resolveStatusAuthLabel({
       provider,
-      params.cfg,
+      modelId: entry.id,
+      cfg: params.cfg,
       modelsPath,
-      params.agentDir,
+      agentDir: params.agentDir,
+      activeAgentId: params.activeAgentId,
       authMode,
-      params.workspaceDir,
-    );
-    authByProvider.set(provider, formatAuthLabel(auth));
+      workspaceDir: params.workspaceDir,
+      sessionEntry: params.sessionEntry,
+    });
+    authByProvider.set(provider, authLabel);
   }
 
   const modelRefs = resolveSelectedAndActiveModel({
@@ -332,7 +473,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
   }
 
   const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
-  for (const entry of pickerCatalog) {
+  const statusCatalog = filterMissingAuthNestedProviderDuplicates({
+    cfg: params.cfg,
+    entries: pickerCatalog,
+    authByProvider,
+  });
+  for (const entry of statusCatalog) {
     const provider = normalizeProviderId(entry.provider);
     const models = byProvider.get(provider);
     if (models) {

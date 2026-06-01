@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  awaitAgentHarnessAgentEndHook,
   clearAgentHarnessFinalizeRetryBudget,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
@@ -7,9 +8,9 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "./lifecycle-hook-helpers.js";
 
-const legacyHookRunner = {
-  hasHooks: () => true,
-};
+const createLegacyHookRunner = () => ({
+  hasHooks: vi.fn(() => true),
+});
 
 const EVENT = {
   runId: "run-1",
@@ -22,6 +23,8 @@ const EVENT = {
   transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
   lastAssistantMessage: "done",
+  messages: [],
+  success: true,
 };
 
 describe("agent harness lifecycle hook helpers", () => {
@@ -30,33 +33,86 @@ describe("agent harness lifecycle hook helpers", () => {
   });
 
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
-    expect(() =>
-      runAgentHarnessLlmInputHook({
-        ctx: {},
-        event: {},
-        hookRunner: legacyHookRunner,
-      } as never),
-    ).not.toThrow();
+    const hookRunner = createLegacyHookRunner();
+    runAgentHarnessLlmInputHook({
+      ctx: {},
+      event: {},
+      hookRunner,
+    } as never);
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("llm_input");
   });
 
   it("ignores legacy hook runners that advertise llm_output without a runner method", () => {
-    expect(() =>
-      runAgentHarnessLlmOutputHook({
-        ctx: {},
-        event: {},
-        hookRunner: legacyHookRunner,
-      } as never),
-    ).not.toThrow();
+    const hookRunner = createLegacyHookRunner();
+    runAgentHarnessLlmOutputHook({
+      ctx: {},
+      event: {},
+      hookRunner,
+    } as never);
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("llm_output");
   });
 
   it("ignores legacy hook runners that advertise agent_end without a runner method", () => {
-    expect(() =>
-      runAgentHarnessAgentEndHook({
-        ctx: {},
-        event: {},
-        hookRunner: legacyHookRunner,
-      } as never),
-    ).not.toThrow();
+    const hookRunner = createLegacyHookRunner();
+    runAgentHarnessAgentEndHook({
+      ctx: {},
+      event: {},
+      hookRunner,
+    } as never);
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("agent_end");
+  });
+
+  it("resolves after agent_end hooks settle", async () => {
+    let releaseHook: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+
+    const run = awaitAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: false },
+    );
+    expect(resolved).toBe(false);
+    releaseHook();
+    await expect(run).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
+  it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+
+    runAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    await Promise.resolve();
+
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: true },
+    );
   });
 
   it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {
@@ -64,7 +120,7 @@ describe("agent harness lifecycle hook helpers", () => {
       runAgentHarnessBeforeAgentFinalizeHook({
         ctx: {},
         event: {},
-        hookRunner: legacyHookRunner,
+        hookRunner: createLegacyHookRunner(),
       } as never),
     ).resolves.toEqual({ action: "continue" });
   });

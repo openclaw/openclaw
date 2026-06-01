@@ -35,11 +35,22 @@ function createDueRecurringJob(params: {
 }
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
+  let resolve: ((value: T) => void) | undefined;
   const promise = new Promise<T>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
+}
+
+function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {
+  const result = timeoutSpy.mock.results.at(-1);
+  if (!result || result.type !== "return") {
+    throw new Error("Expected setTimeout to return a timer handle");
+  }
+  return result.value;
 }
 
 describe("CronService - timer re-arm when running (#12025)", () => {
@@ -78,8 +89,8 @@ describe("CronService - timer re-arm when running (#12025)", () => {
 
     // The timer must be re-armed so the scheduler continues ticking,
     // with a fixed 60s delay to avoid hot-looping.
-    expect(state.timer).not.toBeNull();
     expect(timeoutSpy).toHaveBeenCalled();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((d): d is number => typeof d === "number");
@@ -138,7 +149,7 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(state.running).toBe(true);
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)

@@ -1,11 +1,7 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
-import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,9 +12,16 @@ import {
   validateTalkSessionCloseParams,
   validateTalkSessionCreateParams,
   validateTalkSessionJoinParams,
+  validateTalkSessionSteerParams,
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionTurnParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import {
   cancelTalkHandoffTurn,
@@ -28,11 +31,13 @@ import {
   joinTalkHandoff,
   revokeTalkHandoff,
   startTalkHandoffTurn,
+  type TalkHandoffTurnResult,
 } from "../talk-handoff.js";
 import {
   cancelTalkRealtimeRelayTurn,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
+  steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "../talk-realtime-relay.js";
@@ -41,6 +46,7 @@ import {
   getUnifiedTalkSession,
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
+  type UnifiedTalkSessionRecord,
 } from "../talk-session-registry.js";
 import {
   cancelTalkTranscriptionRelayTurn,
@@ -52,6 +58,7 @@ import { formatForLog } from "../ws-log.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
+  buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   canUseTalkDirectTools,
@@ -59,7 +66,9 @@ import {
   talkHandoffErrorCode,
   withRealtimeBrowserOverrides,
 } from "./talk-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+
+type ManagedRoomTalkSession = Extract<UnifiedTalkSessionRecord, { kind: "managed-room" }>;
 
 function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
   const mode = normalizeOptionalLowercaseString(params.mode) as TalkMode | undefined;
@@ -109,11 +118,59 @@ function canCloseManagedRoomSession(
   return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
 }
 
+function canCreateUnscopedManagedRoomSession(
+  client: { connect?: { scopes?: string[] } } | null,
+): boolean {
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
 function managedRoomOwnershipError(action: string) {
   return errorShape(
     ErrorCodes.INVALID_REQUEST,
     `talk.session.${action} requires the active managed-room connection`,
   );
+}
+
+function respondManagedRoomTurn(params: {
+  session: UnifiedTalkSessionRecord;
+  connId?: string;
+  context: GatewayRequestContext;
+  respond: RespondFn;
+  method: "talk.session.startTurn" | "talk.session.endTurn" | "talk.session.cancelTurn";
+  ownershipAction: "startTurn" | "endTurn" | "cancelTurn";
+  failureVerb: "start" | "end" | "cancel";
+  run: (session: ManagedRoomTalkSession) => TalkHandoffTurnResult;
+}) {
+  if (params.session.kind !== "managed-room") {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `${params.method} requires managed-room`),
+    );
+    return;
+  }
+  if (!isActiveManagedRoomClient(params.session, params.connId)) {
+    params.respond(false, undefined, managedRoomOwnershipError(params.ownershipAction));
+    return;
+  }
+  const result = params.run(params.session);
+  if (!result.ok) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        talkHandoffErrorCode(result.reason),
+        `talk turn ${params.failureVerb} failed: ${result.reason}`,
+      ),
+    );
+    return;
+  }
+  broadcastTalkRoomEvents(params.context, result.record.room.activeClientId, {
+    handoffId: result.record.id,
+    roomId: result.record.roomId,
+    events: result.events,
+  });
+  params.respond(true, { ok: true, turnId: result.turnId, events: result.events }, undefined);
 }
 
 export const talkSessionHandlers: GatewayRequestHandlers = {
@@ -159,10 +216,27 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const spawnedBy = normalizeOptionalString(params.spawnedBy);
+        if (
+          normalizeOptionalString(params.sessionKey) &&
+          !spawnedBy &&
+          !canCreateUnscopedManagedRoomSession(client)
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
+            ),
+          );
+          return;
+        }
         const resolvedSession = await resolveSessionKeyFromResolveParams({
           cfg: context.getRuntimeConfig(),
           p: {
             key: params.sessionKey,
+            ...(spawnedBy ? { spawnedBy } : {}),
             includeGlobal: true,
             includeUnknown: true,
           },
@@ -233,19 +307,26 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           providerConfigs: realtimeConfig.providers,
           cfg: runtimeConfig,
           cfgForResolve: runtimeConfig,
+          defaultModel: realtimeConfig.model,
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
-        const model = normalizeOptionalString(params.model) ?? realtimeConfig.model;
-        const voice = normalizeOptionalString(params.voice) ?? realtimeConfig.voice;
+        const launchOptions = buildRealtimeVoiceLaunchOptions({
+          requested: params,
+          defaults: realtimeConfig,
+        });
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
+          cfg: runtimeConfig,
           provider: resolution.provider,
-          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, { model, voice }),
-          instructions: buildRealtimeInstructions(),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
-          model,
-          voice,
+          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
+          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
+          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
+          model: launchOptions.model,
+          sessionKey: normalizeOptionalString(params.sessionKey),
+          voice: launchOptions.voice,
+          forceAgentConsultOnFinalTranscript:
+            realtimeConfig.consultRouting === "force-agent-consult",
         });
         rememberUnifiedTalkSession(session.relaySessionId, {
           kind: "realtime-relay",
@@ -283,6 +364,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           config: runtimeConfig,
           configuredProviderId: transcriptionConfig.provider,
           providerConfigs: transcriptionConfig.providers,
+          defaultModel: transcriptionConfig.model,
         });
         const session = createTalkTranscriptionRelaySession({
           context,
@@ -432,39 +514,20 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     }
     try {
       const session = getUnifiedTalkSession(params.sessionId);
-      if (session.kind !== "managed-room") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "talk.session.startTurn requires managed-room"),
-        );
-        return;
-      }
-      if (!isActiveManagedRoomClient(session, client?.connId)) {
-        respond(false, undefined, managedRoomOwnershipError("startTurn"));
-        return;
-      }
-      const result = startTalkHandoffTurn(session.handoffId, session.token, {
-        turnId: params.turnId,
-        clientId: client?.connId,
+      respondManagedRoomTurn({
+        session,
+        connId: client?.connId,
+        context,
+        respond,
+        method: "talk.session.startTurn",
+        ownershipAction: "startTurn",
+        failureVerb: "start",
+        run: (managedSession) =>
+          startTalkHandoffTurn(managedSession.handoffId, managedSession.token, {
+            turnId: params.turnId,
+            clientId: client?.connId,
+          }),
       });
-      if (!result.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            talkHandoffErrorCode(result.reason),
-            `talk turn start failed: ${result.reason}`,
-          ),
-        );
-        return;
-      }
-      broadcastTalkRoomEvents(context, result.record.room.activeClientId, {
-        handoffId: result.record.id,
-        roomId: result.record.roomId,
-        events: result.events,
-      });
-      respond(true, { ok: true, turnId: result.turnId, events: result.events }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -483,35 +546,19 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     }
     try {
       const session = getUnifiedTalkSession(params.sessionId);
-      if (session.kind !== "managed-room") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "talk.session.endTurn requires managed-room"),
-        );
-        return;
-      }
-      if (!isActiveManagedRoomClient(session, client?.connId)) {
-        respond(false, undefined, managedRoomOwnershipError("endTurn"));
-        return;
-      }
-      const result = endTalkHandoffTurn(session.handoffId, session.token, {
-        turnId: params.turnId,
+      respondManagedRoomTurn({
+        session,
+        connId: client?.connId,
+        context,
+        respond,
+        method: "talk.session.endTurn",
+        ownershipAction: "endTurn",
+        failureVerb: "end",
+        run: (managedSession) =>
+          endTalkHandoffTurn(managedSession.handoffId, managedSession.token, {
+            turnId: params.turnId,
+          }),
       });
-      if (!result.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(talkHandoffErrorCode(result.reason), `talk turn end failed: ${result.reason}`),
-        );
-        return;
-      }
-      broadcastTalkRoomEvents(context, result.record.room.activeClientId, {
-        handoffId: result.record.id,
-        roomId: result.record.roomId,
-        events: result.events,
-      });
-      respond(true, { ok: true, turnId: result.turnId, events: result.events }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -550,31 +597,20 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         respond(true, { ok: true }, undefined);
         return;
       }
-      if (!isActiveManagedRoomClient(session, client?.connId)) {
-        respond(false, undefined, managedRoomOwnershipError("cancelTurn"));
-        return;
-      }
-      const result = cancelTalkHandoffTurn(session.handoffId, session.token, {
-        turnId: params.turnId,
-        reason: params.reason,
+      respondManagedRoomTurn({
+        session,
+        connId: client?.connId,
+        context,
+        respond,
+        method: "talk.session.cancelTurn",
+        ownershipAction: "cancelTurn",
+        failureVerb: "cancel",
+        run: (managedSession) =>
+          cancelTalkHandoffTurn(managedSession.handoffId, managedSession.token, {
+            turnId: params.turnId,
+            reason: params.reason,
+          }),
       });
-      if (!result.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            talkHandoffErrorCode(result.reason),
-            `talk turn cancel failed: ${result.reason}`,
-          ),
-        );
-        return;
-      }
-      broadcastTalkRoomEvents(context, result.record.room.activeClientId, {
-        handoffId: result.record.id,
-        roomId: result.record.roomId,
-        events: result.events,
-      });
-      respond(true, { ok: true, turnId: result.turnId, events: result.events }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -646,8 +682,83 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         connId,
         callId: params.callId,
         result: params.result,
+        options: params.options,
       });
       respond(true, { ok: true }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.session.steer": async ({ params, respond, client }) => {
+    if (!validateTalkSessionSteerParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.session.steer params: ${formatValidationErrors(validateTalkSessionSteerParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const session = getUnifiedTalkSession(params.sessionId);
+      if (session.kind === "realtime-relay") {
+        const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+        const result = await steerTalkRealtimeRelayAgentRun({
+          relaySessionId: session.relaySessionId,
+          connId,
+          sessionKey: normalizeOptionalString(params.sessionKey),
+          text: params.text,
+          mode: normalizeOptionalString(params.mode),
+        });
+        respond(true, result, undefined);
+        return;
+      }
+      if (session.kind === "transcription-relay") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.session.steer requires an agent-backed Talk session",
+          ),
+        );
+        return;
+      }
+      if (!isActiveManagedRoomClient(session, client?.connId)) {
+        respond(false, undefined, managedRoomOwnershipError("steer"));
+        return;
+      }
+      const handoff = getTalkHandoff(session.handoffId);
+      const sessionKey = handoff?.sessionKey;
+      if (!sessionKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "talk.session.steer requires a session key"),
+        );
+        return;
+      }
+      const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+      if (requestedSessionKey && requestedSessionKey !== sessionKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.session.steer sessionKey does not match the managed-room session",
+          ),
+        );
+        return;
+      }
+      const result = await controlRealtimeVoiceAgentRun({
+        sessionKey,
+        text: params.text,
+        mode: params.mode,
+        recentEvents: handoff?.room.talk.recentEvents,
+      });
+      respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

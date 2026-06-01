@@ -47,7 +47,7 @@ describe("resolveEffectiveModelFallbacks", () => {
       fallbacks: ["google/gemini-2.0-flash"],
     };
 
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([]);
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toStrictEqual([]);
   });
 });
 
@@ -87,11 +87,11 @@ describe("resolveConfiguredCronModelSuggestions", () => {
   });
 
   it("returns empty array for invalid or missing config shape", () => {
-    expect(resolveConfiguredCronModelSuggestions(null)).toEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({})).toEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
-      [],
-    );
+    expect(resolveConfiguredCronModelSuggestions(null)).toStrictEqual([]);
+    expect(resolveConfiguredCronModelSuggestions({})).toStrictEqual([]);
+    expect(
+      resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
+    ).toStrictEqual([]);
   });
 });
 
@@ -111,15 +111,15 @@ describe("agentLogoUrl", () => {
     expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
   });
 
-  it("uses a route-relative fallback before basePath bootstrap finishes", () => {
-    expect(agentLogoUrl("")).toBe("favicon.svg");
+  it("uses a root-relative fallback when no basePath is configured", () => {
+    expect(agentLogoUrl("")).toBe("/favicon.svg");
   });
 });
 
 describe("assistantAvatarFallbackUrl", () => {
   it("uses the bundled Molty png for assistant profile fallbacks", () => {
     expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
-    expect(assistantAvatarFallbackUrl("")).toBe("apple-touch-icon.png");
+    expect(assistantAvatarFallbackUrl("")).toBe("/apple-touch-icon.png");
   });
 });
 
@@ -202,7 +202,7 @@ describe("buildAgentContext", () => {
         workspace: "/tmp/agent-workspace",
         model: {
           primary: "openai/gpt-5.5",
-          fallbacks: ["openai-codex/gpt-5.2-codex"],
+          fallbacks: ["openai/gpt-5.2-codex"],
         },
         agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
       },
@@ -227,7 +227,7 @@ describe("buildAgentContext", () => {
             workspace: "/tmp/default-workspace",
             model: {
               primary: "openai/gpt-5.5",
-              fallbacks: ["openai-codex/gpt-5.2-codex"],
+              fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
           list: [{ id: "main" }],

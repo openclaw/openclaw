@@ -10,6 +10,23 @@ import {
   runCliRespawnPlan,
 } from "./entry.respawn.js";
 
+type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
+
+function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): CliRespawnPlan {
+  if (plan === null) {
+    throw new Error("Expected CLI respawn plan");
+  }
+  return plan;
+}
+
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("buildCliRespawnPlan", () => {
   it("returns null when respawn policy skips the argv", () => {
     expect(
@@ -28,14 +45,15 @@ describe("buildCliRespawnPlan", () => {
       env: {},
       execArgv: [],
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
     });
 
-    expect(plan).not.toBeNull();
-    expect(plan?.command).toBe(process.execPath);
-    expect(plan?.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
-    expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-    expect(plan?.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-    expect(plan?.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.command).toBe(process.execPath);
+    expect(respawnPlan.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
   });
 
   it.each(["tui", "terminal", "chat"] as const)(
@@ -46,13 +64,14 @@ describe("buildCliRespawnPlan", () => {
         env: {},
         execArgv: [],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       });
 
-      expect(plan).not.toBeNull();
-      expect(plan?.argv).toEqual(["openclaw", command]);
-      expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-      expect(plan?.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-      expect(plan?.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+      const respawnPlan = expectCliRespawnPlan(plan);
+      expect(respawnPlan.argv).toEqual(["openclaw", command]);
+      expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+      expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+      expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
     },
   );
 
@@ -60,9 +79,10 @@ describe("buildCliRespawnPlan", () => {
     expect(
       buildCliRespawnPlan({
         argv: ["node", "openclaw", "tui"],
-        env: {},
+        env: { [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1" },
         execArgv: [],
         autoNodeExtraCaCerts: undefined,
+        platform: "linux",
       }),
     ).toBeNull();
   });
@@ -73,9 +93,11 @@ describe("buildCliRespawnPlan", () => {
       env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" },
       execArgv: [],
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
     });
 
-    expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
   });
 
   it("returns null when both respawn guards are already satisfied", () => {
@@ -88,20 +110,83 @@ describe("buildCliRespawnPlan", () => {
         },
         execArgv: [EXPERIMENTAL_WARNING_FLAG],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       }),
     ).toBeNull();
   });
 
-  it("does not respawn on Windows", () => {
+  it("adds a larger V8 stack size on Windows", () => {
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "node",
+        "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+        "dashboard",
+      ],
+      env: {},
+      execArgv: [],
+      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([
+      "--stack-size=8192",
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+      "dashboard",
+    ]);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBeUndefined();
+    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+  });
+
+  it("normalizes duplicated Windows node.exe argv before respawning", () => {
+    const scriptPath =
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath,
+        "node.exe",
+        "dashboard",
+        "--no-open",
+      ],
+      env: {},
+      execArgv: [],
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
+  });
+
+  it("does not respawn on Windows when stack size is already configured", () => {
     expect(
       buildCliRespawnPlan({
         argv: [
           "node",
           "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-          "onboard",
+          "dashboard",
         ],
         env: {},
-        execArgv: [],
+        execArgv: ["--stack-size=16384"],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "win32",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not respawn on Windows when underscore stack size spelling is already configured", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [
+          "node",
+          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+          "dashboard",
+        ],
+        env: {},
+        execArgv: ["--stack_size=16384"],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
         platform: "win32",
       }),
@@ -118,8 +203,13 @@ describe("buildCliRespawnPlan", () => {
       platform: "linux",
     });
 
-    expect(plan?.command).toBe("node");
-    expect(plan?.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "/usr/local/bin/openclaw", "status"]);
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.command).toBe("node");
+    expect(respawnPlan.argv).toEqual([
+      EXPERIMENTAL_WARNING_FLAG,
+      "/usr/local/bin/openclaw",
+      "status",
+    ]);
   });
 });
 
@@ -170,9 +260,12 @@ describe("runCliRespawnPlan", () => {
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
       },
     );
-    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
-      onSignal: expect.any(Function),
-    });
+    const [bridgeChild, bridgeOptions] = requireFirstMockCall(
+      attachChildProcessBridge,
+      "child process bridge attach",
+    );
+    expect(bridgeChild).toBe(child);
+    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
 
     child.emit("exit", 0, null);
 
@@ -216,6 +309,10 @@ describe("runCliRespawnPlan", () => {
       vi.advanceTimersByTime(1_000);
 
       expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      expect(exit).not.toHaveBeenCalled();
+
+      child.emit("exit", null, "SIGKILL");
+
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       vi.useRealTimers();

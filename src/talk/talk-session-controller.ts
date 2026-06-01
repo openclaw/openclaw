@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createTalkEventSequencer,
   type TalkBrain,
@@ -49,9 +50,15 @@ export type TalkSessionControllerParams = TalkEventContext & {
   turnIdPrefix?: string;
 };
 
+export type TalkSessionControllerOptions = {
+  now?: () => Date | string;
+  onEvent?: (event: TalkEvent) => void;
+  sequencer?: TalkEventSequencer;
+};
+
 export function createTalkSessionController(
   params: TalkSessionControllerParams,
-  options: { now?: () => Date | string; sequencer?: TalkEventSequencer } = {},
+  options: TalkSessionControllerOptions = {},
 ): TalkSessionController {
   const { maxRecentEvents = 20, turnIdPrefix = "turn", ...context } = params;
   const sequencer = options.sequencer ?? createTalkEventSequencer(context, { now: options.now });
@@ -64,6 +71,11 @@ export function createTalkSessionController(
     recentEvents.push(event as TalkEvent);
     if (recentEvents.length > maxRecentEvents) {
       recentEvents.splice(0, recentEvents.length - maxRecentEvents);
+    }
+    try {
+      options.onEvent?.(event as TalkEvent);
+    } catch {
+      // Diagnostics hooks must not break Talk delivery.
     }
     return event;
   };
@@ -199,8 +211,3 @@ export function normalizeTalkTransport(value: string | undefined): string | unde
 }
 
 export type { TalkBrain, TalkEvent, TalkEventContext, TalkEventInput, TalkMode, TalkTransport };
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}

@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -23,6 +24,7 @@ import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -187,17 +189,10 @@ function createRuntimeResourceLifecycle(params: {
   };
 }
 
-function isLoopbackBind(bind: string | undefined): boolean {
-  if (!bind) {
-    return false;
-  }
-  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
-}
-
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
-    isLoopbackBind(config.serve?.bind) &&
+    isLoopbackHost(config.serve?.bind ?? "") &&
     (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
 
   switch (config.provider) {
@@ -271,10 +266,19 @@ export async function createVoiceCallRuntime(params: {
   coreConfig: CoreConfig;
   fullConfig?: OpenClawConfig;
   agentRuntime: CoreAgentDeps;
+  stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
 }): Promise<VoiceCallRuntime> {
-  const { config: rawConfig, coreConfig, fullConfig, agentRuntime, ttsRuntime, logger } = params;
+  const {
+    config: rawConfig,
+    coreConfig,
+    fullConfig,
+    agentRuntime,
+    stateRuntime,
+    ttsRuntime,
+    logger,
+  } = params;
   const log = logger ?? {
     info: console.log,
     warn: console.warn,
@@ -301,6 +305,9 @@ export async function createVoiceCallRuntime(params: {
   }
 
   const provider = await resolveProvider(config);
+  if (stateRuntime) {
+    setVoiceCallStateRuntime({ state: stateRuntime });
+  }
   const manager = new CallManager(config);
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
@@ -340,6 +347,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeProvider.provider,
       realtimeProvider.providerConfig,
       config.serve.path,
+      cfg,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -378,11 +386,13 @@ export async function createVoiceCallRuntime(params: {
             voiceConfig: effectiveConfig,
             agentRuntime,
           });
-          const thinkLevel = agentRuntime.resolveThinkingDefault({
-            cfg,
-            provider: agentProvider,
-            model,
-          });
+          const thinkLevel =
+            effectiveConfig.realtime.consultThinkingLevel ??
+            agentRuntime.resolveThinkingDefault({
+              cfg,
+              provider: agentProvider,
+              model,
+            });
           return await consultRealtimeVoiceAgent({
             cfg,
             agentRuntime,
@@ -401,6 +411,7 @@ export async function createVoiceCallRuntime(params: {
             provider: agentProvider,
             model,
             thinkLevel,
+            fastMode: effectiveConfig.realtime.consultFastMode,
             timeoutMs: effectiveConfig.responseTimeoutMs,
             spawnedBy: requesterSessionKey,
             contextMode: requesterSessionKey ? "fork" : undefined,
@@ -459,11 +470,16 @@ export async function createVoiceCallRuntime(params: {
       );
     }
 
-    if (publicUrl && provider.name === "twilio") {
-      (provider as TwilioProvider).setPublicUrl(publicUrl);
+    if (publicUrl) {
+      provider.setPublicUrl?.(publicUrl);
     }
     if (publicUrl && realtimeProvider) {
       webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
+    }
+
+    const realtimeHandler = webhookServer.getRealtimeHandler();
+    if (realtimeHandler) {
+      manager.streamSessionIssuer = (request) => realtimeHandler.issueStreamSession(request);
     }
 
     if (provider.name === "twilio" && config.streaming?.enabled) {

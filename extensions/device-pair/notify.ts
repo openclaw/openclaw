@@ -5,7 +5,7 @@ import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NOTIFY_STATE_FILE = "device-pair-notify.json";
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
@@ -504,11 +504,11 @@ export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPl
         await notifyPendingPairingRequests({ api, statePath });
       };
 
-      await tick().catch((err) => {
+      await tick().catch((err: unknown) => {
         api.logger.warn(`device-pair: initial notify poll failed: ${formatErrorMessage(err)}`);
       });
       notifyInterval = setInterval(() => {
-        tick().catch((err) => {
+        tick().catch((err: unknown) => {
           api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
         });
       }, NOTIFY_POLL_INTERVAL_MS);

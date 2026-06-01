@@ -1,20 +1,26 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
@@ -44,7 +50,9 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 const commandsRegistryLoader = createLazyImportLoader(
   () => import("../commands-registry.runtime.js"),
 );
-const skillCommandsLoader = createLazyImportLoader(() => import("../skill-commands.runtime.js"));
+const skillCommandsLoader = createLazyImportLoader(
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
+);
 
 function loadCommandsRegistry() {
   return commandsRegistryLoader.load();
@@ -160,9 +168,12 @@ export async function resolveReplyDirectives(params: {
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
@@ -188,8 +199,11 @@ export async function resolveReplyDirectives(params: {
     commandAuthorized,
     defaultProvider,
     defaultModel,
+    primaryProvider,
+    primaryModel,
     provider: initialProvider,
     model: initialModel,
+    skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -328,8 +342,10 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        clearThinkLevel: false,
         hasVerboseDirective: false,
         hasFastDirective: false,
+        clearFastMode: false,
         hasReasoningDirective: false,
         reasoningLevel: undefined,
         rawReasoningLevel: undefined,
@@ -416,16 +432,20 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  const sessionThinkLevel = directives.clearThinkLevel
+    ? undefined
+    : (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    normalizeThinkLevel(opts?.thinkingLevelOverride) ?? directives.thinkLevel ?? sessionThinkLevel;
   const resolvedFastMode =
+    opts?.fastModeOverride ??
     directives.fastMode ??
     resolveFastModeState({
       cfg,
       provider,
       model,
       agentId,
-      sessionEntry: targetSessionEntry,
+      sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
     }).enabled;
 
   const resolvedVerboseLevel =
@@ -514,10 +534,14 @@ export async function resolveReplyDirectives(params: {
         storePath,
         defaultProvider,
         defaultModel,
+        primaryProvider,
+        primaryModel,
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
+        skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
+        isHeartbeat: opts?.isHeartbeat === true,
       });
   provider = modelState.provider;
   model = modelState.model;
@@ -528,7 +552,7 @@ export async function resolveReplyDirectives(params: {
 
   const thinkingExplicitlySet =
     directives.thinkLevel !== undefined ||
-    targetSessionEntry?.thinkingLevel !== undefined ||
+    sessionThinkLevel !== undefined ||
     agentCfg?.thinkingDefault !== undefined;
 
   // When neither directive nor session nor agent set reasoning, default to model capability

@@ -1,5 +1,6 @@
 import type { APIMessage, APIUser } from "discord-api-types/v10";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getChannelMessage, Message as DiscordMessage, type Message } from "../internal/discord.js";
 import { resolveDiscordMessageText, type DiscordChannelInfo } from "./message-utils.js";
 
@@ -93,10 +94,6 @@ function readMessageFallback(message: Message): MessageFallback {
   };
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.flatMap((entry) => (typeof entry === "string" ? [entry] : []))
@@ -149,7 +146,7 @@ function copyRuntimeMessageFields(source: Message, target: Message): void {
 }
 
 function shouldHydrateDiscordMessage(params: { message: Message }) {
-  let currentText = "";
+  let currentText;
   try {
     currentText = resolveDiscordMessageText(params.message, {
       includeForwarded: true,

@@ -8,6 +8,11 @@ import {
 } from "./inbound-job.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 describe("buildDiscordInboundJob", () => {
   it("prefers route session key, then base session key, then channel id for queueing", async () => {
     const routed = await createBaseDiscordMessageContext({
@@ -88,7 +93,17 @@ describe("buildDiscordInboundJob", () => {
       },
       ownerId: "user-1",
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+      name: "codex",
+      parentId: "forum-1",
+      parent: {
+        id: "forum-1",
+        name: "Forum",
+      },
+      ownerId: "user-1",
+    });
   });
 
   it("normalizes partial thread channels without reading throwing getters", async () => {
@@ -115,7 +130,10 @@ describe("buildDiscordInboundJob", () => {
       parent: undefined,
       ownerId: undefined,
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+    });
   });
 
   it("re-materializes the process context with an overridden abort signal", async () => {

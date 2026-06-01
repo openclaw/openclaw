@@ -12,7 +12,7 @@ for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
 }
 
-type RealtimeTwilioAudioQueueItem =
+type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
       durationMs: number;
@@ -23,10 +23,16 @@ type RealtimeTwilioAudioQueueItem =
       type: "mark";
     };
 
-export type RealtimeTwilioAudioPacerSendJson = (message: unknown) => boolean;
+export type RealtimeAudioSend = (message: string) => boolean;
 
-export class RealtimeTwilioAudioPacer {
-  private queue: RealtimeTwilioAudioQueueItem[] = [];
+export interface RealtimeAudioSerializer {
+  media(payloadBase64: string): string;
+  clear(): string;
+  mark(name: string): string;
+}
+
+export class RealtimeAudioPacer {
+  private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
@@ -35,8 +41,8 @@ export class RealtimeTwilioAudioPacer {
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
-      sendJson: RealtimeTwilioAudioPacerSendJson;
-      streamSid: string;
+      send: RealtimeAudioSend;
+      serializer: RealtimeAudioSerializer;
     },
   ) {}
 
@@ -77,7 +83,7 @@ export class RealtimeTwilioAudioPacer {
     this.clearTimer();
     this.queue = [];
     this.queuedAudioBytes = 0;
-    this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
   }
 
@@ -118,21 +124,13 @@ export class RealtimeTwilioAudioPacer {
     }
 
     let delayMs = 0;
-    let sent = true;
+    let sent;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.sendJson({
-        event: "media",
-        streamSid: this.params.streamSid,
-        media: { payload: item.chunk.toString("base64") },
-      });
+      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
       delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
     } else {
-      sent = this.params.sendJson({
-        event: "mark",
-        streamSid: this.params.streamSid,
-        mark: { name: item.name },
-      });
+      sent = this.params.send(this.params.serializer.mark(item.name));
     }
 
     if (!sent) {
@@ -151,8 +149,8 @@ export function calculateMulawRms(muLaw: Buffer): number {
     return 0;
   }
   let sum = 0;
-  for (let i = 0; i < muLaw.length; i += 1) {
-    const normalized = (MULAW_LINEAR_SAMPLES[muLaw[i] ?? 0] ?? 0) / PCM16_MAX_AMPLITUDE;
+  for (const sample of muLaw) {
+    const normalized = (MULAW_LINEAR_SAMPLES[sample] ?? 0) / PCM16_MAX_AMPLITUDE;
     sum += normalized * normalized;
   }
   return Math.sqrt(sum / muLaw.length);

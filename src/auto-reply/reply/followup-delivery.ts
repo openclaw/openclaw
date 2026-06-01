@@ -1,4 +1,4 @@
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -46,18 +46,20 @@ export function resolveFollowupDeliveryPayloads(params: {
     params.originatingAccountId,
     params.originatingChatType,
   );
-  const sanitizedPayloads = params.payloads.flatMap((payload) => {
+  const sanitizedPayloads: ReplyPayload[] = [];
+  for (const payload of params.payloads) {
     const text = payload.text;
     if (!text || !text.includes("HEARTBEAT_OK")) {
-      return [payload];
+      sanitizedPayloads.push(payload);
+      continue;
     }
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     const hasMedia = hasReplyPayloadMedia(payload);
     if (stripped.shouldSkip && !hasMedia) {
-      return [];
+      continue;
     }
-    return [{ ...payload, text: stripped.text }];
-  });
+    sanitizedPayloads.push({ ...payload, text: stripped.text });
+  }
   const replyTaggedPayloads = applyReplyThreading({
     payloads: sanitizedPayloads,
     replyToMode,

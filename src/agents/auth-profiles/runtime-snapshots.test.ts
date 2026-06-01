@@ -11,9 +11,9 @@ function createStore(access: string): AuthProfileStore {
   return {
     version: 1,
     profiles: {
-      "openai-codex:default": {
+      "openai:default": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access,
         refresh: `refresh-${access}`,
         expires: Date.now() + 60_000,
@@ -21,14 +21,30 @@ function createStore(access: string): AuthProfileStore {
       },
     },
     order: {
-      "openai-codex": ["openai-codex:default"],
+      openai: ["openai:default"],
     },
     usageStats: {
-      "openai-codex:default": {
+      "openai:default": {
         lastUsed: 1,
       },
     },
   };
+}
+
+function expectOpenAICodexSnapshotCredential(
+  store: AuthProfileStore | undefined,
+  params: { access: string; refresh?: string },
+) {
+  const credential = store?.profiles["openai:default"];
+  expect(credential?.type).toBe("oauth");
+  if (credential?.type !== "oauth") {
+    throw new Error("Expected OpenAI Codex OAuth credential snapshot");
+  }
+  expect(credential.provider).toBe("openai");
+  expect(credential.access).toBe(params.access);
+  if (params.refresh) {
+    expect(credential.refresh).toBe(params.refresh);
+  }
 }
 
 describe("runtime auth profile snapshots", () => {
@@ -38,36 +54,30 @@ describe("runtime auth profile snapshots", () => {
     try {
       const stored = createStore("access-1");
       setRuntimeAuthProfileStoreSnapshot(stored, agentDir);
-      stored.profiles["openai-codex:default"].provider = "mutated";
-      stored.order!["openai-codex"].push("mutated");
+      stored.profiles["openai:default"].provider = "mutated";
+      stored.order!["openai"].push("mutated");
 
       const first = getRuntimeAuthProfileStoreSnapshot(agentDir);
-      expect(first?.profiles["openai-codex:default"]).toMatchObject({
-        provider: "openai-codex",
-        access: "access-1",
-      });
-      expect(first?.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
+      expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
+      expect(first?.order?.["openai"]).toEqual(["openai:default"]);
 
-      first!.profiles["openai-codex:default"].provider = "mutated-again";
-      first!.usageStats!["openai-codex:default"].lastUsed = 99;
+      first!.profiles["openai:default"].provider = "mutated-again";
+      first!.usageStats!["openai:default"].lastUsed = 99;
 
       const second = getRuntimeAuthProfileStoreSnapshot(agentDir);
-      expect(second?.profiles["openai-codex:default"]).toMatchObject({
-        provider: "openai-codex",
-        access: "access-1",
-      });
-      expect(second?.usageStats?.["openai-codex:default"]?.lastUsed).toBe(1);
+      expectOpenAICodexSnapshotCredential(second, { access: "access-1" });
+      expect(second?.usageStats?.["openai:default"]?.lastUsed).toBe(1);
 
       const replacement = createStore("access-2");
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: replacement }]);
-      const replacementCredential = replacement.profiles["openai-codex:default"];
+      const replacementCredential = replacement.profiles["openai:default"];
       expect(replacementCredential?.type).toBe("oauth");
       if (replacementCredential?.type === "oauth") {
         replacementCredential.access = "mutated-replacement";
       }
 
       const replaced = getRuntimeAuthProfileStoreSnapshot(agentDir);
-      expect(replaced?.profiles["openai-codex:default"]).toMatchObject({
+      expectOpenAICodexSnapshotCredential(replaced, {
         access: "access-2",
         refresh: "refresh-access-2",
       });

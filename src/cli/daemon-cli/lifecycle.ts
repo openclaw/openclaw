@@ -1,6 +1,13 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  findInstalledSystemdGatewayScope,
+  restartSystemdService,
+  stopSystemdService,
+} from "../../daemon/systemd.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
@@ -11,11 +18,10 @@ import {
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
+import { createNullWriter } from "./response.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -85,7 +91,7 @@ function resolveGatewayPortFallback(): Promise<number> {
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
   const cfg = await readBestEffortConfig().catch(() => undefined);
-  const tlsEnabled = !!cfg?.gateway?.tls?.enabled;
+  const tlsEnabled = Boolean(cfg?.gateway?.tls?.enabled);
   const scheme = tlsEnabled ? "wss" : "ws";
   const probe = await probeGateway({
     url: `${scheme}://127.0.0.1:${port}`,
@@ -112,7 +118,36 @@ function resolveVerifiedGatewayListenerPids(port: number): number[] {
   );
 }
 
+async function handleSystemScopeSystemdGateway(
+  action: "stop" | "restart",
+): Promise<{ result: "stopped" | "restarted"; message: string } | null> {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  const installed = await findInstalledSystemdGatewayScope(process.env).catch(() => null);
+  if (installed?.scope !== "system") {
+    return null;
+  }
+  const stdout = createNullWriter();
+  if (action === "stop") {
+    await stopSystemdService({ stdout, env: process.env });
+    return {
+      result: "stopped",
+      message: `Gateway stopped via system-scope systemd unit ${installed.unitName}.`,
+    };
+  }
+  await restartSystemdService({ stdout, env: process.env });
+  return {
+    result: "restarted",
+    message: `Gateway restarted via system-scope systemd unit ${installed.unitName}.`,
+  };
+}
+
 async function stopGatewayWithoutServiceManager(port: number) {
+  const managed = await handleSystemScopeSystemdGateway("stop");
+  if (managed) {
+    return managed;
+  }
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;
@@ -155,9 +190,14 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
   if (opts.wait !== undefined) {
     throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
   }
+  const skipDeferral = opts.skipDeferral === true;
+  const params: { reason: string; skipDeferral?: true } = { reason: "gateway.restart.safe" };
+  if (skipDeferral) {
+    params.skipDeferral = true;
+  }
   const result = await callGatewayCli<SafeGatewayRestartRequestResult>({
     method: "gateway.restart.request",
-    params: { reason: "gateway.restart.safe" },
+    params,
     timeoutMs: 10_000,
   });
   const message =
@@ -165,7 +205,9 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
       ? "safe restart request joined an existing pending gateway restart"
       : result.status === "deferred"
         ? "safe restart requested; gateway will restart after active work drains"
-        : "safe restart requested; gateway will restart momentarily";
+        : skipDeferral
+          ? "safe restart requested; gateway bypassing active-work deferral"
+          : "safe restart requested; gateway will restart momentarily";
   const payload = {
     ok: true,
     result: result.status,
@@ -189,6 +231,10 @@ async function restartGatewayWithoutServiceManager(
   port: number,
   restartIntent?: GatewayRestartIntent,
 ) {
+  const managed = await handleSystemScopeSystemdGateway("restart");
+  if (managed) {
+    return managed;
+  }
   await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
@@ -201,6 +247,7 @@ async function restartGatewayWithoutServiceManager(
   }
   writeGatewayRestartIntentSync({
     targetPid: pids[0],
+    reason: "gateway.restart",
     ...(restartIntent ? { intent: restartIntent } : {}),
   });
   signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
@@ -249,6 +296,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     serviceNoun: "Gateway",
     service,
     opts,
+    stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async () => {
       gatewayPortPromise ??= resolveGatewayLifecyclePort(service).catch(() =>
         resolveGatewayPortFallback(),
@@ -264,6 +312,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * Throws/exits on check or restart failures.
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  if (opts.skipDeferral && !opts.safe) {
+    throw new Error("--skip-deferral requires --safe");
+  }
   if (opts.safe) {
     return await requestSafeGatewayRestart(opts);
   }

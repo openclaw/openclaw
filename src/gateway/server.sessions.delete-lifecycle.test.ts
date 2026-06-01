@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "vitest";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { afterEach, expect, test } from "vitest";
+import {
+  readAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../acp/runtime/session-meta.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -18,6 +23,16 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
+
+function expectObject(value: unknown) {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object");
+  }
+}
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
@@ -49,14 +64,16 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   );
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-active");
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
-  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
-    sessionKeys: expect.arrayContaining([
-      "discord:group:dev",
-      "agent:main:discord:group:dev",
-      "sess-active",
-    ]),
-    onWarn: expect.any(Function),
-  });
+  const closeTabsCall = (
+    browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock.calls as unknown as Array<
+      [{ sessionKeys?: string[]; onWarn?: unknown }]
+    >
+  )[0]?.[0];
+  expect(closeTabsCall?.sessionKeys).toHaveLength(3);
+  expect(closeTabsCall?.sessionKeys).toContain("discord:group:dev");
+  expect(closeTabsCall?.sessionKeys).toContain("agent:main:discord:group:dev");
+  expect(closeTabsCall?.sessionKeys).toContain("sess-active");
+  expect(typeof closeTabsCall?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
     {
@@ -127,6 +144,72 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
   expect(deleted.payload?.deleted).toBe(true);
 });
 
+test("sessions.delete scopes selected global deletes to the requested agent", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await writeSessionStore({
+    entries: {},
+    storePath: path.join(dir, "prime-sessions.json"),
+  });
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
+    "utf-8",
+  );
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: "global",
+    agentId: "work",
+    deleteTranscript: false,
+  });
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as {
+    global?: { sessionId?: string };
+  };
+  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as {
+    global?: { sessionId?: string };
+  };
+  expect(mainStore.global?.sessionId).toBe("sess-main-global");
+  expect(workStore.global).toBeUndefined();
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -135,16 +218,18 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main"),
-      "discord:group:dev": sessionStoreEntry("sess-acp", {
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "runtime:delete",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      }),
+      "discord:group:dev": sessionStoreEntry("sess-acp"),
+    },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:discord:group:dev",
+    meta: {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:delete",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: Date.now(),
     },
   });
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
@@ -152,19 +237,88 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
   });
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
-  expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
-    allowBackendUnavailable: true,
-    cfg: expect.any(Object),
-    discardPersistentState: true,
-    requireAcpSession: false,
-    reason: "session-delete",
-    sessionKey: "agent:main:discord:group:dev",
+  expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
+  const closeSessionCall = (
+    acpManagerMocks.closeSession.mock.calls as unknown as Array<
+      [
+        {
+          allowBackendUnavailable?: boolean;
+          cfg?: unknown;
+          discardPersistentState?: boolean;
+          requireAcpSession?: boolean;
+          reason?: string;
+          sessionKey?: string;
+        },
+      ]
+    >
+  )[0]?.[0];
+  expect(closeSessionCall?.allowBackendUnavailable).toBe(true);
+  expectObject(closeSessionCall?.cfg);
+  expect(closeSessionCall?.discardPersistentState).toBe(true);
+  expect(closeSessionCall?.requireAcpSession).toBe(false);
+  expect(closeSessionCall?.reason).toBe("session-delete");
+  expect(closeSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
+
+  expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
+  const cancelSessionCall = (
+    acpManagerMocks.cancelSession.mock.calls as unknown as Array<
+      [{ cfg?: unknown; reason?: string; sessionKey?: string }]
+    >
+  )[0]?.[0];
+  expectObject(cancelSessionCall?.cfg);
+  expect(cancelSessionCall?.reason).toBe("session-delete");
+  expect(cancelSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
+  expect(readAcpSessionMeta({ sessionKey: "agent:main:discord:group:dev" })).toBeUndefined();
+});
+
+test("sessions.delete closes child ACP runtimes spawned from the deleted parent", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSingleLineSession(dir, "sess-parent", "parent");
+  await writeSingleLineSession(dir, "sess-child", "child");
+
+  const acpMeta = (recordId: string) => ({
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: `runtime:${recordId}`,
+    mode: "oneshot" as const,
+    state: "idle" as const,
+    lastActivityAt: Date.now(),
   });
-  expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith({
-    cfg: expect.any(Object),
-    reason: "session-delete",
-    sessionKey: "agent:main:discord:group:dev",
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+      "acp-parent": sessionStoreEntry("sess-parent"),
+      "acp-child": sessionStoreEntry("sess-child", {
+        spawnedBy: "agent:main:acp-parent",
+      }),
+    },
   });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:acp-parent",
+    meta: acpMeta("agent:main:acp-parent"),
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:acp-child",
+    meta: acpMeta("agent:main:acp-child"),
+  });
+
+  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: "acp-parent",
+  });
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+
+  // Deleting the parent must also close its spawned ACP child, not just its own
+  // runtime, otherwise the child's claude-agent-acp process is orphaned (#68916).
+  const closedKeys = (
+    acpManagerMocks.closeSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
+  ).map((call) => call[0]?.sessionKey);
+  expect(closedKeys).toContain("agent:main:acp-parent");
+  expect(closedKeys).toContain("agent:main:acp-child");
+  expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-parent" })).toBeUndefined();
+  expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-child" })).toBeUndefined();
 });
 
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
@@ -201,19 +355,19 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   const [event, context] = (
     sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
-  expect(event).toMatchObject({
-    sessionId: "sess-delete",
-    sessionKey: "agent:main:discord:group:delete",
-    reason: "deleted",
-    transcriptArchived: true,
-  });
+  expect((event as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
+  expect((event as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+    "agent:main:discord:group:delete",
+  );
+  expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
+  expect((event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived).toBe(true);
   expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(".jsonl.deleted.");
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
-  expect(context).toMatchObject({
-    sessionId: "sess-delete",
-    sessionKey: "agent:main:discord:group:delete",
-    agentId: "main",
-  });
+  expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
+  expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+    "agent:main:discord:group:delete",
+  );
+  expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
 });
 
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
@@ -253,12 +407,10 @@ test("sessions.delete emits subagent targetKind for subagent sessions", async ()
   const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
     | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
     | undefined;
-  expect(event).toMatchObject({
-    targetSessionKey: "agent:main:subagent:worker",
-    targetKind: "subagent",
-    reason: "session-delete",
-    outcome: "deleted",
-  });
+  expect(event?.targetSessionKey).toBe("agent:main:subagent:worker");
+  expect(event?.targetKind).toBe("subagent");
+  expect(event?.reason).toBe("session-delete");
+  expect(event?.outcome).toBe("deleted");
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
     targetSessionKey: "agent:main:subagent:worker",
@@ -345,9 +497,9 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   >;
   expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
   const filesAfterDeleteAttempt = await fs.readdir(dir);
-  expect(filesAfterDeleteAttempt.some((f) => f.startsWith("sess-active.jsonl.deleted."))).toBe(
-    false,
-  );
+  expect(
+    filesAfterDeleteAttempt.filter((fileName) => fileName.startsWith("sess-active.jsonl.deleted.")),
+  ).toEqual([]);
 
   ws.close();
 });

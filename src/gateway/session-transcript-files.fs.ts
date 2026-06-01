@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -121,7 +122,7 @@ export function resolveSessionTranscriptCandidates(
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
-  return Array.from(new Set(candidates));
+  return uniqueStrings(candidates);
 }
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
@@ -152,6 +153,7 @@ export function archiveSessionTranscripts(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
@@ -167,6 +169,11 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  /**
+   * Invoked when an individual transcript candidate fails to archive. The
+   * caller decides whether to log, warn-deliver, or escalate.
+   */
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
   const storeDir =
@@ -194,8 +201,8 @@ export function archiveSessionTranscriptsDetailed(opts: {
         sourcePath: candidatePath,
         archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
       });
-    } catch {
-      // Best-effort.
+    } catch (err) {
+      opts.onArchiveError?.(err, candidatePath);
     }
   }
   return archived;
@@ -251,7 +258,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   }
   const now = opts.nowMs ?? Date.now();
   const reason: ArchiveFileReason = opts.reason ?? "deleted";
-  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
+  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
   let removed = 0;
   let scanned = 0;
 
