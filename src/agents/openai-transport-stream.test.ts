@@ -24,7 +24,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
-type CapturedStreamEvent = { type?: string; delta?: string };
+type CapturedStreamEvent = { type?: string; delta?: string; content?: string };
 
 function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
   return {
@@ -1547,6 +1547,68 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Request was aborted");
     expect(yieldedToTimer).toBe(true);
     expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("handles Azure Responses text content and text delta events", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            role: "assistant",
+            id: "msg_azure_text",
+            content: [],
+            status: "in_progress",
+          },
+        },
+        { type: "response.text.delta", delta: "Hello" },
+        { type: "response.text.delta", delta: " from Azure!" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            role: "assistant",
+            id: "msg_azure_text",
+            content: [{ type: "text", text: "Hello from Azure!" }],
+            status: "completed",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_azure_text",
+            status: "completed",
+            usage: {
+              input_tokens: 4,
+              output_tokens: 3,
+              total_tokens: 7,
+            },
+          },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(events).toMatchObject([
+      { type: "text_start" },
+      { type: "text_delta", delta: "Hello" },
+      { type: "text_delta", delta: " from Azure!" },
+      { type: "text_end", content: "Hello from Azure!" },
+    ]);
+    expect(output.content).toMatchObject([{ type: "text", text: "Hello from Azure!" }]);
+    expectRecordFields(output.usage, {
+      input: 4,
+      output: 3,
+      totalTokens: 7,
+    });
+    expect(output.responseId).toBe("resp_azure_text");
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {

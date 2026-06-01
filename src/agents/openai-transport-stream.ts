@@ -1488,7 +1488,11 @@ async function processResponsesStream(
           partial: output,
         });
       }
-    } else if (type === "response.output_text.delta" || type === "response.refusal.delta") {
+    } else if (
+      type === "response.output_text.delta" ||
+      type === "response.text.delta" ||
+      type === "response.refusal.delta"
+    ) {
       if (currentItem?.type === "message" && currentBlock?.type === "text") {
         currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
         stream.push({
@@ -1541,7 +1545,7 @@ async function processResponsesStream(
         currentBlock.text = content
           .map((part) => {
             const contentPart = part as { type?: string; text?: string; refusal?: string };
-            return contentPart.type === "output_text"
+            return contentPart.type === "output_text" || contentPart.type === "text"
               ? (contentPart.text ?? "")
               : (contentPart.refusal ?? "");
           })
