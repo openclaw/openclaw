@@ -164,6 +164,12 @@ function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   );
 }
 
+function resolveTelegramActionTargetWritebackAuthority(options?: {
+  gatewayClientScopes?: readonly string[];
+}) {
+  return options?.gatewayClientScopes === undefined ? ("internal" as const) : undefined;
+}
+
 function pushTelegramMediaUrl(mediaUrls: string[], seen: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
     return;
@@ -341,6 +347,7 @@ export async function handleTelegramAction(
       inboundEventKind: options?.inboundEventKind,
     });
   };
+  const targetWritebackAuthority = resolveTelegramActionTargetWritebackAuthority(options);
 
   if (action === "react") {
     // All react failures return soft results (jsonResult with ok:false) instead
@@ -408,6 +415,7 @@ export async function handleTelegramAction(
           remove,
           accountId: accountId ?? undefined,
           gatewayClientScopes: options?.gatewayClientScopes,
+          targetWritebackAuthority,
         },
       );
     } catch (err) {
@@ -615,6 +623,7 @@ export async function handleTelegramAction(
         isAnonymous: isAnonymous ?? undefined,
         silent: silent ?? undefined,
         gatewayClientScopes: options?.gatewayClientScopes,
+        targetWritebackAuthority,
       },
     );
     notifyVisibleOutboundSuccess(to, messageThreadId);
@@ -648,6 +657,7 @@ export async function handleTelegramAction(
       token,
       accountId: accountId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
+      targetWritebackAuthority,
     });
     if (!result.ok) {
       return jsonResult({ ok: false, deleted: false, warning: result.warning });
@@ -701,6 +711,7 @@ export async function handleTelegramAction(
           token,
           accountId: accountId ?? undefined,
           gatewayClientScopes: options?.gatewayClientScopes,
+          targetWritebackAuthority,
         },
       );
       return jsonResult({
@@ -720,6 +731,7 @@ export async function handleTelegramAction(
         buttons,
         editMode: caption != null ? "caption" : "auto",
         gatewayClientScopes: options?.gatewayClientScopes,
+        targetWritebackAuthority,
       },
     );
     return jsonResult({
@@ -757,6 +769,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
+      targetWritebackAuthority,
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
@@ -816,6 +829,7 @@ export async function handleTelegramAction(
       iconColor,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
+      targetWritebackAuthority,
     });
     if (result.topicId != null && result.chatId) {
       await updateTopicName(
@@ -864,6 +878,7 @@ export async function handleTelegramAction(
         name: name ?? undefined,
         iconCustomEmojiId: iconCustomEmojiId ?? undefined,
         gatewayClientScopes: options?.gatewayClientScopes,
+        targetWritebackAuthority,
       },
     );
     if (result.chatId) {

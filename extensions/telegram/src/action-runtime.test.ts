@@ -1267,6 +1267,90 @@ describe("handleTelegramAction", () => {
       const opts = assertCall(readCallOpts);
       expect(opts.cfg).toBe(cfg);
       expect(opts.gatewayClientScopes).toEqual(["operator.write"]);
+      expect(opts.targetWritebackAuthority).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      name: "react",
+      params: { action: "react", chatId: "123", messageId: 456, emoji: "✅" },
+      cfg: reactionConfig("minimal"),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(reactMessageTelegram.mock.calls as unknown[][], 3),
+    },
+    {
+      name: "poll",
+      params: {
+        action: "poll",
+        to: "123",
+        question: "Q?",
+        answers: ["A", "B"],
+      },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendPollTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "deleteMessage",
+      params: { action: "deleteMessage", chatId: "123", messageId: 1 },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(deleteMessageTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "editMessage",
+      params: { action: "editMessage", chatId: "123", messageId: 1, content: "updated" },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(editMessageTelegram.mock.calls as unknown[][], 3),
+    },
+    {
+      name: "sendSticker",
+      params: { action: "sendSticker", to: "123", fileId: "sticker-1" },
+      cfg: telegramConfig({ actions: { sticker: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendStickerTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "createForumTopic",
+      params: { action: "createForumTopic", chatId: "123", name: "Topic" },
+      cfg: telegramConfig({ actions: { createForumTopic: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(createForumTopicTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "editForumTopic",
+      params: { action: "editForumTopic", chatId: "123", messageThreadId: 42, name: "New" },
+      cfg: telegramConfig({ actions: { editForumTopic: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(editForumTopicTelegram.mock.calls as unknown[][], 2),
+    },
+  ])(
+    "grants internal target writeback authority for unscoped $name actions",
+    async ({ params, cfg, assertCall }) => {
+      const readCallOpts = (calls: unknown[][], argIndex: number): Record<string, unknown> => {
+        const args = calls[0];
+        if (!Array.isArray(args)) {
+          throw new Error("Expected Telegram action call args");
+        }
+        const opts = args[argIndex];
+        if (!opts || typeof opts !== "object") {
+          throw new Error("Expected Telegram action options object");
+        }
+        return opts as Record<string, unknown>;
+      };
+      await handleTelegramAction(params as Record<string, unknown>, cfg);
+      const opts = assertCall(readCallOpts);
+      expect(opts.gatewayClientScopes).toBeUndefined();
+      expect(opts.targetWritebackAuthority).toBe("internal");
     },
   );
 
