@@ -3399,6 +3399,11 @@ describe("memory plugin e2e", () => {
 
   test("sanitizeForMemoryCapture strips current context before envelope prefixes", () => {
     const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"channel":"slack"}',
+      "```",
+      "",
       "Conversation context (untrusted, chronological, selected for current message):",
       "Alice: random history",
       "Bob: I always recommend stale context",

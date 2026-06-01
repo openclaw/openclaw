@@ -715,7 +715,7 @@ const INBOUND_META_LABEL_RE =
 const INBOUND_META_LABEL_JSON_BLOCK_RE =
   /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
 const LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE =
-  /^[^\n]{1,100}\(untrusted, chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
+  /^\s*[^\n]{1,100}\(untrusted, chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
 const BRACKETED_LINE_PREFIX_RE = /^\[[^\]\n]{1,500}\]\s/gm;
 
 const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
