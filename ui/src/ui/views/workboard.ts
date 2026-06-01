@@ -825,7 +825,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const card = state.detailCardId
     ? (state.cards.find((entry) => entry.id === state.detailCardId) ?? null)
     : null;
-  if (!card) {
+  if (!card || card.metadata?.archivedAt) {
     return nothing;
   }
   const task = state.tasksByCardId.get(card.id);
