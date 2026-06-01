@@ -396,13 +396,18 @@ async function resolveAndPersistChatId(params: {
     api: params.api,
     verbose: params.verbose,
   });
+  // Direct Telegram runtime calls are trusted internal callers. Gateway paths
+  // carry a scope list, so absent scopes do not become implicit authority there.
+  const targetWritebackAuthority =
+    params.targetWritebackAuthority ??
+    (params.gatewayClientScopes === undefined ? "internal" : undefined);
   await maybePersistResolvedTelegramTarget({
     cfg: params.cfg,
     rawTarget: params.persistTarget,
     resolvedChatId: chatId,
     verbose: params.verbose,
     gatewayClientScopes: params.gatewayClientScopes,
-    targetWritebackAuthority: params.targetWritebackAuthority,
+    targetWritebackAuthority,
   });
   return chatId;
 }
