@@ -17,6 +17,7 @@ type SessionActivity = {
 type ActiveEmbeddedRun = {
   sessionId?: string;
   sessionKey?: string;
+  sequence: number;
 };
 
 type ActiveTool = {
@@ -62,6 +63,7 @@ export type DiagnosticSessionActivitySnapshot = {
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
+let embeddedRunSequence = 0;
 
 function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
   const refs: string[] = [];
@@ -284,6 +286,7 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   activity.activeEmbeddedRuns.set(resolveEmbeddedRunWorkKey(params), {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sequence: ++embeddedRunSequence,
   });
   touchSessionActivity(activity, "embedded_run:started");
 }
@@ -341,6 +344,21 @@ function clearRecoveredOwnerEmbeddedRuns(activity: SessionActivity, ownerRefs: S
   }
 }
 
+function hasEmbeddedRunStartedAfter(
+  activity: SessionActivity,
+  sequence: number | undefined,
+): boolean {
+  if (sequence === undefined) {
+    return activity.activeEmbeddedRuns.size > 0;
+  }
+  for (const embeddedRun of activity.activeEmbeddedRuns.values()) {
+    if (embeddedRun.sequence > sequence) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function clearRecoveredOwnerMarkers(activity: SessionActivity, ownerRefs: Set<string>): void {
   if (ownerRefs.size === 0) {
     return;
@@ -367,6 +385,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   sessionId?: string;
   sessionKey?: string;
   activeSessionId?: string;
+  recoveryStartedAfterEmbeddedRunSequence?: number;
 }): { cleared: boolean; blockedByActiveEmbeddedRun: boolean } {
   const activity = resolveSessionActivity(params);
   if (!activity) {
@@ -387,8 +406,11 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   clearRecoveredOwnerEmbeddedRuns(activity, ownerRefs);
   clearRecoveredOwnerMarkers(activity, ownerRefs);
   if (activity.activeEmbeddedRuns.size > 0) {
-    touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
-    return { cleared: false, blockedByActiveEmbeddedRun: true };
+    if (hasEmbeddedRunStartedAfter(activity, params.recoveryStartedAfterEmbeddedRunSequence)) {
+      touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
+      return { cleared: false, blockedByActiveEmbeddedRun: true };
+    }
+    activity.activeEmbeddedRuns.clear();
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
@@ -431,6 +453,10 @@ export function getDiagnosticSessionActivitySnapshot(
   };
 }
 
+export function getDiagnosticEmbeddedRunActivitySequence(): number {
+  return embeddedRunSequence;
+}
+
 export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
 }
@@ -454,6 +480,7 @@ export function markDiagnosticModelStartedForTest(
 export function resetDiagnosticRunActivityForTest(): void {
   activityByRef.clear();
   activityByRunId.clear();
+  embeddedRunSequence = 0;
   unregisterDiagnosticRunActivityListener?.();
   unregisterDiagnosticRunActivityListener = undefined;
   registerDiagnosticRunActivityListener();
