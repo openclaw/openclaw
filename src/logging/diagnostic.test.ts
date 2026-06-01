@@ -2547,6 +2547,54 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.activeToolName).toBeUndefined();
   });
 
+  it("clears recovered reply work stored under a custom embedded work key", async () => {
+    const replySessionId = "reply-run-1";
+    logSessionStateChange({
+      sessionId: replySessionId,
+      sessionKey,
+      state: "processing",
+      reason: "run_started",
+    });
+    markDiagnosticEmbeddedRunStarted({
+      sessionId: replySessionId,
+      sessionKey,
+      workKey: `reply:${sessionKey}`,
+    });
+    const state = getDiagnosticSessionState({ sessionId: replySessionId, sessionKey });
+    state.queueDepth = 2;
+
+    requestStuckSessionRecovery({
+      recover: () =>
+        Promise.resolve({
+          ...abortedOutcome(),
+          sessionId: replySessionId,
+          activeSessionId: replySessionId,
+        }),
+      classification: stalledClassification,
+      request: {
+        sessionId: replySessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId: replySessionId, sessionKey })?.state).toBe(
+      "idle",
+    );
+    const activity = getDiagnosticSessionActivitySnapshot({
+      sessionId: replySessionId,
+      sessionKey,
+    });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.hasActiveEmbeddedRun).toBeUndefined();
+  });
+
   it("keeps fresh tool markers when a different embedded owner blocks recovery clearing", async () => {
     logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });

@@ -7,11 +7,16 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
-  activeEmbeddedRuns: Set<string>;
+  activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Map<string, ActiveModelCall>;
   lastProgressAt: number;
   lastProgressReason?: string;
+};
+
+type ActiveEmbeddedRun = {
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 type ActiveTool = {
@@ -101,8 +106,8 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
-  for (const key of source.activeEmbeddedRuns) {
-    target.activeEmbeddedRuns.add(key);
+  for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
+    target.activeEmbeddedRuns.set(key, embeddedRun);
   }
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
@@ -155,7 +160,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    activeEmbeddedRuns: new Set(),
+    activeEmbeddedRuns: new Map(),
     activeTools: new Map(),
     activeModelCalls: new Map(),
     lastProgressAt: Date.now(),
@@ -276,7 +281,10 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRuns.add(resolveEmbeddedRunWorkKey(params));
+  activity.activeEmbeddedRuns.set(resolveEmbeddedRunWorkKey(params), {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
   touchSessionActivity(activity, "embedded_run:started");
 }
 
@@ -322,6 +330,17 @@ function markerBelongsToRecoveredOwner(
   );
 }
 
+function clearRecoveredOwnerEmbeddedRuns(activity: SessionActivity, ownerRefs: Set<string>): void {
+  if (ownerRefs.size === 0) {
+    return;
+  }
+  for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
+    if (embeddedRun.sessionId !== undefined && ownerRefs.has(embeddedRun.sessionId)) {
+      activity.activeEmbeddedRuns.delete(key);
+    }
+  }
+}
+
 function clearRecoveredOwnerMarkers(activity: SessionActivity, ownerRefs: Set<string>): void {
   if (ownerRefs.size === 0) {
     return;
@@ -365,6 +384,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   if (recoveredWorkKey) {
     activity.activeEmbeddedRuns.delete(recoveredWorkKey);
   }
+  clearRecoveredOwnerEmbeddedRuns(activity, ownerRefs);
   clearRecoveredOwnerMarkers(activity, ownerRefs);
   if (activity.activeEmbeddedRuns.size > 0) {
     touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
