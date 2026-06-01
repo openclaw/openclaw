@@ -22,6 +22,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type {
+  ExactSessionEntry,
   SessionAccessScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
@@ -80,6 +81,20 @@ export function loadSqliteSessionEntry(scope: SessionAccessScope): SessionEntry 
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return readSessionEntryRow(database, resolved.sessionKey)?.entry;
+}
+
+/** Loads one exact persisted-key entry from the additive SQLite session store. */
+export function loadExactSqliteSessionEntry(
+  scope: SessionAccessScope,
+): ExactSessionEntry | undefined {
+  const sessionKey = scope.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const resolved = resolveSqliteScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const row = readExactSessionEntryRow(database, sessionKey);
+  return row ? { sessionKey, entry: row.entry } : undefined;
 }
 
 /** Lists session entries from the additive SQLite session store. */
@@ -499,13 +514,17 @@ function readSessionEntryRow(
   database: OpenClawAgentDatabase,
   sessionKey: string,
 ): { entry: SessionEntry; row: SessionEntryRow } | undefined {
+  return readExactSessionEntryRow(database, normalizeSqliteSessionKey(sessionKey));
+}
+
+function readExactSessionEntryRow(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): { entry: SessionEntry; row: SessionEntryRow } | undefined {
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db
-      .selectFrom("session_entries")
-      .selectAll()
-      .where("session_key", "=", normalizeSqliteSessionKey(sessionKey)),
+    db.selectFrom("session_entries").selectAll().where("session_key", "=", sessionKey),
   );
   if (!row) {
     return undefined;
