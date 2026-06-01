@@ -273,11 +273,27 @@ async function hasWorkspaceUserContentEvidence(
   if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
     return true;
   }
+  return await hasWorkspaceSkillEvidence(dir);
+}
+
+async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
   try {
-    return (await fs.readdir(path.join(dir, "skills"))).length > 0;
+    const skillEntries = await fs.readdir(path.join(dir, "skills"), { withFileTypes: true });
+    for (const entry of skillEntries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      try {
+        await fs.access(path.join(dir, "skills", entry.name, "SKILL.md"));
+        return true;
+      } catch {
+        // continue
+      }
+    }
   } catch {
-    return false;
+    // no workspace skills
   }
+  return false;
 }
 
 async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<boolean> {
@@ -288,11 +304,7 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
         continue;
       }
       if (entry.name === "skills" && entry.isDirectory()) {
-        try {
-          if ((await fs.readdir(path.join(dir, entry.name))).length === 0) {
-            continue;
-          }
-        } catch {
+        if (!(await hasWorkspaceSkillEvidence(dir))) {
           continue;
         }
       }

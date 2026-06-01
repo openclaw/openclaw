@@ -194,6 +194,20 @@ describe("ensureAgentWorkspace", () => {
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("refuses a recently attested workspace when only non-skill skills leftovers survive", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.mkdir(path.join(tempDir, "skills"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "skills", ".DS_Store"), "");
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
   it("refuses to recreate a skip-bootstrap workspace after the directory disappears", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.writeFile(path.join(tempDir, "seed.txt"), "preseeded\n");
