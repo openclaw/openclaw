@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHuggingfaceModelDefinition,
@@ -10,9 +11,22 @@ import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
+function restoreEnv(key: "VITEST" | "NODE_ENV", value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
+function stubAbortSignalTimeout() {
+  const controller = new AbortController();
+  return vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+}
+
 afterEach(() => {
-  process.env.VITEST = ORIGINAL_VITEST;
-  process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  restoreEnv("VITEST", ORIGINAL_VITEST);
+  restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -45,7 +59,7 @@ describe("huggingface models", () => {
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {
     process.env.VITEST = "false";
     process.env.NODE_ENV = "development";
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const timeoutSpy = stubAbortSignalTimeout();
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -62,7 +76,7 @@ describe("huggingface models", () => {
   it("accepts a custom discovery timeout override", async () => {
     process.env.VITEST = "false";
     process.env.NODE_ENV = "development";
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const timeoutSpy = stubAbortSignalTimeout();
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -74,6 +88,23 @@ describe("huggingface models", () => {
     await discoverHuggingfaceModels("hf_test_token", 25_000);
 
     expect(timeoutSpy).toHaveBeenCalledWith(25_000);
+  });
+
+  it("caps oversized live discovery timeout overrides", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const timeoutSpy = stubAbortSignalTimeout();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } }),
+      ),
+    );
+
+    await discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
   describe("isHuggingfacePolicyLocked", () => {

@@ -7,8 +7,6 @@ read_when:
 title: "Ansible"
 ---
 
-# Ansible Installation
-
 Deploy OpenClaw to production servers with **[openclaw-ansible](https://github.com/openclaw/openclaw-ansible)** -- an automated installer with security-first architecture.
 
 <Info>
@@ -48,7 +46,7 @@ The Ansible playbook installs and configures:
 1. **Tailscale** -- mesh VPN for secure remote access
 2. **UFW firewall** -- SSH + Tailscale ports only
 3. **Docker CE + Compose V2** -- for the default agent sandbox backend
-4. **Node.js 24 + pnpm** -- runtime dependencies (Node 22 LTS, currently `22.14+`, remains supported)
+4. **Node.js 24 + pnpm** -- runtime dependencies (Node 22 LTS, currently `22.19+`, remains supported)
 5. **OpenClaw** -- host-based, not containerized
 6. **Systemd service** -- auto-start with security hardening
 
@@ -177,6 +175,7 @@ This is idempotent and safe to run multiple times.
     - Ensure you can access via Tailscale VPN first
     - SSH access (port 22) is always allowed
     - The gateway is only accessible via Tailscale by design
+
   </Accordion>
   <Accordion title="Service will not start">
     ```bash
@@ -201,9 +200,11 @@ This is idempotent and safe to run multiple times.
     # Check sandbox image
     sudo docker images | grep openclaw-sandbox
 
-    # Build sandbox image if missing
+    # Build sandbox image if missing (requires source checkout)
     cd /opt/openclaw/openclaw
     sudo -u openclaw ./scripts/sandbox-setup.sh
+    # For npm installs without a source checkout, see
+    # https://docs.openclaw.ai/gateway/sandboxing#images-and-setup
     ```
 
   </Accordion>

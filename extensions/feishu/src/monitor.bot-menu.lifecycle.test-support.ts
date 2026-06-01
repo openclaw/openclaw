@@ -1,5 +1,5 @@
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./lifecycle.test-support.js";
 import {
   getFeishuLifecycleTestMocks,
@@ -31,9 +31,7 @@ const {
   touchBindingMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
-
-let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
+let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
   accountId: "acct-menu",
@@ -41,9 +39,11 @@ const lifecycleConfig = createFeishuLifecycleConfig({
   appSecret: "secret_test",
   channelConfig: {
     dmPolicy: "open",
+    allowFrom: ["ou_user1"],
   },
   accountConfig: {
     dmPolicy: "open",
+    allowFrom: ["ou_user1"],
   },
 });
 
@@ -53,6 +53,7 @@ const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   appSecret: "secret_test",
   config: {
     dmPolicy: "open",
+    allowFrom: ["ou_user1"],
   },
 });
 
@@ -74,9 +75,7 @@ async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
-    onRegister: (registered) => {
-      _handlers = registered;
-    },
+    onRegister: () => {},
     runtime: lastRuntime,
     cfg: lifecycleConfig,
     account: lifecycleAccount,
@@ -89,8 +88,7 @@ describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    _handlers = {};
-    lastRuntime = null;
+    lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-bot-menu");
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
@@ -188,6 +186,7 @@ describe("Feishu bot-menu lifecycle", () => {
         SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
         MessageSid: "bot-menu:quick-actions:1700000000001",
       }),
+      undefined,
     );
     expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
 

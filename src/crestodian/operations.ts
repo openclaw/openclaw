@@ -10,6 +10,14 @@ import type { CrestodianOverview } from "./overview.js";
 
 type ConfigModule = typeof import("../config/config.js");
 type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
+type CrestodianOverviewLoader = () => Promise<CrestodianOverview>;
+type CrestodianOverviewFormatter = (overview: CrestodianOverview) => string;
+
+const loadConfigModule = async () => await import("../config/config.js");
+const loadOverviewModule = async () => await import("./overview.js");
+const loadModelsSharedModule = async () => await import("../commands/models/shared.js");
+const loadConfigCliModule = async () => await import("../cli/config-cli.js");
+const loadDoctorModule = async () => await import("../commands/doctor.js");
 
 export type CrestodianOperation =
   | { kind: "none"; message: string }
@@ -34,6 +42,10 @@ export type CrestodianOperation =
   | { kind: "gateway-restart" }
   | { kind: "agents" }
   | { kind: "models" }
+  | { kind: "plugin-list" }
+  | { kind: "plugin-search"; query: string }
+  | { kind: "plugin-install"; spec: string }
+  | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
   | { kind: "create-agent"; agentId: string; workspace?: string; model?: string }
   | { kind: "open-tui"; agentId?: string; workspace?: string }
@@ -47,6 +59,8 @@ export type CrestodianOperationResult = {
 };
 
 export type CrestodianCommandDeps = {
+  formatOverview?: CrestodianOverviewFormatter;
+  loadOverview?: CrestodianOverviewLoader;
   runAgentsAdd?: (
     opts: {
       name?: string;
@@ -67,6 +81,10 @@ export type CrestodianCommandDeps = {
   runGatewayRestart?: () => Promise<void>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
+  runPluginInstall?: (spec: string, runtime: RuntimeEnv) => Promise<void>;
+  runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
+  runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
+  runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
   runTui?: (opts: {
     local: boolean;
     session?: string;
@@ -89,11 +107,18 @@ const CONFIG_SET_REF_RE =
   /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+(?<path>[A-Za-z0-9_.[\]-]+)\s+(?:(?<source>env|file|exec)\s+)?(?<id>\S+)(?:\s+provider\s+(?<provider>[A-Za-z0-9_-]+))?$/i;
 const SETUP_RE =
   /^(?:setup(?!\s+agent\b)|set\s+me\s+up|set\s+up\s+openclaw|onboard|onboard\s+me|bootstrap|first\s+run)(?:\b|$)/i;
+const PLUGIN_LIST_RE = /^(?:plugins?|clawhub)\s+list$|^list\s+plugins?$/i;
+const PLUGIN_SEARCH_RE =
+  /^(?:(?:plugins?|clawhub)\s+search|search\s+plugins?(?:\s+for)?)\s+(?<query>.+)$/i;
+const PLUGIN_INSTALL_RE =
+  /^(?:(?:plugins?)\s+install|install\s+(?:(?<source>npm|clawhub)\s+)?plugins?)\s+(?<spec>\S+)$/i;
+const PLUGIN_UNINSTALL_RE =
+  /^(?:(?:plugins?)\s+(?:uninstall|remove)|(?:uninstall|remove)\s+plugins?)\s+(?<pluginId>[A-Za-z0-9_.@/-]+)$/i;
 
 const OPENAI_API_DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
-const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-7";
-const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-7";
-const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
+const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
+const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-8";
+const CODEX_APP_SERVER_DEFAULT_MODEL_REF = "openai/gpt-5.5";
 
 export function parseCrestodianOperation(input: string): CrestodianOperation {
   const trimmed = input.trim();
@@ -135,6 +160,27 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
     lower.includes("validate config")
   ) {
     return { kind: "config-validate" };
+  }
+  if (PLUGIN_LIST_RE.test(trimmed)) {
+    return { kind: "plugin-list" };
+  }
+  const pluginSearchMatch = trimmed.match(PLUGIN_SEARCH_RE);
+  if (pluginSearchMatch?.groups?.query?.trim()) {
+    return { kind: "plugin-search", query: pluginSearchMatch.groups.query.trim() };
+  }
+  const pluginInstallMatch = trimmed.match(PLUGIN_INSTALL_RE);
+  if (pluginInstallMatch?.groups?.spec?.trim()) {
+    return {
+      kind: "plugin-install",
+      spec: normalizePluginInstallSpec(
+        pluginInstallMatch.groups.spec.trim(),
+        pluginInstallMatch.groups.source,
+      ),
+    };
+  }
+  const pluginUninstallMatch = trimmed.match(PLUGIN_UNINSTALL_RE);
+  if (pluginUninstallMatch?.groups?.pluginId?.trim()) {
+    return { kind: "plugin-uninstall", pluginId: pluginUninstallMatch.groups.pluginId.trim() };
   }
   if (SETUP_RE.test(lower)) {
     const workspace = trimShellishToken(trimmed.match(WORKSPACE_RE)?.groups?.workspace);
@@ -228,6 +274,32 @@ function trimShellishToken(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+function normalizePluginInstallSpec(spec: string, source: string | undefined): string {
+  const trimmed = spec.trim();
+  const normalizedSource = source?.toLowerCase();
+  if (normalizedSource === "npm" && !trimmed.toLowerCase().startsWith("npm:")) {
+    return `npm:${trimmed}`;
+  }
+  if (normalizedSource === "clawhub" && !trimmed.toLowerCase().startsWith("clawhub:")) {
+    return `clawhub:${trimmed}`;
+  }
+  return trimmed;
+}
+
+function validateCrestodianPluginInstallSpec(spec: string): string | null {
+  const trimmed = spec.trim();
+  if (!trimmed) {
+    return "Plugin install spec is required.";
+  }
+  if (/\s/.test(trimmed)) {
+    return "Crestodian plugin install accepts one npm or ClawHub package spec.";
+  }
+  if (/^(?:\.{1,2}\/|\/|~\/|file:|git(?:\+ssh|\+https)?:|https?:)/i.test(trimmed)) {
+    return "Crestodian plugin install accepts npm or ClawHub package specs only.";
+  }
+  return null;
+}
+
 export function isPersistentCrestodianOperation(operation: CrestodianOperation): boolean {
   return (
     operation.kind === "set-default-model" ||
@@ -235,6 +307,8 @@ export function isPersistentCrestodianOperation(operation: CrestodianOperation):
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "doctor-fix" ||
+    operation.kind === "plugin-install" ||
+    operation.kind === "plugin-uninstall" ||
     operation.kind === "create-agent" ||
     operation.kind === "gateway-start" ||
     operation.kind === "gateway-stop" ||
@@ -254,6 +328,10 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
       return formatSetupPlanDescription(operation);
     case "doctor-fix":
       return "run doctor repairs";
+    case "plugin-install":
+      return `install plugin ${operation.spec}`;
+    case "plugin-uninstall":
+      return `uninstall plugin ${operation.pluginId}`;
     case "create-agent":
       return `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`;
     case "gateway-start":
@@ -313,7 +391,7 @@ function chooseSetupModel(
     return { model: CLAUDE_CLI_DEFAULT_MODEL_REF, source: "Claude Code CLI" };
   }
   if (overview.tools.codex.found) {
-    return { model: CODEX_CLI_DEFAULT_MODEL_REF, source: "Codex CLI" };
+    return { model: CODEX_APP_SERVER_DEFAULT_MODEL_REF, source: "Codex app-server" };
   }
   return { source: "none" };
 }
@@ -348,15 +426,36 @@ async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Pro
 }
 
 async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const { readConfigFileSnapshot } = await loadConfigModule();
   return await readConfigFileSnapshot();
+}
+
+async function loadOverviewForOperation(
+  deps: CrestodianCommandDeps | undefined,
+): Promise<CrestodianOverview> {
+  if (deps?.loadOverview) {
+    return await deps.loadOverview();
+  }
+  const { loadCrestodianOverview } = await loadOverviewModule();
+  return await loadCrestodianOverview();
+}
+
+async function formatOverviewForOperation(
+  overview: CrestodianOverview,
+  deps: CrestodianCommandDeps | undefined,
+): Promise<string> {
+  if (deps?.formatOverview) {
+    return deps.formatOverview(overview);
+  }
+  const { formatCrestodianOverview } = await loadOverviewModule();
+  return formatCrestodianOverview(overview);
 }
 
 async function loadConfigFileMutationHelpers(): Promise<{
   mutateConfigFile: ConfigModule["mutateConfigFile"];
   readConfigFileSnapshot: ConfigModule["readConfigFileSnapshot"];
 }> {
-  const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
+  const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
   return { mutateConfigFile, readConfigFileSnapshot };
 }
 
@@ -388,9 +487,9 @@ function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
 async function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
+  deps?: CrestodianCommandDeps;
 }): Promise<string | undefined> {
-  const { loadCrestodianOverview } = await import("./overview.js");
-  const overview = await loadCrestodianOverview();
+  const overview = await loadOverviewForOperation(params.deps);
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;
@@ -429,14 +528,12 @@ export async function executeCrestodianOperation(
     return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
   }
   if (operation.kind === "overview") {
-    const { formatCrestodianOverview, loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
-    runtime.log(formatCrestodianOverview(overview));
+    const overview = await loadOverviewForOperation(opts.deps);
+    runtime.log(await formatOverviewForOperation(overview, opts.deps));
     return { applied: false };
   }
   if (operation.kind === "agents") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     runtime.log(
       [
         "Agents:",
@@ -456,8 +553,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "models") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     runtime.log(
       [
         `Default model: ${overview.defaultModel ?? "not configured"}`,
@@ -467,6 +563,30 @@ export async function executeCrestodianOperation(
         `Anthropic key: ${overview.tools.apiKeys.anthropic ? "found" : "not found"}`,
       ].join("\n"),
     );
+    return { applied: false };
+  }
+  if (operation.kind === "plugin-list") {
+    logQueued(runtime, "plugins.list");
+    const runPluginsList =
+      opts.deps?.runPluginsList ??
+      (async (pluginRuntime: RuntimeEnv) => {
+        const { runPluginsListCommand } = await import("../cli/plugins-list-command.js");
+        await runPluginsListCommand({}, pluginRuntime);
+      });
+    await runPluginsList(runtime);
+    runtime.log("[crestodian] done: plugins.list");
+    return { applied: false };
+  }
+  if (operation.kind === "plugin-search") {
+    logQueued(runtime, "plugins.search");
+    const runPluginsSearch =
+      opts.deps?.runPluginsSearch ??
+      (async (query: string, pluginRuntime: RuntimeEnv) => {
+        const { runPluginsSearchCommand } = await import("../cli/plugins-search-command.js");
+        await runPluginsSearchCommand(query, {}, pluginRuntime);
+      });
+    await runPluginsSearch(operation.query, runtime);
+    runtime.log("[crestodian] done: plugins.search");
     return { applied: false };
   }
   if (operation.kind === "audit") {
@@ -480,8 +600,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "setup") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     const setupModel = chooseSetupModel(overview, operation.model);
     if (!opts.approved) {
       const message = [
@@ -500,7 +619,7 @@ export async function executeCrestodianOperation(
     const before = await readConfigFileSnapshot();
     const workspace = resolveUserPath(operation.workspace ?? process.cwd());
     const applyDefaultModelPrimaryUpdate = setupModel.model
-      ? (await import("../commands/models/shared.js")).applyDefaultModelPrimaryUpdate
+      ? (await loadModelsSharedModule()).applyDefaultModelPrimaryUpdate
       : undefined;
     const result = await mutateConfigFile({
       base: "source",
@@ -561,12 +680,12 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.set");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
     const runConfigSet =
       opts.deps?.runConfigSet ??
       (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
-        const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
+        const { runConfigSet: importedRunConfigSet } = await loadConfigCliModule();
         await importedRunConfigSet({
           ...setOpts,
           runtime: createNoExitRuntime(runtime),
@@ -599,12 +718,12 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.setRef");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
     const runConfigSet =
       opts.deps?.runConfigSet ??
       (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
-        const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
+        const { runConfigSet: importedRunConfigSet } = await loadConfigCliModule();
         await importedRunConfigSet({
           ...setOpts,
           runtime: createNoExitRuntime(runtime),
@@ -635,6 +754,74 @@ export async function executeCrestodianOperation(
     runtime.log("[crestodian] done: config.setRef");
     return { applied: true };
   }
+  if (operation.kind === "plugin-install") {
+    if (!opts.approved) {
+      const message = formatCrestodianPersistentPlan(operation);
+      runtime.log(message);
+      return { applied: false, message };
+    }
+    const validationError = validateCrestodianPluginInstallSpec(operation.spec);
+    if (validationError) {
+      runtime.error(validationError);
+      runtime.exit(1);
+      return { applied: false };
+    }
+    logQueued(runtime, "plugin.install");
+    const before = await readConfigFileSnapshotLazy();
+    const runPluginInstall =
+      opts.deps?.runPluginInstall ??
+      (async (spec: string, pluginRuntime: RuntimeEnv) => {
+        const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
+        await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
+      });
+    await runPluginInstall(operation.spec, createNoExitRuntime(runtime));
+    const after = await readConfigFileSnapshotLazy();
+    await appendCrestodianAuditEntry({
+      operation: "plugin.install",
+      summary: `Installed plugin ${operation.spec}`,
+      configPath: after.path || before.path || undefined,
+      configHashBefore: before.hash ?? null,
+      configHashAfter: after.hash ?? null,
+      details: {
+        ...opts.auditDetails,
+        spec: operation.spec,
+      },
+    });
+    runtime.log("[crestodian] done: plugin.install");
+    runtime.log("Restart the Gateway to apply installed plugin changes.");
+    return { applied: true };
+  }
+  if (operation.kind === "plugin-uninstall") {
+    if (!opts.approved) {
+      const message = formatCrestodianPersistentPlan(operation);
+      runtime.log(message);
+      return { applied: false, message };
+    }
+    logQueued(runtime, "plugin.uninstall");
+    const before = await readConfigFileSnapshotLazy();
+    const runPluginUninstall =
+      opts.deps?.runPluginUninstall ??
+      (async (pluginId: string, pluginRuntime: RuntimeEnv) => {
+        const { runPluginUninstallCommand } = await import("../cli/plugins-uninstall-command.js");
+        await runPluginUninstallCommand(pluginId, { force: true }, pluginRuntime);
+      });
+    await runPluginUninstall(operation.pluginId, createNoExitRuntime(runtime));
+    const after = await readConfigFileSnapshotLazy();
+    await appendCrestodianAuditEntry({
+      operation: "plugin.uninstall",
+      summary: `Uninstalled plugin ${operation.pluginId}`,
+      configPath: after.path || before.path || undefined,
+      configHashBefore: before.hash ?? null,
+      configHashAfter: after.hash ?? null,
+      details: {
+        ...opts.auditDetails,
+        pluginId: operation.pluginId,
+      },
+    });
+    runtime.log("[crestodian] done: plugin.uninstall");
+    runtime.log("Restart the Gateway to apply plugin changes.");
+    return { applied: true };
+  }
   if (operation.kind === "create-agent") {
     if (!opts.approved) {
       const message = formatCrestodianPersistentPlan(operation);
@@ -642,7 +829,7 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "agents.create");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
     const workspace = resolveUserPath(operation.workspace ?? process.cwd());
     const runAgentsAdd =
@@ -677,7 +864,7 @@ export async function executeCrestodianOperation(
   }
   if (operation.kind === "doctor") {
     logQueued(runtime, "doctor");
-    const runDoctor = opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
+    const runDoctor = opts.deps?.runDoctor ?? (await loadDoctorModule()).doctorCommand;
     await runDoctor(runtime, { nonInteractive: true });
     runtime.log("[crestodian] done: doctor");
     return { applied: false };
@@ -689,9 +876,9 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "doctor.fix");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
-    const runDoctor = opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
+    const runDoctor = opts.deps?.runDoctor ?? (await loadDoctorModule()).doctorCommand;
     await runDoctor(runtime, { nonInteractive: true, repair: true, yes: true });
     const after = await readConfigFileSnapshot();
     await appendCrestodianAuditEntry({
@@ -720,8 +907,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "gateway-status") {
-    const { loadCrestodianOverview } = await import("./overview.js");
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForOperation(opts.deps);
     runtime.log(formatGatewayStatusLine(overview));
     return { applied: false };
   }
@@ -782,6 +968,7 @@ export async function executeCrestodianOperation(
     const agentId = await resolveTuiAgentId({
       requestedAgentId: operation.agentId,
       requestedWorkspace: operation.workspace,
+      deps: opts.deps,
     });
     const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
     const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
@@ -808,7 +995,7 @@ export async function executeCrestodianOperation(
     logQueued(runtime, "config.setDefaultModel");
     const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigFileMutationHelpers();
     const before = await readConfigFileSnapshot();
-    const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
+    const { applyDefaultModelPrimaryUpdate } = await loadModelsSharedModule();
     const result = await mutateConfigFile({
       base: "source",
       mutate: (cfg) => {

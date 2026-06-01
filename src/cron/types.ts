@@ -1,4 +1,5 @@
-import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
@@ -30,8 +31,15 @@ export type CronDelivery = {
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
+  /** Additional webhook destination used when a job must keep chat delivery. */
+  completionDestination?: CronCompletionDestination;
   /** Separate destination for failure notifications. */
   failureDestination?: CronFailureDestination;
+};
+
+export type CronCompletionDestination = {
+  mode: "webhook";
+  to?: string;
 };
 
 export type CronFailureDestination = {
@@ -41,7 +49,21 @@ export type CronFailureDestination = {
   mode?: "announce" | "webhook";
 };
 
-export type CronDeliveryPatch = Partial<CronDelivery>;
+export type CronFailureDestinationPatch = {
+  channel?: CronMessageChannel | null;
+  to?: string | null;
+  accountId?: string | null;
+  mode?: "announce" | "webhook" | null;
+};
+
+export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
+  channel?: CronMessageChannel | null;
+  to?: string | null;
+  threadId?: string | number | null;
+  accountId?: string | null;
+  completionDestination?: CronCompletionDestination | null;
+  failureDestination?: CronFailureDestinationPatch | null;
+};
 
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
@@ -69,6 +91,13 @@ export type CronDeliveryTrace = {
   delivered?: boolean;
 };
 
+export type CronFailureNotificationDelivery = {
+  /** Whether the last failed run's failure notification reached the target channel. */
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+};
+
 export type CronDeliveryPreview = {
   label: string;
   detail: string;
@@ -88,6 +117,32 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
+
+export type CronRunDiagnosticSource =
+  | "cron-preflight"
+  | "cron-setup"
+  | "model-preflight"
+  | "agent-run"
+  | "tool"
+  | "exec"
+  | "delivery";
+
+export type CronRunDiagnostic = {
+  ts: number;
+  source: CronRunDiagnosticSource;
+  severity: CronRunDiagnosticSeverity;
+  message: string;
+  toolName?: string;
+  exitCode?: number | null;
+  truncated?: boolean;
+};
+
+export type CronRunDiagnostics = {
+  summary?: string;
+  entries: CronRunDiagnostic[];
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -96,6 +151,30 @@ export type CronRunOutcome = {
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  diagnostics?: CronRunDiagnostics;
+};
+
+export type CronAgentExecutionPhase = EmbeddedAgentExecutionPhase;
+
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  phase?: CronAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
+  firstModelCallStarted?: boolean;
+};
+
+export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
+  phase: CronAgentExecutionPhase;
 };
 
 export type CronFailureAlert = {
@@ -147,9 +226,11 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  lastDiagnostics?: CronRunDiagnostics;
+  lastDiagnosticSummary?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;
   lastDurationMs?: number;
@@ -167,6 +248,12 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Whether the last failed run's failure notification was delivered to the target channel. */
+  lastFailureNotificationDelivered?: boolean;
+  /** Delivery outcome for the last failed run's failure notification. */
+  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+  /** Delivery-specific error for the last failed run's failure notification. */
+  lastFailureNotificationDeliveryError?: string;
 };
 
 export type CronJob = CronJobBase<
@@ -189,7 +276,9 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
   state?: Partial<CronJobState>;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
+export type CronJobPatch = Partial<
+  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery">
+> & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

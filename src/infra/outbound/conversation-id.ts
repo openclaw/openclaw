@@ -1,7 +1,8 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 
 function resolveExplicitConversationTargetId(target: string): string | undefined {
   for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
@@ -16,8 +17,7 @@ export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
 }): string | undefined {
-  const threadId =
-    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
+  const threadId = stringifyRouteThreadId(params.threadId);
   if (threadId) {
     return threadId;
   }

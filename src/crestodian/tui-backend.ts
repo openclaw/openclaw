@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { SessionsPatchParams, SessionsPatchResult } from "../gateway/protocol/index.js";
+import type {
+  SessionsPatchParams,
+  SessionsPatchResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
@@ -10,7 +13,7 @@ import type {
   TuiModelChoice,
   TuiSessionList,
 } from "../tui/tui-backend.js";
-import { runTui } from "../tui/tui.js";
+import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
 import { approvalQuestion, isYes, resolveCrestodianOperation } from "./dialogue.js";
 import {
@@ -21,10 +24,13 @@ import {
 } from "./operations.js";
 import { formatCrestodianStartupMessage, loadCrestodianOverview } from "./overview.js";
 
+type RunTui = typeof defaultRunTui;
+
 export type CrestodianTuiOptions = {
   yes?: boolean;
   deps?: CrestodianCommandDeps;
   planWithAssistant?: CrestodianAssistantPlanner;
+  runTui?: RunTui;
 };
 
 type CrestodianHistoryMessage = {
@@ -50,6 +56,13 @@ function createCaptureRuntime(): CaptureRuntime {
     },
     read: () => lines.join("\n").trim(),
   };
+}
+
+async function loadOverviewForTui(opts: CrestodianTuiOptions) {
+  if (opts.deps?.loadOverview) {
+    return await opts.deps.loadOverview();
+  }
+  return await loadCrestodianOverview();
 }
 
 function message(role: "assistant" | "user", text: string): CrestodianHistoryMessage {
@@ -143,7 +156,7 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async listSessions(): Promise<TuiSessionList> {
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForTui(this.opts);
     const model = splitModelRef(overview.defaultModel);
     return {
       ts: Date.now(),
@@ -200,7 +213,7 @@ class CrestodianTuiBackend implements TuiBackend {
 
   async resetSession(): Promise<{ ok: boolean }> {
     this.pending = null;
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForTui(this.opts);
     this.messages.splice(
       0,
       this.messages.length,
@@ -210,7 +223,7 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async getGatewayStatus(): Promise<string> {
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForTui(this.opts);
     return overview.gateway.reachable ? "Gateway reachable" : "Gateway unreachable";
   }
 
@@ -316,8 +329,9 @@ export async function runCrestodianTui(
 ): Promise<void> {
   let nextInput: string | undefined;
   for (;;) {
-    const overview = await loadCrestodianOverview();
+    const overview = await loadOverviewForTui(opts);
     const backend = new CrestodianTuiBackend(opts, formatCrestodianStartupMessage(overview));
+    const runTui = opts.runTui ?? defaultRunTui;
     await runTui({
       local: true,
       session: CRESTODIAN_SESSION_KEY,

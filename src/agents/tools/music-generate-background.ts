@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -7,7 +8,7 @@ import {
 
 export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
 
-const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
+export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   toolName: "music_generate",
   taskKind: MUSIC_GENERATION_TASK_KIND,
   label: "Music generation",
@@ -41,8 +42,9 @@ export async function wakeMusicGenerationTaskCompletion(params: {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
 }) {
-  await musicGenerationTaskLifecycle.wakeTaskCompletion(params);
+  return await musicGenerationTaskLifecycle.wakeTaskCompletion(params);
 }

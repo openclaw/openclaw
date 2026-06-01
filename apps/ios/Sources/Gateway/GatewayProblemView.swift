@@ -3,6 +3,8 @@ import SwiftUI
 import UIKit
 
 struct GatewayProblemBanner: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let problem: GatewayConnectionProblem
     var primaryActionTitle: String?
     var onPrimaryAction: (() -> Void)?
@@ -57,60 +59,65 @@ struct GatewayProblemBanner: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(
-            .thinMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThickMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(self.colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(self.colorScheme == .dark ? 0.18 : 0.08), radius: 18, y: 8)
+        }
     }
 
     private var iconName: String {
         switch self.problem.kind {
         case .pairingRequired,
-            .pairingRoleUpgradeRequired,
-            .pairingScopeUpgradeRequired,
-            .pairingMetadataUpgradeRequired:
-            return "person.crop.circle.badge.clock"
+             .pairingRoleUpgradeRequired,
+             .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired:
+            "person.crop.circle.badge.clock"
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            return "wifi.exclamationmark"
+            "wifi.exclamationmark"
         case .deviceIdentityRequired,
-            .deviceSignatureExpired,
-            .deviceNonceRequired,
-            .deviceNonceMismatch,
-            .deviceSignatureInvalid,
-            .devicePublicKeyInvalid,
-            .deviceIdMismatch:
-            return "lock.shield"
+             .deviceSignatureExpired,
+             .deviceNonceRequired,
+             .deviceNonceMismatch,
+             .deviceSignatureInvalid,
+             .devicePublicKeyInvalid,
+             .deviceIdMismatch:
+            "lock.shield"
         default:
-            return "exclamationmark.triangle.fill"
+            "exclamationmark.triangle.fill"
         }
     }
 
     private var tint: Color {
         switch self.problem.kind {
         case .pairingRequired,
-            .pairingRoleUpgradeRequired,
-            .pairingScopeUpgradeRequired,
-            .pairingMetadataUpgradeRequired:
-            return .orange
+             .pairingRoleUpgradeRequired,
+             .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired:
+            .orange
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            return .yellow
+            .yellow
         default:
-            return .red
+            .red
         }
     }
 
     private var ownerLabel: String {
         switch self.problem.owner {
         case .gateway:
-            return "Fix on gateway"
+            "Fix on gateway"
         case .iphone:
-            return "Fix on iPhone"
+            "Fix on iPhone"
         case .both:
-            return "Check both"
+            "Check both"
         case .network:
-            return "Check network"
+            "Check network"
         case .unknown:
-            return "Needs attention"
+            "Needs attention"
         }
     }
 }
@@ -218,15 +225,15 @@ struct GatewayProblemDetailsSheet: View {
     private var ownerSummary: String {
         switch self.problem.owner {
         case .gateway:
-            return "Primary fix: gateway"
+            "Primary fix: gateway"
         case .iphone:
-            return "Primary fix: this iPhone"
+            "Primary fix: this iPhone"
         case .both:
-            return "Primary fix: check both this iPhone and the gateway"
+            "Primary fix: check both this iPhone and the gateway"
         case .network:
-            return "Primary fix: network or remote access"
+            "Primary fix: network or remote access"
         case .unknown:
-            return "Primary fix: review details and retry"
+            "Primary fix: review details and retry"
         }
     }
 }

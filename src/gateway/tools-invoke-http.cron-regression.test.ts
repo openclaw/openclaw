@@ -19,6 +19,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => cfg,
+}));
+
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
@@ -31,11 +35,11 @@ vi.mock("../logger.js", () => ({
   logWarn: noWarnLog,
 }));
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig,
 }));
 
-vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook,
 }));
 
@@ -85,7 +89,7 @@ beforeAll(async () => {
       }
       res.statusCode = 404;
       res.end("not found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       res.statusCode = 500;
       res.end(String(err));
     });
@@ -104,7 +108,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server?.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server?.close(() => resolve());
+  });
   server = undefined;
 });
 

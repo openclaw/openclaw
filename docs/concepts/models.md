@@ -16,14 +16,14 @@ sidebarTitle: "Models CLI"
     Quick provider overview and examples.
   </Card>
   <Card title="Agent runtimes" href="/concepts/agent-runtimes">
-    PI, Codex, and other agent loop runtimes.
+    OpenClaw, Codex, and other agent loop runtimes.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults">
     Model config keys.
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. For example, `openai/gpt-5.5` can run through the normal OpenAI provider path or through the Codex app-server runtime, depending on `agents.defaults.agentRuntime.id`. See [Agent runtimes](/concepts/agent-runtimes).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the external GitHub Copilot agent runtime plugin — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## How model selection works
 
@@ -43,15 +43,28 @@ OpenClaw selects models in this order:
 
 <AccordionGroup>
   <Accordion title="Related model surfaces">
-    - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
+    - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases). Use `provider/*` entries to limit visible providers while keeping provider discovery dynamic.
     - `agents.defaults.imageModel` is used **only when** the primary model can't accept images.
     - `agents.defaults.pdfModel` is used by the `pdf` tool. If omitted, the tool falls back to `agents.defaults.imageModel`, then the resolved session/default model.
     - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
     - `agents.defaults.musicGenerationModel` is used by the shared music-generation capability. If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
     - `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
     - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [Multi-agent routing](/concepts/multi-agent)).
+
   </Accordion>
 </AccordionGroup>
+
+## Selection source and fallback behavior
+
+The same `provider/model` can mean different things depending on where it came from:
+
+- Configured defaults (`agents.defaults.model.primary` and agent-specific primaries) are the normal starting point and use `agents.defaults.model.fallbacks`.
+- Auto fallback selections are temporary recovery state. They are stored with `modelOverrideSource: "auto"` so later turns can keep using the fallback chain without probing a known-bad primary every time; OpenClaw periodically probes the original primary again, clears the auto selection when it recovers, and announces fallback/recovery transitions once per state change.
+- User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
+- Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, switch the current session with `/model Y` or clear stale session state with `/reset`.
+- Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
+- CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
+- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, including provider-wide `provider/*` entries, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
 
 ## Quick model policy
 
@@ -76,11 +89,12 @@ It can set up model + auth for common providers, including **OpenAI Code (Codex)
 - `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.videoGenerationModel.primary` and `agents.defaults.videoGenerationModel.fallbacks`
-- `agents.defaults.models` (allowlist + aliases + provider params)
+- `agents.defaults.models` (allowlist + aliases + provider params + `provider/*` dynamic provider entries)
 - `models.providers` (custom providers written into `models.json`)
 
 <Note>
-Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize to `zai/*`.
+Model refs are normalized to lowercase. Provider IDs are otherwise exact; use the
+provider ID advertised by the plugin.
 
 Provider configuration examples (including OpenCode) live in [OpenCode](/providers/opencode).
 </Note>
@@ -107,7 +121,8 @@ openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for session overrides. When a user selects a model that isn't in that allowlist, OpenClaw returns:
 
 ```
-Model "provider/model" is not allowed. Use /model to list available models.
+Model "provider/model" is not allowed. Use /models to list providers, or /models <provider> to list models.
+Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
 ```
 
 <Warning>
@@ -116,17 +131,49 @@ This happens **before** a normal reply is generated, so the message can feel lik
 - Add the model to `agents.defaults.models`, or
 - Clear the allowlist (remove `agents.defaults.models`), or
 - Pick a model from `/model list`.
-  </Warning>
+
+</Warning>
+
+When the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same `/model ... --runtime ...` command. For native Codex execution, the selected model is still `openai/gpt-5.5`; the `codex` runtime selects the harness and uses Codex auth separately.
+
+For local/GGUF models, store the full provider-prefixed ref in the allowlist,
+for example `ollama/gemma4:26b`, `lmstudio/Gemma4-26b-a4-it-gguf`, or the
+exact provider/model shown by `openclaw models list --provider <provider>`.
+Bare local filenames or display names are not enough when the allowlist is
+active.
+
+If you want to limit providers without manually listing every model, add
+`provider/*` entries to `agents.defaults.models`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/*": {},
+        "vllm/*": {},
+      },
+    },
+  },
+}
+```
+
+With that policy, `/model`, `/models`, and model pickers show the discovered
+catalog for those providers only. New models from the selected providers can
+appear without editing the allowlist. Exact `provider/model` entries can be mixed
+with `provider/*` entries when you need one specific model from another provider.
 
 Example allowlist config:
 
 ```json5
 {
-  agent: {
-    model: { primary: "anthropic/claude-sonnet-4-6" },
-    models: {
-      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-      "anthropic/claude-opus-4-6": { alias: "Opus" },
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-sonnet-4-6" },
+      models: {
+        "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
+      },
     },
   },
 }
@@ -148,15 +195,19 @@ You can switch models for the current session without restarting:
   <Accordion title="Picker behavior">
     - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
     - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
+    - On Telegram, `/models` picker selections are session-scoped; they do not change the agent's persistent default in `openclaw.json`.
     - `/models add` is deprecated and now returns a deprecation message instead of registering models from chat.
     - `/model <#>` selects from that picker.
+
   </Accordion>
   <Accordion title="Persistence and live switching">
     - `/model` persists the new session selection immediately.
     - If the agent is idle, the next run uses the new model right away.
     - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
     - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+    - A user-selected `/model` ref is strict for that session: if the selected provider/model is unreachable, the reply fails visibly instead of silently answering from `agents.defaults.model.fallbacks`. This is different from configured defaults and cron job primaries, which can still use fallback chains.
     - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
+
   </Accordion>
   <Accordion title="Ref parsing">
     - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
@@ -197,7 +248,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-Shows configured models by default. Useful flags:
+Shows configured/auth-available models by default. Useful flags:
 
 <ParamField path="--all" type="boolean">
   Full catalog. Includes bundled provider-owned static catalog rows before auth is configured, so discovery-only views can show models that are unavailable until you add matching provider credentials.
@@ -226,6 +277,7 @@ Shows the resolved primary model, fallbacks, image model, and an auth overview o
     - Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
     - Use `--probe` for live auth checks; probe rows can come from auth profiles, env credentials, or `models.json`.
     - If explicit `auth.order.<provider>` omits a stored profile, probe reports `excluded_by_auth_order` instead of trying it. If auth exists but no probeable model can be resolved for that provider, probe reports `status: no_model`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -288,7 +340,7 @@ When live probes run in a TTY, you can select fallbacks interactively. In non-in
 
 ## Models registry (`models.json`)
 
-Custom providers in `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file is merged by default unless `models.mode` is set to `replace`.
+Custom providers in `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored as generated plugin-owned catalog shards under the agent's plugin state and loaded automatically. This file is merged by default unless `models.mode` is set to `replace`.
 
 <AccordionGroup>
   <Accordion title="Merge mode precedence">
@@ -310,7 +362,7 @@ Marker persistence is source-authoritative: OpenClaw writes markers from the act
 
 ## Related
 
-- [Agent runtimes](/concepts/agent-runtimes) — PI, Codex, and other agent loop runtimes
+- [Agent runtimes](/concepts/agent-runtimes) — OpenClaw, Codex, and other agent loop runtimes
 - [Configuration reference](/gateway/config-agents#agent-defaults) — model config keys
 - [Image generation](/tools/image-generation) — image model configuration
 - [Model failover](/concepts/model-failover) — fallback chains

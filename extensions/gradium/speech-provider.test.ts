@@ -1,4 +1,4 @@
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/testing";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGradiumSpeechProvider } from "./speech-provider.js";
 
@@ -6,6 +6,14 @@ describe("gradium speech provider", () => {
   installPinnedHostnameTestHooks();
 
   const provider = buildGradiumSpeechProvider();
+
+  const firstFetchCall = (fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] => {
+    const call = fetchMock.mock.calls[0] as [string, RequestInit] | undefined;
+    if (!call) {
+      throw new Error("expected Gradium fetch call");
+    }
+    return call;
+  };
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -52,7 +60,7 @@ describe("gradium speech provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = firstFetchCall(fetchMock);
     expect(url).toBe("https://api.gradium.ai/api/post/speech/tts");
     const headers = new Headers(init.headers);
     expect(headers.get("x-api-key")).toBe("gsk_test123");
@@ -82,7 +90,7 @@ describe("gradium speech provider", () => {
       timeoutMs: 30_000,
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchMock);
     expect(JSON.parse(init.body as string).output_format).toBe("opus");
     expect(result.outputFormat).toBe("opus");
     expect(result.fileExtension).toBe(".opus");
@@ -90,20 +98,54 @@ describe("gradium speech provider", () => {
     expect(result.audioBuffer).toEqual(audioData);
   });
 
+  it("applies the configured media byte cap to synthesized audio", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(new Uint8Array(2048), { status: 200 })),
+    );
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 0.001,
+            },
+          },
+        } as never,
+        providerConfig: { apiKey: "gsk_test123" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Gradium TTS audio response exceeds");
+  });
+
   it("uses ulaw_8000 for telephony synthesis", async () => {
     const audioData = Buffer.from("ulaw-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const synthesizeTelephony = provider.synthesizeTelephony;
+    if (!synthesizeTelephony) {
+      throw new Error("Expected Gradium provider synthesizeTelephony");
+    }
 
-    const result = await provider.synthesizeTelephony!({
+    const result = await synthesizeTelephony({
       text: "Telephony test",
       cfg: {} as never,
-      providerConfig: { apiKey: "gsk_test123" },
+      providerConfig: { apiKey: "gsk_test123", voiceId: "default-voice" },
+      providerOverrides: { voiceId: "override-voice" },
       timeoutMs: 30_000,
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string).output_format).toBe("ulaw_8000");
+    const [, init] = firstFetchCall(fetchMock);
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: "Telephony test",
+      voice_id: "override-voice",
+      only_audio: true,
+      output_format: "ulaw_8000",
+      json_config: '{"padding_bonus":0}',
+    });
     expect(result.outputFormat).toBe("ulaw_8000");
     expect(result.sampleRate).toBe(8_000);
     expect(result.audioBuffer).toEqual(audioData);

@@ -1,16 +1,22 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
-  findNormalizedProviderKey,
-  findNormalizedProviderValue,
-  normalizeProviderId,
-  normalizeProviderIdForAuth,
-} from "./provider-id.js";
+  findNormalizedProviderKey as findNormalizedProviderKeyCore,
+  findNormalizedProviderValue as findNormalizedProviderValueCore,
+  normalizeProviderId as normalizeProviderIdCore,
+  normalizeProviderIdForAuth as normalizeProviderIdForAuthCore,
+} from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 export type ModelRef = {
   provider: string;
   model: string;
+};
+
+export type ModelManifestNormalizationContext = {
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
 export function modelKey(provider: string, model: string) {
@@ -28,19 +34,41 @@ export function legacyModelKey(provider: string, model: string): string | null {
   return rawKey === canonicalKey ? null : rawKey;
 }
 
-export {
-  findNormalizedProviderKey,
-  findNormalizedProviderValue,
-  normalizeProviderId,
-  normalizeProviderIdForAuth,
-};
+export function normalizeProviderId(provider: string): string {
+  return normalizeProviderIdCore(provider);
+}
+
+export function normalizeProviderIdForAuth(provider: string): string {
+  return normalizeProviderIdForAuthCore(provider);
+}
+
+export function findNormalizedProviderValue<T>(
+  entries: Record<string, T> | undefined,
+  provider: string,
+): T | undefined {
+  return findNormalizedProviderValueCore(entries, provider);
+}
+
+export function findNormalizedProviderKey(
+  entries: Record<string, unknown> | undefined,
+  provider: string,
+): string | undefined {
+  return findNormalizedProviderKeyCore(entries, provider);
+}
 
 function normalizeProviderModelId(
   provider: string,
   model: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: ModelManifestNormalizationContext & {
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  },
 ): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model);
+  const providerModel = stripSelfProviderModelPrefix(provider, model);
+  const staticModelId = normalizeStaticProviderModelId(provider, providerModel, {
+    allowManifestNormalization: options?.allowManifestNormalization,
+    manifestPlugins: options?.manifestPlugins,
+  });
   if (options?.allowPluginNormalization === false) {
     return staticModelId;
   }
@@ -55,7 +83,8 @@ function normalizeProviderModelId(
   );
 }
 
-type ModelRefNormalizeOptions = {
+type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 };
 

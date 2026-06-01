@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
-import { performMatrixRequest } from "./transport.js";
+import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -52,6 +52,35 @@ describe("performMatrixRequest", () => {
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+  });
+
+  it("rejects malformed raw content-length before buffering the body", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-length": "0x3" }),
+            arrayBuffer,
+          }) as unknown as Response,
+      ),
+    );
+
+    await expect(
+      performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/media/v3/download/example/id",
+        timeoutMs: 5000,
+        raw: true,
+        maxBytes: 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow("invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
   it("applies streaming byte limits when raw responses omit content-length", async () => {
@@ -133,7 +162,10 @@ describe("performMatrixRequest", () => {
     }) as typeof fetch);
     const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expect(
+        (requestInit.dispatcher as { constructor?: { name?: string } } | undefined)?.constructor
+          ?.name,
+      ).toBe("MockAgent");
       return new Response('{"ok":true}', {
         status: 200,
         headers: {
@@ -155,8 +187,72 @@ describe("performMatrixRequest", () => {
     expect(result.text).toBe('{"ok":true}');
     expect(ambientFetchCalls).toBe(0);
     expect(runtimeFetch).toHaveBeenCalledTimes(1);
-    expect(
-      (runtimeFetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
-    ).toBeDefined();
+    const dispatcher = (
+      runtimeFetch.mock.calls.at(0)?.[1] as RequestInit & { dispatcher?: unknown }
+    )?.dispatcher;
+    expect((dispatcher as { constructor?: { name?: string } } | undefined)?.constructor?.name).toBe(
+      "MockAgent",
+    );
+  });
+});
+
+describe("createMatrixGuardedFetch", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  afterEach(() => {
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  it("strips matrix-js-sdk state_after sync opt-in from /sync requests", async () => {
+    const runtimeFetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+    );
+    stubRuntimeFetch(runtimeFetch);
+
+    const guardedFetch = createMatrixGuardedFetch({
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    await guardedFetch(
+      "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&org.matrix.msc4222.use_state_after=true&timeout=30000",
+    );
+
+    expect(runtimeFetch).toHaveBeenCalledTimes(1);
+    expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(
+      "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&timeout=30000",
+    );
+  });
+
+  it("leaves non-sync Matrix requests unchanged", async () => {
+    const runtimeFetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+    );
+    stubRuntimeFetch(runtimeFetch);
+
+    const guardedFetch = createMatrixGuardedFetch({
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    const url =
+      "http://127.0.0.1:8008/_matrix/client/v3/account/whoami?org.matrix.msc4222.use_state_after=true";
+    await guardedFetch(url);
+
+    expect(runtimeFetch).toHaveBeenCalledTimes(1);
+    expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(url);
   });
 });

@@ -7,7 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { writeBuildStamp } from "./build-stamp.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import {
+  BUILD_STAMP_FILE,
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -16,6 +21,7 @@ const DEFAULTS = {
   readyTimeoutMs: 20_000,
   readySettleMs: 500,
   sigkillGraceMs: 10_000,
+  sigkillExitGraceMs: 2_000,
   cpuWarnMs: 1_000,
   cpuFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
@@ -37,11 +43,41 @@ const WATCH_GATEWAY_SKIP_ENV = {
   NODE_ENV: "test",
 };
 
-function parseArgs(argv) {
+export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
+const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
+
+export function appendBoundedWatchLog(current, chunk, maxChars = WATCH_LOG_CAPTURE_MAX_CHARS) {
+  const next = `${current}${String(chunk)}`;
+  if (next.length <= maxChars) {
+    return { text: next, truncated: false };
+  }
+  return { text: next.slice(-maxChars), truncated: true };
+}
+
+function formatCapturedWatchLog(text, truncated) {
+  return truncated
+    ? `[openclaw] log truncated to last ${WATCH_LOG_CAPTURE_MAX_CHARS} chars\n${text}`
+    : text;
+}
+
+export function updateWatchBuildDetection(state, chunk) {
+  const combined = `${state.buffer ?? ""}${String(chunk)}`;
+  const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
+  const reason = detectWatchBuildReason(combined, "");
+  const triggered = state.triggered || combined.includes("Building TypeScript (dist is stale");
+  return {
+    buffer: next.text,
+    triggered,
+    reason: state.reason ?? reason,
+  };
+}
+
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const next = argv[i + 1];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = args[i + 1];
     const readValue = () => {
       if (!next) {
         throw new Error(`Missing value for ${arg}`);
@@ -64,6 +100,9 @@ function parseArgs(argv) {
         break;
       case "--sigkill-grace-ms":
         options.sigkillGraceMs = Number(readValue());
+        break;
+      case "--sigkill-exit-grace-ms":
+        options.sigkillExitGraceMs = Number(readValue());
         break;
       case "--cpu-warn-ms":
         options.cpuWarnMs = Number(readValue());
@@ -203,23 +242,6 @@ function snapshotTree(rootName) {
   return stats;
 }
 
-export function isIgnoredDistRuntimeWatchPath(entry) {
-  return (
-    entry === "dist-runtime/extensions/node_modules" ||
-    entry.startsWith("dist-runtime/extensions/node_modules/")
-  );
-}
-
-function summarizeDistRuntimeAddedPaths(added) {
-  const addedPaths = added.filter((entry) => entry.startsWith("dist-runtime/"));
-  const ignoredDependencyAddedPaths = addedPaths.filter(isIgnoredDistRuntimeWatchPath);
-  const topologyAddedPaths = addedPaths.filter((entry) => !isIgnoredDistRuntimeWatchPath(entry));
-  return {
-    ignoredDependencyAddedPaths,
-    topologyAddedPaths,
-  };
-}
-
 function writeSnapshot(snapshotDir) {
   ensureDir(snapshotDir);
   const pathEntries = [...listTreeEntries("dist"), ...listTreeEntries("dist-runtime")];
@@ -276,7 +298,9 @@ function runCheckedCommand(command, args) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function parsePsCpuTimeMs(timeText) {
@@ -352,10 +376,14 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+export function hasGatewayReadyLog(text) {
+  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+}
+
 async function waitForGatewayReady(readText, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (/\[gateway\] ready \(/.test(readText())) {
+    if (hasGatewayReadyLog(readText())) {
       return true;
     }
     await sleep(100);
@@ -386,16 +414,21 @@ async function allocateLoopbackPort() {
 }
 
 function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port) {
+  const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
+  const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
-    'mkdir -p "$OPENCLAW_HOME/.openclaw"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    'mkdir -p "$OPENCLAW_STATE_DIR"',
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_CONFIG_PATH"`,
     `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
     HOME: isolatedHomeDir,
     OPENCLAW_HOME: isolatedHomeDir,
+    OPENCLAW_CONFIG_PATH: isolatedConfigPath,
+    OPENCLAW_STATE_DIR: isolatedStateDir,
+    XDG_CONFIG_HOME: path.join(isolatedHomeDir, ".config"),
     ...WATCH_GATEWAY_SKIP_ENV,
   };
 
@@ -403,6 +436,14 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
     return {
       command: "/usr/bin/time",
       args: ["-lp", "-o", timeFilePath, "/bin/sh", "-lc", shellSource],
+      env,
+    };
+  }
+
+  if (!fs.existsSync("/usr/bin/time")) {
+    return {
+      command: "/bin/sh",
+      args: ["-lc", shellSource],
       env,
     };
   }
@@ -469,15 +510,28 @@ async function runTimedWatch(options, outputDir) {
 
   let stdout = "";
   let stderr = "";
+  let stdoutTruncated = false;
+  let stderrTruncated = false;
+  let buildDetection = { buffer: "", triggered: false, reason: null };
   child.stdout?.on("data", (chunk) => {
-    stdout += String(chunk);
+    const next = appendBoundedWatchLog(stdout, chunk);
+    stdout = next.text;
+    stdoutTruncated ||= next.truncated;
+    buildDetection = updateWatchBuildDetection(buildDetection, chunk);
   });
   child.stderr?.on("data", (chunk) => {
-    stderr += String(chunk);
+    const next = appendBoundedWatchLog(stderr, chunk);
+    stderr = next.text;
+    stderrTruncated ||= next.truncated;
+    buildDetection = updateWatchBuildDetection(buildDetection, chunk);
   });
 
-  const exitPromise = new Promise((resolve) => {
-    child.on("exit", (code, signal) => resolve({ code, signal }));
+  let spawnError = null;
+  const spawnErrorExit = new Promise((resolve) => {
+    child.once("error", (error) => {
+      spawnError = error;
+      resolve({ code: null, signal: null, error: error.message });
+    });
   });
 
   let watchPid = null;
@@ -500,38 +554,18 @@ async function runTimedWatch(options, outputDir) {
   await sleep(options.windowMs);
   const idleCpuEndMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
 
-  if (watchPid) {
-    try {
-      process.kill(watchPid, "SIGTERM");
-    } catch {
-      // ignore
-    }
-  }
-
-  const gracefulExit = await Promise.race([
-    exitPromise,
-    sleep(options.sigkillGraceMs).then(() => null),
-  ]);
-
-  if (gracefulExit === null) {
-    if (watchPid) {
-      try {
-        process.kill(watchPid, "SIGKILL");
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const exit = (await exitPromise) ?? { code: null, signal: null };
-  fs.writeFileSync(stdoutPath, stdout, "utf8");
-  fs.writeFileSync(stderrPath, stderr, "utf8");
-  const timing = fs.existsSync(timeFilePath)
-    ? parseTimingFile(timeFilePath)
-    : { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN };
+  const exit = await Promise.race([stopTimedWatchChild(child, watchPid, options), spawnErrorExit]);
+  fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
+  fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
+  const timingFileMissing = !fs.existsSync(timeFilePath);
+  const timing = timingFileMissing
+    ? { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN }
+    : parseTimingFile(timeFilePath);
 
   return {
     exit,
+    spawnError: spawnError ? spawnError.message : null,
+    timingFileMissing,
     timing,
     readyBeforeWindow,
     idleCpuMs:
@@ -541,7 +575,59 @@ async function runTimedWatch(options, outputDir) {
     stdoutPath,
     stderrPath,
     timeFilePath,
+    watchTriggeredBuild: buildDetection.triggered,
+    watchBuildReason: buildDetection.reason,
   };
+}
+
+export async function stopTimedWatchChild(child, watchPid, options, deps = {}) {
+  const killProcess = deps.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const currentExit = () =>
+    child.exitCode !== null || child.signalCode !== null
+      ? { code: child.exitCode, signal: child.signalCode }
+      : null;
+  const exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const waitForExit = async (ms) =>
+    currentExit() ?? (await Promise.race([exited, sleep(ms).then(() => null)]));
+  const signalWatchProcess = (signal) => {
+    if (!watchPid) {
+      return;
+    }
+    try {
+      killProcess(watchPid, signal);
+    } catch {
+      // ignore
+    }
+  };
+
+  const existingExit = currentExit();
+  if (existingExit) {
+    return existingExit;
+  }
+
+  signalWatchProcess("SIGTERM");
+  const gracefulExit = await waitForExit(options.sigkillGraceMs);
+  if (gracefulExit) {
+    return gracefulExit;
+  }
+
+  signalWatchProcess("SIGKILL");
+  const killedExit = await waitForExit(options.sigkillExitGraceMs ?? DEFAULTS.sigkillExitGraceMs);
+  if (killedExit) {
+    return killedExit;
+  }
+
+  releaseUnsettledWatchChild(child);
+  return { code: null, signal: "SIGKILL" };
+}
+
+function releaseUnsettledWatchChild(child) {
+  child.stdin?.destroy?.();
+  child.stdout?.destroy?.();
+  child.stderr?.destroy?.();
+  child.unref?.();
 }
 
 function parsePathFile(filePath) {
@@ -590,7 +676,7 @@ function buildRunNodeDeps(env) {
     spawnSync,
     distRoot: path.join(cwd, "dist"),
     distEntry: path.join(cwd, "dist", "/entry.js"),
-    buildStampPath: path.join(cwd, "dist", ".buildstamp"),
+    buildStampPath: path.join(cwd, "dist", BUILD_STAMP_FILE),
     sourceRoots: ["src", "extensions"].map((sourceRoot) => ({
       name: sourceRoot,
       path: path.join(cwd, sourceRoot),
@@ -609,19 +695,25 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   );
 }
 
+export function writeBuildAndRuntimePostBuildStamps(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  writeBuildStamp({ cwd });
+  writeRuntimePostBuildStamp({ cwd });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
     runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
-    // Refresh the build stamp after the gateway build finishes so run-node
-    // does not spuriously rebuild inside the bounded watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    // Refresh both stamps after the gateway build finishes so run-node does not
+    // leave stale local artifact metadata after the bounded watch window.
+    writeBuildAndRuntimePostBuildStamps();
   } else {
     // Restored CI artifacts can be older than the fresh checkout mtimes.
-    // Refresh only the stamp so run-node trusts the already-built dist.
-    writeBuildStamp({ cwd: process.cwd() });
+    // Refresh the local artifact stamps so run-node trusts the already-built dist.
+    writeBuildAndRuntimePostBuildStamps();
   }
 
   let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
@@ -632,9 +724,9 @@ async function main() {
     })
   ) {
     // CI's skip-build path restores a built dist artifact after checkout.
-    // Refresh the stamp so checkout mtimes for package/config files do not
+    // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    writeBuildAndRuntimePostBuildStamps();
     preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
   }
   if (
@@ -670,10 +762,9 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeAddedPathSummary = summarizeDistRuntimeAddedPaths(diff.added);
-  const distRuntimeAddedPaths = distRuntimeAddedPathSummary.topologyAddedPaths.length;
-  const distRuntimeIgnoredDependencyAddedPaths =
-    distRuntimeAddedPathSummary.ignoredDependencyAddedPaths.length;
+  const distRuntimeAddedPaths = diff.added.filter((entry) =>
+    entry.startsWith("dist-runtime/"),
+  ).length;
   const distRuntimeFileGrowth = distRuntimeAddedPaths;
   const distRuntimeByteGrowth =
     distRuntimeAddedPaths === 0
@@ -683,15 +774,8 @@ async function main() {
     (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
   );
   const cpuMs = watchResult.idleCpuMs ?? totalCpuMs;
-  const watchTriggeredBuild =
-    fs
-      .readFileSync(watchResult.stderrPath, "utf8")
-      .includes("Building TypeScript (dist is stale") ||
-    fs.readFileSync(watchResult.stdoutPath, "utf8").includes("Building TypeScript (dist is stale");
-  const watchBuildReason = detectWatchBuildReason(
-    fs.readFileSync(watchResult.stdoutPath, "utf8"),
-    fs.readFileSync(watchResult.stderrPath, "utf8"),
-  );
+  const watchTriggeredBuild = watchResult.watchTriggeredBuild;
+  const watchBuildReason = watchResult.watchBuildReason;
 
   const summary = {
     windowMs: options.windowMs,
@@ -707,10 +791,11 @@ async function main() {
     distRuntimeByteGrowth,
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
-    distRuntimeIgnoredDependencyAddedPaths,
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
+    spawnError: watchResult.spawnError,
+    timingFileMissing: watchResult.timingFileMissing,
     timing: watchResult.timing,
   };
   fs.writeFileSync(
@@ -722,6 +807,18 @@ async function main() {
 
   const failures = [];
   const warnings = [];
+  if (watchResult.spawnError) {
+    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
+  }
+  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
+    failures.push(
+      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
+    );
+  } else if (watchResult.timingFileMissing) {
+    warnings.push(
+      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
+    );
+  }
   if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
     failures.push(
       "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",

@@ -14,6 +14,14 @@ OpenClaw supports additive SecretRefs so supported credentials do not need to be
 Plaintext still works. SecretRefs are opt-in per credential.
 </Note>
 
+<Warning>
+Plaintext credentials remain agent-readable if they are stored in files the
+agent can inspect, including `openclaw.json`, `auth-profiles.json`, `.env`, or
+generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast
+radius only after every supported credential has been migrated and
+`openclaw secrets audit --check` reports no plaintext secret residue.
+</Warning>
+
 ## Goals and runtime model
 
 Secrets are resolved into an in-memory runtime snapshot.
@@ -27,6 +35,33 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.
+
+## Agent-access boundary
+
+SecretRefs protect credentials from being persisted in supported config and
+generated model surfaces, but they are not a process-isolation boundary. If a
+plaintext credential remains on disk in a path the agent can read, the agent can
+bypass API-level redaction by using file or shell tools to inspect that file.
+
+For production deployments where agent-accessible files are in scope, treat
+SecretRef migration as complete only when all of these are true:
+
+- supported credentials use SecretRefs instead of plaintext values
+- legacy plaintext residue has been scrubbed from `openclaw.json`,
+  `auth-profiles.json`, `.env`, and generated `models.json` files
+- `openclaw secrets audit --check` is clean after the migration
+- any remaining unsupported or rotating credentials are protected by operating
+  system isolation, container isolation, or an external credential proxy
+
+This is why the audit/configure/apply workflow is a security migration gate, not
+just a convenience helper.
+
+<Warning>
+SecretRefs do not make arbitrary readable files safe. Backups, copied configs,
+old generated model catalogs, and unsupported credential classes must be treated
+as production secrets until they are deleted, moved outside the agent trust
+boundary, or protected by a separate isolation layer.
+</Warning>
 
 ## Active-surface filtering
 
@@ -51,6 +86,7 @@ SecretRefs are validated only on effectively active surfaces.
         - `gateway.remote.token` is active when token auth can win and no env/auth token is configured.
         - `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
     - `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` is set, because env token input wins for that runtime.
+
   </Accordion>
 </AccordionGroup>
 
@@ -87,6 +123,13 @@ Use one object shape everywhere:
     { source: "env", provider: "default", id: "OPENAI_API_KEY" }
     ```
 
+    Supported SecretInput fields also accept exact string shorthands:
+
+    ```json5
+    "${OPENAI_API_KEY}"
+    "$OPENAI_API_KEY"
+    ```
+
     Validation:
 
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
@@ -107,13 +150,13 @@ Use one object shape everywhere:
   </Tab>
   <Tab title="exec">
     ```json5
-    { source: "exec", provider: "vault", id: "providers/openai/apiKey" }
+    { source: "exec", provider: "vault", id: "providers/openai/apiKey#value" }
     ```
 
     Validation:
 
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
-    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$` (supports selectors such as `secret#json_key`)
     - `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
 
   </Tab>
@@ -140,6 +183,13 @@ Define providers under `secrets.providers`:
         passEnv: ["PATH", "VAULT_ADDR"],
         jsonOnly: true,
       },
+      "team-secrets": {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "acme-secrets",
+          integrationId: "secret-store",
+        },
+      },
     },
     defaults: {
       env: "default",
@@ -159,6 +209,7 @@ Define providers under `secrets.providers`:
   <Accordion title="Env provider">
     - Optional allowlist via `allowlist`.
     - Missing/empty env values fail resolution.
+
   </Accordion>
   <Accordion title="File provider">
     - Reads local file from `path`.
@@ -166,6 +217,7 @@ Define providers under `secrets.providers`:
     - `mode: "singleValue"` expects ref id `"value"` and returns file contents.
     - Path must pass ownership/permission checks.
     - Windows fail-closed note: if ACL verification is unavailable for a path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+
   </Accordion>
   <Accordion title="Exec provider">
     - Runs configured absolute binary path, no shell.
@@ -174,6 +226,11 @@ Define providers under `secrets.providers`:
     - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
     - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
     - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - Plugin-managed exec providers can use `pluginIntegration` instead of
+      copied `command`/`args`. OpenClaw resolves the current command details
+      from the installed plugin manifest during startup/reload. If the plugin is
+      disabled, removed, untrusted, or no longer declares the integration,
+      active SecretRefs using that provider fail closed.
 
     Request payload (stdin):
 
@@ -199,6 +256,41 @@ Define providers under `secrets.providers`:
 
   </Accordion>
 </AccordionGroup>
+
+## File-backed API keys
+
+Do not put `file:...` strings in the config `env` block. The `env` block is
+literal and non-overriding, so `file:...` is not resolved.
+
+Use a file SecretRef on a supported credential field instead:
+
+```json5
+{
+  secrets: {
+    providers: {
+      xai_key_file: {
+        source: "file",
+        path: "~/.openclaw/secrets/xai-api-key.txt",
+        mode: "singleValue",
+      },
+    },
+  },
+  models: {
+    providers: {
+      xai: {
+        apiKey: { source: "file", provider: "xai_key_file", id: "value" },
+      },
+    },
+  },
+}
+```
+
+For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For
+`mode: "json"`, use an absolute JSON pointer such as
+`"/providers/xai/apiKey"`.
+
+See [SecretRef credential surface](/reference/secretref-credential-surface) for
+the config fields that accept SecretRefs.
 
 ## Exec integration examples
 
@@ -231,6 +323,60 @@ Define providers under `secrets.providers`:
     }
     ```
   </Accordion>
+  <Accordion title="Bitwarden Secrets Manager (`bws`)">
+    Use a resolver wrapper when you want SecretRef ids to map to Bitwarden
+    Secrets Manager item keys. The repository includes
+    `scripts/secrets/openclaw-bws-resolver.mjs`; install or copy it to an absolute
+    trusted path on the host that runs the Gateway.
+
+    Requirements:
+
+    - Bitwarden Secrets Manager CLI (`bws`) installed on the Gateway host.
+    - `BWS_ACCESS_TOKEN` available to the Gateway service.
+    - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws`
+      binary path.
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          bws: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-bws-resolver.mjs",
+            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "bws",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The resolver batches requested ids, runs `bws secret list`, and returns
+    values for matching secret `key` fields. Use keys that satisfy the exec
+    SecretRef id contract, such as `openclaw/providers/openai/apiKey`; env-var
+    style keys with underscores are rejected before the resolver runs. If more
+    than one visible Bitwarden secret has the same requested key, the resolver
+    fails that id as ambiguous instead of choosing one. After updating config,
+    verify the resolver path:
+
+    ```bash
+    openclaw secrets audit --allow-exec
+    ```
+
+  </Accordion>
   <Accordion title="HashiCorp Vault CLI">
     ```json5
     {
@@ -258,6 +404,94 @@ Define providers under `secrets.providers`:
       },
     }
     ```
+  </Accordion>
+  <Accordion title="password-store (`pass`)">
+    Use a small resolver wrapper when you want SecretRef ids to map directly to
+    `pass` entries. Save this as an executable in an absolute path that passes
+    your exec-provider path checks, for example
+    `/usr/local/bin/openclaw-pass-resolver`. The `#!/usr/bin/env node` shebang
+    resolves `node` from the resolver process `PATH`, so include `PATH` in
+    `passEnv`. If `pass` is not on that `PATH`, set `PASS_BIN` in the parent
+    environment and include it in `passEnv` too:
+
+    ```js
+    #!/usr/bin/env node
+    const { spawnSync } = require("node:child_process");
+
+    let stdin = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      stdin += chunk;
+    });
+    process.stdin.on("error", (err) => {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    });
+    process.stdin.on("end", () => {
+      let request;
+      try {
+        request = JSON.parse(stdin || "{}");
+      } catch (err) {
+        process.stderr.write(`Failed to parse request: ${err.message}\n`);
+        process.exit(1);
+      }
+
+      const passBin = process.env.PASS_BIN || "pass";
+      const values = {};
+      const errors = {};
+
+      for (const id of request.ids ?? []) {
+        const result = spawnSync(passBin, ["show", id], { encoding: "utf8" });
+        if (result.status === 0) {
+          values[id] = result.stdout.split(/\r?\n/, 1)[0] ?? "";
+        } else {
+          errors[id] = { message: (result.stderr || `pass exited ${result.status}`).trim() };
+        }
+      }
+
+      process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+    });
+    ```
+
+    Then configure the exec provider and point `apiKey` at the `pass` entry path:
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          pass_store: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-pass-resolver",
+            passEnv: ["PATH", "HOME", "GNUPGHOME", "GPG_TTY", "PASSWORD_STORE_DIR", "PASS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "pass_store",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Keep the secret on the first line of the `pass` entry, or customize the
+    wrapper if you want to return the full `pass show` output instead. After
+    updating config, verify both the static audit and the exec resolver path:
+
+    ```bash
+    openclaw secrets audit --check
+    openclaw secrets audit --allow-exec
+    ```
+
   </Accordion>
   <Accordion title="sops">
     ```json5
@@ -450,9 +684,9 @@ Default operator flow:
     openclaw secrets audit --check
     ```
   </Step>
-  <Step title="Configure SecretRefs">
+  <Step title="Configure and apply SecretRefs">
     ```bash
-    openclaw secrets configure
+    openclaw secrets configure --apply
     ```
   </Step>
   <Step title="Re-audit">
@@ -461,6 +695,13 @@ Default operator flow:
     ```
   </Step>
 </Steps>
+
+Do not treat the migration as complete until the re-audit is clean. If the audit
+still reports plaintext values at rest, the agent-access risk is still present
+even when runtime APIs return redacted values.
+
+If you save a plan instead of applying during `configure`, apply that saved plan
+with `openclaw secrets apply --from <plan-path>` before the re-audit.
 
 <AccordionGroup>
   <Accordion title="secrets audit">

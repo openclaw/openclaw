@@ -1,7 +1,7 @@
 import util from "node:util";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../global-state.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
@@ -149,11 +149,11 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
 ] as const;
 
 function shouldSuppressConsoleMessage(message: string): boolean {
-  if (isVerbose()) {
-    return false;
-  }
   if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
     return true;
+  }
+  if (isVerbose()) {
+    return false;
   }
   return false;
 }
@@ -198,6 +198,11 @@ export function enableConsoleCapture(): void {
     for (const stream of [process.stdout, process.stderr]) {
       stream.on("error", (err) => {
         if (isEpipeError(err)) {
+          // stdout/stderr broken means the process is orphaned (e.g. the parent
+          // service restarted and closed the journal pipe). Exit cleanly instead
+          // of spinning in a tight loop where every log attempt re-triggers EPIPE.
+          const exitCode = process.exitCode;
+          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
           return;
         }
         throw err;

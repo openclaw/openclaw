@@ -19,11 +19,13 @@ type DispatchReplyContext = Record<string, unknown> & {
 };
 type DispatchReplyDispatcher = {
   sendFinalReply: (payload: { text: string }) => unknown;
+  getFailedCounts?: UnknownMock;
 };
 type FeishuReplyDispatcherMockValue = {
   dispatcher: DispatchReplyDispatcher;
   replyOptions: Record<string, never>;
   markDispatchIdle: () => unknown;
+  ensureNoVisibleReplyFallback?: AsyncUnknownMock;
 };
 type CreateFeishuReplyDispatcherMock = Mock<(params?: unknown) => FeishuReplyDispatcherMockValue>;
 type DispatchReplyFromConfigMock = Mock<
@@ -218,10 +220,3 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
     }),
   };
 });
-
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: resolveBoundConversationMock,
-    touch: touchBindingMock,
-  }),
-}));

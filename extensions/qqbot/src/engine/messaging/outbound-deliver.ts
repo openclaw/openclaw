@@ -19,7 +19,7 @@ import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import {
   sendText as senderSendText,
-  sendImage as senderSendImage,
+  sendMedia as senderSendMedia,
   withTokenRetry,
   buildDeliveryTarget,
   accountToCreds,
@@ -28,7 +28,7 @@ import {
 // ---- Injected dependency interfaces ----
 
 /** Media target context — describes where to send media. */
-export interface MediaTargetContext {
+interface MediaTargetContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;
@@ -36,14 +36,14 @@ export interface MediaTargetContext {
 }
 
 /** Media send result. */
-export interface MediaSendResult {
+interface MediaSendResult {
   channel?: string;
   error?: string;
   messageId?: string;
 }
 
 /** Media sender interface — implemented by the upper-layer outbound.ts module. */
-export interface MediaSender {
+interface MediaSender {
   sendPhoto(target: MediaTargetContext, imageUrl: string): Promise<MediaSendResult>;
   sendVoice(
     target: MediaTargetContext,
@@ -73,9 +73,9 @@ export interface DeliverDeps {
 // ---- Exported types ----
 
 /** Maximum text length for a single QQ Bot message. */
-export const TEXT_CHUNK_LIMIT = 5000;
+const TEXT_CHUNK_LIMIT = 5000;
 
-export interface DeliverEventContext {
+interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
   messageId: string;
@@ -85,7 +85,7 @@ export interface DeliverEventContext {
   msgIdx?: string;
 }
 
-export interface DeliverAccountContext {
+interface DeliverAccountContext {
   account: GatewayAccount;
   qualifiedTarget: string;
   log?: {
@@ -96,10 +96,10 @@ export interface DeliverAccountContext {
 }
 
 /** Wrapper that retries when the access token expires. */
-export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
+type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
 
 /** Consume a quote ref exactly once. */
-export type ConsumeQuoteRefFn = () => string | undefined;
+type ConsumeQuoteRefFn = () => string | undefined;
 
 // ---- Internal helpers ----
 
@@ -173,8 +173,9 @@ async function sendTextChunkToTarget(params: {
   text: string;
   consumeQuoteRef: ConsumeQuoteRefFn;
   allowDm: boolean;
+  forcePlainText?: boolean;
 }): Promise<unknown> {
-  const { account, event, text, consumeQuoteRef, allowDm } = params;
+  const { account, event, text, consumeQuoteRef, allowDm, forcePlainText } = params;
   const ref = consumeQuoteRef();
   const target = buildDeliveryTarget(event);
   if (target.type === "dm" && !allowDm) {
@@ -184,6 +185,7 @@ async function sendTextChunkToTarget(params: {
   return await senderSendText(target, text, creds, {
     msgId: event.messageId,
     messageReference: ref,
+    forcePlainText,
   });
 }
 
@@ -211,6 +213,35 @@ async function sendTextChunks(
   });
 }
 
+export async function sendTextOnlyReply(
+  text: string,
+  event: DeliverEventContext,
+  actx: DeliverAccountContext,
+  sendWithRetry: SendWithRetryFn,
+  consumeQuoteRef: ConsumeQuoteRefFn,
+  deps: DeliverDeps,
+): Promise<void> {
+  const safeText = filterInternalMarkers(text).trim();
+  if (!safeText) {
+    return;
+  }
+  const { account, log } = actx;
+  const chunks = deps.chunkText(safeText, TEXT_CHUNK_LIMIT);
+  await sendTextChunksWithRetry({
+    account,
+    event,
+    chunks,
+    sendWithRetry,
+    consumeQuoteRef,
+    allowDm: true,
+    forcePlainText: true,
+    log,
+    onSuccess: (chunk) =>
+      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${chunk.slice(0, 50)}...`,
+    onError: (err) => `Failed to send text-only chunk: ${formatErrorMessage(err)}`,
+  });
+}
+
 async function sendTextChunksWithRetry(params: {
   account: GatewayAccount;
   event: DeliverEventContext;
@@ -218,11 +249,13 @@ async function sendTextChunksWithRetry(params: {
   sendWithRetry: SendWithRetryFn;
   consumeQuoteRef: ConsumeQuoteRefFn;
   allowDm: boolean;
+  forcePlainText?: boolean;
   log?: DeliverAccountContext["log"];
   onSuccess: (chunk: string) => string;
   onError: (err: unknown) => string;
 }): Promise<void> {
-  const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, log } = params;
+  const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, forcePlainText, log } =
+    params;
   for (const chunk of chunks) {
     try {
       await sendWithRetry((token) =>
@@ -233,6 +266,7 @@ async function sendTextChunksWithRetry(params: {
           text: chunk,
           consumeQuoteRef,
           allowDm,
+          forcePlainText,
         }),
       );
       log?.info(params.onSuccess(chunk));
@@ -307,12 +341,12 @@ async function sendVoiceWithTimeout(
         }
         return r;
       }),
-      new Promise<{ channel: string; error: string }>((resolve) =>
+      new Promise<{ channel: string; error: string }>((resolve) => {
         setTimeout(() => {
           ac.abort();
           resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" });
-        }, voiceTimeout),
-      ),
+        }, voiceTimeout);
+      }),
     ]);
     if (result.error) {
       log?.error(`sendVoice error: ${result.error}`);
@@ -458,7 +492,7 @@ export async function parseAndSendMediaTags(
 
 // ---- Plain reply ----
 
-export interface PlainReplyPayload {
+interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
@@ -659,7 +693,13 @@ async function sendMarkdownReply(
         const creds = accountToCreds(account);
         if (target.type === "c2c" || target.type === "group") {
           await withTokenRetry(creds, async () => {
-            await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
+            await senderSendMedia({
+              target,
+              creds,
+              kind: "image",
+              source: { url: imageUrl },
+              msgId: event.messageId,
+            });
           });
         } else {
           log?.debug?.(`${target.type} does not support rich media, skipping Base64 image`);

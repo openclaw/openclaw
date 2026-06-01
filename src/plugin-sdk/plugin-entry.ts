@@ -1,10 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type {
   AnyAgentTool,
   AgentHarness,
+  AgentPromptGuidance,
+  AgentPromptGuidanceEntry,
+  AgentPromptSurfaceKind,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationApplyResult,
   MigrationDetection,
   MigrationItem,
@@ -16,7 +19,11 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginHttpRouteHandler,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -63,6 +70,7 @@ import type {
   ProviderReplaySessionState,
   RealtimeTranscriptionProviderPlugin,
   ProviderResolvedUsageAuth,
+  ProviderUsageAuthToken,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -75,18 +83,53 @@ import type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
   OpenClawGatewayDiscoveryAdvertiseContext,
   OpenClawGatewayDiscoveryService,
   SpeechProviderPlugin,
   PluginCommandContext,
   PluginCommandResult,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
   AgentHarness,
+  AgentPromptGuidance,
+  AgentPromptGuidanceEntry,
+  AgentPromptSurfaceKind,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationApplyResult,
   MigrationDetection,
   MigrationItem,
@@ -96,6 +139,9 @@ export type {
   MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -103,7 +149,37 @@ export type {
   OpenClawPluginToolFactory,
   PluginCommandContext,
   PluginCommandResult,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
   OpenClawPluginConfigSchema,
+  OpenClawPluginHttpRouteHandler,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
@@ -132,6 +208,7 @@ export type {
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
   ProviderResolvedUsageAuth,
+  ProviderUsageAuthToken,
   ProviderToolSchemaDiagnostic,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
@@ -150,6 +227,8 @@ export type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
   OpenClawGatewayDiscoveryAdvertiseContext,
   OpenClawGatewayDiscoveryService,
   OpenClawPluginService,
@@ -175,15 +254,29 @@ export type {
   PluginHookInboundClaimResult,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type { OpenClawConfig };
 
-export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export {
+  buildJsonPluginConfigSchema,
+  buildPluginConfigSchema,
+  emptyPluginConfigSchema,
+} from "../plugins/config-schema.js";
 
 /** Options for a plugin entry that registers providers, tools, commands, or services. */
 type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
+   * fallback for older plugins.
+   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   reload?: OpenClawPluginDefinition["reload"];

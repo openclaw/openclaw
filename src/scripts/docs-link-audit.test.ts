@@ -23,8 +23,11 @@ const {
     spawnSyncImpl?: (
       command: string,
       args: string[],
-      options: { cwd: string; stdio: string },
+      options: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean; stdio: string },
     ) => { status: number | null; error?: { code?: string } };
+    env?: NodeJS.ProcessEnv;
+    nodeExecPath?: string;
+    npmExecPath?: string;
     prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
     cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
   }) => number;
@@ -152,15 +155,21 @@ describe("docs-link-audit", () => {
       | {
           command: string;
           args: string[];
-          options: { cwd: string; stdio: string };
+          options: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean; stdio: string };
         }
       | undefined;
     let cleanedDir: string | undefined;
     const anchorDocsDir = path.join(os.tmpdir(), "docs-link-audit-anchor");
+    const fakePnpm = path.join(anchorDocsDir, "pnpm.cjs");
+    fs.mkdirSync(anchorDocsDir, { recursive: true });
+    fs.writeFileSync(fakePnpm, "#!/usr/bin/env node\n", { mode: 0o755 });
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
+      env: { ...process.env, OPENCLAW_DOCS_LINK_SENTINEL: "1" },
+      nodeExecPath: "/opt/node/bin/node",
       nodeVersion: "22.21.1",
+      npmExecPath: fakePnpm,
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -174,11 +183,16 @@ describe("docs-link-audit", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(invocation).toBeDefined();
-    expect(invocation?.command).toBe("pnpm");
-    expect(invocation?.args).toEqual(["dlx", "mint", "broken-links", "--check-anchors"]);
-    expect(invocation?.options.stdio).toBe("inherit");
-    expect(invocation?.options.cwd).toBe(anchorDocsDir);
+    expect(invocation).toEqual({
+      command: "/opt/node/bin/node",
+      args: [fakePnpm, "dlx", "mint", "broken-links", "--check-anchors"],
+      options: expect.objectContaining({
+        cwd: anchorDocsDir,
+        env: expect.objectContaining({ OPENCLAW_DOCS_LINK_SENTINEL: "1" }),
+        shell: false,
+        stdio: "inherit",
+      }),
+    });
     expect(cleanedDir).toBe(anchorDocsDir);
   });
 
@@ -190,10 +204,15 @@ describe("docs-link-audit", () => {
     }> = [];
     let cleanedDir: string | undefined;
     const anchorDocsDir = path.join(os.tmpdir(), "docs-link-audit-anchor");
+    const fakePnpm = path.join(anchorDocsDir, "pnpm.cjs");
+    fs.mkdirSync(anchorDocsDir, { recursive: true });
+    fs.writeFileSync(fakePnpm, "#!/usr/bin/env node\n", { mode: 0o755 });
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
+      nodeExecPath: "/opt/node/bin/node",
       nodeVersion: "25.3.0",
+      npmExecPath: fakePnpm,
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -208,7 +227,11 @@ describe("docs-link-audit", () => {
 
     expect(exitCode).toBe(0);
     expect(invocations).toHaveLength(2);
-    expect(invocations[0]).toMatchObject({
+    const [versionCheck, linkCheck] = invocations;
+    if (!versionCheck || !linkCheck) {
+      throw new Error("Expected Mintlify wrapper invocations");
+    }
+    expect(versionCheck).toEqual({
       command: "fnm",
       args: [
         "exec",
@@ -217,15 +240,22 @@ describe("docs-link-audit", () => {
         "-e",
         "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)",
       ],
-      options: { stdio: "ignore" },
+      options: { cwd: anchorDocsDir, stdio: "ignore" },
     });
-    expect(invocations[1]).toMatchObject({
+    expect(linkCheck).toEqual({
       command: "fnm",
-      args: ["exec", "--using=22", "pnpm", "dlx", "mint", "broken-links", "--check-anchors"],
-      options: { stdio: "inherit" },
+      args: [
+        "exec",
+        "--using=22",
+        "node",
+        fakePnpm,
+        "dlx",
+        "mint",
+        "broken-links",
+        "--check-anchors",
+      ],
+      options: { cwd: anchorDocsDir, stdio: "inherit" },
     });
-    expect(invocations[0]?.options.cwd).toBe(anchorDocsDir);
-    expect(invocations[1]?.options.cwd).toBe(anchorDocsDir);
     expect(cleanedDir).toBe(anchorDocsDir);
   });
 });

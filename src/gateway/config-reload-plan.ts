@@ -18,6 +18,7 @@ export type GatewayReloadPlan = {
   restartCron: boolean;
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
+  reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
   disposeMcpRuntimes: boolean;
   noopPaths: string[];
@@ -29,16 +30,21 @@ type ReloadRule = {
   actions?: ReloadAction[];
 };
 
+export type ConfigReloadMetadata = {
+  kind: ReloadRule["kind"];
+};
+
 type ReloadAction =
   | "reload-hooks"
   | "restart-gmail-watcher"
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
+  | "reload-plugins"
   | "dispose-mcp-runtimes"
   | `restart-channel:${ChannelId}`;
 
-export type GatewayReloadPlanOptions = {
+type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
 };
@@ -61,8 +67,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-health-monitor"],
   },
-  // Stuck-session warning threshold is read by the diagnostics heartbeat loop.
+  // Diagnostics heartbeat reads these from current runtime config.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
+  { prefix: "diagnostics.stuckSessionAbortMs", kind: "none" },
+  { prefix: "diagnostics.memoryPressureSnapshot", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
@@ -81,10 +89,18 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
+    prefix: "models.pricing",
+    kind: "restart",
+  },
+  {
     prefix: "models",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  // Auth cooldown readers resolve values from the active runtime config for each
+  // auth failure decision, so cooldown tuning needs a snapshot refresh but not
+  // a gateway restart.
+  { prefix: "auth.cooldowns", kind: "hot" },
   {
     prefix: "agents.list",
     kind: "hot",
@@ -93,6 +109,8 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
+  { prefix: "plugins.load", kind: "restart" },
+  { prefix: "plugins.installs", kind: "restart" },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -111,11 +129,10 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
   { prefix: "secrets", kind: "none" },
-  { prefix: "plugins", kind: "restart" },
+  { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
   { prefix: "ui", kind: "none" },
   { prefix: "gateway", kind: "restart" },
   { prefix: "discovery", kind: "restart" },
-  { prefix: "canvasHost", kind: "restart" },
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
@@ -159,6 +176,17 @@ function listReloadRules(): ReloadRule[] {
         ),
       ),
   );
+  const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
+    {
+      prefix: `plugins.entries.${plugin.id}`,
+      kind: "hot",
+      actions: [
+        "reload-plugins",
+        "dispose-mcp-runtimes",
+        `restart-channel:${plugin.id}` as ReloadAction,
+      ],
+    },
+  ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
     (entry.registration.restartPrefixes ?? [])
       .map(
@@ -186,6 +214,7 @@ function listReloadRules(): ReloadRule[] {
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
     ...channelReloadRules,
+    ...channelPluginStateRules,
     ...BASE_RELOAD_RULES_TAIL,
   ];
   cachedReloadRules = rules;
@@ -199,6 +228,13 @@ function matchRule(path: string): ReloadRule | null {
     }
   }
   return null;
+}
+
+export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
+  if (isPluginInstallTimestampPath(path)) {
+    return { kind: "none" };
+  }
+  return { kind: matchRule(path)?.kind ?? "restart" };
 }
 
 function isPluginInstallTimestampPath(path: string): boolean {
@@ -282,6 +318,7 @@ export function buildGatewayReloadPlan(
     restartCron: false,
     restartHeartbeat: false,
     restartHealthMonitor: false,
+    reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
     noopPaths: [],
@@ -308,6 +345,9 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;
+        break;
+      case "reload-plugins":
+        plan.reloadPlugins = true;
         break;
       case "dispose-mcp-runtimes":
         plan.disposeMcpRuntimes = true;

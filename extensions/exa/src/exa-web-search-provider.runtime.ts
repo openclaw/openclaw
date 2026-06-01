@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -5,7 +6,7 @@ import {
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -20,7 +21,7 @@ import {
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
@@ -29,6 +30,7 @@ const EXA_MAX_SEARCH_COUNT = 100;
 
 type ExaConfig = {
   apiKey?: string;
+  baseUrl?: string;
 };
 
 type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
@@ -65,6 +67,14 @@ type ExaSearchResponse = {
   results?: unknown;
 };
 
+async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+  try {
+    return normalizeExaResults(await response.json());
+  } catch (cause) {
+    throw new Error("Exa API returned malformed JSON", { cause });
+  }
+}
+
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
@@ -85,6 +95,44 @@ function resolveExaApiKey(exa?: ExaConfig): string | undefined {
     readConfiguredSecretString(exa?.apiKey, "tools.web.search.exa.apiKey") ??
     readProviderEnvValue(["EXA_API_KEY"])
   );
+}
+
+function invalidBaseUrlPayload(value: string) {
+  return {
+    error: "invalid_base_url",
+    message: `plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    docs: "https://docs.openclaw.ai/tools/exa-search",
+  };
+}
+
+function resolveExaSearchEndpoint(
+  exa?: ExaConfig,
+): { endpoint: string } | { error: string; message: string; docs: string } {
+  const configured = normalizeOptionalString(exa?.baseUrl);
+  if (!configured) {
+    return { endpoint: EXA_SEARCH_ENDPOINT };
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
+    return invalidBaseUrlPayload(configured);
+  }
+  const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return invalidBaseUrlPayload(configured);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return invalidBaseUrlPayload(configured);
+  }
+
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  parsed.pathname = pathname.endsWith("/search")
+    ? pathname
+    : `${pathname === "" ? "" : pathname}/search`;
+  parsed.hash = "";
+  return { endpoint: parsed.toString() };
 }
 
 function resolveExaDescription(result: ExaSearchResult): string {
@@ -124,11 +172,11 @@ function isErrorPayload(value: unknown): value is { error: string; message: stri
 }
 
 function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     return fallback;
   }
-  return Math.max(1, Math.min(EXA_MAX_SEARCH_COUNT, Math.floor(parsed)));
+  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
 }
 
 function parseExaContents(
@@ -315,6 +363,7 @@ function resolveFreshnessStartDate(freshness: ExaFreshness): string {
 
 async function runExaSearch(params: {
   apiKey: string;
+  endpoint: string;
   query: string;
   count: number;
   freshness?: ExaFreshness;
@@ -342,7 +391,7 @@ async function runExaSearch(params: {
 
   return withTrustedWebSearchEndpoint(
     {
-      url: EXA_SEARCH_ENDPOINT,
+      url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
@@ -360,11 +409,7 @@ async function runExaSearch(params: {
         const detail = await res.text();
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      try {
-        return normalizeExaResults(await res.json());
-      } catch (error) {
-        throw new Error(`Exa API returned invalid JSON: ${String(error)}`, { cause: error });
-      }
+      return readExaSearchResults(res);
     },
   );
 }
@@ -376,6 +421,31 @@ function missingExaKeyPayload() {
       "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure tools.web.search.exa.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
+}
+
+function buildExaCacheKey(params: {
+  endpoint: string;
+  type: ExaSearchType;
+  query: string;
+  count: number;
+  freshness?: ExaFreshness;
+  dateAfter?: string;
+  dateBefore?: string;
+  contents?: ExaContentsArgs;
+}): string {
+  return buildSearchCacheKey([
+    "exa",
+    params.endpoint,
+    params.type,
+    params.query,
+    params.count,
+    params.freshness,
+    params.dateAfter,
+    params.dateBefore,
+    params.contents?.highlights ? JSON.stringify(params.contents.highlights) : undefined,
+    params.contents?.text ? JSON.stringify(params.contents.text) : undefined,
+    params.contents?.summary ? JSON.stringify(params.contents.summary) : undefined,
+  ]);
 }
 
 export async function executeExaWebSearchProviderTool(
@@ -393,6 +463,11 @@ export async function executeExaWebSearchProviderTool(
   if (!apiKey) {
     return missingExaKeyPayload();
   }
+  const endpointResult = resolveExaSearchEndpoint(exaConfig);
+  if ("error" in endpointResult) {
+    return endpointResult;
+  }
+  const endpoint = endpointResult.endpoint;
 
   const query = readStringParam(params, "query", { required: true });
   const rawType = readStringParam(params, "type");
@@ -400,7 +475,12 @@ export async function executeExaWebSearchProviderTool(
     ? (rawType as ExaSearchType)
     : "auto";
   const count =
-    readNumberParam(params, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(params, "count", {
+      max: EXA_MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(params, "freshness");
   const freshness = normalizeExaFreshness(rawFreshness);
   if (rawFreshness && !freshness) {
@@ -442,18 +522,17 @@ export async function executeExaWebSearchProviderTool(
       ? parsedContents.value
       : undefined;
 
-  const cacheKey = buildSearchCacheKey([
-    "exa",
+  const resolvedCount = resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT);
+  const cacheKey = buildExaCacheKey({
+    endpoint,
     type,
     query,
-    resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
+    count: resolvedCount,
     freshness,
     dateAfter,
     dateBefore,
-    contents?.highlights ? JSON.stringify(contents.highlights) : undefined,
-    contents?.text ? JSON.stringify(contents.text) : undefined,
-    contents?.summary ? JSON.stringify(contents.summary) : undefined,
-  ]);
+    contents,
+  });
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
     return cached;
@@ -462,8 +541,9 @@ export async function executeExaWebSearchProviderTool(
   const start = Date.now();
   const results = await runExaSearch({
     apiKey,
+    endpoint,
     query,
-    count: resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
+    count: resolvedCount,
     freshness,
     dateAfter,
     dateBefore,
@@ -515,13 +595,17 @@ export async function executeExaWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   normalizeExaResults,
   normalizeExaFreshness,
   parseExaContents,
+  buildExaCacheKey,
   resolveExaApiKey,
   resolveExaConfig,
   resolveExaDescription,
   resolveExaSearchCount,
+  resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
+  readExaSearchResults,
 } as const;
+export { testing as __testing };

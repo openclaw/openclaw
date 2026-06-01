@@ -6,14 +6,16 @@ import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/a
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  buildApprovalInteractiveReplyFromActionDescriptors,
+  buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
-  type ExecApprovalPendingReplyParams,
-  type ExecApprovalRequest,
-  type PluginApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ExecApprovalPendingReplyParams } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
@@ -73,6 +75,10 @@ function buildPendingPayload(params: {
           approvalId: params.request.id,
           approvalSlug: params.request.id.slice(0, 8),
           approvalCommandId: params.request.id,
+          warningText:
+            params.view.approvalKind === "exec"
+              ? (params.view.warningText ?? undefined)
+              : undefined,
           command: params.view.approvalKind === "exec" ? params.view.commandText : "",
           cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
           host:
@@ -86,7 +92,7 @@ function buildPendingPayload(params: {
   return {
     text: payload.text ?? "",
     buttons: resolveTelegramInlineButtons({
-      interactive: buildApprovalInteractiveReplyFromActionDescriptors(params.view.actions),
+      presentation: buildApprovalPresentationFromActionDescriptors(params.view.actions),
     }),
   };
 }

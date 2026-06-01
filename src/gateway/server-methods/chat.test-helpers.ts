@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 
 export function createTranscriptFixtureSync(params: {
   prefix: string;
@@ -22,21 +22,4 @@ export function createTranscriptFixtureSync(params: {
     "utf-8",
   );
   return { dir, transcriptPath };
-}
-
-export function createMockSessionEntry(params: {
-  transcriptPath: string;
-  sessionId: string;
-  canonicalKey?: string;
-  cfg?: Record<string, unknown>;
-}) {
-  return {
-    cfg: params.cfg ?? {},
-    storePath: path.join(path.dirname(params.transcriptPath), "sessions.json"),
-    entry: {
-      sessionId: params.sessionId,
-      sessionFile: params.transcriptPath,
-    },
-    canonicalKey: params.canonicalKey ?? "main",
-  };
 }

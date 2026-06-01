@@ -1,5 +1,18 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCaption2
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileDanger
+import ai.openclaw.app.ui.mobileDangerSoft
+import ai.openclaw.app.ui.mobileText
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -29,25 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.OutgoingAttachment
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCaption2
-import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileDangerSoft
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Returns a pending assistant prompt only when chat can accept it immediately. */
 internal fun resolvePendingAssistantAutoSend(
   pendingPrompt: String?,
   healthOk: Boolean,
@@ -58,6 +57,7 @@ internal fun resolvePendingAssistantAutoSend(
   return prompt
 }
 
+/** Dispatches a pending assistant prompt once and reports whether it was accepted. */
 internal suspend fun dispatchPendingAssistantAutoSend(
   pendingPrompt: String?,
   healthOk: Boolean,
@@ -73,9 +73,22 @@ internal suspend fun dispatchPendingAssistantAutoSend(
   return dispatch(prompt)
 }
 
+/** Chooses the session key to load for initial chat hydration, if any. */
+internal fun resolveInitialChatLoadSessionKey(
+  sessionKey: String,
+  mainSessionKey: String,
+): String? {
+  val current = sessionKey.trim()
+  val main = mainSessionKey.trim().ifEmpty { "main" }
+  if (current.isNotEmpty() && current != "main" && current != main) return null
+  return main
+}
+
+/** Main Android chat sheet content: session picker, message list, and composer. */
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
+  val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -89,10 +102,15 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
   LaunchedEffect(Unit) {
-    viewModel.loadChat(mainSessionKey)
+    val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
+    if (loadSessionKey != null) {
+      viewModel.loadChat(loadSessionKey)
+    }
   }
 
   LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+    // Assistant-launch prompts should wait for a healthy idle chat so they do
+    // not race an already-running turn.
     val accepted =
       dispatchPendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
@@ -119,6 +137,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
       scope.launch(Dispatchers.IO) {
+        // Bound both count and encoded size before attachments enter Compose
+        // state; sending uses these already-compressed payloads directly.
         val next =
           uris.take(8).mapNotNull { uri ->
             try {
@@ -153,6 +173,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
     ChatMessageListCard(
       messages = messages,
+      historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
@@ -252,6 +273,9 @@ private fun ChatErrorRail(errorText: String) {
   }
 }
 
+/**
+ * Image selected in the composer and held in memory until the next chat.send call.
+ */
 data class PendingImageAttachment(
   val id: String,
   val fileName: String,

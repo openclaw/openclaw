@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { extractAssistantText } from "../agents/pi-embedded-utils.js";
+import { extractAssistantText } from "../agents/embedded-agent-utils.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -32,19 +32,31 @@ export type CrestodianAssistantPlanner = (params: {
 }) => Promise<CrestodianAssistantPlan | null>;
 
 type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
-type RunEmbeddedPiAgentFn = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
+type RunEmbeddedAgentFn = typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
+type ReadConfigFileSnapshotFn = typeof readConfigFileSnapshot;
+type PrepareSimpleCompletionModelForAgentFn = typeof prepareSimpleCompletionModelForAgent;
+type CompleteWithPreparedSimpleCompletionModelFn = typeof completeWithPreparedSimpleCompletionModel;
+
+export type CrestodianConfiguredModelPlannerDeps = {
+  readConfigFileSnapshot?: ReadConfigFileSnapshotFn;
+  prepareSimpleCompletionModelForAgent?: PrepareSimpleCompletionModelForAgentFn;
+  completeWithPreparedSimpleCompletionModel?: CompleteWithPreparedSimpleCompletionModelFn;
+};
 
 export type CrestodianLocalRuntimePlannerDeps = {
   runCliAgent?: RunCliAgentFn;
-  runEmbeddedPiAgent?: RunEmbeddedPiAgentFn;
+  runEmbeddedAgent?: RunEmbeddedAgentFn;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
 };
 
+export type CrestodianPlannerDeps = CrestodianConfiguredModelPlannerDeps &
+  CrestodianLocalRuntimePlannerDeps;
+
 export async function planCrestodianCommand(params: {
   input: string;
   overview: CrestodianOverview;
-  deps?: CrestodianLocalRuntimePlannerDeps;
+  deps?: CrestodianPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   const configured = await planCrestodianCommandWithConfiguredModel(params);
   if (configured) {
@@ -56,18 +68,21 @@ export async function planCrestodianCommand(params: {
 export async function planCrestodianCommandWithConfiguredModel(params: {
   input: string;
   overview: CrestodianOverview;
+  deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   const input = params.input.trim();
   if (!input) {
     return null;
   }
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await (params.deps?.readConfigFileSnapshot ?? readConfigFileSnapshot)();
   if (!snapshot.exists || !snapshot.valid) {
     return null;
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const agentId = resolveDefaultAgentId(cfg);
-  const prepared = await prepareSimpleCompletionModelForAgent({
+  const prepared = await (
+    params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent
+  )({
     cfg,
     agentId,
     allowMissingApiKeyModes: ["aws-sdk"],
@@ -79,7 +94,10 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CRESTODIAN_ASSISTANT_TIMEOUT_MS);
   try {
-    const response = await completeWithPreparedSimpleCompletionModel({
+    const response = await (
+      params.deps?.completeWithPreparedSimpleCompletionModel ??
+      completeWithPreparedSimpleCompletionModel
+    )({
       model: prepared.model,
       auth: prepared.auth,
       context: {
@@ -186,13 +204,12 @@ async function runLocalRuntimePlanner(
           extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
           messageChannel: "crestodian",
           messageProvider: "crestodian",
-          senderIsOwner: true,
           cleanupCliLiveSessionOnRunEnd: true,
         });
         return extractPlannerResultText(result);
       }
       case "embedded": {
-        const runEmbedded = params.deps?.runEmbeddedPiAgent ?? (await loadRunEmbeddedPiAgent());
+        const runEmbedded = params.deps?.runEmbeddedAgent ?? (await loadRunEmbeddedAgent());
         const result = await runEmbedded({
           sessionId,
           sessionKey,
@@ -212,7 +229,6 @@ async function runLocalRuntimePlanner(
           extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
           messageChannel: "crestodian",
           messageProvider: "crestodian",
-          senderIsOwner: true,
           cleanupBundleMcpOnRunEnd: true,
         });
         return extractPlannerResultText(result);
@@ -236,8 +252,8 @@ async function loadRunCliAgent(): Promise<RunCliAgentFn> {
   return (await import("../agents/cli-runner.js")).runCliAgent;
 }
 
-async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
-  return (await import("../agents/pi-embedded.js")).runEmbeddedPiAgent;
+async function loadRunEmbeddedAgent(): Promise<RunEmbeddedAgentFn> {
+  return (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
 }
 
 function extractPlannerResultText(result: {

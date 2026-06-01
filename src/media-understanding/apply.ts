@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -10,10 +14,6 @@ import {
   resolveInputFileLimits,
 } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
@@ -76,13 +76,25 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-function sanitizeMimeType(value?: string): string | undefined {
-  const trimmed = normalizeOptionalLowercaseString(value);
+// Reject inputs with trailing junk after the type/subtype to defend against
+// callers that compare the original string elsewhere; permit the standard
+// `;param=value` parameter tail (RFC 9110 §8.3) and discard it.
+const MIME_TYPE = String.raw`([a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+)`;
+const HTTP_TOKEN = String.raw`[a-z0-9!#$%&'*+.^_\x60|~-]+`;
+const HTTP_QUOTED_STRING = String.raw`"(?:[\t !#-\[\]-~]|\\[\t -~])*"`;
+const MIME_PARAMETER = String.raw`[ \t]*;[ \t]*${HTTP_TOKEN}=(?:${HTTP_TOKEN}|${HTTP_QUOTED_STRING})`;
+const MIME_TYPE_WITH_OPTIONAL_PARAMS = new RegExp(
+  String.raw`^${MIME_TYPE}(?:${MIME_PARAMETER})*$`,
+  "i",
+);
+
+export function sanitizeMimeType(value?: string): string | undefined {
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
-  return match?.[1];
+  const match = trimmed.match(MIME_TYPE_WITH_OPTIONAL_PARAMS);
+  return match?.[1]?.toLowerCase();
 }
 
 function resolveFileLimits(cfg: OpenClawConfig) {
@@ -350,7 +362,9 @@ function isBinaryMediaMime(mime?: string): boolean {
     mime === "application/gzip" ||
     mime === "application/x-gzip" ||
     mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed"
+    mime === "application/x-7z-compressed" ||
+    mime === "application/msword" ||
+    mime === "application/x-cfb"
   ) {
     return true;
   }
@@ -508,11 +522,14 @@ async function extractFileBlocks(params: {
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
+  const mediaWorkspaceDir = ctx.MediaWorkspaceDir ?? params.workspaceDir;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
   const originalUserText =
     commandCandidates
@@ -522,8 +539,13 @@ export async function applyMediaUnderstanding(params: {
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+    localPathRoots: resolveMediaAttachmentLocalRoots({
+      cfg,
+      ctx,
+      workspaceDir: params.workspaceDir,
+    }),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+    workspaceDir: mediaWorkspaceDir,
   });
 
   try {
@@ -535,7 +557,9 @@ export async function applyMediaUnderstanding(params: {
         ctx,
         attachments: cache,
         media: attachments,
+        agentId: params.agentId,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         providerRegistry,
         config,
         activeModel: params.activeModel,

@@ -3,7 +3,7 @@ import {
   installBrowserControlServerHooks,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch } from "./test-fetch.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 export function installAgentContractHooks() {
   installBrowserControlServerHooks();
@@ -21,7 +21,9 @@ function isTransientStartupFetchError(error: unknown): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function postStartWithRetry(params: {

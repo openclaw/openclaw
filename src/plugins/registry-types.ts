@@ -1,6 +1,6 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OperatorScope } from "../gateway/operator-scopes.js";
+import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -9,7 +9,19 @@ import type {
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
+import type {
+  PluginAgentEventSubscriptionRegistration,
+  PluginControlUiDescriptor,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionExtensionRegistration,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -20,10 +32,12 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginDependencyStatus } from "./status-dependencies.js";
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MusicGenerationProviderPlugin,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliCommandDescriptor,
@@ -33,7 +47,9 @@ import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
+  OpenClawPluginHttpRouteUpgradeHandler,
   OpenClawPluginHttpRouteMatch,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -51,6 +67,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -58,6 +75,7 @@ export type PluginToolRegistration = {
   pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
+  declaredNames?: string[];
   optional: boolean;
   source: string;
   rootDir?: string;
@@ -67,6 +85,7 @@ export type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
+  parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
   source: string;
@@ -77,10 +96,24 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  handleUpgrade?: OpenClawPluginHttpRouteUpgradeHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  gatewayMethodDispatchAllowed?: boolean;
+  nodeCapability?: {
+    surface: string;
+    ttlMs?: number;
+  };
   source?: string;
+};
+
+export type PluginHostedMediaResolverRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  resolver: OpenClawPluginHostedMediaResolver;
+  source: string;
+  rootDir?: string;
 };
 
 export type PluginChannelRegistration = {
@@ -104,6 +137,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginModelCatalogProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: UnifiedModelCatalogProviderPlugin;
   source: string;
   rootDir?: string;
 };
@@ -134,12 +175,16 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
 
 export type PluginSpeechProviderRegistration =
   PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginEmbeddingProviderRegistration =
+  PluginOwnedProviderRegistration<EmbeddingProviderAdapter>;
 export type PluginRealtimeTranscriptionProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
 export type PluginRealtimeVoiceProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
 export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginTranscriptsSourceProviderRegistration =
+  PluginOwnedProviderRegistration<TranscriptSourceProvider>;
 export type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
 export type PluginVideoGenerationProviderRegistration =
@@ -193,6 +238,7 @@ export type PluginServiceRegistration = {
   service: OpenClawPluginService;
   source: string;
   origin: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   rootDir?: string;
 };
 
@@ -220,6 +266,15 @@ export type PluginNodeHostCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginNodeInvokePolicyRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: import("./types.js").OpenClawPluginNodeInvokePolicy;
+  pluginConfig?: Record<string, unknown>;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginSecurityAuditCollectorRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -232,6 +287,71 @@ export type PluginCommandRegistration = {
   pluginId: string;
   pluginName?: string;
   command: OpenClawPluginCommandDefinition;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginSessionExtensionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  extension: PluginSessionExtensionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginTrustedToolPolicyRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: PluginTrustedToolPolicyRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginToolMetadataRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  metadata: PluginToolMetadataRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginControlUiDescriptorRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  descriptor: PluginControlUiDescriptor;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginRuntimeLifecycleRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  lifecycle: PluginRuntimeLifecycleRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginAgentEventSubscriptionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  subscription: PluginAgentEventSubscriptionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginSessionSchedulerJobRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  job: PluginSessionSchedulerJobRegistration;
+  generation?: number;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginSessionActionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  action: PluginSessionActionRegistration;
   source: string;
   rootDir?: string;
 };
@@ -249,6 +369,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  packageName?: string;
   description?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -258,10 +379,12 @@ export type PluginRecord = {
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
   imported?: boolean;
+  compat?: readonly PluginCompatCode[];
   activationSource?: PluginActivationSource;
   activationReason?: string;
   status: "loaded" | "disabled" | "error";
@@ -273,10 +396,13 @@ export type PluginRecord = {
   channelIds: string[];
   cliBackendIds: string[];
   providerIds: string[];
+  syntheticAuthRefs?: string[];
+  embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  transcriptSourceProviderIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
   musicGenerationProviderIds: string[];
@@ -286,7 +412,6 @@ export type PluginRecord = {
   contextEngineIds?: string[];
   memoryEmbeddingProviderIds: string[];
   agentHarnessIds: string[];
-  gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
   gatewayDiscoveryServiceIds: string[];
@@ -298,6 +423,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
+  dependencyStatus?: PluginDependencyStatus;
 };
 
 export type PluginRegistry = {
@@ -308,12 +434,15 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  modelCatalogProviders: PluginModelCatalogProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
+  embeddingProviders: PluginEmbeddingProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
+  transcriptSourceProviders: PluginTranscriptsSourceProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
@@ -325,15 +454,26 @@ export type PluginRegistry = {
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
-  gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
+  gatewayMethodDescriptors: GatewayMethodDescriptor[];
+  coreGatewayMethodNames?: string[];
   httpRoutes: PluginHttpRouteRegistration[];
+  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads?: PluginReloadRegistration[];
   nodeHostCommands?: PluginNodeHostCommandRegistration[];
+  nodeInvokePolicies?: PluginNodeInvokePolicyRegistration[];
   securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
+  sessionExtensions?: PluginSessionExtensionRegistryRegistration[];
+  trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
+  toolMetadata?: PluginToolMetadataRegistryRegistration[];
+  controlUiDescriptors?: PluginControlUiDescriptorRegistryRegistration[];
+  runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
+  agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
+  sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions?: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
@@ -343,6 +483,10 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  hostServices?: {
+    /** May be a live accessor; plugin APIs must read it at call time. */
+    cron?: import("../cron/service-contract.js").CronServiceContract;
+  };
   activateGlobalSideEffects?: boolean;
 };
 

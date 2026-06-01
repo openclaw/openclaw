@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
@@ -11,12 +13,9 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { setupWizardCommand } from "../../commands/onboard.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
-import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -89,10 +88,10 @@ function pickOnboardProviderAuthOptionValues(
   );
 }
 
-export function registerOnboardCommand(program: Command) {
+export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
-    .description("Interactive onboarding for the gateway, workspace, and skills")
+    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
     .addHelpText(
       "after",
       () =>
@@ -105,7 +104,7 @@ export function registerOnboardCommand(program: Command) {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Use the Crestodian conversational onboarding preview", false)
+    .option("--modern", "Use the conversational setup/repair assistant", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -144,6 +143,8 @@ export function registerOnboardCommand(program: Command) {
       "--custom-compatibility <mode>",
       "Custom provider API compatibility: openai|anthropic (default: openai)",
     )
+    .option("--custom-image-input", "Mark the custom provider model as image-capable")
+    .option("--custom-text-input", "Mark the custom provider model as text-only")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -167,6 +168,8 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
+    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
     .option("--import-source <path>", "Source agent home for --import-from")
@@ -174,6 +177,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--json", "Output JSON summary", false);
 
   command.action(async (opts, commandRuntime) => {
+    const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
         const { runCrestodian } = await import("../../crestodian/crestodian.js");
@@ -188,11 +192,11 @@ export function registerOnboardCommand(program: Command) {
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
-      const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+      const gatewayPort = parsePort(opts.gatewayPort);
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
+      const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
@@ -214,10 +218,13 @@ export function registerOnboardCommand(program: Command) {
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
           customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
-          gatewayPort:
-            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-              ? gatewayPort
-              : undefined,
+          customImageInput:
+            opts.customTextInput === true
+              ? false
+              : opts.customImageInput === true
+                ? true
+                : undefined,
+          gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
@@ -237,6 +244,8 @@ export function registerOnboardCommand(program: Command) {
           skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),
+          suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
+          skipHooks: Boolean(opts.skipHooks),
           nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
           importFrom: opts.importFrom as string | undefined,
           importSource: opts.importSource as string | undefined,

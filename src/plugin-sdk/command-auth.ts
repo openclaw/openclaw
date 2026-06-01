@@ -1,17 +1,38 @@
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Use channel ingress/runtime authorization helpers or command-status helpers
+ * instead of this broad compatibility surface.
+ */
+
 import {
   buildCommandsMessage as buildCommandsMessageCompat,
   buildCommandsMessagePaginated as buildCommandsMessagePaginatedCompat,
   buildHelpMessage as buildHelpMessageCompat,
 } from "../auto-reply/command-status-builders.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+import {
+  expandAllowFromWithAccessGroups,
+  type AccessGroupMembershipResolver,
+} from "./access-groups.js";
+import { resolveDmGroupAccessWithLists } from "./channel-access-compat.js";
+export {
+  ACCESS_GROUP_ALLOW_FROM_PREFIX,
+  expandAllowFromWithAccessGroups,
+  parseAccessGroupAllowFromEntry,
+  resolveAccessGroupAllowFromMatches,
+  resolveAccessGroupAllowFromState,
+  type AccessGroupMembershipResolver,
+  type AccessGroupMembershipLookup,
+  type ResolvedAccessGroupAllowFromState,
+} from "./access-groups.js";
 export { buildCommandsPaginationKeyboard } from "./telegram-command-ui.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
   type DirectDmCommandAuthorizationRuntime,
   type ResolvedInboundDirectDmAccess,
-} from "./direct-dm.js";
+} from "../channels/direct-dm-access.js";
 
 export {
   hasControlCommand,
@@ -76,10 +97,9 @@ export {
   listSkillCommandsForAgents,
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
-} from "../auto-reply/skill-commands.js";
-export { getPluginCommandSpecs } from "../plugins/command-specs.js";
-export { listProviderPluginCommandSpecs } from "../plugins/command-registry-state.js";
-export type { SkillCommandSpec } from "../agents/skills.js";
+} from "../skills/discovery/chat-commands.js";
+export { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "../plugins/command-specs.js";
+export type { SkillCommandSpec } from "../skills/types.js";
 export {
   buildModelsProviderData,
   formatModelsAvailableHeader,
@@ -89,6 +109,7 @@ export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js"
 export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 export type { StoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;
   rawBody: string;
@@ -98,14 +119,19 @@ export type ResolveSenderCommandAuthorizationParams = {
   configuredGroupAllowFrom?: string[];
   senderId: string;
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
+  channel?: ChannelId;
+  accountId?: string;
+  resolveAccessGroupMembership?: AccessGroupMembershipResolver;
   readAllowFromStore: () => Promise<string[]>;
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
-  resolveCommandAuthorizedFromAuthorizers: (params: {
+  /** @deprecated Command authorization is resolved by channel ingress. Kept for runtime injection compatibility. */
+  resolveCommandAuthorizedFromAuthorizers?: (params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   }) => boolean;
 };
 
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export type CommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   resolveCommandAuthorizedFromAuthorizers: (params: {
@@ -114,6 +140,7 @@ export type CommandAuthorizationRuntime = {
   }) => boolean;
 };
 
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
   ResolveSenderCommandAuthorizationParams,
   "shouldComputeCommandAuthorized" | "resolveCommandAuthorizedFromAuthorizers"
@@ -121,7 +148,7 @@ export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
   runtime: CommandAuthorizationRuntime;
 };
 
-/** Fast-path DM command authorization when only policy and sender allowlist state matter. */
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export function resolveDirectDmAuthorizationOutcome(params: {
   isGroup: boolean;
   dmPolicy: string;
@@ -133,13 +160,13 @@ export function resolveDirectDmAuthorizationOutcome(params: {
   if (params.dmPolicy === "disabled") {
     return "disabled";
   }
-  if (params.dmPolicy !== "open" && !params.senderAllowedForCommands) {
+  if (!params.senderAllowedForCommands) {
     return "unauthorized";
   }
   return "allowed";
 }
 
-/** Runtime-backed wrapper around sender command authorization for grouped helper surfaces. */
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export async function resolveSenderCommandAuthorizationWithRuntime(
   params: ResolveSenderCommandAuthorizationWithRuntimeParams,
 ): ReturnType<typeof resolveSenderCommandAuthorization> {
@@ -150,7 +177,7 @@ export async function resolveSenderCommandAuthorizationWithRuntime(
   });
 }
 
-/** Compute effective allowlists and command authorization for one inbound sender. */
+/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export async function resolveSenderCommandAuthorization(
   params: ResolveSenderCommandAuthorizationParams,
 ): Promise<{
@@ -162,18 +189,54 @@ export async function resolveSenderCommandAuthorization(
 }> {
   const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
   const storeAllowFrom =
-    !params.isGroup &&
-    params.dmPolicy !== "allowlist" &&
-    (params.dmPolicy !== "open" || shouldComputeAuth)
+    !params.isGroup && params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
       ? await params.readAllowFromStore().catch(() => [])
       : [];
+  const channel = params.channel;
+  const accountId = params.accountId ?? "default";
+  let configuredAllowFrom = params.configuredAllowFrom;
+  let configuredGroupAllowFrom = params.configuredGroupAllowFrom ?? [];
+  let dmStoreAllowFrom = storeAllowFrom;
+  if (channel) {
+    [configuredAllowFrom, configuredGroupAllowFrom] = await Promise.all([
+      expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: params.configuredAllowFrom,
+        channel,
+        accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      }),
+      expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: params.configuredGroupAllowFrom ?? [],
+        channel,
+        accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      }),
+    ]);
+    if (!params.isGroup) {
+      dmStoreAllowFrom = await expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: storeAllowFrom,
+        channel,
+        accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      });
+    }
+  }
   const access = resolveDmGroupAccessWithLists({
     isGroup: params.isGroup,
     dmPolicy: params.dmPolicy,
     groupPolicy: "allowlist",
-    allowFrom: params.configuredAllowFrom,
-    groupAllowFrom: params.configuredGroupAllowFrom ?? [],
-    storeAllowFrom,
+    allowFrom: configuredAllowFrom,
+    groupAllowFrom: configuredGroupAllowFrom,
+    storeAllowFrom: dmStoreAllowFrom,
     isSenderAllowed: (allowFrom) => params.isSenderAllowed(params.senderId, allowFrom),
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
@@ -186,13 +249,13 @@ export async function resolveSenderCommandAuthorization(
   const ownerAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveAllowFrom);
   const groupAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveGroupAllowFrom);
   const commandAuthorized = shouldComputeAuth
-    ? params.resolveCommandAuthorizedFromAuthorizers({
+    ? (params.resolveCommandAuthorizedFromAuthorizers?.({
         useAccessGroups,
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
           { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
         ],
-      })
+      }) ?? senderAllowedForCommands)
     : undefined;
 
   return {

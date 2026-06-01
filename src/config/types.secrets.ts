@@ -19,7 +19,9 @@ export type SecretInput = string | SecretRef;
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
 export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 export const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
+export const LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX = "__env__:"; // pragma: allowlist secret
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
+const ENV_SECRET_SHORTHAND_RE = /^\$([A-Z][A-Z0-9_]{0,127})$/;
 export type SecretInputStringResolutionMode = "strict" | "inspect";
 export type SecretInputStringResolution =
   | { status: "available"; value: string; ref: null }
@@ -72,7 +74,8 @@ export function parseEnvTemplateSecretRef(
   if (typeof value !== "string") {
     return null;
   }
-  const match = ENV_SECRET_TEMPLATE_RE.exec(value.trim());
+  const trimmed = value.trim();
+  const match = ENV_SECRET_TEMPLATE_RE.exec(trimmed) ?? ENV_SECRET_SHORTHAND_RE.exec(trimmed);
   if (!match) {
     return null;
   }
@@ -91,10 +94,15 @@ export function parseLegacySecretRefEnvMarker(
     return null;
   }
   const trimmed = value.trim();
-  if (!trimmed.startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX)) {
+  const prefix = trimmed.startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX)
+    ? LEGACY_SECRETREF_ENV_MARKER_PREFIX
+    : trimmed.startsWith(LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX)
+      ? LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX
+      : undefined;
+  if (!prefix) {
     return null;
   }
-  const id = trimmed.slice(LEGACY_SECRETREF_ENV_MARKER_PREFIX.length);
+  const id = trimmed.slice(prefix.length);
   if (!ENV_SECRET_REF_ID_RE.test(id)) {
     return null;
   }
@@ -108,6 +116,10 @@ export function parseLegacySecretRefEnvMarker(
 export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
   if (isSecretRef(value)) {
     return value;
+  }
+  const legacyEnvMarker = parseLegacySecretRefEnvMarker(value, defaults?.env);
+  if (legacyEnvMarker) {
+    return legacyEnvMarker;
   }
   if (isLegacySecretRefWithoutProvider(value)) {
     const provider =
@@ -259,7 +271,7 @@ export type FileSecretProviderConfig = {
   allowInsecurePath?: boolean;
 };
 
-export type ExecSecretProviderConfig = {
+export type ManualExecSecretProviderConfig = {
   source: "exec";
   command: string;
   args?: string[];
@@ -273,6 +285,18 @@ export type ExecSecretProviderConfig = {
   allowInsecurePath?: boolean;
   allowSymlinkCommand?: boolean;
 };
+
+export type PluginIntegrationSecretProviderConfig = {
+  source: "exec";
+  pluginIntegration: {
+    pluginId: string;
+    integrationId: string;
+  };
+};
+
+export type ExecSecretProviderConfig =
+  | ManualExecSecretProviderConfig
+  | PluginIntegrationSecretProviderConfig;
 
 export type SecretProviderConfig =
   | EnvSecretProviderConfig

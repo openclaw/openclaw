@@ -1,16 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
-);
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-}));
-
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
@@ -58,15 +47,13 @@ describe("memory dreaming host helpers", () => {
       mode: "both",
       separateReports: true,
     });
-    expect(resolved.phases.deep).toMatchObject({
-      cron: "0 */4 * * *",
-      limit: 5,
-      minScore: 0.9,
-      minRecallCount: 4,
-      minUniqueQueries: 2,
-      recencyHalfLifeDays: 21,
-      maxAgeDays: 30,
-    });
+    expect(resolved.phases.deep.cron).toBe("0 */4 * * *");
+    expect(resolved.phases.deep.limit).toBe(5);
+    expect(resolved.phases.deep.minScore).toBe(0.9);
+    expect(resolved.phases.deep.minRecallCount).toBe(4);
+    expect(resolved.phases.deep.minUniqueQueries).toBe(2);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(21);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
   it("lets execution defaults and phase execution override the top-level dreaming model", () => {
@@ -113,13 +100,11 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(false);
     expect(resolved.frequency).toBe("0 3 * * *");
     expect(resolved.timezone).toBe("America/Los_Angeles");
-    expect(resolved.phases.deep).toMatchObject({
-      cron: "0 3 * * *",
-      limit: 10,
-      minScore: 0.8,
-      recencyHalfLifeDays: 14,
-      maxAgeDays: 30,
-    });
+    expect(resolved.phases.deep.cron).toBe("0 3 * * *");
+    expect(resolved.phases.deep.limit).toBe(10);
+    expect(resolved.phases.deep.minScore).toBe(0.8);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
   it("defaults storage mode to separate so phase blocks do not pollute daily memory files", () => {
@@ -164,19 +149,13 @@ describe("memory dreaming host helpers", () => {
   });
 
   it("dedupes shared workspaces across all configured agents", () => {
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
-      if (agentId === "alpha") {
-        return "/workspace/shared";
-      }
-      if (agentId === "gamma") {
-        return "/workspace/shared";
-      }
-      return `/workspace/${agentId}`;
-    });
-
     const cfg = {
       agents: {
-        list: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }],
+        list: [
+          { id: "alpha", workspace: "/workspace/shared" },
+          { id: "beta", workspace: "/workspace/beta" },
+          { id: "gamma", workspace: "/workspace/shared" },
+        ],
       },
     } as OpenClawConfig;
 
@@ -192,14 +171,50 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "agi-ceo", workspace: "/workspace/agi-ceo" },
+          { id: "agi-cdo", workspace: "/workspace/agi-cdo" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, {
+        primaryWorkspaceDir: "/workspace/main",
+        primaryAgentId: "main",
+      }),
+    ).toEqual([
+      {
+        workspaceDir: "/workspace/agi-ceo",
+        agentIds: ["agi-ceo"],
+      },
+      {
+        workspaceDir: "/workspace/agi-cdo",
+        agentIds: ["agi-cdo"],
+      },
+      {
+        workspaceDir: "/workspace/main",
+        agentIds: ["main"],
+      },
+    ]);
+  });
+
   it("uses default agent fallback and timezone-aware day helpers", () => {
-    resolveDefaultAgentId.mockReturnValue("fallback");
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/workspace",
+        },
+      },
+    } as OpenClawConfig;
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
       {
-        workspaceDir: "/workspace/fallback",
-        agentIds: ["fallback"],
+        workspaceDir: "/workspace",
+        agentIds: ["main"],
       },
     ]);
 

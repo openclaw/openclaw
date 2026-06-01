@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-export type IngestMemoryWikiSourceResult = {
+type IngestMemoryWikiSourceResult = {
   sourcePath: string;
   pageId: string;
   pagePath: string;
@@ -15,13 +17,6 @@ export type IngestMemoryWikiSourceResult = {
   created: boolean;
   indexUpdatedFiles: string[];
 };
-
-function pathExists(filePath: string): Promise<boolean> {
-  return fs
-    .access(filePath)
-    .then(() => true)
-    .catch(() => false);
-}
 
 function resolveSourceTitle(sourcePath: string, explicitTitle?: string): string {
   if (explicitTitle?.trim()) {
@@ -54,7 +49,7 @@ export async function ingestMemoryWikiSource(params: {
   const pageRelativePath = path.join("sources", `${slug}.md`);
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
-  const timestamp = new Date(params.nowMs ?? Date.now()).toISOString();
+  const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
 
   const markdown = renderWikiMarkdown({
     frontmatter: {

@@ -1,9 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJson, writeJson } from "../infra/json-files.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   executeCrestodianOperation,
@@ -81,8 +86,13 @@ async function readPending(
   now = new Date(),
 ): Promise<RescuePendingOperation | null> {
   try {
-    const parsed = JSON.parse(await fs.readFile(pendingPath, "utf8")) as RescuePendingOperation;
-    if (Date.parse(parsed.expiresAt) <= now.getTime()) {
+    const parsed = await tryReadJson<RescuePendingOperation>(pendingPath);
+    if (!parsed) {
+      return null;
+    }
+    const expiresAtMs = asDateTimestampMs(Date.parse(parsed.expiresAt));
+    const nowMs = asDateTimestampMs(now.getTime());
+    if (expiresAtMs === undefined || nowMs === undefined || expiresAtMs <= nowMs) {
       await fs.rm(pendingPath, { force: true });
       return null;
     }
@@ -93,13 +103,10 @@ async function readPending(
 }
 
 async function writePending(pendingPath: string, pending: RescuePendingOperation): Promise<void> {
-  await fs.mkdir(path.dirname(pendingPath), { recursive: true });
-  await fs.writeFile(pendingPath, `${JSON.stringify(pending, null, 2)}\n`, {
-    encoding: "utf8",
+  await writeJson(pendingPath, pending, {
+    dirMode: 0o700,
     mode: 0o600,
-  });
-  await fs.chmod(pendingPath, 0o600).catch(() => {
-    // Best-effort on platforms/filesystems without POSIX modes.
+    trailingNewline: true,
   });
 }
 
@@ -125,6 +132,12 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
     return [
       "Crestodian rescue cannot open the local TUI from a message channel.",
       "Use local `openclaw` for agent handoff, or ask for status, doctor, config, gateway, agents, or models.",
+    ].join(" ");
+  }
+  if (operation.kind === "plugin-install") {
+    return [
+      "Crestodian rescue cannot install plugins from a message channel by default because plugin install downloads executable code.",
+      "Use local `openclaw crestodian` or `openclaw plugins install` instead.",
     ].join(" ");
   }
   return null;
@@ -175,11 +188,18 @@ export async function runCrestodianRescueMessage(
   }
   if (isPersistentCrestodianOperation(operation)) {
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + policy.pendingTtlMinutes * 60_000);
+    const nowMs = asDateTimestampMs(now.getTime());
+    const expiresAtMs =
+      nowMs === undefined
+        ? undefined
+        : resolveExpiresAtMsFromDurationMs(policy.pendingTtlMinutes * 60_000, { nowMs });
+    if (expiresAtMs === undefined) {
+      return "Crestodian rescue could not create a pending approval because the expiry clock is invalid.";
+    }
     await writePending(pendingPath, {
       id: randomUUID(),
       createdAt: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
       operation,
       auditDetails: buildAuditDetails(input),
     });

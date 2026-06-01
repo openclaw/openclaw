@@ -47,7 +47,10 @@ type AvailabilityDeps = {
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
-  isReachable: (timeoutMs?: number) => Promise<boolean>;
+  isReachable: (
+    timeoutMs?: number,
+    options?: { ephemeral?: boolean; signal?: AbortSignal },
+  ) => Promise<boolean>;
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
 };
@@ -150,11 +153,26 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
-  const isReachable = async (timeoutMs?: number) => {
+  const isReachable = async (
+    timeoutMs?: number,
+    options?: { ephemeral?: boolean; signal?: AbortSignal },
+  ) => {
     if (capabilities.usesChromeMcp) {
-      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
+      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required.
+      // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
+      // but do not seed a new persistent session as a side effect of read-only status calls.
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      await listChromeMcpTabs(profile.name, profile);
+      const callOptions: { timeoutMs?: number; ephemeral?: boolean; signal?: AbortSignal } = {};
+      if (timeoutMs != null) {
+        callOptions.timeoutMs = timeoutMs;
+      }
+      if (options?.ephemeral) {
+        callOptions.ephemeral = true;
+      }
+      if (options?.signal) {
+        callOptions.signal = options.signal;
+      }
+      await listChromeMcpTabs(profile.name, profile, callOptions);
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -268,7 +286,9 @@ export function createProfileAvailability({
       if (await isReachable(attemptTimeoutMs)) {
         return;
       }
-      await new Promise((r) => setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS);
+      });
     }
     throw new Error(
       `Chrome CDP websocket for profile "${profile.name}" is not reachable after start. ${await describeCdpFailure(
@@ -288,7 +308,9 @@ export function createProfileAvailability({
       } catch (err) {
         lastError = err;
       }
-      await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS);
+      });
     }
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };

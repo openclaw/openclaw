@@ -7,7 +7,7 @@ title: "Onboard"
 
 # `openclaw onboard`
 
-Interactive onboarding for local or remote Gateway setup.
+Full guided onboarding for local or remote Gateway setup. Use this when you want OpenClaw to walk through model auth, workspace, gateway, channels, skills, and health in one flow.
 
 ## Related guides
 
@@ -47,10 +47,36 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
 
-For plaintext private-network `ws://` targets (trusted networks only), set
+On a fresh install where the active config file is missing or has no authored
+settings (empty or metadata-only), bare `openclaw` also starts the classic
+onboarding flow. Once a config file has authored settings, bare `openclaw`
+opens Crestodian instead.
+
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
+Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
-There is no `openclaw.json` equivalent for this client-side transport
-break-glass.
+
+## Locale
+
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. Resolve
+order is:
+
+1. `OPENCLAW_LOCALE`
+2. `LC_ALL`
+3. `LC_MESSAGES`
+4. `LANG`
+5. English fallback
+
+Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use
+underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command
+names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
+remain literal.
+
+Example:
+
+```bash
+OPENCLAW_LOCALE=zh-CN openclaw onboard
+```
 
 Non-interactive custom provider:
 
@@ -61,10 +87,12 @@ openclaw onboard --non-interactive \
   --custom-model-id "foo-large" \
   --custom-api-key "$CUSTOM_API_KEY" \
   --secret-input-mode plaintext \
-  --custom-compatibility openai
+  --custom-compatibility openai \
+  --custom-image-input
 ```
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+OpenClaw marks common vision model IDs as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
 
 LM Studio also supports a provider-specific key flag in non-interactive mode:
 
@@ -117,6 +145,8 @@ Gateway token options in non-interactive mode:
 - With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
 - With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. If a later config file is missing `gateway.mode`, treat that as config damage or an incomplete manual edit, not as a valid local-mode shortcut.
+- Local onboarding installs selected downloadable plugins when the chosen setup path requires them.
+- Remote onboarding only writes connection info for the remote Gateway and does not install local plugin packages.
 - `--allow-unconfigured` is a separate gateway runtime escape hatch. It does not mean onboarding may omit `gateway.mode`.
 
 Example:
@@ -181,6 +211,7 @@ openclaw onboard --non-interactive \
     - `quickstart`: minimal prompts, auto-generates a gateway token.
     - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
     - `import`: runs a detected migration provider, previews the plan, then applies after confirmation.
+
   </Accordion>
   <Accordion title="Provider prefiltering">
     When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider. For Volcengine and BytePlus, this also matches the coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`).
@@ -191,7 +222,7 @@ openclaw onboard --non-interactive \
   <Accordion title="Web-search follow-ups">
     Some web-search providers trigger provider-specific follow-up prompts:
 
-    - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY` and an `x_search` model choice.
+    - **Grok** can offer optional `x_search` setup with the same xAI OAuth profile or API key and an `x_search` model choice.
     - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs `api.moonshot.cn`) and the default Kimi web-search model.
 
   </Accordion>
@@ -200,15 +231,19 @@ openclaw onboard --non-interactive \
     - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
     - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
     - If Hermes state is detected, onboarding offers a migration flow. Use [Migrate](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+
   </Accordion>
 </AccordionGroup>
 
 ## Common follow-up commands
 
 ```bash
+openclaw channels add
 openclaw configure
 openclaw agents add <name>
 ```
+
+Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

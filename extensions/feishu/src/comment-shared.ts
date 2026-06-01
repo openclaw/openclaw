@@ -1,10 +1,9 @@
 import {
-  asOptionalRecord,
-  hasNonEmptyString as sharedHasNonEmptyString,
   isRecord as sharedIsRecord,
   normalizeOptionalString,
+  normalizeStringEntries,
   readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FEISHU_COMMENT_FILE_TYPES, type CommentFileType } from "./comment-target.js";
 
 export function encodeQuery(params: Record<string, string | undefined>): string {
@@ -25,10 +24,6 @@ export const normalizeString = normalizeOptionalString;
 
 export const isRecord = sharedIsRecord;
 
-export const asRecord = asOptionalRecord;
-
-export const hasNonEmptyString = sharedHasNonEmptyString;
-
 export function formatFeishuApiError(
   error: unknown,
   options: {
@@ -47,6 +42,7 @@ export function formatFeishuApiError(
     (options.includeNestedErrorLogId
       ? readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined)
       : undefined);
+  const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
 
   return JSON.stringify({
     message:
@@ -64,21 +60,61 @@ export function formatFeishuApiError(
       typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
     feishu_msg: readString(responseData?.msg),
     feishu_log_id: feishuLogId,
+    feishu_troubleshooter:
+      readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
   });
 }
 
-export type ParsedCommentDocumentRef = {
+function formatFeishuApiFailure(
+  error: unknown,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): string {
+  const details = formatFeishuApiError(error, options);
+  return `${errorPrefix}: ${details || "unknown error"}`;
+}
+
+export function createFeishuApiError(
+  error: unknown,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): Error {
+  return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
+}
+
+export async function requestFeishuApi<T>(
+  request: () => Promise<T>,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    throw createFeishuApiError(error, errorPrefix, options);
+  }
+}
+
+type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;
 };
 
-export type ParsedCommentMention = {
+type ParsedCommentMention = {
   userId: string;
   displayText: string;
   isBotMention: boolean;
 };
 
-export type ParsedCommentLinkedDocumentKind =
+type ParsedCommentLinkedDocumentKind =
   | CommentFileType
   | "wiki"
   | "mindnote"
@@ -86,7 +122,7 @@ export type ParsedCommentLinkedDocumentKind =
   | "base"
   | "unknown";
 
-export type ParsedCommentResolvedDocumentType = Exclude<
+type ParsedCommentResolvedDocumentType = Exclude<
   ParsedCommentLinkedDocumentKind,
   "wiki" | "unknown"
 >;
@@ -202,10 +238,7 @@ function parseCommentLinkedDocumentPath(pathname: string): {
   urlKind: ParsedCommentResolvedDocumentType | "wiki";
   token: string;
 } | null {
-  const segments = pathname
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = normalizeStringEntries(pathname.split("/"));
   const offset = segments[0]?.toLowerCase() === "space" ? 1 : 0;
   const kind = COMMENT_LINK_KIND_ALIASES.get(segments[offset]?.toLowerCase() ?? "");
   const token = normalizeString(segments[offset + 1]);
@@ -357,10 +390,6 @@ export function parseCommentContentElements(params: {
     linkedDocuments,
     botMentioned,
   };
-}
-
-export function extractCommentElementText(element: unknown): string | undefined {
-  return parseCommentContentElements({ elements: [element] }).plainText;
 }
 
 export function extractReplyText(

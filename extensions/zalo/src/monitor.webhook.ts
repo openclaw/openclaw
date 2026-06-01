@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
@@ -266,7 +266,7 @@ export async function handleZaloWebhookRequest(
         update,
         processUpdate,
         nowMs,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 

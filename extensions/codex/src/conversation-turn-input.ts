@@ -1,5 +1,7 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeSingleOrTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexUserInput } from "./app-server/protocol.js";
 
 type InboundMedia = {
@@ -27,10 +29,14 @@ function extractInboundMedia(event: PluginHookInboundClaimEvent): InboundMedia[]
   // OpenClaw channels expose either local staged files or remote URLs. Keep
   // them separate so Codex can receive the cheaper localImage input when a file
   // is already present, while still supporting remote-only transports.
-  const paths = readStringArray(metadata.mediaPaths).concat(readStringArray(metadata.mediaPath));
-  const urls = readStringArray(metadata.mediaUrls).concat(readStringArray(metadata.mediaUrl));
-  const mimeTypes = readStringArray(metadata.mediaTypes).concat(
-    readStringArray(metadata.mediaType),
+  const paths = normalizeSingleOrTrimmedStringList(metadata.mediaPaths).concat(
+    normalizeSingleOrTrimmedStringList(metadata.mediaPath),
+  );
+  const urls = normalizeSingleOrTrimmedStringList(metadata.mediaUrls).concat(
+    normalizeSingleOrTrimmedStringList(metadata.mediaUrl),
+  );
+  const mimeTypes = normalizeSingleOrTrimmedStringList(metadata.mediaTypes).concat(
+    normalizeSingleOrTrimmedStringList(metadata.mediaType),
   );
   const count = Math.max(paths.length, urls.length, mimeTypes.length);
   const media: InboundMedia[] = [];
@@ -48,8 +54,10 @@ function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
   if (!isImageMedia(media)) {
     return undefined;
   }
-  if (media.path) {
-    return { type: "localImage", path: normalizeFileUrl(media.path) };
+  const localPath = media.path ?? readLocalMediaPath(media.url);
+  if (localPath) {
+    const normalized = normalizeFileUrl(localPath);
+    return normalized ? { type: "localImage", path: normalized } : undefined;
   }
   return media.url ? { type: "image", url: media.url } : undefined;
 }
@@ -65,16 +73,29 @@ function isImageMedia(media: InboundMedia): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
 }
 
-function normalizeFileUrl(value: string): string {
-  return value.startsWith("file://") ? new URL(value).pathname : value;
+function normalizeFileUrl(value: string): string | undefined {
+  if (!value.startsWith("file://")) {
+    return value;
+  }
+  try {
+    return fileURLToPath(value);
+  } catch {
+    return undefined;
+  }
 }
 
-function readStringArray(value: unknown): string[] {
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
+function readLocalMediaPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
   }
-  if (!Array.isArray(value)) {
-    return [];
+  if (value.startsWith("file://")) {
+    return value;
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  if (value.startsWith("//")) {
+    return undefined;
+  }
+  if (path.isAbsolute(value) || path.win32.isAbsolute(value)) {
+    return value;
+  }
+  return /^[a-z][a-z0-9+.-]*:/i.test(value) ? undefined : value;
 }

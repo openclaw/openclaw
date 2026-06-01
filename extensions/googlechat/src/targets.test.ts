@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isSenderAllowed } from "./sender-allow.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -37,6 +36,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
 vi.mock("gaxios", () => ({
   Gaxios: class {
     defaults: unknown;
+    interceptors = {
+      request: { add: vi.fn() },
+      response: { add: vi.fn() },
+    };
 
     constructor(defaults?: unknown) {
       this.defaults = defaults;
@@ -74,7 +77,15 @@ vi.mock("./auth.js", async () => {
 });
 
 const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
-const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+const { testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
+  vi.doUnmock("./auth.js");
+  vi.resetModules();
+});
 
 const account = {
   accountId: "default",
@@ -91,11 +102,22 @@ function stubSuccessfulSend(name: string) {
   return fetchMock;
 }
 
-async function expectDownloadToRejectForResponse(response: Response) {
+async function expectDownloadToRejectForResponse(
+  response: Response,
+  expected: string | RegExp = /max bytes/i,
+) {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
   await expect(
     downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-  ).rejects.toThrow(/max bytes/i);
+  ).rejects.toThrow(expected);
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
 describe("normalizeGoogleChatTarget", () => {
@@ -146,29 +168,6 @@ describe("googlechat group policy", () => {
   });
 });
 
-describe("isSenderAllowed", () => {
-  it("matches raw email entries only when dangerous name matching is enabled", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"])).toBe(false);
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"], true)).toBe(true);
-  });
-
-  it("does not treat users/<email> entries as email allowlist (deprecated form)", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["users/jane@example.com"])).toBe(
-      false,
-    );
-  });
-
-  it("still matches user id entries", () => {
-    expect(isSenderAllowed("users/abc", "jane@example.com", ["users/abc"])).toBe(true);
-  });
-
-  it("rejects non-matching raw email entries", () => {
-    expect(isSenderAllowed("users/123", "jane@example.com", ["other@example.com"], true)).toBe(
-      false,
-    );
-  });
-});
-
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     authTesting.resetGoogleChatAuthForTests();
@@ -188,6 +187,22 @@ describe("downloadGoogleChatMedia", () => {
       headers: { "content-length": "50", "content-type": "application/octet-stream" },
     });
     await expectDownloadToRejectForResponse(response);
+  });
+
+  it("rejects malformed content-length before reading media", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        "content-length": "0x3",
+        "content-type": "application/octet-stream",
+      }),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expectDownloadToRejectForResponse(response, "invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
   it("rejects when streamed payload exceeds max bytes", async () => {
@@ -227,12 +242,18 @@ describe("sendGoogleChatMessage", () => {
       thread: "spaces/AAA/threads/xyz",
     });
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const url = mockCallArg(fetchMock);
+    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
     expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      text: "hello",
-      thread: { name: "spaces/AAA/threads/xyz" },
-    });
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected Google Chat request body");
+    }
+    const body = JSON.parse(init.body) as {
+      text?: unknown;
+      thread?: { name?: unknown };
+    };
+    expect(body.text).toBe("hello");
+    expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
@@ -244,8 +265,28 @@ describe("sendGoogleChatMessage", () => {
       text: "hello",
     });
 
-    const [url] = fetchMock.mock.calls[0] ?? [];
+    const url = mockCallArg(fetchMock);
     expect(String(url)).not.toContain("messageReplyOption=");
+  });
+
+  it("reports malformed send JSON with a stable API error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      sendGoogleChatMessage({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+      }),
+    ).rejects.toThrow("Google Chat API request failed: malformed JSON response");
   });
 });
 
@@ -280,25 +321,17 @@ describe("verifyGoogleChatRequest", () => {
       }),
     ).resolves.toBe("access-token");
 
-    const googleAuthOptions = mocks.googleAuthCtor.mock.calls[0]?.[0] as {
+    const googleAuthOptions = mockCallArg(mocks.googleAuthCtor) as {
       clientOptions?: { transporter?: { defaults?: { fetchImplementation?: unknown } } };
       credentials?: { client_email?: string; token_uri?: string };
     };
 
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
-    expect(googleAuthOptions).toMatchObject({
-      clientOptions: {
-        transporter: {
-          defaults: {
-            fetchImplementation: expect.any(Function),
-          },
-        },
-      },
-      credentials: {
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-      },
-    });
+    expect(googleAuthOptions.credentials?.client_email).toBe("bot@example.iam.gserviceaccount.com");
+    expect(googleAuthOptions.credentials?.token_uri).toBe("https://oauth2.googleapis.com/token");
+    expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
+      "function",
+    );
     expect(mocks.getAccessToken).toHaveBeenCalledOnce();
     expect("window" in globalThis).toBe(false);
   });
@@ -318,16 +351,10 @@ describe("verifyGoogleChatRequest", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
+    const oauthOptions = mockCallArg(mocks.oauthCtor) as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
     };
-    expect(oauthOptions).toMatchObject({
-      transporter: {
-        defaults: {
-          fetchImplementation: expect.any(Function),
-        },
-      },
-    });
+    expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {
@@ -416,6 +443,30 @@ describe("verifyGoogleChatRequest", () => {
       "123456789",
       ["chat@system.gserviceaccount.com"],
     );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports malformed Chat cert JSON with a stable auth error", async () => {
+    authTesting.resetGoogleChatAuthForTests();
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "Google Chat cert fetch failed: malformed JSON response",
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 });

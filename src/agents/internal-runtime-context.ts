@@ -4,12 +4,15 @@ export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
+export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
+export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the immediately preceding user message.";
+export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
+export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
-  [
-    "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored. Keep internal details private.",
-    "",
-  ].join("\n") + "\n";
+  ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
 const LEGACY_INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
@@ -37,12 +40,17 @@ function findDelimitedTokenIndex(text: string, token: string, from: number): num
   return match.index + prefixLength;
 }
 
-function stripDelimitedBlock(text: string, begin: string, end: string): string {
+function extractDelimitedBlocks(
+  text: string,
+  begin: string,
+  end: string,
+): { text: string; blocks: string[] } {
   let next = text;
+  const blocks: string[] = [];
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
-      return next;
+      return { text: next, blocks };
     }
 
     let cursor = start + begin.length;
@@ -66,11 +74,17 @@ function stripDelimitedBlock(text: string, begin: string, end: string): string {
 
     const before = next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return before;
+      return { text: before, blocks };
     }
-    const after = next.slice(finish + end.length).trimStart();
+    const blockEnd = finish + end.length;
+    blocks.push(next.slice(start, blockEnd).trim());
+    const after = next.slice(blockEnd).trimStart();
     next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
   }
+}
+
+function stripDelimitedBlock(text: string, begin: string, end: string): string {
+  return extractDelimitedBlocks(text, begin, end).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -154,6 +168,42 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
+function isRuntimeContextPromptHeader(line: string): boolean {
+  return (
+    line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER || line === OPENCLAW_RUNTIME_EVENT_HEADER
+  );
+}
+
+function stripRuntimeContextPromptPreface(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let changed = false;
+  const output: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const nextLine = lines[index + 1] ?? "";
+    if (
+      isRuntimeContextPromptHeader(line.trim()) &&
+      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
+    ) {
+      changed = true;
+      index += 1;
+      while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
+        index += 1;
+      }
+      continue;
+    }
+    output.push(line);
+  }
+
+  return changed
+    ? output
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    : text;
+}
+
 export function stripInternalRuntimeContext(text: string): string {
   if (!text) {
     return text;
@@ -163,7 +213,24 @@ export function stripInternalRuntimeContext(text: string): string {
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     INTERNAL_RUNTIME_CONTEXT_END,
   );
-  return stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
+  return stripRuntimeContextPromptPreface(
+    stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
+  );
+}
+
+export function extractInternalRuntimeContext(text: string): {
+  text: string;
+  runtimeContext?: string;
+} {
+  const extracted = extractDelimitedBlocks(
+    text,
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+  );
+  return {
+    text: extracted.text,
+    ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
+  };
 }
 
 export function hasInternalRuntimeContext(text: string): boolean {
@@ -172,6 +239,57 @@ export function hasInternalRuntimeContext(text: string): boolean {
   }
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
-    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER)
+    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
+    text.includes(
+      `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
+    ) ||
+    text.includes(`${OPENCLAW_RUNTIME_EVENT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`)
   );
+}
+
+function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as { role?: unknown; customType?: unknown };
+  return (
+    candidate.role === "custom" && candidate.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE
+  );
+}
+
+export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
+  if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
+    return messages;
+  }
+  return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+}
+
+function isUserMessage(message: unknown): boolean {
+  return Boolean(
+    message && typeof message === "object" && (message as { role?: unknown }).role === "user",
+  );
+}
+
+/** Keeps only current-turn runtime context positioned immediately before the active user. */
+export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
+  if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
+    return messages;
+  }
+  const lastUserIndex = messages.findLastIndex(isUserMessage);
+  if (lastUserIndex === -1) {
+    return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+  }
+  const currentRuntimeContextIndexes = new Set<number>();
+  for (let index = lastUserIndex - 1; index >= 0; index -= 1) {
+    if (!isOpenClawRuntimeContextCustomMessage(messages[index])) {
+      break;
+    }
+    currentRuntimeContextIndexes.add(index);
+  }
+  return messages.filter((message, index) => {
+    if (!isOpenClawRuntimeContextCustomMessage(message)) {
+      return true;
+    }
+    return currentRuntimeContextIndexes.has(index);
+  });
 }

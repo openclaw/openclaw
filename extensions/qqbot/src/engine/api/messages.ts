@@ -13,6 +13,7 @@ import type {
   OutboundMeta,
   EngineLogger,
   InlineKeyboard,
+  StreamMessageRequest,
 } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { ApiClient } from "./api-client.js";
@@ -23,10 +24,11 @@ import {
   gatewayPath,
   interactionPath,
   getNextMsgSeq,
+  streamMessagePath,
 } from "./routes.js";
 import { TokenManager } from "./token.js";
 
-export interface MessageApiConfig {
+interface MessageApiConfig {
   /** Whether the QQ Bot has markdown permission. */
   markdownSupport: boolean;
   /** Logger for diagnostics. */
@@ -96,6 +98,7 @@ export class MessageApi {
       msgId?: string;
       messageReference?: string;
       inlineKeyboard?: InlineKeyboard;
+      forcePlainText?: boolean;
     },
   ): Promise<MessageResponse> {
     const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
@@ -106,6 +109,7 @@ export class MessageApi {
       msgSeq,
       opts?.messageReference,
       opts?.inlineKeyboard,
+      opts?.forcePlainText,
     );
     const path = messagePath(scope, targetId);
     return this.sendAndNotify(creds.appId, token, "POST", path, body, { text: content });
@@ -117,12 +121,13 @@ export class MessageApi {
     targetId: string,
     content: string,
     creds: Credentials,
+    opts?: { forcePlainText?: boolean },
   ): Promise<MessageResponse> {
     if (!content?.trim()) {
       throw new Error("Proactive message content must not be empty");
     }
     const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
-    const body = this.buildProactiveBody(content);
+    const body = this.buildProactiveBody(content, opts?.forcePlainText);
     const path = messagePath(scope, targetId);
     return this.sendAndNotify(creds.appId, token, "POST", path, body, { text: content });
   }
@@ -204,10 +209,37 @@ export class MessageApi {
     return data.url;
   }
 
+  /**
+   * Send a C2C stream message chunk (`/v2/users/{openid}/stream_messages`).
+   * Only supported for one-to-one chats.
+   */
+  async sendC2CStreamMessage(
+    creds: Credentials,
+    openid: string,
+    req: StreamMessageRequest,
+  ): Promise<MessageResponse> {
+    const token = await this.tokenManager.getAccessToken(creds.appId, creds.clientSecret);
+    const path = streamMessagePath(openid);
+    const body: Record<string, unknown> = {
+      input_mode: req.input_mode,
+      input_state: req.input_state,
+      content_type: req.content_type,
+      content_raw: req.content_raw,
+      event_id: req.event_id,
+      msg_id: req.msg_id,
+      msg_seq: req.msg_seq,
+      index: req.index,
+    };
+    if (req.stream_msg_id) {
+      body.stream_msg_id = req.stream_msg_id;
+    }
+    return this.client.request<MessageResponse>(token, "POST", path, body);
+  }
+
   // ---- Internal ----
 
   private async sendAndNotify(
-    appId: string,
+    _appId: string,
     accessToken: string,
     method: string,
     path: string,
@@ -233,15 +265,17 @@ export class MessageApi {
     msgSeq: number,
     messageReference?: string,
     inlineKeyboard?: InlineKeyboard,
+    forcePlainText = false,
   ): Record<string, unknown> {
-    const body: Record<string, unknown> = this.markdownSupport
+    const useMarkdown = this.markdownSupport && !forcePlainText;
+    const body: Record<string, unknown> = useMarkdown
       ? { markdown: { content }, msg_type: 2, msg_seq: msgSeq }
       : { content, msg_type: 0, msg_seq: msgSeq };
 
     if (msgId) {
       body.msg_id = msgId;
     }
-    if (messageReference && !this.markdownSupport) {
+    if (messageReference && !useMarkdown) {
       body.message_reference = { message_id: messageReference };
     }
     if (inlineKeyboard) {
@@ -250,8 +284,10 @@ export class MessageApi {
     return body;
   }
 
-  private buildProactiveBody(content: string): Record<string, unknown> {
-    return this.markdownSupport ? { markdown: { content }, msg_type: 2 } : { content, msg_type: 0 };
+  private buildProactiveBody(content: string, forcePlainText = false): Record<string, unknown> {
+    return this.markdownSupport && !forcePlainText
+      ? { markdown: { content }, msg_type: 2 }
+      : { content, msg_type: 0 };
   }
 }
 
@@ -262,6 +298,3 @@ export interface Credentials {
   appId: string;
   clientSecret: string;
 }
-
-// Re-export getNextMsgSeq for consumers that import from messages.ts.
-export { getNextMsgSeq } from "./routes.js";

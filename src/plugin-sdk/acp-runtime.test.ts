@@ -50,6 +50,15 @@ const ctx = {
   markIdle: vi.fn(),
 };
 
+function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
+  expect(dispatchMock).toHaveBeenCalledTimes(1);
+  const [payload] = dispatchMock.mock.calls[0] ?? [];
+  expect(payload).toBeTypeOf("object");
+  for (const [key, value] of Object.entries(expected)) {
+    expect((payload as Record<string, unknown>)[key]).toBe(value);
+  }
+}
+
 describe("tryDispatchAcpReplyHook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,6 +83,26 @@ describe("tryDispatchAcpReplyHook", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("skips ACP runtime lookup for non-command deny turns even when CommandBody is populated", async () => {
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        sendPolicy: "deny",
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          CommandBody: "write a test",
+          BodyForCommands: "write a test",
+          BodyForAgent: "write a test",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(bypassMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("skips ACP dispatch when send policy denies delivery and no bypass applies", async () => {
     bypassMock.mockResolvedValue(false);
 
@@ -81,6 +110,40 @@ describe("tryDispatchAcpReplyHook", () => {
 
     expect(result).toBeUndefined();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("checks command bypass when BodyForCommands has the clean command and CommandBody has an envelope", async () => {
+    bypassMock.mockResolvedValue(true);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    const wrappedEvent = {
+      ...event,
+      sendPolicy: "deny" as const,
+      ctx: buildTestCtx({
+        SessionKey: "agent:test:session",
+        CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
+        BodyForCommands: "/status",
+        BodyForAgent: "/status",
+      }),
+    };
+
+    const result = await tryDispatchAcpReplyHook(wrappedEvent, ctx);
+
+    expect(bypassMock).toHaveBeenCalledWith(wrappedEvent.ctx, ctx.cfg);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: wrappedEvent.ctx,
+        bypassForCommand: true,
+      }),
+    );
+    expect(result).toEqual({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
   });
 
   it("dispatches through ACP when command bypass applies", async () => {
@@ -97,14 +160,41 @@ describe("tryDispatchAcpReplyHook", () => {
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },
     });
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: event.ctx,
-        cfg: ctx.cfg,
-        dispatcher: ctx.dispatcher,
-        bypassForCommand: true,
-      }),
-    );
+    expectDispatchPayloadFields({
+      ctx: event.ctx,
+      cfg: ctx.cfg,
+      dispatcher: ctx.dispatcher,
+      bypassForCommand: true,
+    });
+  });
+
+  it("passes a live tool-summary predicate through to ACP runtime", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    let shouldSendToolSummaries = true;
+    const eventWithGetter = {
+      ...event,
+      get shouldSendToolSummaries() {
+        return shouldSendToolSummaries;
+      },
+    };
+
+    await tryDispatchAcpReplyHook(eventWithGetter, ctx);
+
+    expectDispatchPayloadFields({
+      shouldSendToolSummaries: true,
+    });
+    const [payload] = dispatchMock.mock.calls[0] ?? [];
+    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
+      .shouldSendToolSummariesNow;
+    expect(livePredicate).toBeTypeOf("function");
+    expect(livePredicate?.()).toBe(true);
+
+    shouldSendToolSummaries = false;
+    expect(livePredicate?.()).toBe(false);
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {
@@ -141,13 +231,11 @@ describe("tryDispatchAcpReplyHook", () => {
     // Non-tail, non-command ACP turns under deny must still flow through ACP
     // runtime so session/tool state stays consistent — delivery suppression is
     // handled inside the ACP delivery path via suppressUserDelivery.
-    expect(dispatchMock).toHaveBeenCalledOnce();
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        suppressUserDelivery: true,
-        bypassForCommand: false,
-      }),
-    );
+    expectDispatchPayloadFields({
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: true,
+      bypassForCommand: false,
+    });
     expect(result).toEqual({
       handled: true,
       queuedFinal: false,
@@ -203,10 +291,8 @@ describe("tryDispatchAcpReplyHook", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bypassForCommand: true,
-      }),
-    );
+    expectDispatchPayloadFields({
+      bypassForCommand: true,
+    });
   });
 });

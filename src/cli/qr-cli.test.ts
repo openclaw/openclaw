@@ -17,7 +17,7 @@ const runtimeLog = runtime.log;
 const runtimeError = runtime.error;
 const runtimeExit = runtime.exit;
 
-vi.mock("../runtime.js", async () => {
+vi.doMock("../runtime.js", async () => {
   return mockRuntimeModule(
     () => vi.importActual<typeof import("../runtime.js")>("../runtime.js"),
     runtime,
@@ -135,7 +135,8 @@ describe("registerQrCli", () => {
   }
 
   function parseLastLoggedQrJson() {
-    const raw = runtimeLog.mock.calls.at(-1)?.[0];
+    const calls = runtimeLog.mock.calls;
+    const raw = calls[calls.length - 1]?.[0];
     return JSON.parse(typeof raw === "string" ? raw : "{}") as {
       setupCode?: string;
       gatewayUrl?: string;
@@ -258,6 +259,22 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
 
     expectLoggedSetupCode("ws://10.0.2.2:18789");
+  });
+
+  it("rejects invalid override urls before printing setup codes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only", "--url", "http://localhost:notaport"]);
+
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("Configured publicUrl is invalid.");
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("accepts --token override when config has no auth", async () => {
@@ -389,12 +406,31 @@ describe("registerQrCli", () => {
       bootstrapToken: "bootstrap-123",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandName: "qr --remote",
-        targetIds: new Set(["gateway.remote.token", "gateway.remote.password"]),
-      }),
-    );
+    const request = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as
+      | { commandName?: string; targetIds?: Set<string> }
+      | undefined;
+    if (!request) {
+      throw new Error("expected command secret resolution request");
+    }
+    expect(request.commandName).toBe("qr --remote");
+    expect(request.targetIds).toEqual(new Set(["gateway.remote.token", "gateway.remote.password"]));
+  });
+
+  it("rejects invalid gateway.remote.url before printing remote setup codes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        remote: { url: "http://localhost:notaport", token: "remote-tok" },
+        auth: { mode: "token", token: "local-tok" },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only", "--remote"]);
+
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("Configured gateway.remote.url is invalid.");
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("logs remote secret diagnostics in non-json output mode", async () => {

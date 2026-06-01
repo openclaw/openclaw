@@ -1,9 +1,12 @@
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import { fetchDeepSeekUsage } from "openclaw/plugin-sdk/provider-usage";
 import { applyDeepSeekConfig, DEEPSEEK_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
+import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "deepseek";
 
@@ -44,11 +47,21 @@ export default defineSingleProviderPluginEntry({
       }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bdeepseek\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
-    ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      dropReasoningFromHistory: false,
+    }),
+    ...buildProviderToolCompatFamilyHooks("deepseek"),
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
-    isModernModelRef: ({ modelId }) => {
-      const lower = modelId.toLowerCase();
-      return lower === "deepseek-v4-flash" || lower === "deepseek-v4-pro";
+    resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
+    isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
+    resolveUsageAuth: async (ctx) => {
+      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+        envDirect: [ctx.env.DEEPSEEK_API_KEY],
+      });
+      return apiKey ? { token: apiKey } : null;
     },
+    fetchUsageSnapshot: async (ctx) =>
+      await fetchDeepSeekUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
   },
 });

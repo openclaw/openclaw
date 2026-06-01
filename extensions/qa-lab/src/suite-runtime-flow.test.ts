@@ -22,6 +22,7 @@ const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
@@ -38,6 +39,7 @@ const callPluginToolsMcp = vi.hoisted(() => vi.fn());
 const runAgentPrompt = vi.hoisted(() => vi.fn());
 const ensureImageGenerationConfigured = vi.hoisted(() => vi.fn());
 const handleQaAction = vi.hoisted(() => vi.fn());
+const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
 const extractQaToolPayload = vi.hoisted(() => vi.fn());
 const browserRequest = vi.hoisted(() => vi.fn());
 const waitForBrowserReady = vi.hoisted(() => vi.fn());
@@ -52,8 +54,10 @@ const webEvaluate = vi.hoisted(() => vi.fn());
 const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
 const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
-const hasModelSwitchContinuityEvidence = vi.hoisted(() => vi.fn());
+const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
 const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
+const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
+const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
@@ -87,6 +91,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,
@@ -134,12 +139,21 @@ vi.mock("./extract-tool-payload.js", () => ({
   extractQaToolPayload,
 }));
 
+vi.mock("./runtime-tool-fixture.js", () => ({
+  runRuntimeToolFixture,
+}));
+
 vi.mock("./model-switch-eval.js", () => ({
-  hasModelSwitchContinuityEvidence,
+  hasModelSwitchContinuitySignal,
 }));
 
 vi.mock("./runtime-api.js", () => ({
   qaChannelPlugin,
+}));
+
+vi.mock("./gateway-log-sentinel.js", () => ({
+  scanGatewayLogSentinels,
+  assertNoGatewayLogSentinels,
 }));
 
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
@@ -234,9 +248,16 @@ describe("qa suite runtime flow", () => {
         runScenario: typeof runScenario;
         waitForQaChannelReady: typeof waitForQaChannelReady;
         waitForOutboundMessage: typeof waitForOutboundMessage;
+        markGatewayLogCursor: () => number;
+        assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
+        readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
+        runRuntimeToolFixture: (
+          envArg: typeof env,
+          configArg: Record<string, unknown>,
+        ) => Promise<unknown>;
         qaChannelPlugin: typeof qaChannelPlugin;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
@@ -251,9 +272,24 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
     expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
+    expect(call.deps.markGatewayLogCursor()).toBe(0);
+    expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
+    expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
+    await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
+    expect(runRuntimeToolFixture).toHaveBeenCalledWith(
+      env,
+      { toolName: "read" },
+      {
+        createSession,
+        readEffectiveTools,
+        runAgentPrompt,
+        fetchJson,
+        ensureImageGenerationConfigured,
+      },
+    );
     expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",

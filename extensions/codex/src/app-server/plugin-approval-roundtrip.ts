@@ -2,8 +2,9 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
-export const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
+const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 
@@ -37,7 +38,7 @@ export async function requestPluginApproval(params: {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return callGatewayTool(
     "plugin.approval.request",
-    { timeoutMs: timeoutMs + 10_000 },
+    { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     {
       pluginId: "openclaw-codex-app-server",
       title: truncateForGateway(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
@@ -78,7 +79,7 @@ export async function waitForPluginApprovalDecision(params: {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
-    { timeoutMs: timeoutMs + 10_000 },
+    { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
   );
   if (!params.signal) {
@@ -87,10 +88,10 @@ export async function waitForPluginApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(params.signal!.reason);
+      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(params.signal!.reason);
+    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -119,4 +120,18 @@ export function mapExecDecisionToOutcome(
 
 function truncateForGateway(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

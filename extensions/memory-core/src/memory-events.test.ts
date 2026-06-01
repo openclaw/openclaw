@@ -62,15 +62,17 @@ describe("memory host event journal integration", () => {
       "memory.recall.recorded",
       "memory.promotion.applied",
     ]);
-    expect(events[0]).toMatchObject({
-      type: "memory.recall.recorded",
-      resultCount: 1,
-      query: "alpha memory",
-    });
-    expect(events[1]).toMatchObject({
-      type: "memory.promotion.applied",
-      applied: 1,
-    });
+    const recallEvent = events[0];
+    if (recallEvent?.type !== "memory.recall.recorded") {
+      throw new Error("expected recall event");
+    }
+    expect(recallEvent.resultCount).toBe(1);
+    expect(recallEvent.query).toBe("alpha memory");
+    const promotionEvent = events[1];
+    if (promotionEvent?.type !== "memory.promotion.applied") {
+      throw new Error("expected promotion event");
+    }
+    expect(promotionEvent.applied).toBe(1);
   });
 
   it("records dreaming completion events when phase artifacts are written", async () => {
@@ -86,14 +88,19 @@ describe("memory host event journal integration", () => {
 
     const events = await readMemoryHostEvents({ workspaceDir });
 
-    expect(written.inlinePath).toBeTruthy();
-    expect(written.reportPath).toBeTruthy();
+    expect(written.inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
+    expect(written.reportPath).toBe(
+      path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
+    );
+    await expect(fs.readFile(written.inlinePath ?? "", "utf8")).resolves.toContain("- staged note");
+    await expect(fs.readFile(written.reportPath ?? "", "utf8")).resolves.toContain("- second note");
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "memory.dream.completed",
-      phase: "light",
-      lineCount: 2,
-      storageMode: "both",
-    });
+    const dreamEvent = events[0];
+    if (dreamEvent?.type !== "memory.dream.completed") {
+      throw new Error("expected dream completion event");
+    }
+    expect(dreamEvent.phase).toBe("light");
+    expect(dreamEvent.lineCount).toBe(2);
+    expect(dreamEvent.storageMode).toBe("both");
   });
 });

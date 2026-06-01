@@ -1,9 +1,6 @@
-import {
-  createGoogleThinkingPayloadWrapper,
-  sanitizeGoogleThinkingPayload,
-} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
-import { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
-import { resolveMoonshotThinkingKeep } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
+import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
+import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
@@ -17,13 +14,12 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
-} from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/openai.js";
 import {
   createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
-} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/proxy.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
@@ -34,20 +30,19 @@ import {
 export {
   applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
-  buildCopilotDynamicHeaders,
   composeProviderStreamWrappers,
-  createBedrockNoCacheWrapper,
+  createAnthropicThinkingPrefillPayloadWrapper,
   createMoonshotThinkingWrapper,
+  createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,
-  hasCopilotVisionInput,
-  isAnthropicBedrockModel,
   isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
   resolveAnthropicPayloadPolicy,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =
@@ -137,7 +132,7 @@ export function buildProviderStreamFamilyHooks(
             ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
               ? undefined
               : ctx.thinkingLevel;
-          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel);
+          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel, ctx.extraParams);
         },
       };
     case "tool-stream-default-on":
@@ -149,15 +144,22 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
+/** @deprecated Google provider-owned stream hook shortcut; use local provider hooks instead. */
 export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
+/** @deprecated Kilocode provider-owned stream hook shortcut; use local provider hooks instead. */
 export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
+/** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
+/** @deprecated MiniMax provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
+/** @deprecated OpenAI provider-owned stream hook shortcut; use local provider hooks instead. */
 export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
   "openai-responses-defaults",
 );
+/** @deprecated OpenRouter provider-owned stream hook shortcut; use local provider hooks instead. */
 export const OPENROUTER_THINKING_STREAM_HOOKS =
   buildProviderStreamFamilyHooks("openrouter-thinking");
+/** @deprecated Provider-owned stream hook shortcut; use local provider hooks instead. */
 export const TOOL_STREAM_DEFAULT_ON_HOOKS =
   buildProviderStreamFamilyHooks("tool-stream-default-on");
 
@@ -166,18 +168,18 @@ export const TOOL_STREAM_DEFAULT_ON_HOOKS =
 export {
   createAnthropicToolPayloadCompatibilityWrapper,
   createOpenAIAnthropicToolPayloadCompatibilityWrapper,
-} from "../agents/pi-embedded-runner/anthropic-family-tool-payload-compat.js";
+} from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
-} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/google.js";
 export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
-} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
-export { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/proxy.js";
+export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
@@ -190,8 +192,8 @@ export {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
-} from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/openai.js";
 export {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
-} from "../agents/pi-embedded-runner/openrouter-model-capabilities.js";
+} from "../agents/embedded-agent-runner/openrouter-model-capabilities.js";

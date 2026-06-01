@@ -1,10 +1,19 @@
 import crypto from "node:crypto";
-import type { Skill } from "@mariozechner/pi-coding-agent";
+import type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpIdentitySource,
+  SessionAcpIdentityState,
+  SessionAcpMeta,
+} from "@openclaw/acp-core/types";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -25,57 +34,24 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
-export type SessionAcpIdentitySource = "ensure" | "status" | "event";
-
-export type SessionAcpIdentityState = "pending" | "resolved";
-
-export type SessionAcpIdentity = {
-  state: SessionAcpIdentityState;
-  acpxRecordId?: string;
-  acpxSessionId?: string;
-  agentSessionId?: string;
-  source: SessionAcpIdentitySource;
-  lastUpdatedAt: number;
-};
-
-export type SessionAcpMeta = {
-  backend: string;
-  agent: string;
-  runtimeSessionName: string;
-  identity?: SessionAcpIdentity;
-  mode: "persistent" | "oneshot";
-  runtimeOptions?: AcpSessionRuntimeOptions;
-  cwd?: string;
-  state: "idle" | "running" | "error";
-  lastActivityAt: number;
-  lastError?: string;
-};
-
-export type AcpSessionRuntimeOptions = {
-  /**
-   * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
-   */
-  runtimeMode?: string;
-  /** ACP runtime config option: model id. */
-  model?: string;
-  /** ACP runtime config option: thinking/reasoning effort. */
-  thinking?: string;
-  /** Working directory override for ACP session turns. */
-  cwd?: string;
-  /** ACP runtime config option: permission profile id. */
-  permissionProfile?: string;
-  /** ACP runtime config option: per-turn timeout in seconds. */
-  timeoutSeconds?: number;
-  /** Backend-specific option bag mapped through session/set_config_option. */
-  backendExtras?: Record<string, string>;
+export type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpIdentitySource,
+  SessionAcpIdentityState,
+  SessionAcpMeta,
 };
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
+  forceReuse?: boolean;
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  promptToolNamesHash?: string;
+  cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
 };
@@ -107,9 +83,121 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionContextBudgetStatusRoute =
+  | "fits"
+  | "compact_only"
+  | "truncate_tool_results_only"
+  | "compact_then_truncate";
+
+export type SessionContextBudgetStatus = {
+  schemaVersion: 1;
+  source: "pre-prompt-estimate";
+  updatedAt: number;
+  provider: string;
+  model: string;
+  route: SessionContextBudgetStatusRoute;
+  shouldCompact: boolean;
+  estimatedPromptTokens: number;
+  contextTokenBudget: number;
+  promptBudgetBeforeReserve: number;
+  reserveTokens: number;
+  effectiveReserveTokens: number;
+  remainingPromptBudgetTokens: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
+  messageCount: number;
+  unwindowedMessageCount: number;
+  sessionId?: string;
+};
+
 export type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
+};
+
+export type SessionPluginJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SessionPluginJsonValue[]
+  | { [key: string]: SessionPluginJsonValue };
+
+export type SessionPluginNextTurnInjection = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  text: string;
+  idempotencyKey?: string;
+  placement: "prepend_context" | "append_context";
+  ttlMs?: number;
+  createdAt: number;
+  metadata?: SessionPluginJsonValue;
+};
+
+export type SubagentRecoveryState = {
+  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
+  automaticAttempts?: number;
+  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
+  lastAttemptAt?: number;
+  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
+  lastRunId?: string;
+  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
+  wedgedAt?: number;
+  /** Human-readable reason automatic recovery was tombstoned. */
+  wedgedReason?: string;
+};
+
+export type LaneExecutionState =
+  | "active"
+  | "draining"
+  | "suspended"
+  | "resuming"
+  | "circuit_open"
+  | "failed_handoff";
+
+export interface QuotaSuspension {
+  schemaVersion: 1;
+  suspendedAt: number; // epoch ms
+  reason: "quota_exhausted" | "manual" | "circuit_open";
+  failedProvider: string;
+  failedModel: string;
+  /** Recovery briefing text injected into the next attempt when state === "resuming". */
+  summary?: string;
+  /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
+  snapshotRef?: string;
+  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  laneId?: string;
+  expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
+  state: LaneExecutionState; // State machine check for hot-path
+}
+
+export type SessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
+export type SessionGoal = {
+  schemaVersion: 1;
+  id: string;
+  objective: string;
+  status: SessionGoalStatus;
+  createdAt: number;
+  updatedAt: number;
+  tokenStart: number;
+  tokenStartFresh?: boolean;
+  tokensUsed: number;
+  tokenBudget?: number;
+  continuationTurns: number;
+  lastStatusNote?: string;
+  pausedAt?: number;
+  blockedAt?: number;
+  completedAt?: number;
+  usageLimitedAt?: number;
+  budgetLimitedAt?: number;
 };
 
 export type SessionEntry = {
@@ -128,6 +216,12 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /** Plugin-owned session state, grouped by plugin id then extension namespace. */
+  pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
+  pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
+  /** Durable one-shot prompt additions drained before the next agent turn. */
+  pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -135,6 +229,8 @@ export type SessionEntry = {
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
   spawnedWorkspaceDir?: string;
+  /** Task working directory inherited by spawned sessions and reused on later turns. */
+  spawnedCwd?: string;
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -145,12 +241,26 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Session-scoped tool deny entries inherited from the caller that created this session. */
+  inheritedToolDeny?: string[];
+  /** Session-scoped tool allow entries inherited from the caller that created this session. */
+  inheritedToolAllow?: string[];
   /** Plugin id that created this session through api.runtime.subagent. */
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Durable guard state for automatic subagent orphan recovery. */
+  subagentRecovery?: SubagentRecoveryState;
+  /** Quota cascade protection and state-aware failover status. */
+  quotaSuspension?: QuotaSuspension;
+  /** Core-owned durable goal state for this thread/session. */
+  goal?: SessionGoal;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
+  /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
+  usageFamilyKey?: string;
+  /** Session ids known to belong to this usage lineage, including archived predecessors. */
+  usageFamilySessionIds?: string[];
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
   lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
@@ -196,6 +306,9 @@ export type SessionEntry = {
    * Resets only preserve user-driven overrides.
    */
   modelOverrideSource?: "auto" | "user";
+  /** Selected model that produced the current auto fallback override. */
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
@@ -210,20 +323,29 @@ export type SessionEntry = {
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
-  queueMode?:
-    | "steer"
-    | "followup"
-    | "collect"
-    | "steer-backlog"
-    | "steer+backlog"
-    | "queue"
-    | "interrupt";
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
   queueDebounceMs?: number;
   queueCap?: number;
   queueDrop?: "old" | "new" | "summarize";
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Durable marker that final user reply delivery still needs a retry/resume pass. */
+  pendingFinalDelivery?: boolean;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryLastAttemptAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
+  /** Frozen reply text that needs delivery. */
+  pendingFinalDeliveryText?: string | null;
+  /** Original delivery context (channel, recipient, etc). */
+  pendingFinalDeliveryContext?: DeliveryContext;
+  /** Durable send intent backing pending final delivery, when already created. */
+  pendingFinalDeliveryIntentId?: string | null;
+  /** Current visible run delivery context used only for restart recovery. */
+  restartRecoveryDeliveryContext?: DeliveryContext;
+  /** Active run id that owns restartRecoveryDeliveryContext cleanup. */
+  restartRecoveryDeliveryRunId?: string;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -249,11 +371,18 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
+  /** Consecutive memory flush failures since the last successful flush. */
+  memoryFlushFailureCount?: number;
+  /** Timestamp (ms) of the last failed memory flush attempt. */
+  memoryFlushLastFailedAt?: number;
+  /** Last memory flush failure error message, truncated for durable metadata. */
+  memoryFlushLastFailureError?: string;
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
@@ -265,6 +394,7 @@ export type SessionEntry = {
   groupChannel?: string;
   space?: string;
   origin?: SessionOrigin;
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;
@@ -279,6 +409,12 @@ export type SessionEntry = {
   pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
 };
+
+export function isTerminalSessionStatus(
+  status: unknown,
+): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
 
 function isSessionPluginTraceLine(line: string): boolean {
   const trimmed = line.trim();
@@ -379,10 +515,20 @@ function resolveMergedUpdatedAt(
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,
 ): number {
+  const now = options?.now ?? Date.now();
+  const existingUpdatedAt = normalizeMergedUpdatedAt(existing?.updatedAt, now);
+  const patchUpdatedAt = normalizeMergedUpdatedAt(patch.updatedAt, now);
   if (options?.policy === "preserve-activity" && existing) {
-    return existing.updatedAt ?? patch.updatedAt ?? options.now ?? Date.now();
+    return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
-  return Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, options?.now ?? Date.now());
+  return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
+}
+
+function normalizeMergedUpdatedAt(value: number | undefined, now: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.min(value, now);
 }
 
 export function mergeSessionEntryWithPolicy(
@@ -409,6 +555,19 @@ export function mergeSessionEntryWithPolicy(
       patch.sessionStartedAt ??
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
+
+  if (existing.sessionId !== sessionId) {
+    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
+    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
+    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+      sessionFile: candidateSessionFile,
+      previousSessionId: existing.sessionId,
+      nextSessionId: sessionId,
+    });
+    if (rewrittenSessionFile) {
+      next.sessionFile = rewrittenSessionFile;
+    }
+  }
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
@@ -474,11 +633,28 @@ export type GroupKeyResolution = {
   chatType?: SessionChatType;
 };
 
+export type SessionSkillPromptRef = {
+  version: 1;
+  algorithm: "sha256";
+  hash: string;
+  bytes: number;
+};
+
 export type SessionSkillSnapshot = {
   prompt: string;
+  /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
+  promptRef?: SessionSkillPromptRef;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /**
+   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
+   * each SKILL.md body) so the embedded runner can skip a workspace skill
+   * scan within a turn. Stripped from sessions.json on every read and write
+   * via normalizeSessionStore — see store-load.ts. On a cold session resume
+   * this is undefined and src/skills/runtime/embedded-run-entries.ts
+   * rebuilds it by reloading skill entries from disk.
+   */
   resolvedSkills?: Skill[];
   version?: number;
 };
@@ -510,6 +686,12 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+    hash?: string;
+  };
+  currentTurn?: {
+    kind?: "user_request" | "room_event";
+    promptChars: number;
+    runtimeContextChars: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;
@@ -521,6 +703,7 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
+    hash?: string;
     entries: Array<{ name: string; blockChars: number }>;
   };
   tools: {
@@ -529,7 +712,9 @@ export type SessionSystemPromptReport = {
     entries: Array<{
       name: string;
       summaryChars: number;
+      summaryHash?: string;
       schemaChars: number;
+      schemaHash?: string;
       propertiesCount?: number | null;
     }>;
   };

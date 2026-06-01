@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -14,6 +17,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
@@ -78,7 +82,7 @@ type ChatGptConversationRecord = {
 
 type ChatGptImportOperation = "create" | "update" | "skip";
 
-export type ChatGptImportAction = {
+type ChatGptImportAction = {
   conversationId: string;
   title: string;
   pagePath: string;
@@ -201,7 +205,7 @@ function isoFromUnix(raw: unknown): string | undefined {
   if (!Number.isFinite(numeric)) {
     return undefined;
   }
-  return new Date(numeric * 1000).toISOString();
+  return timestampMsToIsoString(numeric * 1000);
 }
 
 function cleanMessageText(value: string): string {
@@ -292,7 +296,7 @@ function inferRisk(title: string, sampleText: string): ChatGptRiskAssessment {
     (rule) => rule.label,
   );
   if (reasons.length > 0) {
-    return { level: "high", reasons: [...new Set(reasons)] };
+    return { level: "high", reasons: uniqueStrings(reasons) };
   }
   if (/\b(career|job|salary|interview|offer|resume|cover letter)\b/i.test(blob)) {
     return { level: "medium", reasons: ["work_career"] };
@@ -679,8 +683,7 @@ async function writeImportRunRecord(
   record: ChatGptImportRunRecord,
 ): Promise<void> {
   const recordPath = resolveImportRunPath(vaultRoot, record.runId);
-  await fs.mkdir(path.dirname(recordPath), { recursive: true });
-  await fs.writeFile(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeJsonFileAtomically(recordPath, record);
 }
 
 async function readImportRunRecord(
@@ -744,7 +747,7 @@ export async function importChatGptConversations(params: {
   let updatedCount = 0;
   let skippedCount = 0;
   let runId: string | undefined;
-  const nowIso = new Date(params.nowMs ?? Date.now()).toISOString();
+  const nowIso = resolveMemoryWikiTimestamp(params.nowMs);
 
   let importRunRecord: ChatGptImportRunRecord | undefined;
   let importRunDir = "";

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import "../../test-support/browser-security-runtime.mock.js";
+import "../test-support/browser-security.mock.js";
 import {
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
@@ -27,7 +27,9 @@ describe("cdp", () => {
 
   const startWsServer = async () => {
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      wsServer?.once("listening", resolve);
+    });
     return (wsServer.address() as { port: number }).port;
   };
 
@@ -77,7 +79,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     return (httpServer.address() as { port: number }).port;
   };
 
@@ -85,14 +89,16 @@ describe("cdp", () => {
     vi.unstubAllEnvs();
     await new Promise<void>((resolve) => {
       if (!httpServer) {
-        return resolve();
+        resolve();
+        return;
       }
       httpServer.close(() => resolve());
       httpServer = null;
     });
     await new Promise<void>((resolve) => {
       if (!wsServer) {
-        return resolve();
+        resolve();
+        return;
       }
       wsServer.close(() => resolve());
       wsServer = null;
@@ -126,19 +132,17 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
-    expect(methods).toEqual(
-      expect.arrayContaining([
-        "Target.createTarget",
-        "Target.attachToTarget",
-        "Page.enable",
-        "Runtime.enable",
-        "Network.enable",
-        "DOM.enable",
-        "Accessibility.enable",
-        "Runtime.runIfWaitingForDebugger",
-        "Target.detachFromTarget",
-      ]),
-    );
+    expect(methods).toEqual([
+      "Target.createTarget",
+      "Target.attachToTarget",
+      "Page.enable",
+      "Runtime.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Accessibility.enable",
+      "Runtime.runIfWaitingForDebugger",
+      "Target.detachFromTarget",
+    ]);
   });
 
   it("creates a target via direct WebSocket URL (skips /json/version)", async () => {
@@ -192,7 +196,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const httpPort = (httpServer.address() as AddressInfo).port;
 
     await expect(
@@ -201,7 +207,7 @@ describe("cdp", () => {
         url: "https://example.com",
         timeouts: { httpTimeoutMs: 20 },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/abort|timeout|timed out/i);
   });
 
   it("honors configured WebSocket handshake timeouts when creating a target", async () => {
@@ -212,7 +218,9 @@ describe("cdp", () => {
       heldSockets.push(socket);
       // Hold the TCP connection open without completing the WebSocket handshake.
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const port = (httpServer.address() as AddressInfo).port;
 
     try {
@@ -222,7 +230,7 @@ describe("cdp", () => {
           url: "https://example.com",
           timeouts: { handshakeTimeoutMs: 20 },
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/handshake|timeout|timed out/i);
     } finally {
       for (const socket of heldSockets) {
         socket.destroy();
@@ -246,6 +254,18 @@ describe("cdp", () => {
         const msg = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
         if (msg.method === "Target.createTarget") {
           socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_QP" } }));
+        } else if (msg.method === "Target.attachToTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S1" } }));
+        } else if (
+          msg.method === "Target.detachFromTarget" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.enable" ||
+          msg.method === "Network.enable" ||
+          msg.method === "DOM.enable" ||
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Runtime.runIfWaitingForDebugger"
+        ) {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
         }
       });
     });
@@ -461,20 +481,25 @@ describe("cdp", () => {
     });
     const wss = new WebSocketServer({ noServer: true });
     server.on("upgrade", (req, socket, head) => {
-      if (req.url?.startsWith("/e/bad")) {
-        socket.destroy();
-        return;
-      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
     });
-    wss.on("connection", (socket) => {
+    wss.on("connection", (socket, req) => {
       socket.on("message", (data) => {
         const msg = JSON.parse(rawDataToString(data)) as {
           id?: number;
           method?: string;
         };
+        if (req.url?.startsWith("/e/bad")) {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              error: { message: "Browserless endpoint rejected command" },
+            }),
+          );
+          return;
+        }
         if (msg.method === "Target.createTarget") {
           socket.send(JSON.stringify({ id: msg.id, result: { targetId: "ROOT_FALLBACK" } }));
         } else if (msg.method === "Target.attachToTarget") {
@@ -492,7 +517,9 @@ describe("cdp", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const addr = server.address() as AddressInfo;
       const created = await createTargetViaCdp({
@@ -501,8 +528,12 @@ describe("cdp", () => {
       });
       expect(created.targetId).toBe("ROOT_FALLBACK");
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 

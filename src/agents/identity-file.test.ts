@@ -11,9 +11,9 @@ describe("parseIdentityMarkdown", () => {
 - **Vibe:** *(how do you come across? sharp? warm? chaotic? calm?)*
 - **Emoji:** *(your signature - pick one that feels right)*
 - **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*
-`;
+    `;
     const parsed = parseIdentityMarkdown(content);
-    expect(parsed).toEqual({});
+    expect(parsed).toStrictEqual({});
   });
 
   it("parses explicit identity values", () => {
@@ -32,6 +32,26 @@ describe("parseIdentityMarkdown", () => {
       emoji: ":robot:",
       avatar: "avatars/openclaw.png",
     });
+  });
+
+  it("strips markdown code spans from values and labels", () => {
+    const content = [
+      "- **Name:** `Samantha`",
+      "- `Creature`: Robot",
+      "- **`Avatar`**: `avatars/openclaw.png`",
+    ].join("\n");
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      name: "Samantha",
+      creature: "Robot",
+      avatar: "avatars/openclaw.png",
+    });
+  });
+
+  it("still treats code-span-wrapped template placeholders as placeholders", () => {
+    const content = "- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`";
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toStrictEqual({});
   });
 });
 
@@ -78,5 +98,13 @@ Fluent in over six million error messages.
     expect(merged.match(/Name:/g)).toHaveLength(1);
     expect(merged).toContain("- Name: New Name");
     expect(merged).toContain("- Emoji: 🦀");
+  });
+
+  it("updates code-span-wrapped writable labels instead of inserting duplicates", () => {
+    const merged = mergeIdentityMarkdownContent("- **`Name`**: Old Name\n", {
+      name: "New Name",
+    });
+
+    expect(merged).toBe("- Name: New Name\n");
   });
 });

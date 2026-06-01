@@ -1,12 +1,9 @@
 import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
-
-type SubagentSpawningEvent = Parameters<SubagentLifecycleHookRunner["runSubagentSpawning"]>[0];
 
 describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
   const callGatewayMock = vi.fn();
@@ -49,6 +46,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
         task: "persistent planning session",
         mode: "session",
         thread: true,
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -65,7 +63,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
   });
 });
 
-describe('spawnSubagentDirect mode="session" with registered thread hooks (#67400)', () => {
+describe('spawnSubagentDirect mode="session" with thread binding-capable channels (#67400)', () => {
   const callGatewayMock = vi.fn();
   let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
   let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
@@ -76,19 +74,6 @@ describe('spawnSubagentDirect mode="session" with registered thread hooks (#6740
       callGatewayMock,
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       workspaceDir: os.tmpdir(),
-      hookRunner: {
-        hasHooks: () => true,
-        runSubagentSpawning: async (event: SubagentSpawningEvent) => {
-          const requesterChannel = event.requester?.channel;
-          if (requesterChannel !== "discord") {
-            return undefined;
-          }
-          return {
-            status: "ok" as const,
-            threadBindingReady: true,
-          };
-        },
-      },
     }));
     resetSubagentRegistryForTests();
   });
@@ -119,6 +104,7 @@ describe('spawnSubagentDirect mode="session" with registered thread hooks (#6740
         task: "persistent planning session",
         mode: "session",
         thread: true,
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",

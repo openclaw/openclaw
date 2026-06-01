@@ -11,6 +11,7 @@ import {
   normalizeModelValue,
   parseFallbackList,
   resolveAgentConfig,
+  resolveAgentRuntimeLabel,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
@@ -49,6 +50,7 @@ export function renderAgentOverview(params: {
     onModelFallbacksChange,
     onSelectPanel,
   } = params;
+  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const config = resolveAgentConfig(configForm, agent.id);
   const agentModel = agent.model;
   const workspaceFromFiles =
@@ -64,6 +66,7 @@ export function renderAgentOverview(params: {
     : config.defaults?.model
       ? resolveModelLabel(config.defaults?.model)
       : resolveModelLabel(agentModel);
+  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
@@ -71,6 +74,7 @@ export function renderAgentOverview(params: {
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null) ||
     (configForm ? null : resolveModelPrimary(agentModel));
   const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
+  const selectedPrimary = isDefault ? effectivePrimary : entryPrimary;
   const modelFallbacks =
     resolveModelFallbacks(config.entry?.model) ??
     resolveModelFallbacks(config.defaults?.model) ??
@@ -78,8 +82,8 @@ export function renderAgentOverview(params: {
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
-  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const disabled = !configForm || configLoading || configSaving;
+  const thinkingDefault = agent.thinkingDefault ?? "-";
 
   const removeChip = (index: number) => {
     const next = fallbackChips.filter((_, i) => i !== index);
@@ -122,6 +126,14 @@ export function renderAgentOverview(params: {
           <div class="mono">${model}</div>
         </div>
         <div class="agent-kv">
+          <div class="label">Runtime</div>
+          <div class="mono">${runtime}</div>
+        </div>
+        <div class="agent-kv">
+          <div class="label">${t("agents.context.thinkingDefault")}</div>
+          <div class="mono">${thinkingDefault}</div>
+        </div>
+        <div class="agent-kv">
           <div class="label">Skills Filter</div>
           <div>${skillFilter ? `${skillCount} selected` : "all skills"}</div>
         </div>
@@ -141,19 +153,24 @@ export function renderAgentOverview(params: {
           <label class="field">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
+              .value=${selectedPrimary ?? ""}
               ?disabled=${disabled}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
               ${isDefault
-                ? html` <option value="">Not set</option> `
+                ? html` <option value="" ?selected=${!selectedPrimary}>Not set</option> `
                 : html`
-                    <option value="">
+                    <option value="" ?selected=${!selectedPrimary}>
                       ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
                     </option>
                   `}
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
+              ${buildModelOptions(
+                configForm,
+                effectivePrimary ?? undefined,
+                params.modelCatalog,
+                selectedPrimary,
+              )}
             </select>
           </label>
           <div class="field">

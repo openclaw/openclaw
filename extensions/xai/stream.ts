@@ -1,9 +1,13 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  streamSimple,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
-  createHtmlEntityToolCallArgumentDecodingWrapper,
+  createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 
@@ -13,6 +17,10 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-4", "grok-4-fast"],
   ["grok-4-0709", "grok-4-fast"],
 ]);
+
+interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
+  result: () => Promise<AssistantMessage>;
+}
 
 function resolveXaiFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -43,7 +51,90 @@ function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
+function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknown }): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsReasoningEffort?: unknown })
+      : undefined;
+  return model.reasoning === true && compat?.supportsReasoningEffort !== false;
+}
+
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
+const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
+const NAMED_HTML_ENTITIES = new Map<string, string>([
+  ["amp", "&"],
+  ["apos", "'"],
+  ["gt", ">"],
+  ["lt", "<"],
+  ["quot", '"'],
+]);
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|#39);/gi, (match, entity) => {
+    const normalized = String(entity).toLowerCase();
+    if (normalized === "#39") {
+      return "'";
+    }
+    if (normalized.startsWith("#x")) {
+      return String.fromCodePoint(Number.parseInt(normalized.slice(2), 16));
+    }
+    if (normalized.startsWith("#")) {
+      return String.fromCodePoint(Number.parseInt(normalized.slice(1), 10));
+    }
+    return NAMED_HTML_ENTITIES.get(normalized) ?? match;
+  });
+}
+
+function decodeHtmlEntitiesInObject(value: unknown): unknown {
+  switch (typeof value) {
+    case "string":
+      return HTML_ENTITY_RE.test(value) ? decodeHtmlEntities(value) : value;
+    case "object":
+      if (!value) {
+        return value;
+      }
+      if (Array.isArray(value)) {
+        return value.map((entry) => decodeHtmlEntitiesInObject(entry));
+      }
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+          key,
+          decodeHtmlEntitiesInObject(entry),
+        ]),
+      );
+    default:
+      return value;
+  }
+}
+
+function visitContentBlocks(
+  value: unknown,
+  visitor: (block: Record<string, unknown>) => void,
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      visitContentBlocks(entry, visitor);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const block = value as Record<string, unknown>;
+  visitor(block);
+  if ("content" in block) {
+    visitContentBlocks(block.content, visitor);
+  }
+}
+
+function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
+  visitContentBlocks(message, (block) => {
+    if (block.type !== "toolCall" || !block.arguments || typeof block.arguments !== "object") {
+      return;
+    }
+    block.arguments = decodeHtmlEntitiesInObject(block.arguments);
+  });
+}
 
 type ReplayableInputImagePart =
   | {
@@ -170,9 +261,11 @@ export function createXaiToolPayloadCompatibilityWrapper(
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          delete payloadObj.reasoning;
-          delete payloadObj.reasoningEffort;
-          delete payloadObj.reasoning_effort;
+          if (!supportsReasoningControls(model)) {
+            delete payloadObj.reasoning;
+            delete payloadObj.reasoningEffort;
+            delete payloadObj.reasoning_effort;
+          }
         }
         return originalOnPayload?.(payload, model);
       },
@@ -201,8 +294,64 @@ export function createXaiFastModeWrapper(
   };
 }
 
-export const createXaiToolCallArgumentDecodingWrapper =
-  createHtmlEntityToolCallArgumentDecodingWrapper;
+function transformXaiStreamEvent(
+  value: unknown,
+  transformMessage: (message: unknown) => void,
+): void {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const event = value as { partial?: unknown; message?: unknown };
+  transformMessage(event.partial);
+  transformMessage(event.message);
+}
+
+function wrapStreamMessageObjects(
+  stream: MutableAssistantMessageEventStream,
+  transformMessage: (message: unknown) => void,
+): MutableAssistantMessageEventStream {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    transformMessage(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done) {
+            transformXaiStreamEvent(result.value, transformMessage);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+  return stream;
+}
+
+function createXaiToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
+      );
+    }
+    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
+  };
+}
 
 export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
@@ -214,6 +363,7 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
     }
     wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+    wrappedStreamFn = createPlainTextToolCallCompatWrapper(wrappedStreamFn);
     return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
   });
 }

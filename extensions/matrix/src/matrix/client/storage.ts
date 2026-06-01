@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -15,13 +16,12 @@ import {
 import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
-export const DEFAULT_ACCOUNT_KEY = "default";
+const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 const LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
 const RECOVERY_KEY_FILENAME = "recovery-key.json";
 const IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
-const STARTUP_VERIFICATION_FILENAME = "startup-verification.json";
 
 type LegacyMoveRecord = {
   sourcePath: string;
@@ -105,10 +105,10 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
 function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
   const metadata: StoredRootMetadata = {};
 
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(rootDir, STORAGE_META_FILENAME), "utf8"),
-    ) as Partial<StoredRootMetadata>;
+  const parsed = loadJsonFile<Partial<StoredRootMetadata>>(
+    path.join(rootDir, STORAGE_META_FILENAME),
+  );
+  if (parsed) {
     if (typeof parsed.homeserver === "string" && parsed.homeserver.trim()) {
       metadata.homeserver = parsed.homeserver.trim();
     }
@@ -130,19 +130,6 @@ function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
     if (typeof parsed.createdAt === "string" && parsed.createdAt.trim()) {
       metadata.createdAt = parsed.createdAt.trim();
     }
-  } catch {
-    // ignore missing or malformed storage metadata
-  }
-
-  try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(rootDir, STARTUP_VERIFICATION_FILENAME), "utf8"),
-    ) as { deviceId?: unknown };
-    if (!metadata.deviceId && typeof parsed.deviceId === "string" && parsed.deviceId.trim()) {
-      metadata.deviceId = parsed.deviceId.trim();
-    }
-  } catch {
-    // ignore missing or malformed verification state
   }
 
   return metadata;
@@ -228,7 +215,7 @@ function resolvePreferredMatrixStorageRoot(params: {
     };
   }
 
-  let siblingEntries: fs.Dirent[] = [];
+  let siblingEntries: fs.Dirent[];
   try {
     siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
   } catch {
@@ -473,8 +460,7 @@ function writeStoredRootMetadata(
   },
 ): boolean {
   try {
-    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
-    fs.writeFileSync(metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    saveJsonFile(metaPath, payload);
     return true;
   } catch {
     return false;
@@ -514,6 +500,29 @@ export function claimCurrentTokenStorageState(params: { rootDir: string }): bool
     accessTokenHash: metadata.accessTokenHash,
     deviceId: metadata.deviceId ?? null,
     currentTokenStateClaimed: true,
+    createdAt: metadata.createdAt ?? new Date().toISOString(),
+  });
+}
+
+export function recordCurrentStorageMetaDeviceId(params: {
+  rootDir: string;
+  deviceId: string;
+}): boolean {
+  const deviceId = params.deviceId.trim();
+  if (!deviceId) {
+    return false;
+  }
+  const metadata = readStoredRootMetadata(params.rootDir);
+  if (!metadata.accessTokenHash?.trim()) {
+    return false;
+  }
+  return writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+    homeserver: metadata.homeserver,
+    userId: metadata.userId,
+    accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+    accessTokenHash: metadata.accessTokenHash,
+    deviceId,
+    currentTokenStateClaimed: metadata.currentTokenStateClaimed === true,
     createdAt: metadata.createdAt ?? new Date().toISOString(),
   });
 }

@@ -1,6 +1,6 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { normalizeAnyChannelId } from "../channels/registry-normalize.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
@@ -23,11 +23,4 @@ export function isDeliverableMessageChannel(value: string): boolean {
   return (
     normalized !== undefined && normalized !== INTERNAL_MESSAGE_CHANNEL && normalized === value
   );
-}
-
-export function resolveMessageChannel(
-  primary?: string | null,
-  fallback?: string | null,
-): string | undefined {
-  return normalizeMessageChannel(primary) ?? normalizeMessageChannel(fallback);
 }

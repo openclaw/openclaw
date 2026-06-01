@@ -1,14 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { resolvePackagedBundledLoadPathAlias } from "./bundled-load-path-aliases.js";
+import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
+import {
+  buildLegacyBundledRootPath,
+  resolvePackagedBundledLoadPathAlias,
+} from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -17,15 +27,22 @@ import {
   type PluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
+  type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
+import { resolvePluginSourceRoots } from "./roots.js";
+import {
+  normalizePluginDependencySpecs,
+  type PluginDependencySpecMap,
+} from "./status-dependencies.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
@@ -40,6 +57,11 @@ const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
   "dist",
   "node_modules",
 ]);
+const PACKAGE_MANIFEST_CACHE_MAX_ENTRIES = 512;
+const packageManifestProcessCache = new Map<
+  string,
+  { mtimeMs: number; size: number; manifest: PackageManifest | null }
+>();
 
 export type PluginCandidate = {
   idHint: string;
@@ -55,74 +77,20 @@ export type PluginCandidate = {
   packageDescription?: string;
   packageDir?: string;
   packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
+  bundledManifestId?: string;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
+  requiredPluginIds?: string[];
+  requiredPluginSource?: string;
+  rawPackageManifest?: PackageManifest;
 };
 
 export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
 };
-
-const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscoveryResult }>();
-
-// Keep a short cache window to collapse bursty reloads during startup flows.
-const DEFAULT_DISCOVERY_CACHE_MS = 1000;
-
-export function clearPluginDiscoveryCache(): void {
-  discoveryCache.clear();
-}
-
-function resolveDiscoveryCacheMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
-  if (raw === "" || raw === "0") {
-    return 0;
-  }
-  if (!raw) {
-    return DEFAULT_DISCOVERY_CACHE_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_DISCOVERY_CACHE_MS;
-  }
-  return Math.max(0, parsed);
-}
-
-function shouldUseDiscoveryCache(env: NodeJS.ProcessEnv): boolean {
-  const disabled = env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim();
-  if (disabled) {
-    return false;
-  }
-  return resolveDiscoveryCacheMs(env) > 0;
-}
-
-function buildScopedDiscoveryCacheKey(params: {
-  workspaceDir?: string;
-  extraPaths?: string[];
-  ownershipUid?: number | null;
-  env: NodeJS.ProcessEnv;
-}): string {
-  const { roots, loadPaths } = resolvePluginCacheInputs({
-    workspaceDir: params.workspaceDir,
-    loadPaths: params.extraPaths,
-    env: params.env,
-  });
-  const workspaceKey = roots.workspace ?? "";
-  const bundledRoot = roots.stock ?? "";
-  const ownershipUid = params.ownershipUid ?? currentUid();
-  return `scoped::${workspaceKey}::${bundledRoot}::${ownershipUid ?? "none"}::${JSON.stringify(loadPaths)}`;
-}
-
-function buildSharedDiscoveryCacheKey(params: {
-  ownershipUid?: number | null;
-  env: NodeJS.ProcessEnv;
-}): string {
-  const roots = resolvePluginSourceRoots({ env: params.env });
-  const configExtensionsRoot = roots.global ?? "";
-  const bundledRoot = roots.stock ?? "";
-  const ownershipUid = params.ownershipUid ?? currentUid();
-  return `shared::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}`;
-}
 
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
@@ -158,9 +126,10 @@ type CandidateBlockIssue = {
 function checkSourceEscapesRoot(params: {
   source: string;
   rootDir: string;
+  realpathCache: Map<string, string>;
 }): CandidateBlockIssue | null {
-  const sourceRealPath = safeRealpathSync(params.source);
-  const rootRealPath = safeRealpathSync(params.rootDir);
+  const sourceRealPath = safeRealpathSync(params.source, params.realpathCache);
+  const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache);
   if (!sourceRealPath || !rootRealPath) {
     return null;
   }
@@ -259,10 +228,12 @@ function findCandidateBlockIssue(params: {
   rootDir: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
+  realpathCache: Map<string, string>;
 }): CandidateBlockIssue | null {
   const escaped = checkSourceEscapesRoot({
     source: params.source,
     rootDir: params.rootDir,
+    realpathCache: params.realpathCache,
   });
   if (escaped) {
     return escaped;
@@ -292,20 +263,24 @@ function isUnsafePluginCandidate(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;
+  pluginId?: string;
   diagnostics: PluginDiagnostic[];
   ownershipUid?: number | null;
+  realpathCache: Map<string, string>;
 }): boolean {
   const issue = findCandidateBlockIssue({
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,
     ownershipUid: params.ownershipUid,
+    realpathCache: params.realpathCache,
   });
   if (!issue) {
     return false;
   }
   params.diagnostics.push({
     level: "warn",
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
     source: issue.targetPath,
     message: formatCandidateBlockMessage(issue),
   });
@@ -348,12 +323,40 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
-function resolvesToSameDirectory(left?: string, right?: string): boolean {
+function resolveScannedEntryType(entry: fs.Dirent, fullPath: string): "file" | "directory" | null {
+  if (entry.isFile()) {
+    return "file";
+  }
+  if (entry.isDirectory()) {
+    return "directory";
+  }
+  if (!entry.isSymbolicLink()) {
+    return null;
+  }
+
+  const stat = safeStatSync(fullPath);
+  if (!stat) {
+    return null;
+  }
+  if (stat.isFile()) {
+    return "file";
+  }
+  if (stat.isDirectory()) {
+    return "directory";
+  }
+  return null;
+}
+
+function resolvesToSameDirectory(
+  left: string | undefined,
+  right: string | undefined,
+  realpathCache: Map<string, string>,
+): boolean {
   if (!left || !right) {
     return false;
   }
-  const leftRealPath = safeRealpathSync(left);
-  const rightRealPath = safeRealpathSync(right);
+  const leftRealPath = safeRealpathSync(left, realpathCache);
+  const rightRealPath = safeRealpathSync(right, realpathCache);
   if (leftRealPath && rightRealPath) {
     return leftRealPath === rightRealPath;
   }
@@ -371,6 +374,7 @@ function mergeDiscoveryResult(
   target: PluginDiscoveryResult,
   source: PluginDiscoveryResult,
   seenSources: Set<string>,
+  seenDiagnostics: Set<string>,
 ): void {
   for (const candidate of source.candidates) {
     const key = candidate.source;
@@ -380,48 +384,244 @@ function mergeDiscoveryResult(
     seenSources.add(key);
     target.candidates.push(candidate);
   }
-  target.diagnostics.push(...source.diagnostics);
+  for (const diagnostic of source.diagnostics) {
+    const key = [
+      diagnostic.level,
+      diagnostic.pluginId ?? "",
+      diagnostic.source ?? "",
+      diagnostic.message,
+    ].join("\0");
+    if (seenDiagnostics.has(key)) {
+      continue;
+    }
+    seenDiagnostics.add(key);
+    target.diagnostics.push(diagnostic);
+  }
 }
 
-function getCachedDiscoveryResult(params: {
-  cacheEnabled: boolean;
-  cacheKey: string;
-  env: NodeJS.ProcessEnv;
-  load: () => PluginDiscoveryResult;
-}): PluginDiscoveryResult {
-  const ttl = resolveDiscoveryCacheMs(params.env);
-  if (params.cacheEnabled) {
-    const cached = discoveryCache.get(params.cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.result;
+function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): void {
+  const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
+  const seen = new Set<string>();
+  for (const candidate of result.candidates) {
+    for (const requiredPluginId of candidate.requiredPluginIds ?? []) {
+      if (candidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
+        continue;
+      }
+      const key = `${candidate.idHint}\0${requiredPluginId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      result.diagnostics.push({
+        level: "warn",
+        pluginId: candidate.idHint,
+        source: candidate.requiredPluginSource ?? candidate.source,
+        message: `plugin "${candidate.idHint}" requires plugin "${requiredPluginId}"; install "${requiredPluginId}" to use it`,
+      });
     }
   }
-  const result = params.load();
-  if (params.cacheEnabled && ttl > 0) {
-    discoveryCache.set(params.cacheKey, { expiresAt: Date.now() + ttl, result });
-  }
-  return result;
 }
 
-function readPackageManifest(dir: string, rejectHardlinks = true): PackageManifest | null {
-  const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: dir,
+type InstalledPluginRecordPath = {
+  path: string;
+  requireBuiltRuntimeEntry: boolean;
+};
+
+function isLinkedLocalPluginRecord(params: {
+  record: PluginInstallRecord;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+}): boolean {
+  if (params.record.source !== "path") {
+    return false;
+  }
+  if (
+    typeof params.record.sourcePath !== "string" ||
+    !params.record.sourcePath.trim() ||
+    typeof params.record.installPath !== "string" ||
+    !params.record.installPath.trim()
+  ) {
+    return false;
+  }
+  return resolvesToSameDirectory(
+    resolveUserPath(params.record.sourcePath, params.env),
+    resolveUserPath(params.record.installPath, params.env),
+    params.realpathCache,
+  );
+}
+
+function collectInstalledPluginRecordPaths(
+  installRecords: Record<string, PluginInstallRecord> | undefined,
+  env: NodeJS.ProcessEnv,
+  realpathCache: Map<string, string>,
+): InstalledPluginRecordPath[] {
+  const paths: InstalledPluginRecordPath[] = [];
+  const seen = new Set<string>();
+  for (const record of Object.values(installRecords ?? {})) {
+    const rawPath =
+      typeof record.installPath === "string" && record.installPath.trim()
+        ? record.installPath
+        : typeof record.sourcePath === "string" && record.sourcePath.trim()
+          ? record.sourcePath
+          : undefined;
+    if (!rawPath) {
+      continue;
+    }
+    const resolved = resolveUserPath(rawPath, env);
+    if (seen.has(resolved) || !fs.existsSync(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    paths.push({
+      path: resolved,
+      requireBuiltRuntimeEntry: !isLinkedLocalPluginRecord({ record, env, realpathCache }),
+    });
+  }
+  return paths;
+}
+
+// Discovery follows the install ledger's primary path choice; managed
+// classification needs every recorded path so a sourcePath under the global
+// extensions root does not get rescanned as an untracked local plugin.
+function collectManagedPluginRecordPaths(
+  installRecords: Record<string, PluginInstallRecord> | undefined,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const record of Object.values(installRecords ?? {})) {
+    for (const rawPath of [record.installPath, record.sourcePath]) {
+      if (typeof rawPath !== "string" || !rawPath.trim()) {
+        continue;
+      }
+      const resolved = resolveUserPath(rawPath, env);
+      if (seen.has(resolved) || !fs.existsSync(resolved)) {
+        continue;
+      }
+      seen.add(resolved);
+      paths.push(resolved);
+    }
+  }
+  return paths;
+}
+
+function resolveManagedPluginDirKey(
+  installedPath: string,
+  realpathCache: Map<string, string>,
+): string | null {
+  const stat = safeStatSync(installedPath);
+  if (!stat) {
+    return null;
+  }
+  const pluginDir = stat.isFile() ? path.dirname(installedPath) : installedPath;
+  return safeRealpathSync(pluginDir, realpathCache) ?? path.resolve(pluginDir);
+}
+
+function collectManagedPluginDirKeys(
+  installedPaths: readonly string[],
+  realpathCache: Map<string, string>,
+): Set<string> {
+  const dirs = new Set<string>();
+  for (const installedPath of installedPaths) {
+    const key = resolveManagedPluginDirKey(installedPath, realpathCache);
+    if (key) {
+      dirs.add(key);
+    }
+  }
+  return dirs;
+}
+
+function isManagedPluginDir(params: {
+  dir: string;
+  realpath?: string;
+  managedPluginDirs?: Set<string>;
+  realpathCache: Map<string, string>;
+}): boolean {
+  if (!params.managedPluginDirs || params.managedPluginDirs.size === 0) {
+    return false;
+  }
+  const key =
+    params.realpath ??
+    safeRealpathSync(params.dir, params.realpathCache) ??
+    path.resolve(params.dir);
+  return params.managedPluginDirs.has(key);
+}
+
+function readPackageManifest(
+  dir: string,
+  rejectHardlinks = true,
+  rootRealPath?: string,
+): PackageManifest | null {
+  const result = readRootJsonObjectSync({
+    rootDir: dir,
+    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+    relativePath: "package.json",
     boundaryLabel: "plugin package directory",
     rejectHardlinks,
   });
-  if (!opened.ok) {
-    return null;
-  }
+  return result.ok ? (result.value as PackageManifest) : null;
+}
+
+function readTrustedPackageManifest(dir: string): PackageManifest | null {
+  return tryReadJsonSync<PackageManifest>(path.join(dir, "package.json"));
+}
+
+function readPackageManifestStat(dir: string): { mtimeMs: number; size: number } | null {
   try {
-    const raw = fs.readFileSync(opened.fd, "utf-8");
-    return JSON.parse(raw) as PackageManifest;
+    const stat = fs.statSync(path.join(dir, "package.json"));
+    return stat.isFile() ? { mtimeMs: stat.mtimeMs, size: stat.size } : null;
   } catch {
     return null;
-  } finally {
-    fs.closeSync(opened.fd);
   }
+}
+
+function prunePackageManifestProcessCache(): void {
+  while (packageManifestProcessCache.size > PACKAGE_MANIFEST_CACHE_MAX_ENTRIES) {
+    const oldest = packageManifestProcessCache.keys().next().value;
+    if (oldest === undefined) {
+      return;
+    }
+    packageManifestProcessCache.delete(oldest);
+  }
+}
+
+function readCandidatePackageManifest(params: {
+  dir: string;
+  origin: PluginOrigin;
+  rejectHardlinks: boolean;
+  rootRealPath?: string;
+  packageManifestCache?: Map<string, PackageManifest | null>;
+}): PackageManifest | null {
+  const trustMode =
+    params.origin === "bundled"
+      ? "trusted"
+      : params.rejectHardlinks
+        ? "external-reject"
+        : "external-allow";
+  const cacheKey = `${trustMode}:${params.rootRealPath ?? path.resolve(params.dir)}`;
+  const cached = params.packageManifestCache?.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const canUseProcessCache = params.origin === "bundled" || !params.rejectHardlinks;
+  const stat = readPackageManifestStat(params.dir);
+  if (canUseProcessCache && stat) {
+    const processCached = packageManifestProcessCache.get(cacheKey);
+    if (processCached?.mtimeMs === stat.mtimeMs && processCached.size === stat.size) {
+      params.packageManifestCache?.set(cacheKey, processCached.manifest);
+      return processCached.manifest;
+    }
+  }
+  const manifest =
+    params.origin === "bundled"
+      ? readTrustedPackageManifest(params.dir)
+      : readPackageManifest(params.dir, params.rejectHardlinks, params.rootRealPath);
+  params.packageManifestCache?.set(cacheKey, manifest);
+  if (canUseProcessCache && stat) {
+    packageManifestProcessCache.set(cacheKey, { ...stat, manifest });
+    prunePackageManifestProcessCache();
+  }
+  return manifest;
 }
 
 function deriveIdHint(params: {
@@ -448,7 +648,9 @@ function deriveIdHint(params: {
   const normalizedPackageId =
     unscoped.endsWith("-provider") && unscoped.length > "-provider".length
       ? unscoped.slice(0, -"-provider".length)
-      : unscoped;
+      : unscoped.endsWith("-plugin") && unscoped.length > "-plugin".length
+        ? unscoped.slice(0, -"-plugin".length)
+        : unscoped;
 
   if (!params.hasMultipleExtensions) {
     return normalizedPackageId;
@@ -456,9 +658,64 @@ function deriveIdHint(params: {
   return `${normalizedPackageId}/${base}`;
 }
 
-function resolveIdHintManifestId(rootDir: string, rejectHardlinks: boolean): string | undefined {
-  const manifest = loadPluginManifest(rootDir, rejectHardlinks);
-  return manifest.ok ? manifest.manifest.id : undefined;
+function derivePackagePluginIdHint(params: {
+  manifestId?: string;
+  packageName?: string;
+}): string | undefined {
+  const rawManifestId = params.manifestId?.trim();
+  if (rawManifestId) {
+    return rawManifestId;
+  }
+  const rawPackageName = params.packageName?.trim();
+  if (!rawPackageName) {
+    return undefined;
+  }
+  const unscoped = rawPackageName.includes("/")
+    ? (rawPackageName.split("/").pop() ?? rawPackageName)
+    : rawPackageName;
+  return unscoped.endsWith("-provider") && unscoped.length > "-provider".length
+    ? unscoped.slice(0, -"-provider".length)
+    : unscoped;
+}
+
+function pushInvalidPackageExtensionDiagnostic(params: {
+  resolution: PackageExtensionResolution;
+  source: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  if (params.resolution.status === "invalid") {
+    params.diagnostics.push({
+      level: "error",
+      source: params.source,
+      message: params.resolution.error,
+    });
+    return true;
+  }
+  if (params.resolution.status === "empty") {
+    params.diagnostics.push({
+      level: "error",
+      source: params.source,
+      message: "package.json openclaw.extensions is empty",
+    });
+    return true;
+  }
+  return false;
+}
+
+type ResolvedCandidateManifest = {
+  manifest: PluginManifest;
+  manifestPath: string;
+};
+
+function resolveCandidateManifest(
+  rootDir: string,
+  rejectHardlinks: boolean,
+  rootRealPath?: string,
+): ResolvedCandidateManifest | undefined {
+  const manifest = loadPluginManifest(rootDir, rejectHardlinks, rootRealPath);
+  return manifest.ok
+    ? { manifest: manifest.manifest, manifestPath: manifest.manifestPath }
+    : undefined;
 }
 
 function addCandidate(params: {
@@ -476,27 +733,40 @@ function addCandidate(params: {
   workspaceDir?: string;
   manifest?: PackageManifest | null;
   packageDir?: string;
+  bundledManifestId?: string;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
+  requiredPluginIds?: string[];
+  requiredPluginSource?: string;
+  realpathCache: Map<string, string>;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
     return;
   }
-  const resolvedRoot = safeRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
+  const resolvedRoot =
+    safeRealpathSync(params.rootDir, params.realpathCache) ?? path.resolve(params.rootDir);
   if (
     isUnsafePluginCandidate({
       source: resolved,
       rootDir: resolvedRoot,
       origin: params.origin,
+      pluginId: params.idHint,
       diagnostics: params.diagnostics,
       ownershipUid: params.ownershipUid,
+      realpathCache: params.realpathCache,
     })
   ) {
+    params.seen.add(resolved);
     return;
   }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
+  const packageManifest = getPackageManifestMetadata(manifest ?? undefined);
+  const packageDependencies = normalizePluginDependencySpecs({
+    dependencies: manifest?.dependencies,
+    optionalDependencies: manifest?.optionalDependencies,
+  });
   params.candidates.push({
     idHint: params.idHint,
     source: resolved,
@@ -510,29 +780,48 @@ function addCandidate(params: {
     packageVersion: normalizeOptionalString(manifest?.version),
     packageDescription: normalizeOptionalString(manifest?.description),
     packageDir: params.packageDir,
-    packageManifest: getPackageManifestMetadata(manifest ?? undefined),
+    packageManifest,
+    packageDependencies: packageDependencies.dependencies,
+    packageOptionalDependencies: packageDependencies.optionalDependencies,
+    rawPackageManifest: manifest ?? undefined,
+    bundledManifestId: params.bundledManifestId,
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
+    ...(params.requiredPluginIds && params.requiredPluginIds.length > 0
+      ? { requiredPluginIds: params.requiredPluginIds }
+      : {}),
+    ...(params.requiredPluginSource ? { requiredPluginSource: params.requiredPluginSource } : {}),
   });
 }
 
 function discoverBundleInRoot(params: {
   rootDir: string;
   origin: PluginOrigin;
+  env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  manifest?: PackageManifest | null;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  realpathCache: Map<string, string>;
 }): "added" | "invalid" | "none" {
   const bundleFormat = detectBundleManifestFormat(params.rootDir);
   if (!bundleFormat) {
     return "none";
   }
+  const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache) ?? undefined;
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: params.origin,
+    rootDir: params.rootDir,
+    env: params.env,
+    realpathCache: params.realpathCache,
+  });
   const bundleManifest = loadBundleManifest({
     rootDir: params.rootDir,
+    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
     bundleFormat,
-    rejectHardlinks: params.origin !== "bundled",
+    rejectHardlinks,
   });
   if (!bundleManifest.ok) {
     params.diagnostics.push({
@@ -554,18 +843,91 @@ function discoverBundleInRoot(params: {
     bundleFormat,
     ownershipUid: params.ownershipUid,
     workspaceDir: params.workspaceDir,
+    manifest: params.manifest,
+    packageDir: params.rootDir,
+    bundledManifestId: bundleManifest.manifest.id,
+    bundledManifestPath: bundleManifest.manifestPath,
+    realpathCache: params.realpathCache,
   });
   return "added";
+}
+
+function addLegacyNpmDeclarationDiagnostic(params: {
+  pluginDir: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
+  if (!declaration) {
+    return false;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: declaration.pluginId,
+    source: declaration.source,
+    message: `legacy npm plugin declaration ignored for "${declaration.pluginId}"; run "openclaw doctor --fix" to install ${declaration.npmSpec} into the managed plugin root`,
+  });
+  return true;
+}
+
+function shouldSkipIncompatiblePackagePluginApi(params: {
+  origin: PluginOrigin;
+  manifest: PackageManifest | null;
+  packageDir: string;
+  env: NodeJS.ProcessEnv;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  if (params.origin === "bundled") {
+    return false;
+  }
+  const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
+  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(packageManifest);
+  if (!packagePluginApiRangeCheck.ok) {
+    const pluginId =
+      normalizeOptionalString(packageManifest?.plugin?.id) ??
+      derivePackagePluginIdHint({ packageName: params.manifest?.name });
+    params.diagnostics.push({
+      level: "warn",
+      source: path.join(params.packageDir, "package.json"),
+      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery`,
+      ...(pluginId ? { pluginId } : {}),
+    });
+    return true;
+  }
+  const packagePluginApiRange = packagePluginApiRangeCheck.range;
+  if (!packagePluginApiRange) {
+    return false;
+  }
+  const compatibilityHostVersion = resolveCompatibilityHostVersion(params.env);
+  if (satisfiesPluginApiRange(compatibilityHostVersion, packagePluginApiRange)) {
+    return false;
+  }
+  const pluginId =
+    normalizeOptionalString(packageManifest?.plugin?.id) ??
+    derivePackagePluginIdHint({ packageName: params.manifest?.name });
+  params.diagnostics.push({
+    level: "warn",
+    source: path.join(params.packageDir, "package.json"),
+    message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery`,
+    ...(pluginId ? { pluginId } : {}),
+  });
+  return true;
 }
 
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
+  env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  requireBuiltRuntimeEntry?: boolean;
+  managedPluginDirs?: Set<string>;
+  skipRootDirKeys?: Set<string>;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  realpathCache: Map<string, string>;
+  packageManifestCache?: Map<string, PackageManifest | null>;
+  scanFiles?: boolean;
   recurseDirectories?: boolean;
   skipDirectories?: Set<string>;
   visitedDirectories?: Set<string>;
@@ -573,14 +935,15 @@ function discoverInDirectory(params: {
   if (!fs.existsSync(params.dir)) {
     return;
   }
-  const resolvedDir = safeRealpathSync(params.dir) ?? path.resolve(params.dir);
+  const resolvedDir =
+    safeRealpathSync(params.dir, params.realpathCache) ?? path.resolve(params.dir);
   if (params.recurseDirectories) {
     if (params.visitedDirectories?.has(resolvedDir)) {
       return;
     }
     params.visitedDirectories?.add(resolvedDir);
   }
-  let entries: fs.Dirent[] = [];
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(params.dir, { withFileTypes: true });
   } catch (err) {
@@ -594,8 +957,10 @@ function discoverInDirectory(params: {
 
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
-    if (entry.isFile()) {
-      if (!isExtensionFile(fullPath)) {
+    const entryType = resolveScannedEntryType(entry, fullPath);
+    if (entryType === "file") {
+      const shouldScanFile = params.scanFiles ?? params.origin === "bundled";
+      if (!shouldScanFile || !isExtensionFile(fullPath)) {
         continue;
       }
       addCandidate({
@@ -608,9 +973,11 @@ function discoverInDirectory(params: {
         origin: params.origin,
         ownershipUid: params.ownershipUid,
         workspaceDir: params.workspaceDir,
+        realpathCache: params.realpathCache,
       });
+      continue;
     }
-    if (!entry.isDirectory()) {
+    if (entryType !== "directory") {
       continue;
     }
     if (params.skipDirectories?.has(entry.name)) {
@@ -620,15 +987,62 @@ function discoverInDirectory(params: {
       continue;
     }
 
-    const rejectHardlinks = params.origin !== "bundled";
-    const manifest = readPackageManifest(fullPath, rejectHardlinks);
+    const fullPathRealPath = safeRealpathSync(fullPath, params.realpathCache) ?? undefined;
+    const fullPathDirKey = fullPathRealPath ?? path.resolve(fullPath);
+    if (params.skipRootDirKeys?.has(fullPathDirKey)) {
+      continue;
+    }
+    const requireBuiltRuntimeEntry =
+      params.requireBuiltRuntimeEntry ??
+      isManagedPluginDir({
+        dir: fullPath,
+        realpath: fullPathRealPath,
+        managedPluginDirs: params.managedPluginDirs,
+        realpathCache: params.realpathCache,
+      });
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: fullPath,
+      env: params.env,
+      realpathCache: params.realpathCache,
+    });
+    const manifest = readCandidatePackageManifest({
+      dir: fullPath,
+      origin: params.origin,
+      rejectHardlinks,
+      ...(fullPathRealPath !== undefined ? { rootRealPath: fullPathRealPath } : {}),
+      packageManifestCache: params.packageManifestCache,
+    });
+    if (
+      shouldSkipIncompatiblePackagePluginApi({
+        origin: params.origin,
+        manifest,
+        packageDir: fullPath,
+        env: params.env,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      continue;
+    }
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    if (
+      pushInvalidPackageExtensionDiagnostic({
+        resolution: extensionResolution,
+        source: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      continue;
+    }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks);
+    const candidateManifest = resolveCandidateManifest(fullPath, rejectHardlinks, fullPathRealPath);
+    const manifestId = candidateManifest?.manifest.id;
     const setupSource = resolvePackageSetupSource({
       packageDir: fullPath,
+      ...(fullPathRealPath !== undefined ? { packageRootRealPath: fullPathRealPath } : {}),
       manifest,
       origin: params.origin,
+      requireBuiltRuntimeEntry,
       sourceLabel: fullPath,
       diagnostics: params.diagnostics,
       rejectHardlinks,
@@ -637,9 +1051,12 @@ function discoverInDirectory(params: {
     if (extensions.length > 0) {
       const resolvedRuntimeSources = resolvePackageRuntimeExtensionSources({
         packageDir: fullPath,
+        ...(fullPathRealPath !== undefined ? { packageRootRealPath: fullPathRealPath } : {}),
         manifest,
         extensions,
         origin: params.origin,
+        pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
+        requireBuiltRuntimeEntry,
         sourceLabel: fullPath,
         diagnostics: params.diagnostics,
         rejectHardlinks,
@@ -663,6 +1080,9 @@ function discoverInDirectory(params: {
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: fullPath,
+          requiredPluginIds: candidateManifest?.manifest.requiresPlugins,
+          requiredPluginSource: candidateManifest?.manifestPath,
+          realpathCache: params.realpathCache,
         });
       }
       continue;
@@ -671,11 +1091,14 @@ function discoverInDirectory(params: {
     const bundleDiscovery = discoverBundleInRoot({
       rootDir: fullPath,
       origin: params.origin,
+      env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      manifest,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      realpathCache: params.realpathCache,
     });
     if (bundleDiscovery === "added") {
       continue;
@@ -689,7 +1112,7 @@ function discoverInDirectory(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
-        idHint: entry.name,
+        idHint: manifestId ?? entry.name,
         source: indexFile,
         ...(setupSource ? { setupSource } : {}),
         rootDir: fullPath,
@@ -698,7 +1121,19 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
+        requiredPluginIds: candidateManifest?.manifest.requiresPlugins,
+        requiredPluginSource: candidateManifest?.manifestPath,
+        realpathCache: params.realpathCache,
       });
+      continue;
+    }
+
+    if (
+      addLegacyNpmDeclarationDiagnostic({
+        pluginDir: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
       continue;
     }
 
@@ -711,15 +1146,76 @@ function discoverInDirectory(params: {
   }
 }
 
+function hasDiscoverablePluginTree(pluginsDir: string): boolean {
+  try {
+    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
+      if (!entry.isDirectory()) {
+        return false;
+      }
+      const pluginDir = path.join(pluginsDir, entry.name);
+      return (
+        fs.existsSync(path.join(pluginDir, "package.json")) ||
+        fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
+  const packageRoot = path.dirname(extensionsDir);
+  return (
+    fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+    fs.existsSync(path.join(packageRoot, "src")) &&
+    fs.existsSync(extensionsDir) &&
+    hasDiscoverablePluginTree(extensionsDir)
+  );
+}
+
+function resolveBundledSourceCheckoutExtensionsDir(bundledRoot?: string): string | undefined {
+  if (!bundledRoot) {
+    return undefined;
+  }
+  const legacyRoot = buildLegacyBundledRootPath(bundledRoot);
+  if (!legacyRoot || !isSourceCheckoutExtensionsDir(legacyRoot)) {
+    return undefined;
+  }
+  return legacyRoot;
+}
+
+function readChildDirectoryNames(dir: string | undefined): Set<string> {
+  if (!dir || !fs.existsSync(dir)) {
+    return new Set();
+  }
+  try {
+    return new Set(
+      fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function discoverFromPath(params: {
   rawPath: string;
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  requireBuiltRuntimeEntry?: boolean;
+  managedPluginDirs?: Set<string>;
+  skipRootDirKeys?: Set<string>;
+  scanFiles?: boolean;
   env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  realpathCache: Map<string, string>;
+  packageManifestCache?: Map<string, PackageManifest | null>;
 }) {
   const resolved = resolveUserPath(params.rawPath, params.env);
   if (!fs.existsSync(resolved)) {
@@ -751,20 +1247,64 @@ function discoverFromPath(params: {
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      realpathCache: params.realpathCache,
     });
     return;
   }
 
   if (stat.isDirectory()) {
-    const rejectHardlinks = params.origin !== "bundled";
-    const manifest = readPackageManifest(resolved, rejectHardlinks);
+    const resolvedRealPath = safeRealpathSync(resolved, params.realpathCache) ?? undefined;
+    const requireBuiltRuntimeEntry =
+      params.requireBuiltRuntimeEntry ??
+      isManagedPluginDir({
+        dir: resolved,
+        realpath: resolvedRealPath,
+        managedPluginDirs: params.managedPluginDirs,
+        realpathCache: params.realpathCache,
+      });
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: resolved,
+      env: params.env,
+      realpathCache: params.realpathCache,
+    });
+    const manifest = readCandidatePackageManifest({
+      dir: resolved,
+      origin: params.origin,
+      rejectHardlinks,
+      ...(resolvedRealPath !== undefined ? { rootRealPath: resolvedRealPath } : {}),
+      packageManifestCache: params.packageManifestCache,
+    });
+    if (
+      shouldSkipIncompatiblePackagePluginApi({
+        origin: params.origin,
+        manifest,
+        packageDir: resolved,
+        env: params.env,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      return;
+    }
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    if (
+      pushInvalidPackageExtensionDiagnostic({
+        resolution: extensionResolution,
+        source: resolved,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      return;
+    }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks);
+    const candidateManifest = resolveCandidateManifest(resolved, rejectHardlinks, resolvedRealPath);
+    const manifestId = candidateManifest?.manifest.id;
     const setupSource = resolvePackageSetupSource({
       packageDir: resolved,
+      ...(resolvedRealPath !== undefined ? { packageRootRealPath: resolvedRealPath } : {}),
       manifest,
       origin: params.origin,
+      requireBuiltRuntimeEntry,
       sourceLabel: resolved,
       diagnostics: params.diagnostics,
       rejectHardlinks,
@@ -773,9 +1313,12 @@ function discoverFromPath(params: {
     if (extensions.length > 0) {
       const resolvedRuntimeSources = resolvePackageRuntimeExtensionSources({
         packageDir: resolved,
+        ...(resolvedRealPath !== undefined ? { packageRootRealPath: resolvedRealPath } : {}),
         manifest,
         extensions,
         origin: params.origin,
+        pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
+        requireBuiltRuntimeEntry,
         sourceLabel: resolved,
         diagnostics: params.diagnostics,
         rejectHardlinks,
@@ -799,6 +1342,9 @@ function discoverFromPath(params: {
           workspaceDir: params.workspaceDir,
           manifest,
           packageDir: resolved,
+          requiredPluginIds: candidateManifest?.manifest.requiresPlugins,
+          requiredPluginSource: candidateManifest?.manifestPath,
+          realpathCache: params.realpathCache,
         });
       }
       return;
@@ -807,11 +1353,14 @@ function discoverFromPath(params: {
     const bundleDiscovery = discoverBundleInRoot({
       rootDir: resolved,
       origin: params.origin,
+      env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      manifest,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      realpathCache: params.realpathCache,
     });
     if (bundleDiscovery === "added") {
       return;
@@ -826,7 +1375,7 @@ function discoverFromPath(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
-        idHint: path.basename(resolved),
+        idHint: manifestId ?? path.basename(resolved),
         source: indexFile,
         ...(setupSource ? { setupSource } : {}),
         rootDir: resolved,
@@ -835,45 +1384,61 @@ function discoverFromPath(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: resolved,
+        requiredPluginIds: candidateManifest?.manifest.requiresPlugins,
+        requiredPluginSource: candidateManifest?.manifestPath,
+        realpathCache: params.realpathCache,
       });
+      return;
+    }
+
+    if (
+      addLegacyNpmDeclarationDiagnostic({
+        pluginDir: resolved,
+        diagnostics: params.diagnostics,
+      })
+    ) {
       return;
     }
 
     discoverInDirectory({
       dir: resolved,
       origin: params.origin,
+      env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
+      realpathCache: params.realpathCache,
+      packageManifestCache: params.packageManifestCache,
+      ...(params.scanFiles !== undefined || params.origin === "config"
+        ? { scanFiles: params.scanFiles ?? true }
+        : {}),
+      ...(params.requireBuiltRuntimeEntry !== undefined
+        ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
+        : {}),
+      ...(params.managedPluginDirs ? { managedPluginDirs: params.managedPluginDirs } : {}),
+      ...(params.skipRootDirKeys ? { skipRootDirKeys: params.skipRootDirKeys } : {}),
     });
-    return;
   }
 }
 
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
+  installRecords?: Record<string, PluginInstallRecord>;
   ownershipUid?: number | null;
-  cache?: boolean;
   env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
-  const cacheEnabled = params.cache !== false && shouldUseDiscoveryCache(env);
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
-  const scopedResult = getCachedDiscoveryResult({
-    cacheEnabled,
-    cacheKey: buildScopedDiscoveryCacheKey({
-      workspaceDir: params.workspaceDir,
-      extraPaths: params.extraPaths,
-      ownershipUid: params.ownershipUid,
-      env,
-    }),
-    env,
-    load: () => {
+  const realpathCache = new Map<string, string>();
+  const packageManifestCache = new Map<string, PackageManifest | null>();
+  const scopedResult = tracePluginLifecyclePhase(
+    "discovery scan",
+    () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
       const extra = params.extraPaths ?? [];
@@ -906,9 +1471,15 @@ export function discoverOpenClawPlugins(params: {
           candidates: result.candidates,
           diagnostics: result.diagnostics,
           seen,
+          realpathCache,
+          packageManifestCache,
         });
       }
-      const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
+      const workspaceMatchesBundledRoot = resolvesToSameDirectory(
+        workspaceRoot,
+        roots.stock,
+        realpathCache,
+      );
       if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
         // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
         // Recursively scanning the full workspace treats arbitrary project folders as
@@ -916,24 +1487,23 @@ export function discoverOpenClawPlugins(params: {
         discoverInDirectory({
           dir: roots.workspace,
           origin: "workspace",
+          env,
           ownershipUid: params.ownershipUid,
           workspaceDir: workspaceRoot,
           candidates: result.candidates,
           diagnostics: result.diagnostics,
           seen,
+          realpathCache,
+          packageManifestCache,
         });
       }
       return result;
     },
-  });
-  const sharedResult = getCachedDiscoveryResult({
-    cacheEnabled,
-    cacheKey: buildSharedDiscoveryCacheKey({
-      ownershipUid: params.ownershipUid,
-      env,
-    }),
-    env,
-    load: () => {
+    { scope: "scoped", extraPathCount: params.extraPaths?.length ?? 0 },
+  );
+  const sharedResult = tracePluginLifecyclePhase(
+    "discovery scan",
+    () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
       for (const sourceOverlayDir of listBundledSourceOverlayDirs({
@@ -949,6 +1519,8 @@ export function discoverOpenClawPlugins(params: {
           candidates: result.candidates,
           diagnostics: result.diagnostics,
           seen,
+          realpathCache,
+          packageManifestCache,
         });
         result.diagnostics.push({
           level: "warn",
@@ -957,14 +1529,75 @@ export function discoverOpenClawPlugins(params: {
             "using bind-mounted bundled plugin source overlay; this source overrides the packaged dist bundle for the same plugin id",
         });
       }
+      const sourceCheckoutDependencyDiagnostic = resolveSourceCheckoutDependencyDiagnostic(env);
+      if (sourceCheckoutDependencyDiagnostic) {
+        result.diagnostics.push({
+          level: "warn",
+          source: sourceCheckoutDependencyDiagnostic.source,
+          message: sourceCheckoutDependencyDiagnostic.message,
+        });
+      }
       if (roots.stock) {
         discoverInDirectory({
           dir: roots.stock,
           origin: "bundled",
+          env,
           ownershipUid: params.ownershipUid,
           candidates: result.candidates,
           diagnostics: result.diagnostics,
           seen,
+          realpathCache,
+          packageManifestCache,
+        });
+      }
+      const sourceCheckoutExtensionsDir = resolveBundledSourceCheckoutExtensionsDir(roots.stock);
+      const sourceCheckoutMatchesBundledRoot = resolvesToSameDirectory(
+        sourceCheckoutExtensionsDir,
+        roots.stock,
+        realpathCache,
+      );
+      if (sourceCheckoutExtensionsDir && !sourceCheckoutMatchesBundledRoot) {
+        discoverInDirectory({
+          dir: sourceCheckoutExtensionsDir,
+          origin: "bundled",
+          env,
+          ownershipUid: params.ownershipUid,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+          realpathCache,
+          packageManifestCache,
+          skipDirectories: readChildDirectoryNames(roots.stock),
+        });
+      }
+      const installedPaths = collectInstalledPluginRecordPaths(
+        params.installRecords,
+        env,
+        realpathCache,
+      );
+      const installedPluginDirKeys = collectManagedPluginDirKeys(
+        installedPaths.map((installedPath) => installedPath.path),
+        realpathCache,
+      );
+      const managedPluginDirs = collectManagedPluginDirKeys(
+        collectManagedPluginRecordPaths(params.installRecords, env),
+        realpathCache,
+      );
+      for (const installedPath of installedPaths) {
+        discoverFromPath({
+          rawPath: installedPath.path,
+          origin: "global",
+          ownershipUid: params.ownershipUid,
+          workspaceDir,
+          requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
+          managedPluginDirs,
+          scanFiles: true,
+          env,
+          candidates: result.candidates,
+          diagnostics: result.diagnostics,
+          seen,
+          realpathCache,
+          packageManifestCache,
         });
       }
       // Keep auto-discovered global extensions behind bundled plugins.
@@ -972,17 +1605,25 @@ export function discoverOpenClawPlugins(params: {
       discoverInDirectory({
         dir: roots.global,
         origin: "global",
+        env,
         ownershipUid: params.ownershipUid,
+        managedPluginDirs,
+        skipRootDirKeys: installedPluginDirKeys,
         candidates: result.candidates,
         diagnostics: result.diagnostics,
         seen,
+        realpathCache,
+        packageManifestCache,
       });
       return result;
     },
-  });
+    { scope: "shared" },
+  );
   const result = createDiscoveryResult();
   const seenSources = new Set<string>();
-  mergeDiscoveryResult(result, scopedResult, seenSources);
-  mergeDiscoveryResult(result, sharedResult, seenSources);
+  const seenDiagnostics = new Set<string>();
+  mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
+  mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
+  addMissingRequiredPluginDiagnostics(result);
   return result;
 }

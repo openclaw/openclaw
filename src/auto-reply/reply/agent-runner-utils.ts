@@ -1,4 +1,7 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -17,10 +20,6 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -28,6 +27,11 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
+import {
+  buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
+  resolveEnforceFinalTagWithResolver,
+} from "./agent-runner-run-params.js";
+export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -101,7 +105,12 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const isRestartSentinelContinuation =
+    sessionCtx.InputProvenance?.kind === "internal_system" &&
+    sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+  const currentMessageId = isRestartSentinelContinuation
+    ? sessionCtx.ReplyToId
+    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
@@ -122,7 +131,7 @@ export function buildThreadingToolContext(params: {
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
-  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
@@ -143,16 +152,21 @@ export function buildThreadingToolContext(params: {
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
+        ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        TransportThreadId: sessionCtx.TransportThreadId,
         NativeChannelId: sessionCtx.NativeChannelId,
       },
       hasRepliedRef,
     }) ?? {};
+  const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
-    currentMessageId: context.currentMessageId ?? currentMessageId,
+    // Some providers expose only thread resources as reply targets; explicit
+    // `undefined` means the adapter rejected the generic message-id fallback.
+    currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
   };
 }
 
@@ -173,66 +187,18 @@ export const resolveEnforceFinalTag = (
   run: FollowupRun["run"],
   provider: string,
   model = run.model,
-) =>
-  (run.skipProviderRuntimeHints ? false : undefined) ??
-  (run.enforceFinalTag ||
-    isReasoningTagProvider(provider, {
-      config: run.config,
-      workspaceDir: run.workspaceDir,
-      modelId: model,
-    }));
+) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
 
-export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  const config = run.config;
-  return {
-    cfg: config,
-    provider: run.provider,
-    model: run.model,
-    agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    }),
-  };
+export function buildEmbeddedRunBaseParams(
+  params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
+) {
+  return buildEmbeddedRunBaseParamsCore({
+    ...params,
+    isReasoningTagProvider,
+  });
 }
 
-export function buildEmbeddedRunBaseParams(params: {
-  run: FollowupRun["run"];
-  provider: string;
-  model: string;
-  runId: string;
-  authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
-  allowTransientCooldownProbe?: boolean;
-}) {
-  const config = params.run.config;
-  return {
-    sessionFile: params.run.sessionFile,
-    workspaceDir: params.run.workspaceDir,
-    agentDir: params.run.agentDir,
-    config,
-    skillsSnapshot: params.run.skillsSnapshot,
-    ownerNumbers: params.run.ownerNumbers,
-    inputProvenance: params.run.inputProvenance,
-    senderIsOwner: params.run.senderIsOwner,
-    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
-    silentExpected: params.run.silentExpected,
-    allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
-    provider: params.provider,
-    model: params.model,
-    ...params.authProfile,
-    thinkLevel: params.run.thinkLevel,
-    verboseLevel: params.run.verboseLevel,
-    reasoningLevel: params.run.reasoningLevel,
-    execOverrides: params.run.execOverrides,
-    bashElevated: params.run.bashElevated,
-    timeoutMs: params.run.timeoutMs,
-    runId: params.runId,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-  };
-}
-
-export function buildEmbeddedContextFromTemplate(params: {
+function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
@@ -272,7 +238,7 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
   return roles.length > 0 ? roles : undefined;
 }
 
-export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
+function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
     senderName: normalizeOptionalString(sessionCtx.SenderName),

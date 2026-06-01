@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { createTempHomeEnv } from "../../test-support.js";
 import { stopBrowserControlService } from "../control-service.js";
 import { fetchBrowserJson } from "./client-fetch.js";
@@ -18,14 +18,12 @@ describe("browser client fetch attachOnly diagnostics", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     await stopBrowserControlService();
-    clearConfigCache();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     await stopBrowserControlService();
-    clearConfigCache();
     clearRuntimeConfigSnapshot();
     await tempHome?.restore();
     tempHome = undefined;
@@ -39,7 +37,9 @@ describe("browser client fetch attachOnly diagnostics", () => {
       socket.on("close", () => sockets.delete(socket));
       socket.on("error", () => {});
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const port = (server.address() as { port: number }).port;
     const configPath = path.join(tempHome.home, ".openclaw", "openclaw.json");
     await fs.writeFile(
@@ -64,7 +64,6 @@ describe("browser client fetch attachOnly diagnostics", () => {
       ),
     );
     process.env.OPENCLAW_CONFIG_PATH = configPath;
-    clearConfigCache();
     clearRuntimeConfigSnapshot();
 
     try {
@@ -81,7 +80,9 @@ describe("browser client fetch attachOnly diagnostics", () => {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });

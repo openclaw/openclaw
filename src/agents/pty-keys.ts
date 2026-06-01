@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../utils.js";
 
 const ESC = "\x1b";
@@ -102,13 +102,13 @@ const modifiableNamedKeys = new Set([
   "dc",
 ]);
 
-export type KeyEncodingRequest = {
+type KeyEncodingRequest = {
   keys?: string[];
   hex?: string[];
   literal?: string;
 };
 
-export type KeyEncodingResult = {
+type KeyEncodingResult = {
   data: string;
   warnings: string[];
 };

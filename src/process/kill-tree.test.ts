@@ -1,11 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -15,24 +16,25 @@ vi.mock("node:child_process", async () => {
 });
 
 let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
+let signalProcessTree: typeof import("./kill-tree.js").signalProcessTree;
 
-async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
-  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", { value: platform, configurable: true });
-  try {
-    return await run();
-  } finally {
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
-    }
-  }
+function expectTaskkillCall(index: number, args: string[]) {
+  expect(spawnMock.mock.calls[index]).toStrictEqual([
+    "taskkill",
+    args,
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  ]);
 }
 
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {
-    ({ killProcessTree } = await import("./kill-tree.js"));
+    ({ killProcessTree, signalProcessTree } = await import("./kill-tree.js"));
   });
 
   beforeEach(() => {
@@ -55,16 +57,11 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("win32", async () => {
+    await withMockedPlatform("win32", async () => {
       killProcessTree(4242, { graceMs: 25 });
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
-      expect(spawnMock).toHaveBeenNthCalledWith(
-        1,
-        "taskkill",
-        ["/T", "/PID", "4242"],
-        expect.objectContaining({ detached: true, stdio: "ignore" }),
-      );
+      expectTaskkillCall(0, ["/T", "/PID", "4242"]);
 
       await vi.advanceTimersByTimeAsync(25);
       expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -79,24 +76,14 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("win32", async () => {
+    await withMockedPlatform("win32", async () => {
       killProcessTree(5252, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
 
       expect(spawnMock).toHaveBeenCalledTimes(2);
-      expect(spawnMock).toHaveBeenNthCalledWith(
-        1,
-        "taskkill",
-        ["/T", "/PID", "5252"],
-        expect.objectContaining({ detached: true, stdio: "ignore" }),
-      );
-      expect(spawnMock).toHaveBeenNthCalledWith(
-        2,
-        "taskkill",
-        ["/F", "/T", "/PID", "5252"],
-        expect.objectContaining({ detached: true, stdio: "ignore" }),
-      );
+      expectTaskkillCall(0, ["/T", "/PID", "5252"]);
+      expectTaskkillCall(1, ["/F", "/T", "/PID", "5252"]);
     });
   });
 
@@ -111,7 +98,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(3333, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -130,13 +117,48 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(4444, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
 
       expect(killSpy).toHaveBeenCalledWith(-4444, "SIGTERM");
       expect(killSpy).toHaveBeenCalledWith(-4444, "SIGKILL");
+    });
+  });
+
+  it("on Unix force-kills synchronously without SIGTERM or delayed escalation", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(4949, { force: true });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(-4949, "SIGKILL");
+      expect(killSpy).not.toHaveBeenCalledWith(-4949, "SIGTERM");
+    });
+  });
+
+  it("on Unix force-kills a live detached group even after the parent pid exits", async () => {
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -4545 && signal === 0) {
+        return true;
+      }
+      if (pid === 4545 && signal === 0) {
+        throw new Error("ESRCH");
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(4545, { graceMs: 5 });
+
+      await vi.advanceTimersByTimeAsync(5);
+
+      expect(killSpy).toHaveBeenCalledWith(-4545, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(-4545, "SIGKILL");
+      expect(killSpy).not.toHaveBeenCalledWith(4545, "SIGKILL");
     });
   });
 
@@ -148,7 +170,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(5555, { graceMs: 10, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
@@ -172,11 +194,46 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(6666, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 
       expect(killSpy).toHaveBeenCalledWith(-6666, "SIGTERM");
+    });
+  });
+
+  it("on Unix sends a single requested tree signal without scheduling escalation", async () => {
+    killSpy.mockImplementation(() => true);
+
+    await withMockedPlatform("linux", async () => {
+      signalProcessTree(7777, "SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(killSpy).toHaveBeenCalledTimes(1);
+      expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-7777, "SIGKILL");
+    });
+  });
+
+  it("on Windows maps requested tree signals to taskkill force mode", async () => {
+    await withMockedPlatform("win32", async () => {
+      signalProcessTree(8888, "SIGTERM");
+      signalProcessTree(8888, "SIGKILL");
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expectTaskkillCall(0, ["/T", "/PID", "8888"]);
+      expectTaskkillCall(1, ["/F", "/T", "/PID", "8888"]);
+    });
+  });
+
+  it("on Windows force-kills synchronously without delayed taskkill", async () => {
+    await withMockedPlatform("win32", async () => {
+      killProcessTree(9999, { force: true });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expectTaskkillCall(0, ["/F", "/T", "/PID", "9999"]);
     });
   });
 });

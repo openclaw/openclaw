@@ -21,10 +21,12 @@ export type {
   DiscordActionConfig,
   DiscordConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-contracts";
 export {
   jsonResult,
+  readNonNegativeIntegerParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
   resolvePollMaxSelections,

@@ -1,5 +1,8 @@
 {
   "id": "vercel-ai-gateway",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
   "modelIdNormalization": {
@@ -7,9 +10,7 @@
       "vercel-ai-gateway": {
         "aliases": {
           "opus-4.6": "claude-opus-4-6",
-          "opus-4.5": "claude-opus-4-5",
-          "sonnet-4.6": "claude-sonnet-4-6",
-          "sonnet-4.5": "claude-sonnet-4-5"
+          "sonnet-4.6": "claude-sonnet-4-6"
         },
         "prefixWhenBareAfterAliasStartsWith": [
           {
@@ -32,8 +33,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "vercel-ai-gateway",
+        "envVars": ["AI_GATEWAY_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -7,11 +7,12 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
+  mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
@@ -30,7 +31,11 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { telegramSecurityAdapter } from "./security.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
-export const TELEGRAM_CHANNEL = "telegram" as const;
+const TELEGRAM_CHANNEL = "telegram" as const;
+
+type TelegramConfigAccessorAccount = {
+  config: TelegramAccountConfig;
+};
 
 export function findTelegramTokenOwnerAccountId(params: {
   cfg: OpenClawConfig;
@@ -86,7 +91,7 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   }
   const accounts = cfg.channels?.telegram?.accounts;
   const hasConfiguredAccounts =
-    !!accounts &&
+    Boolean(accounts) &&
     typeof accounts === "object" &&
     !Array.isArray(accounts) &&
     Object.keys(accounts).length > 0;
@@ -99,17 +104,31 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   return !resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 }
 
-export const telegramConfigAdapter = createScopedChannelConfigAdapter<ResolvedTelegramAccount>({
+function resolveTelegramConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): TelegramConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
+  return { config: mergeTelegramAccountConfig(params.cfg, accountId) };
+}
+
+export const telegramConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedTelegramAccount,
+  TelegramConfigAccessorAccount
+>({
   sectionKey: TELEGRAM_CHANNEL,
   listAccountIds: listTelegramAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
+  resolveAccessorAccount: resolveTelegramConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectTelegramAccount),
   defaultAccountId: resolveDefaultTelegramAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
-  resolveAllowFrom: (account: ResolvedTelegramAccount) => account.config.allowFrom,
+  resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
-  resolveDefaultTo: (account: ResolvedTelegramAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
 export function createTelegramPluginBase(params: {
@@ -226,7 +245,7 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            !!inspected.token?.trim() &&
+            Boolean(inspected.token?.trim()) &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
         };

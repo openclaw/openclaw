@@ -1,24 +1,18 @@
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { afterEach, beforeEach } from "vitest";
 import { normalizeE164 } from "../../plugin-sdk/account-resolution.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  lowercasePreservingWhitespace,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function formatDiscordAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => normalizeOptionalString(String(entry)) ?? "")
-    .filter(Boolean)
+  return normalizeStringEntries(allowFrom)
     .map((entry) => entry.replace(/^(discord|user|pk):/i, "").replace(/^<@!?(\d+)>$/, "$1"))
     .map((entry) => lowercasePreservingWhitespace(entry));
 }
 
 function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => normalizeOptionalString(String(entry)) ?? "")
-    .filter((entry): entry is string => Boolean(entry))
+  return normalizeStringEntries(allowFrom)
     .map((entry) => {
       if (entry === "*") {
         return entry;
@@ -59,7 +53,7 @@ function resolveChannelAllowFrom(
   return Array.isArray(allowFrom) ? allowFrom : undefined;
 }
 
-export const createCommandAuthRegistry = () =>
+const createCommandAuthRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",

@@ -1,19 +1,23 @@
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
-import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import {
+  resolveGatewayRestartLogPath,
+  resolveGatewaySupervisorLogPaths,
+} from "../../daemon/restart-logs.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
+import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -59,6 +63,27 @@ function formatCapabilityLabel(capability?: string) {
     return null;
   }
   return capability.replaceAll("_", "-");
+}
+
+function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
+  if (!cli) {
+    return null;
+  }
+  return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
+}
+
+function formatConnectionLine(
+  connection: NonNullable<DaemonStatus["connections"]>["established"][number],
+) {
+  const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+  const ppid = connection.ppid ? ` ppid=${connection.ppid}` : "";
+  const direction = ` ${connection.direction}`;
+  const command = connection.command ? ` ${connection.command}` : "";
+  const address = connection.address ? ` ${connection.address}` : "";
+  const commandLine = connection.commandLine
+    ? ` cmd=${shortenHomePath(connection.commandLine)}`
+    : "";
+  return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
 }
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
@@ -124,6 +149,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         );
       }
     }
+    if (status.config.cli.warnings?.length) {
+      defaultRuntime.error(warnText("Config warnings:"));
+      for (const warning of status.config.cli.warnings.slice(0, 5)) {
+        defaultRuntime.error(
+          warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
+        );
+      }
+    }
     if (status.config.daemon) {
       const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
       defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
@@ -131,6 +164,18 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
             `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          );
+        }
+      }
+      if (status.config.daemon !== status.config.cli && status.config.daemon.warnings?.length) {
+        const warningsLabel =
+          status.config.daemon.path === status.config.cli.path
+            ? "Config warnings:"
+            : "Service config warnings:";
+        defaultRuntime.error(warnText(warningsLabel));
+        for (const warning of status.config.daemon.warnings.slice(0, 5)) {
+          defaultRuntime.error(
+            warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
           );
         }
       }
@@ -175,10 +220,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  const gatewayVersion = rpc?.server?.version?.trim() || status.gateway?.version?.trim();
+  const cliVersionLine = formatCliVersionLine(status.cli);
+  if (gatewayVersion) {
+    if (cliVersionLine) {
+      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+    }
+    defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
+    if (status.cli?.version && status.cli.version !== gatewayVersion) {
+      defaultRuntime.error(
+        warnText(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
+        ),
+      );
+      defaultRuntime.error(
+        warnText(
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ),
+      );
+    }
+    spacer();
+  }
+
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+  if (service.restartHandoff) {
+    defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
@@ -229,8 +299,30 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  if (status.connections?.established.length) {
+    defaultRuntime.log(
+      `${label("Established clients:")} ${infoText(String(status.connections.established.length))}`,
+    );
+    for (const connection of status.connections.established.slice(0, 8)) {
+      defaultRuntime.log(`  ${infoText(formatConnectionLine(connection))}`);
+    }
+    if (status.connections.established.length > 8) {
+      defaultRuntime.log(
+        `  ${infoText(`... ${status.connections.established.length - 8} more connection(s)`)}`,
+      );
+    }
+    defaultRuntime.log(
+      warnText(
+        "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and re-run gateway status.",
+      ),
+    );
+    spacer();
+  }
+
   const systemdUnavailable =
-    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+    process.platform === "linux" &&
+    rpc?.ok !== true &&
+    isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const container = Boolean(
       resolveDaemonContainerContext(service.command?.environment ?? process.env),
@@ -288,6 +380,22 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  if (service.staleUpdateLaunchdJobs?.length) {
+    defaultRuntime.error(errorText("Stale OpenClaw updater launchd job(s) detected."));
+    for (const job of service.staleUpdateLaunchdJobs) {
+      const exitStatus =
+        job.lastExitStatus !== undefined ? `, last exit ${job.lastExitStatus}` : "";
+      const pid = job.pid !== undefined ? `, pid ${job.pid}` : "";
+      defaultRuntime.error(errorText(`- ${job.label}${pid}${exitStatus}`));
+    }
+    defaultRuntime.error(
+      errorText(
+        `Fix after confirming no update is running: launchctl remove <label>, then run ${formatCliCommand("openclaw gateway restart")}.`,
+      ),
+    );
+    spacer();
+  }
+
   for (const line of renderPortDiagnosticsForCli(status, rpc?.ok)) {
     defaultRuntime.error(errorText(line));
   }
@@ -324,9 +432,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(serviceEnv);
+      const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
-      defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
+      defaultRuntime.error(`${errorText("Errors:")} suppressed`);
     }
     defaultRuntime.error(
       `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,
@@ -335,24 +443,24 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (extraServices.length > 0) {
-    defaultRuntime.error(errorText("Other gateway-like services detected (best effort):"));
+    defaultRuntime.log(warnText("Other gateway-like services detected (best effort):"));
     for (const svc of extraServices) {
-      defaultRuntime.error(`- ${errorText(svc.label)} (${svc.scope}, ${svc.detail})`);
+      defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
     for (const hint of renderGatewayServiceCleanupHints()) {
-      defaultRuntime.error(`${errorText("Cleanup hint:")} ${hint}`);
+      defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
     }
     spacer();
   }
 
   if (extraServices.length > 0) {
-    defaultRuntime.error(
-      errorText(
+    defaultRuntime.log(
+      infoText(
         "Recommendation: run a single gateway per machine for most setups. One gateway supports multiple agents (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );
-    defaultRuntime.error(
-      errorText(
+    defaultRuntime.log(
+      infoText(
         "If you need multiple gateways (e.g., a rescue bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );

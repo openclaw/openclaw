@@ -37,10 +37,38 @@ import {
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
 
+export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
+export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
+
+export const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
+export type ChatAutoScrollMode = (typeof CHAT_AUTO_SCROLL_MODES)[number];
+
+export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode {
+  return CHAT_AUTO_SCROLL_MODES.includes(value as ChatAutoScrollMode)
+    ? (value as ChatAutoScrollMode)
+    : "near-bottom";
+}
+
 function snapBorderRadius(value: number): BorderRadiusStop {
   let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
   let bestDist = Math.abs(value - best);
   for (const stop of BORDER_RADIUS_STOPS) {
+    const dist = Math.abs(value - stop);
+    if (dist < bestDist) {
+      best = stop;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  let best: TextScaleStop = TEXT_SCALE_STOPS[0];
+  let bestDist = Math.abs(value - best);
+  for (const stop of TEXT_SCALE_STOPS) {
     const dist = Math.abs(value - stop);
     if (dist < bestDist) {
       best = stop;
@@ -57,14 +85,16 @@ export type UiSettings = {
   lastActiveSessionKey: string;
   theme: ThemeName;
   themeMode: ThemeMode;
-  chatFocusMode: boolean;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
+  chatAutoScroll?: ChatAutoScrollMode;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  recentSessionsCollapsed?: boolean; // Collapse recent sessions list in sidebar
   borderRadius: number; // Corner roundness (0–100, default 50)
+  textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
 };
@@ -87,7 +117,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
     typeof window !== "undefined" &&
-    normalizeOptionalString(window.__OPENCLAW_CONTROL_UI_BASE_PATH__);
+    normalizeOptionalString(window["__OPENCLAW_CONTROL_UI_BASE_PATH__"]);
   const basePath = configured
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);
@@ -198,14 +228,16 @@ export function loadSettings(): UiSettings {
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "system",
-    chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
+    chatAutoScroll: "near-bottom",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    recentSessionsCollapsed: false,
     borderRadius: 50,
+    textScale: 100,
   };
 
   try {
@@ -235,8 +267,6 @@ export function loadSettings(): UiSettings {
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
-      chatFocusMode:
-        typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
@@ -245,6 +275,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowToolCalls === "boolean"
           ? parsed.chatShowToolCalls
           : defaults.chatShowToolCalls,
+      chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -261,12 +292,17 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      recentSessionsCollapsed:
+        typeof parsed.recentSessionsCollapsed === "boolean"
+          ? parsed.recentSessionsCollapsed
+          : defaults.recentSessionsCollapsed,
       borderRadius:
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
         parsed.borderRadius <= 100
           ? snapBorderRadius(parsed.borderRadius)
           : defaults.borderRadius,
+      textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
@@ -378,14 +414,16 @@ function persistSettings(next: UiSettings) {
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
-    chatFocusMode: next.chatFocusMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
+    chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
+    recentSessionsCollapsed: next.recentSessionsCollapsed ?? false,
     borderRadius: next.borderRadius,
+    textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),

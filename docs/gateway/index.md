@@ -73,7 +73,8 @@ After the first successful load, the running process serves the active in-memory
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs, OpenAI compatible (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - Plugin HTTP routes, such as optional `/api/v1/admin/rpc`
   - Control UI and hooks
 - Default bind mode: `loopback`.
 - Auth is required by default. Shared-secret setups use
@@ -83,7 +84,7 @@ After the first successful load, the running process serves the active in-memory
 
 ## OpenAI-compatible endpoints
 
-OpenClaw’s highest-leverage compatibility surface is now:
+OpenClaw's highest-leverage compatibility surface is now:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`
@@ -105,12 +106,16 @@ Planning note:
 
 All of these run on the main Gateway port and use the same trusted operator auth boundary as the rest of the Gateway HTTP API.
 
+Admin HTTP RPC (`POST /api/v1/admin/rpc`) is a separate, default-off plugin route for host tooling that cannot use WebSocket RPC. See [Admin HTTP RPC](/plugins/admin-http-rpc).
+
 ### Port and bind precedence
 
 | Setting      | Resolution order                                              |
 | ------------ | ------------------------------------------------------------- |
 | Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
 | Bind mode    | CLI/override → `gateway.bind` → `loopback`                    |
+
+Installed gateway services record the resolved `--port` in supervisor metadata. After changing `gateway.port`, run `openclaw doctor --fix` or `openclaw gateway install --force` so launchd/systemd/schtasks starts the process on the new port.
 
 Gateway startup uses the same effective port and bind when it seeds local
 Control UI origins for non-loopback binds. For example, `--bind lan --port 3000`
@@ -182,42 +187,6 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 
 Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).
 
-## VoiceClaw real-time brain endpoint
-
-OpenClaw exposes a VoiceClaw-compatible real-time WebSocket endpoint at
-`/voiceclaw/realtime`. Use it when a VoiceClaw desktop client should talk
-directly to a real-time OpenClaw brain instead of going through a separate relay
-process.
-
-The endpoint uses Gemini Live for real-time audio and calls OpenClaw as the
-brain by exposing OpenClaw tools directly to Gemini Live. Tool calls return an
-immediate `working` result to keep the voice turn responsive, then OpenClaw
-executes the actual tool asynchronously and injects the result back into the
-live session. Set `GEMINI_API_KEY` in the gateway process environment. If
-gateway auth is enabled, the desktop client sends the gateway token or password
-in its first `session.config` message.
-
-Real-time brain access runs owner-authorized OpenClaw agent commands. Keep
-`gateway.auth.mode: "none"` limited to loopback-only test instances. Non-local
-real-time brain connections require gateway auth.
-
-For an isolated test gateway, run a separate instance with its own port, config,
-and state:
-
-```bash
-OPENCLAW_CONFIG_PATH=/path/to/openclaw-realtime/openclaw.json \
-OPENCLAW_STATE_DIR=/path/to/openclaw-realtime/state \
-OPENCLAW_SKIP_CHANNELS=1 \
-GEMINI_API_KEY=... \
-openclaw gateway --port 19789
-```
-
-Then configure VoiceClaw to use:
-
-```text
-ws://127.0.0.1:19789/voiceclaw/realtime
-```
-
 ## Remote access
 
 Preferred: Tailscale/VPN.
@@ -251,7 +220,9 @@ openclaw gateway restart
 openclaw gateway stop
 ```
 
-Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start`; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
+Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start` as a restart substitute.
+
+On macOS, `gateway stop` uses `launchctl bootout` by default — this removes the LaunchAgent from the current boot session without persisting a disable, so KeepAlive auto-recovery still works after unexpected crashes and `gateway start` re-enables cleanly. To persistently suppress auto-respawn across reboots, pass `--disable`: `openclaw gateway stop --disable`.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
@@ -323,6 +294,8 @@ Use the same service body as the user unit, but install it under
 `/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
 `ExecStart=` if your `openclaw` binary lives elsewhere.
 
+Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
+
   </Tab>
 </Tabs>
 
@@ -344,8 +317,9 @@ Defaults include isolated state/config and base gateway port `19001`.
   a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
 - Common events include `connect.challenge`, `agent`, `chat`,
-  `session.message`, `session.tool`, `sessions.changed`, `presence`, `tick`,
-  `health`, `heartbeat`, pairing/approval lifecycle events, and `shutdown`.
+  `session.message`, `session.operation`, `session.tool`, `sessions.changed`,
+  `presence`, `tick`, `health`, `heartbeat`, pairing/approval lifecycle events,
+  and `shutdown`.
 
 Agent runs are two-stage:
 

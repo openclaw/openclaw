@@ -1,11 +1,13 @@
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
-import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
@@ -19,11 +21,15 @@ type TargetNormalizerCacheEntry = {
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
 
+function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin | undefined {
+  return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
+}
+
 function resetTargetNormalizerCacheForTests(): void {
   targetNormalizerCacheByChannelId.clear();
 }
 
-export const __testing = {
+export const testing = {
   resetTargetNormalizerCacheForTests,
 } as const;
 
@@ -33,7 +39,7 @@ function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   if (cached && cached.version === version) {
     return cached.normalizer;
   }
-  const plugin = getLoadedChannelPluginForRead(channelId);
+  const plugin = resolveChannelPluginForTargetRead(channelId);
   const normalizer = plugin?.messaging?.normalizeTarget;
   targetNormalizerCacheByChannelId.set(channelId, {
     version,
@@ -62,6 +68,7 @@ export type ResolvedPluginMessagingTarget = {
   kind: TargetResolveKindLike;
   display?: string;
   source: "normalized" | "directory";
+  resolutionSource: "plugin";
 };
 
 export function resolveNormalizedTargetInput(
@@ -85,7 +92,7 @@ export function looksLikeTargetId(params: {
 }): boolean {
   const normalizedInput =
     params.normalized ?? normalizeTargetForProvider(params.channel, params.raw);
-  const lookup = getLoadedChannelPluginForRead(params.channel)?.messaging?.targetResolver
+  const lookup = resolveChannelPluginForTargetRead(params.channel)?.messaging?.targetResolver
     ?.looksLikeId;
   if (lookup) {
     return lookup(params.raw, normalizedInput ?? params.raw);
@@ -117,7 +124,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
   if (!normalizedInput) {
     return undefined;
   }
-  const resolver = getLoadedChannelPluginForRead(params.channel)?.messaging?.targetResolver;
+  const resolver = resolveChannelPluginForTargetRead(params.channel)?.messaging?.targetResolver;
   if (!resolver?.resolveTarget) {
     return undefined;
   }
@@ -146,11 +153,12 @@ export async function maybeResolvePluginMessagingTarget(params: {
     kind: resolved.kind,
     display: resolved.display,
     source: resolved.source ?? "normalized",
+    resolutionSource: "plugin",
   };
 }
 
 export function buildTargetResolverSignature(channel: ChannelId): string {
-  const plugin = getLoadedChannelPluginForRead(channel);
+  const plugin = resolveChannelPluginForTargetRead(channel);
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const looksLike = resolver?.looksLikeId;
@@ -165,3 +173,4 @@ function hashSignature(value: string): string {
   }
   return (hash >>> 0).toString(36);
 }
+export { testing as __testing };

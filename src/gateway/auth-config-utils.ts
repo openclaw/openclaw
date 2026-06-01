@@ -8,12 +8,12 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "./secret-input-paths.js";
 
-export type GatewayAuthSecretInputPath = Extract<
+type GatewayAuthSecretInputPath = Extract<
   SupportedGatewaySecretInputPath,
   "gateway.auth.token" | "gateway.auth.password"
 >;
 
-export type GatewayAuthSecretRefResolutionParams = {
+type GatewayAuthSecretRefResolutionParams = {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   mode?: GatewayAuthConfig["mode"];
@@ -21,6 +21,7 @@ export type GatewayAuthSecretRefResolutionParams = {
   hasTokenCandidate: boolean;
 };
 
+/** Check whether a local Gateway auth input is configured directly or through defaults. */
 export function hasConfiguredGatewayAuthSecretInput(
   cfg: OpenClawConfig,
   path: GatewayAuthSecretInputPath,
@@ -28,7 +29,8 @@ export function hasConfiguredGatewayAuthSecretInput(
   return hasConfiguredSecretInput(readGatewaySecretInputValue(cfg, path), cfg.secrets?.defaults);
 }
 
-export function shouldResolveGatewayAuthSecretRef(params: {
+/** Decide whether a token/password secret ref can be active for the configured auth mode. */
+function shouldResolveGatewayAuthSecretRef(params: {
   mode?: GatewayAuthConfig["mode"];
   path: GatewayAuthSecretInputPath;
   hasPasswordCandidate: boolean;
@@ -48,10 +50,12 @@ export function shouldResolveGatewayAuthSecretRef(params: {
   if (params.mode === "password") {
     return !isTokenPath;
   }
+  // With implicit mode, resolve the side that does not already have a concrete
+  // candidate so token and password defaults do not both get materialized.
   return isTokenPath ? !params.hasPasswordCandidate : !params.hasTokenCandidate;
 }
 
-export function shouldResolveGatewayTokenSecretRef(
+function shouldResolveGatewayTokenSecretRef(
   params: Omit<GatewayAuthSecretRefResolutionParams, "cfg" | "env">,
 ): boolean {
   return shouldResolveGatewayAuthSecretRef({
@@ -62,7 +66,7 @@ export function shouldResolveGatewayTokenSecretRef(
   });
 }
 
-export function shouldResolveGatewayPasswordSecretRef(
+function shouldResolveGatewayPasswordSecretRef(
   params: Omit<GatewayAuthSecretRefResolutionParams, "cfg" | "env">,
 ): boolean {
   return shouldResolveGatewayAuthSecretRef({
@@ -73,7 +77,7 @@ export function shouldResolveGatewayPasswordSecretRef(
   });
 }
 
-export async function resolveGatewayAuthSecretRefValue(params: {
+async function resolveGatewayAuthSecretRefValue(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   path: GatewayAuthSecretInputPath;
@@ -94,6 +98,7 @@ export async function resolveGatewayAuthSecretRefValue(params: {
   return value;
 }
 
+/** Resolve the Gateway auth token ref only when token auth can use it. */
 export async function resolveGatewayTokenSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
@@ -105,6 +110,7 @@ export async function resolveGatewayTokenSecretRefValue(
   });
 }
 
+/** Resolve the Gateway auth password ref only when password auth can use it. */
 export async function resolveGatewayPasswordSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
@@ -116,7 +122,7 @@ export async function resolveGatewayPasswordSecretRefValue(
   });
 }
 
-export async function resolveGatewayAuthSecretRef(params: {
+async function resolveGatewayAuthSecretRef(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   path: GatewayAuthSecretInputPath;
@@ -137,7 +143,7 @@ export async function resolveGatewayAuthSecretRef(params: {
   return nextConfig;
 }
 
-export async function resolveGatewayPasswordSecretRef(params: {
+async function resolveGatewayPasswordSecretRef(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   mode?: GatewayAuthConfig["mode"];
@@ -152,6 +158,7 @@ export async function resolveGatewayPasswordSecretRef(params: {
   });
 }
 
+/** Materialize active local Gateway auth secret refs on a cloned config. */
 export async function materializeGatewayAuthSecretRefs(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<OpenClawConfig> {

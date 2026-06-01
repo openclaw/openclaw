@@ -1,3 +1,7 @@
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
@@ -11,15 +15,30 @@ import {
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
+export const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const MIN_MEDIA_TIMEOUT_MS = 1000;
+
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
   const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;
-  return Math.max(1000, Math.floor(value * 1000));
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return MIN_MEDIA_TIMEOUT_MS;
+  }
+  const timeoutMs = Math.floor(value * 1000);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+  );
+}
+
+export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS);
 }
 
 export function resolvePrompt(
@@ -63,13 +82,6 @@ export function resolveMaxBytes(params: {
     return configured;
   }
   return DEFAULT_MAX_BYTES[params.capability];
-}
-
-export function resolveCapabilityConfig(
-  cfg: OpenClawConfig,
-  capability: MediaUnderstandingCapability,
-): MediaUnderstandingConfig | undefined {
-  return cfg.tools?.media?.[capability];
 }
 
 export function resolveScopeDecision(params: {

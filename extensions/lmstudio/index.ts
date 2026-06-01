@@ -1,12 +1,12 @@
 import {
   definePluginEntry,
-  OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
@@ -34,7 +34,7 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
       provider: PROVIDER_ID,
       id: entry.id,
       name: entry.name ?? entry.id,
-      compat: { supportsUsageInStreaming: true },
+      compat: { ...entry.compat, supportsUsageInStreaming: true },
       contextWindow: entry.contextWindow,
       contextTokens: entry.contextTokens,
       reasoning: entry.reasoning,
@@ -81,7 +81,7 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         // Run after early providers so local LM Studio detection does not dominate resolution.
         order: "late",
         run: async (ctx) => {

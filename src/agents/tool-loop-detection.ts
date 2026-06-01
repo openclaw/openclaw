@@ -1,19 +1,24 @@
 import { createHash } from "node:crypto";
+import {
+  normalizeNullableString as nonEmptyStringField,
+  normalizeOptionalString as normalizeRunId,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { SessionState } from "../logging/diagnostic-session-state.js";
+import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import { stableStringify } from "./stable-stringify.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
-export type LoopDetectorKind =
+type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
   | "ping_pong";
 
-export type LoopDetectionResult =
+type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;
@@ -58,6 +63,18 @@ type ResolvedLoopDetectionConfig = {
   };
 };
 
+type ToolLoopDetectionScope = {
+  runId?: string;
+};
+
+function selectHistoryForScope(
+  history: readonly ToolCallRecord[],
+  scope?: ToolLoopDetectionScope,
+): ToolCallRecord[] {
+  const runId = normalizeRunId(scope?.runId);
+  return history.filter((record) => normalizeRunId(record.runId) === runId);
+}
+
 function asPositiveInt(value: number | undefined, fallback: number): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return fallback;
@@ -66,7 +83,7 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  let warningThreshold = asPositiveInt(
+  const warningThreshold = asPositiveInt(
     config?.warningThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
   );
@@ -115,41 +132,9 @@ export function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${digestStable(params)}`;
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).toSorted();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
-}
-
 function digestStable(value: unknown): string {
-  const serialized = stableStringifyFallback(value);
+  const serialized = stableStringify(value);
   return createHash("sha256").update(serialized).digest("hex");
-}
-
-function stableStringifyFallback(value: unknown): string {
-  try {
-    return stableStringify(value);
-  } catch {
-    if (value === null || value === undefined) {
-      return `${value}`;
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      return `${value}`;
-    }
-    if (value instanceof Error) {
-      return `${value.name}:${value.message}`;
-    }
-    return Object.prototype.toString.call(value);
-  }
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
@@ -204,14 +189,6 @@ function extractUnknownToolName(error: unknown): string | undefined {
 
 function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function nonEmptyStringField(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
 }
 
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
@@ -483,12 +460,13 @@ export function detectToolCallLoop(
   toolName: string,
   params: unknown,
   config?: ToolLoopDetectionConfig,
+  scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!resolvedConfig.enabled) {
     return { stuck: false };
   }
-  const history = state.toolCallHistory ?? [];
+  const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
   const currentHash = hashToolCall(toolName, params);
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
@@ -591,10 +569,27 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: warn on repeated identical calls, then block only after
+  // outcomes prove the calls are not making progress.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    noProgressStreak >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: noProgressStreak,
+      message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
+      warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+    };
+  }
 
   if (
     !knownPollTool &&
@@ -625,8 +620,10 @@ export function recordToolCall(
   params: unknown,
   toolCallId?: string,
   config?: ToolLoopDetectionConfig,
+  scope?: ToolLoopDetectionScope,
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
+  const runId = normalizeRunId(scope?.runId);
   if (!state.toolCallHistory) {
     state.toolCallHistory = [];
   }
@@ -635,11 +632,12 @@ export function recordToolCall(
     toolName,
     argsHash: hashToolCall(toolName, params),
     toolCallId,
+    ...(runId && { runId }),
     timestamp: Date.now(),
   });
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
-    state.toolCallHistory.shift();
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
 }
 
@@ -655,13 +653,15 @@ export function recordToolCallOutcome(
     result?: unknown;
     error?: unknown;
     config?: ToolLoopDetectionConfig;
+    runId?: string;
   },
-): void {
+): ToolCallRecord | undefined {
   const resolvedConfig = resolveLoopDetectionConfig(params.config);
+  const runId = normalizeRunId(params.runId);
   const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
   const resultHash = outcome.resultHash;
   if (!resultHash) {
-    return;
+    return undefined;
   }
 
   if (!state.toolCallHistory) {
@@ -670,9 +670,13 @@ export function recordToolCallOutcome(
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   let matched = false;
+  let recordedOutcome: ToolCallRecord | undefined;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
     if (!call) {
+      continue;
+    }
+    if (normalizeRunId(call.runId) !== runId) {
       continue;
     }
     if (params.toolCallId && call.toolCallId !== params.toolCallId) {
@@ -687,23 +691,28 @@ export function recordToolCallOutcome(
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
+    recordedOutcome = call;
     break;
   }
 
   if (!matched) {
-    state.toolCallHistory.push({
+    const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
+      ...(runId && { runId }),
       resultHash,
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
-    });
+    };
+    state.toolCallHistory.push(record);
+    recordedOutcome = record;
   }
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
     state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
+  return recordedOutcome;
 }
 
 /**

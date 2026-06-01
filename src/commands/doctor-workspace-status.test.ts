@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as noteModule from "../../packages/terminal-core/src/note.js";
 import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
 } from "../plugins/status.test-helpers.js";
-import * as noteModule from "../terminal/note.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +22,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
 }));
 
@@ -163,7 +163,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
+      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin compatibility");
     } finally {
       noteSpy.mockRestore();
     }

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "../agents/runtime/index.js";
 
 export type CodexAppServerToolResultEvent = {
   threadId: string;

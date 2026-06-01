@@ -5,11 +5,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
 
 function createModelDefaultsConfig(params: {
   primary: string;
@@ -29,7 +29,7 @@ function createLegacyRuntimeListConfig(
   models?: Record<string, Record<string, never>>,
 ): OpenClawConfig {
   return createModelDefaultsConfig({
-    primary: "google-gemini-cli/gemini-3-pro-preview",
+    primary: "google-gemini-cli/gemini-3.1-pro-preview",
     ...(models ? { models } : {}),
   });
 }
@@ -118,7 +118,7 @@ function listSingleSession(params: {
 
 describe("listSessionsFromStore search", () => {
   afterEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
+    resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
   });
 
@@ -187,6 +187,78 @@ describe("listSessionsFromStore search", () => {
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0].key).toBe(testCase.expectedKey);
     }
+  });
+
+  test("filters sessions by the displayed provider and model identity", () => {
+    const now = Date.now();
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+    const store: Record<string, SessionEntry> = {
+      "agent:main:inherited-default": {
+        sessionId: "sess-inherited-default",
+        updatedAt: now,
+        label: "Inherited default",
+      } as SessionEntry,
+      "agent:main:override": {
+        sessionId: "sess-override",
+        updatedAt: now - 1_000,
+        label: "Override",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      } as SessionEntry,
+      "agent:main:runtime": {
+        sessionId: "sess-runtime",
+        updatedAt: now - 2_000,
+        label: "Runtime",
+        modelProvider: "google",
+        model: "gemini-3.1-pro-preview",
+      } as SessionEntry,
+    };
+    const cases = [
+      { search: "anthropic", expectedKey: "agent:main:inherited-default" },
+      { search: "claude-sonnet", expectedKey: "agent:main:inherited-default" },
+      { search: "anthropic/claude-sonnet", expectedKey: "agent:main:inherited-default" },
+      { search: "openai/gpt-5.5", expectedKey: "agent:main:override" },
+      { search: "gemini-3.1", expectedKey: "agent:main:runtime" },
+      { search: "google/gemini", expectedKey: "agent:main:runtime" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { search: testCase.search },
+      });
+
+      expect(result.sessions.map((session) => session.key)).toEqual([testCase.expectedKey]);
+      expect(result.totalCount).toBe(1);
+    }
+  });
+
+  test("keeps derived model search for colon model ids", () => {
+    const now = Date.now();
+    const cfg = createModelDefaultsConfig({
+      primary: "ollama/qwen3:0.6b",
+    });
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:inherited-local-model": {
+          sessionId: "sess-inherited-local-model",
+          updatedAt: now,
+          label: "Inherited local model",
+        } as SessionEntry,
+      },
+      opts: { search: "qwen3:0.6b" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:inherited-local-model",
+    ]);
+    expect(result.totalCount).toBe(1);
   });
 
   test("hides cron run alias session keys from sessions list", () => {
@@ -366,7 +438,7 @@ describe("listSessionsFromStore search", () => {
       agents: { list: [{ id: "main", default: true }] },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [
               {
                 id: "gpt-5.3-codex-spark",
@@ -386,7 +458,7 @@ describe("listSessionsFromStore search", () => {
         "agent:main:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
-          modelProvider: "openai-codex",
+          modelProvider: "openai",
           model: "gpt-5.3-codex-spark",
           inputTokens: 5_107,
           outputTokens: 1_827,
@@ -404,7 +476,7 @@ describe("listSessionsFromStore search", () => {
     withTranscriptStoreFixture({
       prefix: "openclaw-session-utils-zero-cost-",
       transcriptId: "sess-main",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.3-codex-spark",
       input: 5_107,
       output: 1_827,
@@ -418,7 +490,7 @@ describe("listSessionsFromStore search", () => {
           entry: {
             sessionId: "sess-main",
             updatedAt: now,
-            modelProvider: "openai-codex",
+            modelProvider: "openai",
             model: "gpt-5.3-codex-spark",
             totalTokens: 0,
             totalTokensFresh: false,
@@ -473,6 +545,47 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
+  test("chat history session metadata keeps model-derived contextTokens without transcript usage", () => {
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-info-context-",
+      transcriptId: "sess-main",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        const row = buildGatewaySessionInfo({
+          cfg: {
+            models: {
+              providers: {
+                "local-test": {
+                  models: [{ id: "test-model", contextTokens: 123_456 }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          storePath,
+          key: "agent:main:main",
+          store: {
+            "agent:main:main": {
+              sessionId: "sess-main",
+              updatedAt: now,
+              modelProvider: "local-test",
+              model: "test-model",
+            } as SessionEntry,
+          },
+        });
+
+        expect(row.totalTokens).toBeUndefined();
+        expect(row.totalTokensFresh).toBe(false);
+        expect(row.estimatedCostUsd).toBeUndefined();
+        expect(row.contextTokens).toBe(123_456);
+      },
+    });
+  });
+
   test("uses subagent run model immediately for child sessions while transcript usage fills live totals", () => {
     withTranscriptStoreFixture({
       prefix: "openclaw-session-utils-subagent-",
@@ -513,15 +626,13 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:subagent:child-live",
-          status: "running",
-          modelProvider: "anthropic",
-          model: "claude-sonnet-4-6",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-          contextTokens: 1_048_576,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:subagent:child-live");
+        expect(result.sessions[0]?.status).toBe("running");
+        expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+        expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+        expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
         expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
       },
     });
@@ -567,14 +678,12 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:subagent:child-live-stale-transcript",
-          status: "running",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:subagent:child-live-stale-transcript");
+        expect(result.sessions[0]?.status).toBe("running");
+        expect(result.sessions[0]?.modelProvider).toBe("openai");
+        expect(result.sessions[0]?.model).toBe("gpt-5.4");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
       },
     });
   });
@@ -604,13 +713,11 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:main",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:main");
+        expect(result.sessions[0]?.modelProvider).toBe("openai");
+        expect(result.sessions[0]?.model).toBe("gpt-5.4");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
       },
     });
   });
@@ -649,14 +756,12 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:main",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-          contextTokens: 200_000,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:main");
+        expect(result.sessions[0]?.modelProvider).toBe("openai");
+        expect(result.sessions[0]?.model).toBe("gpt-5.4");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+        expect(result.sessions[0]?.contextTokens).toBe(200_000);
       },
     });
   });

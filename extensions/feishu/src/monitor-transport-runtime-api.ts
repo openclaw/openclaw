@@ -1,6 +1,9 @@
 export type { RuntimeEnv } from "../runtime-api.js";
-export { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
-export { applyBasicWebhookRequestGuards } from "openclaw/plugin-sdk/webhook-ingress";
+export { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+export {
+  applyBasicWebhookRequestGuards,
+  resolveRequestClientIp,
+} from "openclaw/plugin-sdk/webhook-ingress";
 export {
   installRequestBodyLimitGuard,
   readWebhookBodyOrReject,

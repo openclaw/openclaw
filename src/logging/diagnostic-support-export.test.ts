@@ -232,10 +232,8 @@ describe("diagnostic support export", () => {
 
     expect(result.path).toBe(outputPath);
     expect(result.bytes).toBeGreaterThan(0);
-    expect(requestedLogTail).toMatchObject({
-      limit: 5000,
-      maxBytes: 1_000_000,
-    });
+    expect(requestedLogTail?.limit).toBe(5000);
+    expect(requestedLogTail?.maxBytes).toBe(1_000_000);
 
     const entries = await readZipTextEntries(outputPath);
     expect(Object.keys(entries).toSorted()).toEqual([
@@ -341,10 +339,8 @@ describe("diagnostic support export", () => {
       gateway?: { mode?: string; authMode?: string };
       channels?: { ids?: string[] };
     };
-    expect(configShape.gateway).toMatchObject({
-      mode: "local",
-      authMode: "token",
-    });
+    expect(configShape.gateway?.mode).toBe("local");
+    expect(configShape.gateway?.authMode).toBe("token");
     expect(configShape.channels?.ids).toEqual(["telegram"]);
 
     const sanitizedConfig = JSON.parse(entries["config/sanitized.json"] ?? "{}") as {
@@ -369,17 +365,16 @@ describe("diagnostic support export", () => {
       };
       agents?: Array<{ name?: string; instructions?: string }>;
     };
-    expect(sanitizedConfig.gateway).toMatchObject({
+    expect(sanitizedConfig.gateway).toEqual({
       mode: "local",
+      bind: "loopback",
       port: 18789,
       auth: {
         mode: "token",
         token: "<redacted>",
       },
     });
-    expect(sanitizedConfig.logging).toMatchObject({
-      redactSensitive: "off",
-    });
+    expect(sanitizedConfig.logging?.redactSensitive).toBe("off");
     expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
       "<redacted-account-1>",
     ]);
@@ -481,6 +476,94 @@ describe("diagnostic support export", () => {
     ]) {
       expect(combined).not.toContain(secret);
     }
+  });
+
+  it("includes mDNS config state and recent Bonjour log summary", async () => {
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-bonjour.zip");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        discovery: {
+          mdns: {
+            mode: "minimal",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-04-22T12:00:01.000Z"),
+      readLogTail: async () => ({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.000Z",
+            level: "warn",
+            subsystem: "gateway/discovery/bonjour",
+            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
+          }),
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.500Z",
+            level: "warn",
+            msg: "bonjour: disabling advertiser after 3 failed restarts",
+          }),
+        ],
+      }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
+      discovery?: {
+        mdnsMode?: string;
+        bonjourEnvOverride?: string;
+      };
+    };
+    expect(configShape.discovery).toEqual({
+      mdnsMode: "minimal",
+      bonjourEnvOverride: "force-disabled",
+    });
+
+    const diagnostics = JSON.parse(entries["diagnostics.json"] ?? "{}") as {
+      bonjour?: {
+        count?: number;
+        warnings?: number;
+        last?: { kind?: string };
+        flags?: {
+          disabled?: boolean;
+          restarted?: boolean;
+          ciaoSuppressed?: boolean;
+        };
+      };
+    };
+    expect(diagnostics.bonjour).toEqual({
+      count: 2,
+      warnings: 2,
+      last: {
+        time: "2026-04-22T12:00:00.500Z",
+        level: "warn",
+        kind: "disabled",
+      },
+      flags: {
+        disabled: true,
+        restarted: false,
+        ciaoSuppressed: true,
+      },
+    });
   });
 
   it("redacts numeric private fields in support snapshots and config", () => {

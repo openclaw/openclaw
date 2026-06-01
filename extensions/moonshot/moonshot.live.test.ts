@@ -1,10 +1,11 @@
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const KIMI_SEARCH_KEY =
   process.env.KIMI_API_KEY?.trim() || process.env.MOONSHOT_API_KEY?.trim() || "";
 const describeLive = isLiveTestEnabled() && KIMI_SEARCH_KEY.length > 0 ? describe : describe.skip;
+const KIMI_LIVE_SEARCH_TIMEOUT_SECONDS = 60;
 
 function isTransientKimiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -22,7 +23,11 @@ describeLive("moonshot plugin live", () => {
     const provider = createKimiWebSearchProvider();
     const tool = provider.createTool?.({
       config: {},
-      searchConfig: { kimi: { apiKey: KIMI_SEARCH_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 90 },
+      searchConfig: {
+        kimi: { apiKey: KIMI_SEARCH_KEY },
+        cacheTtlMinutes: 0,
+        timeoutSeconds: KIMI_LIVE_SEARCH_TIMEOUT_SECONDS,
+      },
     } as never);
 
     let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
@@ -40,12 +45,26 @@ describeLive("moonshot plugin live", () => {
       }
     }
     if (lastError) {
-      throw lastError;
+      throw toLintErrorObject(lastError, "Non-Error thrown");
     }
 
     expect(result?.provider).toBe("kimi");
     expect(typeof result?.content).toBe("string");
-    expect((result?.content as string).length).toBeGreaterThan(20);
+    expect((result!.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
-  }, 120_000);
+  }, 180_000);
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

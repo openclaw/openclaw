@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -28,6 +28,27 @@ describe("listIrcAccountIds", () => {
     });
 
     expect(listIrcAccountIds(cfg)).toEqual(["ops-team", "work"]);
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level connection config", () => {
+    const cfg = asConfig({
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "claw",
+          accounts: {
+            work: {
+              enabled: false,
+              host: "irc-work.example.com",
+              nick: "claw-work",
+            },
+          },
+        },
+      },
+    });
+
+    expect(listIrcAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultIrcAccountId(cfg)).toBe("default");
   });
 });
 
@@ -105,8 +126,7 @@ describe("resolveIrcAccount", () => {
   });
 
   it("parses delimited IRC_CHANNELS env values for the default account", () => {
-    const previousChannels = process.env.IRC_CHANNELS;
-    process.env.IRC_CHANNELS = "alpha, beta\ngamma; delta";
+    vi.stubEnv("IRC_CHANNELS", "alpha, beta\ngamma; delta");
 
     try {
       const account = resolveIrcAccount({
@@ -122,11 +142,7 @@ describe("resolveIrcAccount", () => {
 
       expect(account.config.channels).toEqual(["alpha", "beta", "gamma", "delta"]);
     } finally {
-      if (previousChannels === undefined) {
-        delete process.env.IRC_CHANNELS;
-      } else {
-        process.env.IRC_CHANNELS = previousChannels;
-      }
+      vi.unstubAllEnvs();
     }
   });
 
@@ -147,9 +163,32 @@ describe("resolveIrcAccount", () => {
       },
     });
 
-    const account = resolveIrcAccount({ cfg });
-    expect(account.password).toBe("");
-    expect(account.passwordSource).toBe("none");
+    expect(() => resolveIrcAccount({ cfg })).toThrow(/IRC password file.*must not be a symlink/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform !== "win32")("rejects symlinked NickServ password files", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-nickserv-"));
+    const passwordFile = path.join(dir, "nickserv-password.txt");
+    const passwordLink = path.join(dir, "nickserv-password-link.txt");
+    fs.writeFileSync(passwordFile, "nickserv-pass\n", "utf8");
+    fs.symlinkSync(passwordFile, passwordLink);
+
+    const cfg = asConfig({
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "claw",
+          nickserv: {
+            passwordFile: passwordLink,
+          },
+        },
+      },
+    });
+
+    expect(() => resolveIrcAccount({ cfg })).toThrow(
+      /IRC NickServ password file.*must not be a symlink/,
+    );
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

@@ -1,7 +1,7 @@
 import os from "node:os";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -9,8 +9,13 @@ type MockImplementationTarget = {
 };
 type SessionStore = Record<string, Record<string, unknown>>;
 type SessionStoreMutator = (store: SessionStore) => unknown;
-type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning"> &
-  Partial<Pick<SubagentLifecycleHookRunner, "runSubagentSpawned" | "runSubagentEnded">>;
+type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
+  Partial<
+    Pick<
+      SubagentLifecycleHookRunner,
+      "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+    >
+  >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: MockFn;
 };
@@ -58,11 +63,11 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-export function identityDeliveryContext(value: unknown) {
+function identityDeliveryContext(value: unknown) {
   return value;
 }
 
-export function createDefaultSessionHelperMocks() {
+function createDefaultSessionHelperMocks() {
   return {
     resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
     resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
@@ -97,6 +102,7 @@ export function expectPersistedRuntimeModel(params: {
   sessionKey: string | RegExp;
   provider: string;
   model: string;
+  overrideSource?: "auto" | "user";
 }) {
   const [persistedKey, persistedEntry] = Object.entries(params.persistedStore ?? {})[0] ?? [];
   if (typeof params.sessionKey === "string") {
@@ -104,19 +110,24 @@ export function expectPersistedRuntimeModel(params: {
   } else {
     expect(persistedKey).toMatch(params.sessionKey);
   }
-  expect(persistedEntry).toMatchObject({
-    modelProvider: params.provider,
-    model: params.model,
-  });
+  expect(persistedEntry?.modelProvider).toBe(params.provider);
+  expect(persistedEntry?.model).toBe(params.model);
+  expect(persistedEntry?.providerOverride).toBe(params.provider);
+  expect(persistedEntry?.modelOverride).toBe(params.model);
+  if (params.overrideSource) {
+    expect(persistedEntry?.modelOverrideSource).toBe(params.overrideSource);
+  }
 }
 
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
+  loadSessionStoreMock?: MockFn;
+  ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
-  resolveParentForkMaxTokensMock?: MockFn;
+  resolveParentForkDecisionMock?: MockFn;
   pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
@@ -131,6 +142,33 @@ export async function loadSubagentSpawnModuleForTest(params: {
     sessionKey?: string;
   }) => { sandboxed: boolean };
   getSessionBindingService?: () => {
+    getCapabilities?: (params: { channel?: string; accountId?: string }) => {
+      adapterAvailable: boolean;
+      bindSupported: boolean;
+      placements: Array<"current" | "child">;
+    };
+    bind?: (params: {
+      targetSessionKey: string;
+      targetKind?: string;
+      conversation: {
+        channel: string;
+        accountId?: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
+      placement: "current" | "child";
+      metadata?: Record<string, unknown>;
+    }) => Promise<{
+      targetSessionKey: string;
+      targetKind?: string;
+      status?: string;
+      conversation: {
+        channel: string;
+        accountId?: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
+    }>;
     listBySession: (targetSessionKey: string) => Array<{
       status?: string;
       conversation: {
@@ -174,8 +212,34 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
+    ensureContextEnginesInitialized:
+      params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
-    resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
+    resolveParentForkDecision:
+      params.resolveParentForkDecisionMock ??
+      (async (forkParams: { parentEntry?: { totalTokens?: unknown } }) => {
+        const maxTokens = 100_000;
+        const parentTokens =
+          typeof forkParams.parentEntry?.totalTokens === "number" &&
+          Number.isFinite(forkParams.parentEntry.totalTokens)
+            ? Math.floor(forkParams.parentEntry.totalTokens)
+            : undefined;
+        if (maxTokens > 0 && typeof parentTokens === "number" && parentTokens > maxTokens) {
+          return {
+            status: "skip",
+            reason: "parent-too-large",
+            maxTokens,
+            parentTokens,
+            message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+          };
+        }
+        return {
+          status: "fork",
+          maxTokens,
+          ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+        };
+      }),
     mergeSessionEntry: (
       current: Record<string, unknown> | undefined,
       next: Record<string, unknown>,
@@ -194,7 +258,18 @@ export async function loadSubagentSpawnModuleForTest(params: {
       method === "sessions.patch" || method === "sessions.delete",
     pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
     getSessionBindingService:
-      params.getSessionBindingService ?? (() => ({ listBySession: () => [] })),
+      params.getSessionBindingService ??
+      (() => ({
+        getCapabilities: () => ({
+          adapterAvailable: false,
+          bindSupported: false,
+          placements: [],
+        }),
+        bind: async () => {
+          throw new Error("session binding adapter unavailable");
+        },
+        listBySession: () => [],
+      })),
     resolveConversationDeliveryTarget:
       params.resolveConversationDeliveryTarget ??
       ((targetParams: { channel?: string; conversationId?: string | number }) => ({

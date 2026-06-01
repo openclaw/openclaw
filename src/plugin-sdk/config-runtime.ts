@@ -1,52 +1,26 @@
-// Shared config/runtime boundary for plugins that need config loading,
-// config writes, or session-store helpers without importing src internals.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer narrower config subpaths such as plugin-config-runtime,
+ * config-mutation, and runtime-config-snapshot.
+ */
 
-import type { OpenClawConfig } from "../config/types.js";
+import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 
-export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
-  if (config) {
-    return config;
-  }
-  throw new Error(
-    `${context} requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.`,
-  );
-}
-
-export function resolvePluginConfigObject(
-  config: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  const plugins =
-    config?.plugins && typeof config.plugins === "object" && !Array.isArray(config.plugins)
-      ? (config.plugins as Record<string, unknown>)
-      : undefined;
-  const entries =
-    plugins?.entries && typeof plugins.entries === "object" && !Array.isArray(plugins.entries)
-      ? (plugins.entries as Record<string, unknown>)
-      : undefined;
-  const entry = entries?.[pluginId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return undefined;
-  }
-  const pluginConfig = (entry as { config?: unknown }).config;
-  return pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)
-    ? (pluginConfig as Record<string, unknown>)
-    : undefined;
-}
-
-export function resolveLivePluginConfigObject(
-  runtimeConfigLoader: (() => OpenClawConfig | undefined) | undefined,
-  pluginId: string,
-  startupPluginConfig?: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (typeof runtimeConfigLoader !== "function") {
-    return startupPluginConfig;
-  }
-  return resolvePluginConfigObject(runtimeConfigLoader(), pluginId);
-}
+/**
+ * @deprecated Use getSessionEntry/listSessionEntries for reads and
+ * patchSessionEntry/upsertSessionEntry for writes. loadSessionStore keeps the
+ * legacy mutable whole-store shape and will remain a compatibility escape hatch.
+ */
+export const loadSessionStore = loadSessionStoreImpl;
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  requireRuntimeConfig,
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
+} from "./plugin-config-runtime.js";
+export {
+  clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
@@ -128,6 +102,8 @@ export type {
   DiscordSlashCommandConfig,
   DmConfig,
   DmPolicy,
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
   ContextVisibilityMode,
   GroupPolicy,
   GroupToolPolicyBySenderConfig,
@@ -165,12 +141,16 @@ export type {
 } from "../config/types.js";
 export {
   clearSessionStoreCacheForTest,
-  loadSessionStore,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

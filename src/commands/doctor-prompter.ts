@@ -1,6 +1,9 @@
 import { confirm, select } from "@clack/prompts";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../packages/terminal-core/src/prompt-style.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import {
   resolveDoctorRepairMode,
   shouldAutoApproveDoctorFix,
@@ -11,11 +14,16 @@ import { guardCancel } from "./onboard-helpers.js";
 
 export type { DoctorOptions } from "./doctor.types.js";
 
+type DoctorConfirmParams = Parameters<typeof confirm>[0];
+type DoctorRuntimeRepairConfirmParams = DoctorConfirmParams & {
+  requiresInteractiveConfirmation?: boolean;
+};
+
 export type DoctorPrompter = {
   confirm: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAggressiveAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmRuntimeRepair: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
+  confirmRuntimeRepair: (params: DoctorRuntimeRepairConfirmParams) => Promise<boolean>;
   select: <T>(params: Parameters<typeof select>[0], fallback: T) => Promise<T>;
   shouldRepair: boolean;
   shouldForce: boolean;
@@ -71,19 +79,26 @@ export function createDoctorPrompter(params: {
       );
     },
     confirmRuntimeRepair: async (p) => {
-      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })) {
+      const { requiresInteractiveConfirmation, ...confirmParams } = p;
+      if (
+        requiresInteractiveConfirmation !== true &&
+        shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })
+      ) {
         return true;
+      }
+      if (requiresInteractiveConfirmation === true && !repairMode.canPrompt) {
+        return false;
       }
       if (repairMode.nonInteractive) {
         return false;
       }
       if (!repairMode.canPrompt) {
-        return p.initialValue ?? false;
+        return confirmParams.initialValue ?? false;
       }
       return guardCancel(
         await confirm({
-          ...p,
-          message: stylePromptMessage(p.message),
+          ...confirmParams,
+          message: stylePromptMessage(confirmParams.message),
         }),
         params.runtime,
       );

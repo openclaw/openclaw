@@ -1,18 +1,30 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
+  runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
+import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
+import { mergeProviderModels } from "./models-config.merge.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -22,7 +34,6 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -43,6 +54,10 @@ type ImplicitProviderParams = {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  providerDiscoveryProviderIds?: readonly string[];
+  providerDiscoveryTimeoutMs?: number;
+  providerDiscoveryEntriesOnly?: boolean;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -62,8 +77,8 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   if (!raw) {
     return 15_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+  const parsed = Number(raw);
+  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
 function resolveProviderDiscoveryFilter(params: {
@@ -71,15 +86,25 @@ function resolveProviderDiscoveryFilter(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  providerIds?: readonly string[];
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
   if (testRaw) {
-    const ids = testRaw
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return ids.length > 0 ? [...new Set(ids)] : undefined;
+    const ids = normalizeStringEntries(testRaw.split(","));
+    return ids.length > 0 ? uniqueStrings(ids) : undefined;
+  }
+  const scopedProviderIds = params.providerIds
+    ? normalizeStringEntries([...params.providerIds])
+    : undefined;
+  if (scopedProviderIds) {
+    return resolveProviderPluginScopeFromProviderIds({
+      providerIds: scopedProviderIds,
+      config,
+      workspaceDir,
+      env,
+      resolveOwners: params.resolveOwners,
+    });
   }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
@@ -93,22 +118,35 @@ function resolveProviderDiscoveryFilter(params: {
   if (rawValues.length === 0) {
     return undefined;
   }
-  const ids = rawValues
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")));
   if (ids.length === 0) {
     return undefined;
   }
+  return resolveProviderPluginScopeFromProviderIds({
+    providerIds: ids,
+    config,
+    workspaceDir,
+    env,
+    resolveOwners: params.resolveOwners,
+  });
+}
+
+function resolveProviderPluginScopeFromProviderIds(params: {
+  providerIds: readonly string[];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  resolveOwners?: (provider: string) => readonly string[] | undefined;
+}): string[] {
   const pluginIds = new Set<string>();
-  for (const id of ids) {
+  for (const id of params.providerIds) {
     const owners =
       params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProvider({
+      resolveOwningPluginIdsForProviderRef({
         provider: id,
-        config,
-        workspaceDir,
-        env,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
       }) ??
       [];
     if (owners.length > 0) {
@@ -119,9 +157,75 @@ function resolveProviderDiscoveryFilter(params: {
     }
     pluginIds.add(id);
   }
-  return pluginIds.size > 0
-    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolvePluginMetadataProviderOwners(
+  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
+  provider: string,
+): readonly string[] | undefined {
+  if (!pluginMetadataSnapshot) {
+    return undefined;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return undefined;
+  }
+  const owners = new Set<string>();
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.providers ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  appendNormalizedPluginMetadataOwners(
+    owners,
+    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
+    provider,
+    normalizedProvider,
+  );
+  return owners.size > 0
+    ? [...owners].toSorted((left, right) => left.localeCompare(right))
     : undefined;
+}
+
+function appendNormalizedPluginMetadataOwners(
+  target: Set<string>,
+  ownerMap: ReadonlyMap<string, readonly string[]>,
+  provider: string,
+  normalizedProvider: string,
+): void {
+  for (const owner of ownerMap.get(provider) ?? []) {
+    target.add(owner);
+  }
+  if (normalizedProvider !== provider) {
+    for (const owner of ownerMap.get(normalizedProvider) ?? []) {
+      target.add(owner);
+    }
+  }
+  for (const [ownedId, owners] of ownerMap.entries()) {
+    if (
+      ownedId !== provider &&
+      ownedId !== normalizedProvider &&
+      normalizeProviderId(ownedId) === normalizedProvider
+    ) {
+      for (const owner of owners) {
+        target.add(owner);
+      }
+    }
+  }
 }
 
 export function resolveProviderDiscoveryFilterForTest(params: {
@@ -129,8 +233,16 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveOwners?: (provider: string) => readonly string[] | undefined;
+  providerIds?: readonly string[];
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
+}
+
+export function resolvePluginMetadataProviderOwnersForTest(
+  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
+  provider: string,
+): readonly string[] | undefined {
+  return resolvePluginMetadataProviderOwners(pluginMetadataSnapshot, provider);
 }
 
 function mergeImplicitProviderSet(
@@ -149,6 +261,7 @@ function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
+  dynamicProviderModels?: boolean;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -157,6 +270,9 @@ function mergeImplicitProviderConfig(params: {
   const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
   if (merge) {
     return merge({ existing, implicit });
+  }
+  if (params.dynamicProviderModels) {
+    return mergeProviderModels(implicit, existing);
   }
   return {
     ...implicit,
@@ -197,6 +313,23 @@ function resolveExistingImplicitProviderFromContext(params: {
       configuredProviders: params.ctx.config?.models?.providers,
       providerIds: params.providerIds,
     })
+  );
+}
+
+function hasProviderWildcardVisibility(params: {
+  config?: OpenClawConfig;
+  providerId: string;
+}): boolean {
+  return parseConfiguredModelVisibilityEntries({ cfg: params.config }).providerWildcards.has(
+    normalizeProviderId(params.providerId),
+  );
+}
+
+function hasRuntimeProviderCatalog(
+  provider: import("../plugins/types.js").ProviderPlugin,
+): boolean {
+  return (
+    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
   );
 }
 
@@ -247,17 +380,37 @@ async function resolvePluginImplicitProviders(
       };
     };
 
-    const result = await runProviderCatalogWithTimeout({
-      provider,
-      config: catalogConfig,
-      agentDir: ctx.agentDir,
-      workspaceDir: ctx.workspaceDir,
-      env: ctx.env,
-      resolveProviderApiKey: resolveCatalogProviderApiKey,
-      resolveProviderAuth: (providerId, options) =>
-        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-      timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
-    });
+    const useStaticCatalog =
+      Boolean(provider.staticCatalog) &&
+      (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
+    let result = useStaticCatalog
+      ? await runProviderStaticCatalog({
+          provider,
+          config: catalogConfig,
+          agentDir: ctx.agentDir,
+          workspaceDir: ctx.workspaceDir,
+          env: ctx.env,
+        })
+      : await runProviderCatalogWithTimeout({
+          provider,
+          config: catalogConfig,
+          agentDir: ctx.agentDir,
+          workspaceDir: ctx.workspaceDir,
+          env: ctx.env,
+          resolveProviderApiKey: resolveCatalogProviderApiKey,
+          resolveProviderAuth: (providerId, options) =>
+            ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
+        });
+    if (!result && !useStaticCatalog && provider.staticCatalog) {
+      result = await runProviderStaticCatalog({
+        provider,
+        config: catalogConfig,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        env: ctx.env,
+      });
+    }
     if (!result) {
       continue;
     }
@@ -280,6 +433,10 @@ async function resolvePluginImplicitProviders(
             ],
           }),
         implicit: implicitProvider,
+        dynamicProviderModels: hasProviderWildcardVisibility({
+          config: ctx.config,
+          providerId,
+        }),
       });
     }
   }
@@ -349,6 +506,7 @@ export async function resolveImplicitProviders(
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
+      externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
   const context: ImplicitProviderContext = {
     ...params,
@@ -367,7 +525,15 @@ export async function resolveImplicitProviders(
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
+      resolveOwners: params.pluginMetadataSnapshot
+        ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
+        : undefined,
+      providerIds: params.providerDiscoveryProviderIds,
     }),
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
   });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {

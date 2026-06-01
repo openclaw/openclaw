@@ -1,13 +1,19 @@
 import fs from "node:fs";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
 import plugin from "./index.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 type MoonshotManifest = {
-  providerAuthEnvVars?: Record<string, string[]>;
+  providerAuthAliases?: Record<string, string>;
+  setup?: {
+    providers?: Array<{
+      id?: string;
+      envVars?: string[];
+    }>;
+  };
 };
 
 function readManifest(): MoonshotManifest {
@@ -18,9 +24,23 @@ function readManifest(): MoonshotManifest {
 
 describe("moonshot provider plugin", () => {
   it("mirrors Kimi web-search env credentials in manifest metadata", () => {
-    const manifestEnvVars = readManifest().providerAuthEnvVars?.moonshot ?? [];
+    const manifestEnvVars =
+      readManifest().setup?.providers?.find((provider) => provider.id === "moonshot")?.envVars ??
+      [];
 
-    expect(manifestEnvVars).toEqual(expect.arrayContaining(createKimiWebSearchProvider().envVars));
+    expect([...manifestEnvVars].toSorted()).toStrictEqual(
+      [...createKimiWebSearchProvider().envVars].toSorted(),
+    );
+  });
+
+  it("declares shipped Moonshot provider aliases in runtime and manifest metadata", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.aliases).toEqual(["moonshotai", "moonshot-ai"]);
+    expect(readManifest().providerAuthAliases).toEqual({
+      moonshotai: "moonshot",
+      "moonshot-ai": "moonshot",
+    });
   });
 
   it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
@@ -32,11 +52,12 @@ describe("moonshot provider plugin", () => {
       modelId: "kimi-k2.6",
     } as never);
 
-    expect(policy).toMatchObject({
+    expect(policy).toEqual({
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
     });
+    expect(policy).not.toHaveProperty("dropReasoningFromHistory");
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });
@@ -62,7 +83,7 @@ describe("moonshot provider plugin", () => {
       {},
     );
 
-    expect(capturedStream.getCapturedPayload()).toMatchObject({
+    expect(capturedStream.getCapturedPayload()).toEqual({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });

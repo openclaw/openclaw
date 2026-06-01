@@ -1,5 +1,6 @@
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isPathInside } from "../infra/path-guards.js";
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -64,11 +65,7 @@ export function isWorkspaceRelativeAvatarPath(value: string): boolean {
 }
 
 export function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
-  const relative = path.relative(rootDir, targetPath);
-  if (relative === "") {
-    return true;
-  }
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
+  return isPathInside(rootDir, targetPath);
 }
 
 export function looksLikeAvatarPath(value: string): boolean {

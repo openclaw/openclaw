@@ -28,6 +28,14 @@ export const directChatConfig = {
 
 export const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
 
+function hasChannelBotToken(channelConfig: unknown): boolean {
+  if (channelConfig == null || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+    return false;
+  }
+  const token = (channelConfig as Record<string, unknown>).botToken;
+  return typeof token === "string" && Boolean(token.trim());
+}
+
 export const runDryAction = (params: {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
@@ -35,6 +43,7 @@ export const runDryAction = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -44,6 +53,7 @@ export const runDryAction = (params: {
     dryRun: true,
     abortSignal: params.abortSignal,
     sandboxRoot: params.sandboxRoot,
+    agentId: params.agentId,
   });
 
 export const runDrySend = (params: {
@@ -52,6 +62,7 @@ export const runDrySend = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runDryAction({
     ...params,
@@ -60,7 +71,7 @@ export const runDrySend = (params: {
 
 type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
 
-export function normalizeWorkspaceTarget(raw: string): string {
+function normalizeWorkspaceTarget(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return trimmed;
@@ -81,7 +92,7 @@ export function normalizeWorkspaceTarget(raw: string): string {
   return trimmed;
 }
 
-export function createConfiguredTestPlugin(params: {
+function createConfiguredTestPlugin(params: {
   id: string;
   isConfigured: (cfg: OpenClawConfig) => boolean;
   normalizeTarget: (raw: string) => string | undefined;
@@ -116,7 +127,7 @@ export function createConfiguredTestPlugin(params: {
 
 export const workspaceTestPlugin = createConfiguredTestPlugin({
   id: "workspace",
-  isConfigured: (cfg) => Boolean(cfg.channels?.workspace?.botToken?.trim()),
+  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.workspace),
   normalizeTarget: (raw) => normalizeWorkspaceTarget(raw) || undefined,
   resolveTarget: (input) => {
     const normalized = normalizeWorkspaceTarget(input);
@@ -133,7 +144,7 @@ export const workspaceTestPlugin = createConfiguredTestPlugin({
 
 export const forumTestPlugin = createConfiguredTestPlugin({
   id: "forum",
-  isConfigured: (cfg) => Boolean(cfg.channels?.forum?.botToken?.trim()),
+  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.forum),
   normalizeTarget: (raw) => raw.trim() || undefined,
   resolveTarget: (input) => {
     const normalized = input.trim();

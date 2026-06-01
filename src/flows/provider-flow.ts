@@ -1,21 +1,20 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
-import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
-import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
+import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
+import * as providerInstallCatalog from "../plugins/provider-install-catalog.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
-export type ProviderFlowScope = "text-inference" | "image-generation";
+type ProviderFlowScope = "text-inference" | "image-generation" | "music-generation";
 
 const DEFAULT_PROVIDER_FLOW_SCOPE: ProviderFlowScope = "text-inference";
 
-export type ProviderSetupFlowOption = FlowOption & {
+type ProviderSetupFlowOption = FlowOption & {
   onboardingScopes?: ProviderFlowScope[];
+  onboardingFeatured?: boolean;
 };
 
-export type ProviderModelPickerFlowEntry = FlowOption;
-
-export type ProviderSetupFlowContribution = FlowContribution & {
+type ProviderSetupFlowContribution = FlowContribution & {
   kind: "provider";
   surface: "setup";
   providerId: string;
@@ -40,10 +39,11 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
 }): ProviderSetupFlowContribution[] {
   const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
   const normalizedPluginsConfig = normalizePluginsConfig(params?.config?.plugins);
-  return resolveProviderInstallCatalogEntries({
-    ...params,
-    includeUntrustedWorkspacePlugins: false,
-  })
+  return providerInstallCatalog
+    .resolveProviderInstallCatalogEntries({
+      ...params,
+      includeUntrustedWorkspacePlugins: false,
+    })
     .filter(
       (entry) =>
         includesProviderFlowScope(entry.onboardingScopes, scope) &&
@@ -95,10 +95,11 @@ function resolveManifestProviderSetupFlowContributions(params?: {
   scope?: ProviderFlowScope;
 }): ProviderSetupFlowContribution[] {
   const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
-  return resolveManifestProviderAuthChoices({
-    ...params,
-    includeUntrustedWorkspacePlugins: false,
-  })
+  return providerAuthChoices
+    .resolveManifestProviderAuthChoices({
+      ...params,
+      includeUntrustedWorkspacePlugins: false,
+    })
     .filter((choice) => includesProviderFlowScope(choice.onboardingScopes, scope))
     .map((choice) => {
       const groupId = choice.groupId ?? choice.providerId;
@@ -120,6 +121,7 @@ function resolveManifestProviderSetupFlowContributions(params?: {
             ...(choice.assistantVisibility
               ? { assistantVisibility: choice.assistantVisibility }
               : {}),
+            ...(choice.onboardingFeatured ? { onboardingFeatured: true } : {}),
             group: {
               id: groupId,
               label: groupLabel,
@@ -153,5 +155,3 @@ export function resolveProviderSetupFlowContributions(params?: {
   }).filter((contribution) => !seenOptionValues.has(contribution.option.value));
   return sortFlowContributionsByLabel([...manifestContributions, ...installCatalogContributions]);
 }
-
-export { includesProviderFlowScope };

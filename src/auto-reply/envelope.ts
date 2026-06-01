@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
@@ -8,12 +12,8 @@ import {
   formatZonedTimestamp,
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
-export type AgentEnvelopeParams = {
+type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;
@@ -142,10 +142,10 @@ export function formatEnvelopeTimestamp(
 
   const formatted =
     zone.mode === "utc"
-      ? formatUtcTimestamp(date)
+      ? formatUtcTimestamp(date, { displaySeconds: true })
       : zone.mode === "local"
-        ? formatZonedTimestamp(date)
-        : formatZonedTimestamp(date, { timeZone: zone.timeZone });
+        ? formatZonedTimestamp(date, { displaySeconds: true })
+        : formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true });
 
   if (!formatted) {
     return undefined;

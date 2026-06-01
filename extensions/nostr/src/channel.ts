@@ -4,11 +4,13 @@ import {
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
 } from "openclaw/plugin-sdk/extension-shared";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -69,9 +71,7 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
   ],
   resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
-    allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
+    normalizeStringEntries(allowFrom)
       .map((entry) => {
         if (entry === "*") {
           return "*";
@@ -83,6 +83,11 @@ const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccou
         }
       })
       .filter(Boolean),
+});
+
+const nostrMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "nostr",
+  outbound: nostrOutboundAdapter,
 });
 
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChannelPlugin({
@@ -118,6 +123,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
         }),
     },
     messaging: {
+      targetPrefixes: ["nostr"],
       normalizeTarget: (target) => {
         // Strip nostr: prefix if present
         const cleaned = target.trim().replace(/^nostr:/i, "");
@@ -136,6 +142,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
       },
       resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
     },
+    message: nostrMessageAdapter,
     status: {
       ...createComputedAccountStatusAdapter<ResolvedNostrAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -178,12 +185,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
  * @throws Error if account is not running
  */
 export async function publishNostrProfile(
-  accountId: string = DEFAULT_ACCOUNT_ID,
+  accountId: string | undefined,
   profile: NostrProfile,
 ): Promise<ProfilePublishResult> {
-  const bus = getActiveNostrBuses().get(accountId);
+  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const bus = getActiveNostrBuses().get(resolvedAccountId);
   if (!bus) {
-    throw new Error(`Nostr bus not running for account ${accountId}`);
+    throw new Error(`Nostr bus not running for account ${resolvedAccountId}`);
   }
   return bus.publishProfile(profile);
 }
@@ -204,5 +212,3 @@ export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_I
   }
   return bus.getProfileState();
 }
-
-export { getActiveNostrBuses, getNostrMetrics } from "./gateway.js";

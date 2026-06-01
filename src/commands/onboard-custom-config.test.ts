@@ -5,7 +5,10 @@ import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
+  CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+  inferCustomModelSupportsImageInput,
   parseNonInteractiveCustomApiFlags,
+  resolveCustomModelImageInputInference,
 } from "./onboard-custom-config.js";
 
 function buildCustomProviderConfig(contextWindow?: number) {
@@ -45,14 +48,14 @@ function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
   });
 }
 
-it("uses expanded max_tokens for openai verification probes", async () => {
+it("uses expanded max_tokens for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
     baseUrl: "https://example.com/v1",
     apiKey: "test-key",
     modelId: "detected-model",
   });
 
-  expect(request.body).toMatchObject({ max_tokens: 16 });
+  expect(request.body.max_tokens).toBe(16);
 });
 it("uses azure responses-specific headers and body for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
@@ -98,20 +101,30 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
   });
 
   expect(request.endpoint).toBe("https://example.com/v1/messages");
-  expect(request.body).toMatchObject({ max_tokens: 1 });
+  expect(request.body.max_tokens).toBe(1);
 });
 
 describe("applyCustomApiConfig", () => {
   it.each([
     {
-      name: "uses hard-min context window for newly added custom models",
+      name: "uses stable default context window for newly added custom models",
       existingContextWindow: undefined,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
       name: "upgrades existing custom model context window when below hard minimum",
-      existingContextWindow: 4096,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      existingContextWindow: 2048,
+      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+    },
+    {
+      name: "raises legacy generated hard-min context window (#79428)",
+      existingContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+    },
+    {
+      name: "preserves explicit small context window when already valid",
+      existingContextWindow: 8192,
+      expectedContextWindow: 8192,
     },
     {
       name: "preserves existing custom model context window when already above minimum",
@@ -285,8 +298,13 @@ describe("applyCustomApiConfig", () => {
     });
 
     expect(result.providerId).toBe("custom-2");
-    expect(result.config.models?.providers?.custom).toBeDefined();
-    expect(result.config.models?.providers?.["custom-2"]).toBeDefined();
+    expect(Object.keys(result.config.models?.providers ?? {}).toSorted()).toEqual([
+      "custom",
+      "custom-2",
+    ]);
+    const provider = result.config.models?.providers?.["custom-2"];
+    expect(provider?.baseUrl).toBe("http://localhost:11434/v1");
+    expect(provider?.models?.[0]?.id).toBe("llama3");
   });
 
   it("does not add azure fields for non-azure URLs", () => {
@@ -309,6 +327,60 @@ describe("applyCustomApiConfig", () => {
     expect(
       result.config.agents?.defaults?.models?.["custom/foo-large"]?.params?.thinking,
     ).toBeUndefined();
+  });
+
+  it("adds image input for new non-azure custom models when requested", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-4o",
+      compatibility: "openai",
+      providerId: "custom",
+      supportsImageInput: true,
+    });
+
+    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text", "image"]);
+  });
+
+  it("infers image input for known non-azure custom vision models", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-4o",
+      compatibility: "openai",
+      providerId: "custom",
+    });
+
+    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text", "image"]);
+  });
+
+  it("lets explicit text input override known non-azure custom vision inference", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-4o",
+      compatibility: "openai",
+      providerId: "custom",
+      supportsImageInput: false,
+    });
+
+    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text"]);
+  });
+
+  it("updates existing non-azure custom model input when image support is explicitly requested", () => {
+    const result = applyCustomApiConfig({
+      config: buildCustomProviderConfig(CONTEXT_WINDOW_HARD_MIN_TOKENS),
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+      supportsImageInput: true,
+    });
+    const model = result.config.models?.providers?.custom?.models?.find(
+      (entry) => entry.id === "foo-large",
+    );
+
+    expect(model?.input).toEqual(["text", "image"]);
   });
 
   it("re-onboard preserves user-customized fields for non-azure models", () => {
@@ -391,6 +463,16 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     });
   });
 
+  it("parses custom image input opt-in", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      supportsImageInput: true,
+    });
+
+    expect(result.supportsImageInput).toBe(true);
+  });
+
   it.each([
     {
       name: "missing required flags",
@@ -417,5 +499,32 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     },
   ])("rejects $name", ({ flags, expectedMessage }) => {
     expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
+  });
+});
+
+describe("inferCustomModelSupportsImageInput", () => {
+  it.each(["gpt-4o", "claude-sonnet-4-6", "gemini-3-flash", "qwen2.5-vl", "llava"])(
+    "detects likely vision model %s",
+    (modelId) => {
+      expect(inferCustomModelSupportsImageInput(modelId)).toBe(true);
+    },
+  );
+
+  it.each(["llama3", "deepseek-v3", "evolvable-text-model"])(
+    "does not over-match text model %s",
+    (modelId) => {
+      expect(inferCustomModelSupportsImageInput(modelId)).toBe(false);
+    },
+  );
+
+  it("reports confidence for known text and unknown custom models", () => {
+    expect(resolveCustomModelImageInputInference("llama3")).toEqual({
+      supportsImageInput: false,
+      confidence: "known",
+    });
+    expect(resolveCustomModelImageInputInference("my-private-model")).toEqual({
+      supportsImageInput: false,
+      confidence: "unknown",
+    });
   });
 });

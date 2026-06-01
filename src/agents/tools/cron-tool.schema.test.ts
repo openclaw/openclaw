@@ -78,13 +78,63 @@ describe("CronToolSchema", () => {
     const jobStagger = propertyAt(schemaRecord, "job.schedule.staggerMs");
     const patchStagger = propertyAt(schemaRecord, "patch.schedule.staggerMs");
 
-    expect(jobStagger?.description).toBe("Random jitter in ms (kind=cron)");
-    expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
+    expect(jobStagger?.description).toBe("Jitter ms (kind=cron)");
+    expect(patchStagger?.description).toBe("Jitter ms (kind=cron)");
   });
 
-  it("job.delivery exposes mode, channel, to, bestEffort, accountId, failureDestination", () => {
+  it("advertises numeric cron params with runtime bounds", () => {
+    for (const path of ["job.schedule.everyMs", "patch.schedule.everyMs"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const path of [
+      "job.schedule.anchorMs",
+      "job.schedule.staggerMs",
+      "patch.schedule.anchorMs",
+      "patch.schedule.staggerMs",
+      "job.failureAlert.cooldownMs",
+      "patch.failureAlert.cooldownMs",
+    ]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 0 });
+    }
+    for (const path of ["job.failureAlert.after", "patch.failureAlert.after"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const path of ["job.payload.timeoutSeconds", "patch.payload.timeoutSeconds"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "number", minimum: 0 });
+    }
+  });
+
+  it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    const jobExpr = propertyAt(schemaRecord, "job.schedule.expr");
+    const patchExpr = propertyAt(schemaRecord, "patch.schedule.expr");
+    const jobTz = propertyAt(schemaRecord, "job.schedule.tz");
+    const patchTz = propertyAt(schemaRecord, "patch.schedule.tz");
+
+    for (const prop of [jobExpr, patchExpr]) {
+      expect(prop?.description).toMatch(/wall-clock time/i);
+      expect(prop?.description).toMatch(/do not convert/i);
+      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toContain("0 18 * * *");
+      expect(prop?.description).toContain("Asia/Shanghai");
+    }
+    for (const prop of [jobTz, patchTz]) {
+      expect(prop?.description).toMatch(/wall-clock fields/i);
+      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toContain("Asia/Shanghai");
+    }
+  });
+
+  it("job.delivery exposes mode, channel, to, threadId, bestEffort, accountId, failureDestination", () => {
     expect(keysAt(schemaRecord, "job.delivery")).toEqual(
-      ["accountId", "bestEffort", "channel", "failureDestination", "mode", "to"].toSorted(),
+      [
+        "accountId",
+        "bestEffort",
+        "channel",
+        "failureDestination",
+        "mode",
+        "threadId",
+        "to",
+      ].toSorted(),
     );
   });
 

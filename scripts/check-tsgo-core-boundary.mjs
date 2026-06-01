@@ -2,15 +2,16 @@
 
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const tsgoPath = path.join(repoRoot, "node_modules", ".bin", "tsgo");
 
 const coreGraphs = [
   { name: "core", config: "tsconfig.core.json" },
-  { name: "core-test", config: "tsconfig.core.test.json" },
-  { name: "core-test-agents", config: "tsconfig.core.test.agents.json" },
-  { name: "core-test-non-agents", config: "tsconfig.core.test.non-agents.json" },
+  { name: "core-test", config: "test/tsconfig/tsconfig.core.test.json" },
+  { name: "core-test-agents", config: "test/tsconfig/tsconfig.core.test.agents.json" },
+  { name: "core-test-non-agents", config: "test/tsconfig/tsconfig.core.test.non-agents.json" },
 ];
 
 function normalizeFilePath(filePath) {
@@ -23,11 +24,16 @@ function normalizeFilePath(filePath) {
 }
 
 function listGraphFiles(graph) {
-  const result = spawnSync(tsgoPath, ["-p", graph.config, "--pretty", "false", "--listFilesOnly"], {
+  const tsgo = createManagedCommandInvocation({
+    args: ["-p", graph.config, "--pretty", "false", "--listFilesOnly"],
+    bin: tsgoPath,
+  });
+  const result = spawnSync(tsgo.command, tsgo.args, {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
-    shell: process.platform === "win32",
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
   });
   if (result.error) {
     throw result.error;

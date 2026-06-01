@@ -10,10 +10,21 @@ title: "Gateway logging"
 
 For a user-facing overview (CLI + Control UI + config), see [/logging](/logging).
 
-OpenClaw has two log “surfaces”:
+OpenClaw has two log "surfaces":
 
 - **Console output** (what you see in the terminal / Debug UI).
 - **File logs** (JSON lines) written by the gateway logger.
+
+At startup, the Gateway logs the resolved default agent model together with the
+mode defaults that affect new sessions, for example:
+
+```text
+agent model: openai/gpt-5.5 (thinking=medium, fast=on)
+```
+
+`thinking` comes from the default agent, model params, or global agent default;
+when it is unset, the startup summary shows `medium`. `fast` comes from the
+default agent or model `fastMode` params.
 
 ## File-based logger
 
@@ -26,6 +37,11 @@ OpenClaw has two log “surfaces”:
   - `logging.level`
 
 The file format is one JSON object per line.
+
+Talk, realtime voice, and managed-room code paths use the shared file logger for
+bounded lifecycle records. These records are intended for operational debugging
+and OTLP log export; transcript text, audio payloads, turn ids, call ids, and
+provider item ids are not copied into the log record.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`).
 CLI can do the same:
@@ -41,6 +57,9 @@ openclaw logs --follow
   raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or
   `trace`.
+- Trace logging also includes diagnostic timing summaries for selected hot paths,
+  such as plugin tool factory preparation. See
+  [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
 ## Console capture
 
@@ -55,7 +74,7 @@ You can tune console verbosity independently via:
 ## Redaction
 
 OpenClaw can mask sensitive tokens before log or transcript output leaves the
-process. The same redaction policy is applied at console, file-log, OTLP
+process. This logging redaction policy is applied at console, file-log, OTLP
 log-record, and session transcript text sinks, so matching secret values are
 masked before JSONL lines or messages are written to disk.
 
@@ -63,13 +82,20 @@ masked before JSONL lines or messages are written to disk.
 - `logging.redactPatterns`: array of regex strings (overrides defaults)
   - Use raw regex strings (auto `gi`), or `/pattern/flags` if you need custom flags.
   - Matches are masked by keeping the first 6 + last 4 chars (length >= 18), otherwise `***`.
-  - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, and popular token prefixes.
+  - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular token prefixes, and payment credential field names such as card number, CVC/CVV, shared payment token, and payment credential.
+
+Some safety boundaries always redact regardless of `logging.redactSensitive`.
+That includes Control UI tool-call events, `sessions_history` tool output,
+diagnostics support exports, provider error observations, exec approval command
+display, and Gateway WebSocket protocol logs. These surfaces may still use
+`logging.redactPatterns` as additional patterns, but `redactSensitive: "off"`
+does not make them emit raw secrets.
 
 ## Gateway WebSocket logs
 
 The gateway prints WebSocket protocol logs in two modes:
 
-- **Normal mode (no `--verbose`)**: only “interesting” RPC results are printed:
+- **Normal mode (no `--verbose`)**: only "interesting" RPC results are printed:
   - errors (`ok=false`)
   - slow calls (default threshold: `>= 50ms`)
   - parse errors

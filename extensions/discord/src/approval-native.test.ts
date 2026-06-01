@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import {
   createDiscordNativeApprovalAdapter,
   getDiscordApprovalCapability,
@@ -158,6 +158,56 @@ describe("createDiscordNativeApprovalAdapter", () => {
           title: "Plugin approval",
           description: "Let plugin proceed",
           sessionKey: "agent:main:discord:dm:123456789",
+          turnSourceChannel: "discord",
+          turnSourceTo: "123456789",
+          turnSourceAccountId: "main",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    });
+
+    expect(target).toBeNull();
+  });
+
+  it("falls back to approver DMs for canonical Discord direct sessions", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+
+    const target = await adapter.native?.resolveOriginTarget?.({
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request: {
+        id: "abc",
+        request: {
+          title: "Plugin approval",
+          description: "Let plugin proceed",
+          sessionKey: "agent:main:discord:direct:123456789",
+          turnSourceChannel: "discord",
+          turnSourceTo: "123456789",
+          turnSourceAccountId: "main",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    });
+
+    expect(target).toBeNull();
+  });
+
+  it("falls back to approver DMs for account-scoped Discord direct sessions", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+
+    const target = await adapter.native?.resolveOriginTarget?.({
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request: {
+        id: "abc",
+        request: {
+          title: "Plugin approval",
+          description: "Let plugin proceed",
+          sessionKey: "agent:main:discord:default:direct:123456789",
           turnSourceChannel: "discord",
           turnSourceTo: "123456789",
           turnSourceAccountId: "main",

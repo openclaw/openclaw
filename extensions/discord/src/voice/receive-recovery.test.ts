@@ -12,9 +12,29 @@ describe("voice receive recovery", () => {
       analyzeVoiceReceiveError(
         new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
       ),
-    ).toMatchObject({
+    ).toEqual({
+      message: "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
+      isAbortLike: false,
       shouldAttemptPassthrough: true,
       countsAsDecryptFailure: true,
+    });
+  });
+
+  it("treats WASM bounds traps as recoverable receive failures", () => {
+    expect(analyzeVoiceReceiveError(new Error("memory access out of bounds"))).toEqual({
+      message: "memory access out of bounds",
+      isAbortLike: false,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: true,
+    });
+  });
+
+  it("treats premature stream close as an expected receive end", () => {
+    expect(analyzeVoiceReceiveError(new Error("Premature close"))).toEqual({
+      message: "Premature close",
+      isAbortLike: true,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: false,
     });
   });
 

@@ -40,6 +40,8 @@ export type AgentItemEventData = {
   error?: string;
   summary?: string;
   progressText?: string;
+  /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
+  suppressChannelProgress?: boolean;
   approvalId?: string;
   approvalSlug?: string;
 };
@@ -104,10 +106,19 @@ export type AgentEventPayload = {
   ts: number;
   data: Record<string, unknown>;
   sessionKey?: string;
+  /**
+   * sessionId the run was bound to when it started. Lifecycle persistence uses
+   * this to reject terminal events from a pre-`sessions.reset` run that would
+   * otherwise clobber the rotated session row resolved by the shared sessionKey.
+   */
+  sessionId?: string;
+  agentId?: string;
 };
 
 export type AgentRunContext = {
   sessionKey?: string;
+  /** Owning run's sessionId; stamped onto lifecycle events (see AgentEventPayload.sessionId). */
+  sessionId?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
@@ -150,6 +161,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
   }
+  if (context.sessionId && existing.sessionId !== context.sessionId) {
+    existing.sessionId = context.sessionId;
+  }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
@@ -158,6 +172,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.registeredAt !== undefined) {
+    existing.registeredAt = context.registeredAt;
+  }
+  if (context.lastActiveAt !== undefined) {
+    existing.lastActiveAt = context.lastActiveAt;
   }
 }
 
@@ -209,10 +229,22 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
-  const sessionKey = isControlUiVisible ? (eventSessionKey ?? context?.sessionKey) : undefined;
+  // Hidden channel-routed runs should not leak live assistant/tool traffic into
+  // Control UI, but lifecycle events still need the session key so gateway
+  // listeners can persist terminal session state even if run-context lookup is
+  // unavailable by the time the terminal event arrives. Terminal failures are
+  // emitted on the lifecycle stream with `phase: "error"`; the separate error
+  // stream remains redacted for hidden runs because it is observational only.
+  const preserveSessionKey = isControlUiVisible || event.stream === "lifecycle";
+  const sessionKey = preserveSessionKey ? (eventSessionKey ?? context?.sessionKey) : undefined;
+  // Stamp lifecycle events with the owning sessionId (see AgentEventPayload) at
+  // emit time, since the run context can be cleared before the terminal persists.
+  const sessionId =
+    event.stream === "lifecycle" ? (event.sessionId ?? context?.sessionId) : event.sessionId;
   const enriched: AgentEventPayload = {
     ...event,
     sessionKey,
+    ...(sessionId ? { sessionId } : {}),
     seq: nextSeq,
     ts: Date.now(),
   };

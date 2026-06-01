@@ -1,8 +1,16 @@
 {
   "id": "deepgram",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
-  "providerAuthEnvVars": {
-    "deepgram": ["DEEPGRAM_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "deepgram",
+        "envVars": ["DEEPGRAM_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "mediaUnderstandingProviders": ["deepgram"],

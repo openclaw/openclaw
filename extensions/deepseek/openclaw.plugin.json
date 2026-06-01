@@ -1,7 +1,10 @@
 {
   "id": "deepseek",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
   "providerEndpoints": [
     {
@@ -103,8 +106,13 @@
       "deepseek": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "deepseek": ["DEEPSEEK_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "deepseek",
+        "envVars": ["DEEPSEEK_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -1,3 +1,12 @@
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
@@ -9,11 +18,6 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
@@ -25,8 +29,70 @@ export const getCronChannelOptions = () => {
   return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
 };
 
+function addCronRunCauseFields(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const entries = record.entries;
+  if (!Array.isArray(entries)) {
+    return value;
+  }
+  const nextEntries = entries.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return entry;
+    }
+    const item = entry as Record<string, unknown>;
+    if (item.action !== "finished" || typeof item.errorReason !== "string") {
+      return item;
+    }
+    const cause = item.errorReason.trim();
+    return cause ? Object.assign({}, item, { cause }) : item;
+  });
+  return { ...record, entries: nextEntries };
+}
+
 export function printCronJson(value: unknown) {
-  defaultRuntime.writeJson(value);
+  defaultRuntime.writeJson(addCronRunCauseFields(value));
+}
+
+/**
+ * Enrich a CronJob (or list response) with a computed `status` field
+ * derived from enabled + state.runningAtMs + state.lastRunStatus.
+ * This mirrors the human-readable status shown by `cron list` / `cron show`.
+ */
+export function enrichCronJsonWithStatus(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const obj = value as Record<string, unknown>;
+
+  // Single job object (has 'state' and 'enabled')
+  if ("state" in obj && "enabled" in obj) {
+    return { ...obj, status: computeStatus(obj as unknown as CronJob) };
+  }
+
+  // List response (has 'jobs' array)
+  if ("jobs" in obj && Array.isArray(obj.jobs)) {
+    const enrichedJobs = (obj.jobs as CronJob[]).map((job) => {
+      const status = computeStatus(job);
+      return Object.assign({}, job, { status });
+    });
+    return { ...obj, jobs: enrichedJobs };
+  }
+
+  return value;
+}
+
+function computeStatus(job: CronJob): string {
+  if (!job.enabled) {
+    return "disabled";
+  }
+  const state = job.state ?? {};
+  if (state.runningAtMs) {
+    return "running";
+  }
+  return state.lastRunStatus ?? state.lastStatus ?? "idle";
 }
 
 export function handleCronCliError(err: unknown) {
@@ -136,11 +202,13 @@ export function parseAt(input: string, tz?: string): string | null {
 
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
-    return new Date(absolute).toISOString();
+    return timestampMsToIsoString(absolute) ?? null;
   }
-  const dur = parseDurationMs(raw);
+  const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
+  const dur = parseDurationMs(durationInput);
   if (dur !== null) {
-    return new Date(Date.now() + dur).toISOString();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
+    return timestampMsToIsoString(expiresAt) ?? null;
   }
   return null;
 }
@@ -380,4 +448,5 @@ export function printCronShow(
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
   runtime.log(`status: ${formatStatus(job)}`);
+  runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
 }

@@ -23,7 +23,7 @@ function isRollingLogFile(file: string): boolean {
   return ROLLING_LOG_RE.test(path.basename(file));
 }
 
-async function resolveLogFile(file: string): Promise<string> {
+export async function resolveLogFile(file: string): Promise<string> {
   const stat = await fs.stat(file).catch(() => null);
   if (stat) {
     return file;
@@ -79,7 +79,7 @@ async function readLogSlice(params: {
       : undefined;
   let reset = false;
   let truncated = false;
-  let start = 0;
+  let start;
 
   if (cursor != null) {
     if (cursor > size) {

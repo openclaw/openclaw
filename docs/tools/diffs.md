@@ -26,6 +26,11 @@ When enabled, the plugin prepends concise usage guidance into system-prompt spac
 ## Quick start
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install diffs
+    ```
+  </Step>
   <Step title="Enable the plugin">
     ```json5
     {
@@ -131,8 +136,10 @@ All fields are optional unless noted.
   Display filename for before and after mode.
 </ParamField>
 <ParamField path="lang" type="string">
-  Language override hint for before and after mode. Unknown values fall back to plain text.
+  Language override hint for before and after mode. Unknown values and languages outside the default viewer set fall back to plain text unless the
+  Diff Viewer Language Pack plugin is installed.
 </ParamField>
+
 <ParamField path="title" type="string">
   Viewer title override.
 </ParamField>
@@ -191,8 +198,25 @@ All fields are optional unless noted.
       - `fileQuality: "hq"`: max 14 MP (14,000,000 rendered pixels).
       - `fileQuality: "print"`: max 24 MP (24,000,000 rendered pixels).
       - PDF also has a max of 50 pages.
+
   </Accordion>
 </AccordionGroup>
+
+## Syntax highlighting
+
+OpenClaw includes syntax highlighting for common source, config, and documentation languages:
+
+`javascript`, `typescript`, `tsx`, `jsx`, `json`, `markdown`, `yaml`, `css`, `html`, `sh`, `python`, `go`, `rust`, `java`, `c`, `cpp`, `csharp`, `php`, `sql`, `docker`, `ruby`, `swift`, `kotlin`, `r`, `dart`, `lua`, `powershell`, `xml`, and `toml`.
+
+Common aliases such as `js`, `ts`, `bash`, `md`, `yml`, `c++`, `dockerfile`, `rb`, `kt`, and `ps1` are normalized to those default languages.
+
+Install the Diff Viewer Language Pack plugin to highlight other languages:
+
+```bash
+openclaw plugins install clawhub:@openclaw/diffs-language-pack
+```
+
+With the language pack available, OpenClaw automatically uses it for languages outside the default list. Without it, those files stay readable as plain text.
 
 ## Output details contract
 
@@ -282,6 +306,7 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             fileScale: 2,
             fileMaxWidth: 960,
             mode: "both",
+            ttlSeconds: 21600,
           },
         },
       },
@@ -306,6 +331,7 @@ Supported defaults:
 - `fileScale`
 - `fileMaxWidth`
 - `mode`
+- `ttlSeconds`
 
 Explicit tool parameters override these defaults.
 
@@ -377,6 +403,7 @@ Viewer assets:
 
 - `/plugins/diffs/assets/viewer.js`
 - `/plugins/diffs/assets/viewer-runtime.js`
+- `/plugins/diffs-language-pack/assets/viewer.js` when the diff uses a language from the Diff Viewer Language Pack
 
 The viewer document resolves those assets relative to the viewer URL, so an optional `baseUrl` path prefix is preserved for both asset requests too.
 
@@ -406,11 +433,13 @@ URL construction behavior:
     - Remote miss throttling when remote access is enabled:
       - 40 failures per 60 seconds
       - 60 second lockout (`429 Too Many Requests`)
+
   </Accordion>
   <Accordion title="File rendering hardening">
     - Screenshot browser request routing is deny-by-default.
     - Only local viewer assets from `http://127.0.0.1/plugins/diffs/assets/*` are allowed.
     - External network requests are blocked.
+
   </Accordion>
 </AccordionGroup>
 
@@ -428,6 +457,7 @@ Resolution order:
     - `OPENCLAW_BROWSER_EXECUTABLE_PATH`
     - `BROWSER_EXECUTABLE_PATH`
     - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`
+
   </Step>
   <Step title="Platform fallback">
     Platform command/path discovery fallback.
@@ -449,6 +479,7 @@ Fix by installing Chrome, Chromium, Edge, or Brave, or setting one of the execut
     - `Invalid baseUrl: ...` — use `http(s)` origin with optional path, no query/hash.
     - `{field} exceeds maximum size (...)` — reduce payload size.
     - Large patch rejection — reduce patch file count or total lines.
+
   </Accordion>
   <Accordion title="Viewer accessibility">
     - Viewer URL resolves to `127.0.0.1` by default.
@@ -461,6 +492,7 @@ Fix by installing Chrome, Chromium, Edge, or Brave, or setting one of the execut
       - prefer `mode: "file"` or `mode: "both"` when you only need an attachment, or
       - intentionally enable `security.allowRemoteViewer` and set plugin `viewerBaseUrl` or pass a proxy/public `baseUrl` when you need a shareable viewer URL
     - Enable `security.allowRemoteViewer` only when you intend external viewer access.
+
   </Accordion>
   <Accordion title="Unmodified-lines row has no expand button">
     This can happen for patch input when the patch does not carry expandable context. This is expected and does not indicate a viewer failure.
@@ -469,6 +501,7 @@ Fix by installing Chrome, Chromium, Edge, or Brave, or setting one of the execut
     - Artifact expired due TTL.
     - Token or path changed.
     - Cleanup removed stale data.
+
   </Accordion>
 </AccordionGroup>
 
