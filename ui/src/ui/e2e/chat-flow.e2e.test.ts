@@ -297,6 +297,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
       const params = requireRecord(sendRequest.params);
       expect(params.message).toBe(prompt);
       expect(params.sessionKey).toBe("global");
@@ -377,6 +382,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await expect
+        .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
+          timeout: 10_000,
+        })
+        .toBe("");
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
