@@ -587,6 +587,26 @@ export class Run {
     const error = readOptionalString(record.error)
       ? { message: readOptionalString(record.error) ?? "run failed" }
       : undefined;
+    // Extract agentMeta from `meta.agentMeta` — the gateway `agent.wait`
+    // handler nests it there for both the cached-dedupe and lifecycle paths.
+    const meta = asRecord(record.meta);
+    const hasAgentMeta = "agentMeta" in meta;
+    const agentMeta = asRecord(meta.agentMeta);
+    const agentMetaUsage = asRecord(agentMeta.usage);
+    const usage: RunResult["usage"] = hasAgentMeta
+      ? {
+          ...(typeof agentMetaUsage.inputTokens === "number"
+            ? { inputTokens: agentMetaUsage.inputTokens }
+            : {}),
+          ...(typeof agentMetaUsage.outputTokens === "number"
+            ? { outputTokens: agentMetaUsage.outputTokens }
+            : {}),
+          ...(typeof agentMetaUsage.cachedInputTokens === "number"
+            ? { cachedInputTokens: agentMetaUsage.cachedInputTokens }
+            : {}),
+          ...(typeof agentMeta.costUsd === "number" ? { costUsd: agentMeta.costUsd } : {}),
+        }
+      : undefined;
     return {
       runId: this.id,
       status,
@@ -594,6 +614,13 @@ export class Run {
       sessionId: readOptionalString(record.sessionId),
       startedAt: readOptionalTimestamp(record.startedAt),
       endedAt: readOptionalTimestamp(record.endedAt),
+      ...(usage ? { usage } : {}),
+      ...(hasAgentMeta
+        ? {
+            provider: readOptionalString(agentMeta.provider),
+            model: readOptionalString(agentMeta.model),
+          }
+        : {}),
       ...(error ? { error } : {}),
       raw,
     };
