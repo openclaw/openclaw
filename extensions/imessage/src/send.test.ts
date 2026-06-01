@@ -189,6 +189,89 @@ describe("sendMessageIMessage receipts", () => {
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
+  it("allows implicit group replies through legacy allowFrom sender fallback", async () => {
+    const client = createClient({ guid: "p:0/group-legacy-sender-reply" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          defaults: {
+            groupPolicy: "allowlist",
+          },
+          imessage: {
+            allowFrom: ["+15551230000"],
+          },
+        },
+      },
+      client,
+      replyToId: "inbound-1",
+      replyToIdSource: "implicit",
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows implicit group replies through legacy allowFrom access groups", async () => {
+    const client = createClient({ guid: "p:0/group-legacy-access-reply" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              imessage: ["+15551230000"],
+            },
+          },
+        },
+        channels: {
+          defaults: {
+            groupPolicy: "allowlist",
+          },
+          imessage: {
+            allowFrom: ["accessGroup:owners"],
+          },
+        },
+      },
+      client,
+      replyToId: "inbound-1",
+      replyToIdSource: "implicit",
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps fresh group sends blocked when legacy allowFrom fallback only names senders", async () => {
+    const client = createClient({ guid: "p:0/group-legacy-sender-fresh" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            defaults: {
+              groupPolicy: "allowlist",
+            },
+            imessage: {
+              allowFrom: ["+15551230000"],
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
   it("does not fall back to legacy allowFrom when groupAllowFrom is explicitly empty", async () => {
     const client = createClient({ guid: "p:0/group-empty-explicit" });
 
