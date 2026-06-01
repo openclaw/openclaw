@@ -55,6 +55,7 @@ openclaw hooks info session-memory
 | `session:compact:after`  | After compaction completes                                 |
 | `session:patch`          | When session properties are modified                       |
 | `agent:bootstrap`        | Before workspace bootstrap files are injected              |
+| `agent:turn:save`        | After an ACP agent turn save phase reaches an outcome      |
 | `gateway:startup`        | After channels start and hooks are loaded                  |
 | `gateway:shutdown`       | When gateway shutdown begins                               |
 | `gateway:pre-restart`    | Before an expected gateway restart                         |
@@ -134,6 +135,8 @@ reply channel and ignore pushed messages.
 **Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
+
+**Agent turn save events** (`agent:turn:save`): `context.sessionKey`, `context.success`, `context.saveOutcome`, `context.turnSuccess`, `context.durationMs`, optional `context.turnErrorCode`, optional `context.saveError`, and optional `context.saveSkipReason`. Its `saveOutcome` field is `saved`, `skipped`, or `failed`; `success` is true only for `saved`. `turnSuccess` preserves the underlying runtime turn outcome. It is scheduled after the ACP turn save phase reaches an outcome, including save failure, no registered save callback, a save callback returning no durable-write evidence, or a save layer declining the durable-readiness boundary. Hooks that need to read completed durable turn state should require `context.saveOutcome === "saved"`. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. The event does not embed transcript text.
 
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 

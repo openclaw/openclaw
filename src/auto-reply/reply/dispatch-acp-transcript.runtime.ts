@@ -1,5 +1,6 @@
 // Bridges ACP transcript events into persisted OpenClaw session transcripts.
 import { resolveAcpSessionCwd } from "@openclaw/acp-core/runtime/session-identifiers";
+import type { AcpTurnSaveHookResult } from "../../acp/control-plane/manager.types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { persistAcpTurnTranscript } from "../../agents/command/attempt-execution.js";
 import {
@@ -17,11 +18,11 @@ export async function persistAcpDispatchTranscript(params: {
   finalText: string;
   meta?: SessionAcpMeta;
   threadId?: string | number;
-}): Promise<void> {
+}): Promise<AcpTurnSaveHookResult> {
   const promptText = params.promptText.trim();
   const finalText = params.finalText.trim();
   if (!promptText && !finalText) {
-    return;
+    return { saveOutcome: "skipped", saveSkipReason: "empty_turn" };
   }
 
   const sessionAgentId = resolveSessionAgentId({
@@ -41,7 +42,7 @@ export async function persistAcpDispatchTranscript(params: {
     throw new Error(`unknown ACP session key: ${params.sessionKey}`);
   }
 
-  await persistAcpTurnTranscript({
+  const persistResult = await persistAcpTurnTranscript({
     body: promptText,
     transcriptBody: promptText,
     finalText,
@@ -55,4 +56,10 @@ export async function persistAcpDispatchTranscript(params: {
     sessionCwd: resolveAcpSessionCwd(params.meta) ?? process.cwd(),
     config: params.cfg,
   });
+  return persistResult.saveOutcome === "saved"
+    ? { saveOutcome: "saved" }
+    : {
+        saveOutcome: "skipped",
+        saveSkipReason: persistResult.saveSkipReason ?? "no_transcript_write",
+      };
 }

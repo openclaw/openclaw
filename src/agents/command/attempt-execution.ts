@@ -128,6 +128,18 @@ type PersistTextTurnTranscriptParams = {
   };
 };
 
+type PersistTextTurnTranscriptResult = {
+  sessionEntry: SessionEntry | undefined;
+  appendedMessages: number;
+  skipReason?: "empty_turn" | "no_transcript_write";
+};
+
+export type AcpTurnTranscriptPersistResult = {
+  sessionEntry: SessionEntry | undefined;
+  saveOutcome: "saved" | "skipped";
+  saveSkipReason?: string;
+};
+
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
@@ -228,11 +240,15 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
 
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
-): Promise<SessionEntry | undefined> {
+): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
-    return params.sessionEntry;
+    return {
+      sessionEntry: params.sessionEntry,
+      appendedMessages: 0,
+      skipReason: "empty_turn",
+    };
   }
 
   const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
@@ -250,11 +266,11 @@ async function persistTextTurnTranscript(
     allowReentrant: true,
   });
   let transcriptMarkerUpdatedAt: number | undefined;
+  let appendedMessages = 0;
   try {
-    let wroteTranscript = false;
     const userMessage = params.userMessage;
     if (userMessage || promptText) {
-      await appendUserTurnTranscriptMessage({
+      const appendedUser = await appendUserTurnTranscriptMessage({
         transcriptPath: sessionFile,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -271,7 +287,9 @@ async function persistTextTurnTranscript(
             }),
         updateMode: "none",
       });
-      wroteTranscript = true;
+      if (appendedUser) {
+        appendedMessages += 1;
+      }
     }
 
     if (replyText) {
@@ -285,7 +303,7 @@ async function persistTextTurnTranscript(
         }
       }
       if (appendAssistant) {
-        await appendSessionTranscriptMessage({
+        const appendedAssistant = await appendSessionTranscriptMessage({
           transcriptPath: sessionFile,
           sessionId: params.sessionId,
           cwd: params.sessionCwd,
@@ -301,10 +319,12 @@ async function persistTextTurnTranscript(
             timestamp: Date.now(),
           },
         });
-        wroteTranscript = true;
+        if (appendedAssistant) {
+          appendedMessages += 1;
+        }
       }
     }
-    if (wroteTranscript) {
+    if (appendedMessages > 0) {
       transcriptMarkerUpdatedAt = Date.now();
     }
   } finally {
@@ -338,7 +358,11 @@ async function persistTextTurnTranscript(
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
-  return updatedSessionEntry;
+  return {
+    sessionEntry: updatedSessionEntry,
+    appendedMessages,
+    ...(appendedMessages > 0 ? {} : { skipReason: "no_transcript_write" }),
+  };
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -371,8 +395,8 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-}): Promise<SessionEntry | undefined> {
-  return await persistTextTurnTranscript({
+}): Promise<AcpTurnTranscriptPersistResult> {
+  const result = await persistTextTurnTranscript({
     ...params,
     assistant: {
       api: "openai-responses",
@@ -380,6 +404,15 @@ export async function persistAcpTurnTranscript(params: {
       model: "acp-runtime",
     },
   });
+  return {
+    sessionEntry: result.sessionEntry,
+    ...(result.appendedMessages > 0
+      ? { saveOutcome: "saved" as const }
+      : {
+          saveOutcome: "skipped" as const,
+          saveSkipReason: result.skipReason ?? "no_transcript_write",
+        }),
+  };
 }
 
 export async function persistCliTurnTranscript(params: {
@@ -403,7 +436,7 @@ export async function persistCliTurnTranscript(params: {
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
 
-  return await persistTextTurnTranscript({
+  const result = await persistTextTurnTranscript({
     body: gapFill ? "" : params.body,
     transcriptBody: gapFill ? undefined : params.transcriptBody,
     ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
@@ -425,6 +458,7 @@ export async function persistCliTurnTranscript(params: {
       usage: params.result.meta.agentMeta?.usage,
     },
   });
+  return result.sessionEntry;
 }
 
 export function runAgentAttempt(params: {
