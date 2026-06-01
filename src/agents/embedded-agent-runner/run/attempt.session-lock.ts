@@ -1198,9 +1198,21 @@ function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerp
 async function waitForSessionEventQueue(_session: unknown): Promise<void> {}
 
 export class EmbeddedAttemptSessionTakeoverError extends Error {
-  constructor(sessionFile: string) {
-    super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
+  readonly sessionFile: string;
+  readonly phase?: "prompt_reacquire" | "cleanup" | "write" | "fence_check";
+
+  constructor(
+    sessionFile: string,
+    phase?: "prompt_reacquire" | "cleanup" | "write" | "fence_check",
+  ) {
+    super(
+      `session file changed while embedded prompt lock was released: ${sessionFile}${
+        phase ? ` (phase: ${phase})` : ""
+      }`,
+    );
     this.name = "EmbeddedAttemptSessionTakeoverError";
+    this.sessionFile = sessionFile;
+    this.phase = phase;
   }
 }
 
@@ -1483,7 +1495,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
-  async function assertSessionFileFence(): Promise<void> {
+  async function assertSessionFileFence(
+    phase: "prompt_reacquire" | "cleanup" | "write" | "fence_check" = "fence_check",
+  ): Promise<void> {
     if (!fenceActive) {
       return;
     }
@@ -1589,7 +1603,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     takeoverDetected = true;
-    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile, phase);
   }
 
   async function refreshSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
@@ -2116,7 +2130,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         try {
           heldLock = lock;
-          await assertSessionFileFence();
+          await assertSessionFileFence("prompt_reacquire");
         } catch (err) {
           heldLock = undefined;
           await lock.release();
@@ -2140,7 +2154,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           return noopLock;
         }
         try {
-          await assertSessionFileFence();
+          await assertSessionFileFence("cleanup");
         } catch (err) {
           await cleanupLock.release();
           if (err instanceof EmbeddedAttemptSessionTakeoverError) {

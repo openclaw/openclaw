@@ -327,6 +327,38 @@ describe("runAgentTurnWithFallback: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
+  it("surfaces embedded session takeover with specific resend guidance", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(
+      "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.",
+    );
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
+    expect(failCall[1]).toBe(takeoverError);
+  });
+
   it("stays silent (NO_REPLY) when the reply operation was aborted for restart", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);

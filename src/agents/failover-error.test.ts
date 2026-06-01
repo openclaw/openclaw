@@ -12,6 +12,7 @@ import {
   FailoverError,
   findCliMaxTurnsError,
   findCliTimeoutError,
+  isEmbeddedAttemptSessionTakeoverError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -1378,7 +1379,9 @@ describe("failover-error", () => {
     });
 
     it("returns true for direct embedded attempt session takeover errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+      const error = makeEmbeddedTakeoverError();
+      expect(isEmbeddedAttemptSessionTakeoverError(error)).toBe(true);
+      expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
     });
 
     it("returns true for harness session generation ownership loss", () => {

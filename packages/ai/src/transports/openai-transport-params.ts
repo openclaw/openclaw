@@ -234,16 +234,21 @@ export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
   options?: { stream?: boolean },
-): { signal?: AbortSignal; timeout?: number; headers?: Record<string, string> } | undefined {
+): {
+  signal?: AbortSignal;
+  timeout?: number;
+  headers?: Record<string, string>;
+  maxRetries: 0;
+} {
   const timeout = resolveOpenAISdkTimeoutMs(model);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }
       : undefined;
-  if (timeout === undefined && !signal && !headers) {
-    return undefined;
-  }
+  // Keep the SDK's own retry loop out of the embedded prompt-lock release window
+  // (maxRetries:0); configured settings.retry.provider.maxRetries still wins upstream.
   return {
+    maxRetries: 0,
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),

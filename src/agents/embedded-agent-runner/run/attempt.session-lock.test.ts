@@ -144,6 +144,23 @@ describe("embedded attempt session lock lifecycle", () => {
     await second.dispose();
   });
 
+  it("keeps takeover error construction backward compatible while recording phase", () => {
+    const legacyError = new EmbeddedAttemptSessionTakeoverError("/tmp/session.jsonl");
+    expect(legacyError.message).toBe(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    );
+    expect(legacyError.sessionFile).toBe("/tmp/session.jsonl");
+    expect(legacyError.phase).toBeUndefined();
+
+    const phasedError = new EmbeddedAttemptSessionTakeoverError(
+      "/tmp/session.jsonl",
+      "prompt_reacquire",
+    );
+    expect(phasedError.message).toContain("(phase: prompt_reacquire)");
+    expect(phasedError.sessionFile).toBe("/tmp/session.jsonl");
+    expect(phasedError.phase).toBe("prompt_reacquire");
+  });
+
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
     const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
@@ -1399,6 +1416,57 @@ describe("embedded attempt session lock lifecycle", () => {
       await cleanupLock.release();
     },
   );
+
+  it("detects session takeover when prompt reacquire sees another owner advance the session file", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"prompt-takeover"}\n', "utf8");
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toMatchObject({
+      name: "EmbeddedAttemptSessionTakeoverError",
+      phase: "prompt_reacquire",
+      sessionFile,
+    });
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("allows owned steering writes before the prompt stream lock is reacquired", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: (run, options) => controller.withSessionWriteLock(run, options),
+      },
+      async () => {
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "queued steering input" }],
+          },
+        });
+      },
+    );
+
+    await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain("queued steering input");
+  });
 
   it("allows delivery mirror appends while the prompt lock is released", async () => {
     const sessionFile = await createTempSessionFile();
