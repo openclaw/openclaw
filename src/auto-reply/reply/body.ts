@@ -3,12 +3,12 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { setAbortMemory } from "./abort-primitives.js";
 
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
+const sessionAccessorRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
 );
 
-function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
+function loadSessionAccessorRuntime() {
+  return sessionAccessorRuntimeLoader.load();
 }
 
 /** Applies one-shot session hints to the agent-visible body and clears consumed flags. */
@@ -34,18 +34,17 @@ export async function applySessionHints(params: {
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        const { updateSessionStore } = await loadSessionStoreRuntime();
-        await updateSessionStore(params.storePath, (store) => {
-          const entry = store[sessionKey] ?? params.sessionEntry;
-          if (!entry) {
-            return;
-          }
-          store[sessionKey] = {
-            ...entry,
+        const { updateSessionEntry } = await loadSessionAccessorRuntime();
+        await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey,
+          },
+          () => ({
             abortedLastRun: false,
             updatedAt: Date.now(),
-          };
-        });
+          }),
+        );
       }
     } else if (params.abortKey) {
       setAbortMemory(params.abortKey, false);

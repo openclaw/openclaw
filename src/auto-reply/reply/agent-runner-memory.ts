@@ -29,9 +29,8 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
-  applySessionStoreEntryPatch,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -64,6 +63,15 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
+type UpdateSessionStoreEntryParams = {
+  storePath: string;
+  sessionKey: string;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  update: (
+    entry: SessionEntry,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+};
 
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
@@ -91,6 +99,22 @@ async function runEmbeddedAgentDefault(
 ): Promise<Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>>> {
   const { runEmbeddedAgent } = await loadEmbeddedAgentRuntime();
   return await runEmbeddedAgent(...args);
+}
+
+async function updateSessionStoreEntryDefault(
+  params: UpdateSessionStoreEntryParams,
+): Promise<SessionEntry | null> {
+  return await updateSessionEntry(
+    {
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    },
+    params.update,
+    {
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership,
+    },
+  );
 }
 
 async function ensureMemoryFlushTargetFile(params: {
@@ -126,7 +150,7 @@ const memoryDeps = {
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
-  updateSessionStoreEntry,
+  updateSessionStoreEntry: updateSessionStoreEntryDefault,
   emitAgentEvent,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
@@ -143,7 +167,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
-    updateSessionStoreEntry,
+    updateSessionStoreEntry: updateSessionStoreEntryDefault,
     emitAgentEvent,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
@@ -1150,13 +1174,17 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await applySessionStoreEntryPatch({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: { totalTokens: transcriptPromptTokens, totalTokensFresh: true },
-        });
+        const updatedEntry = await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+          },
+          () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+          },
+        );
         if (updatedEntry) {
           entry = updatedEntry;
           if (params.sessionStore) {
