@@ -9,7 +9,16 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
+  "browser",
+  "cron",
+  "image_generate",
+  "message",
+  "music_generate",
+  "pdf",
+  "tts",
+  "video_generate",
+]);
 const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
   enabled: true,
   mode: "tools",
