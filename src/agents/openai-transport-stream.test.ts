@@ -2909,7 +2909,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
-      } satisfies Model<"openai-responses">,
+      } as never,
       {
         systemPrompt: "system",
         messages: [
