@@ -21,12 +21,18 @@ import {
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeHostOverrideEnvVarKey,
+  sanitizeHostExecEnvWithDiagnostics,
+} from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -100,6 +106,26 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "ask",
   "node",
 ] as const;
+
+function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, string> | undefined {
+  const env: Record<string, string> = {};
+  for (const [rawKey, value] of Object.entries(rawEnv)) {
+    const key = normalizeHostOverrideEnvVarKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    const upperKey = key.toUpperCase();
+    if (
+      upperKey === "PATH" ||
+      isDangerousHostEnvVarName(upperKey) ||
+      isDangerousHostEnvOverrideVarName(upperKey)
+    ) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
 
 function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
@@ -1597,12 +1623,35 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      let pluginEnv: Record<string, string> | undefined;
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("resolve_exec_env")) {
+        const rawPluginEnv = await hookRunner.runResolveExecEnv(
+          {
+            sessionKey: defaults?.sessionKey,
+            toolName: "exec",
+            host,
+          },
+          {
+            agentId,
+            sessionKey: defaults?.sessionKey,
+            messageProvider: defaults?.messageProvider,
+            channelId: defaults?.currentChannelId,
+          },
+        );
+        pluginEnv = filterPluginExecEnv(rawPluginEnv);
+        if (pluginEnv) {
+          Object.assign(env, pluginEnv);
+        }
+      }
+      const requestedEnv = pluginEnv ? { ...params.env, ...pluginEnv } : params.env;
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
           workdir,
           env,
-          requestedEnv: params.env,
+          requestedEnv,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
@@ -1639,7 +1688,7 @@ export function createExecTool(
           workdir,
           env,
           pathPrepend: defaultPathPrepend,
-          requestedEnv: params.env,
+          requestedEnv,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
