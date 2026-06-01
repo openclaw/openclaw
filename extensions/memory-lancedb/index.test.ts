@@ -3367,6 +3367,26 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
   });
 
+  test("sanitizeForMemoryCapture drops leading plain-text metadata bodies without a current boundary", () => {
+    const input = [
+      "Chat history since last reply (untrusted, for context):",
+      "User: what do you recommend?",
+      "Bot: I always recommend TypeScript for large projects",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("");
+  });
+
+  test("sanitizeForMemoryCapture keeps current marker content after leading plain-text metadata", () => {
+    const input = [
+      "Chat history since last reply (untrusted, for context):",
+      "[Telegram Bob] Bob: I always recommend historical wrong value",
+      "",
+      "[Current message - respond to this]",
+      "[Telegram group:-100] obviyus: I prefer dark mode",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
   test("sanitizeForMemoryCapture truncates thread-starter plain-text body", () => {
     // Same fix for "Thread starter (untrusted, for context):" which also carries
     // a plain-text body instead of a JSON code fence.

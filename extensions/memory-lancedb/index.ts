@@ -989,6 +989,14 @@ function stripPendingHistoryContextBeforeCurrentMessage(text: string): string {
   return candidateText.slice(currentMessageIndex + CURRENT_MESSAGE_MARKER.length);
 }
 
+function stripToCurrentMessageMarker(text: string): string | null {
+  const currentMessageIndex = text.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  if (currentMessageIndex === -1) {
+    return null;
+  }
+  return text.slice(currentMessageIndex + CURRENT_MESSAGE_MARKER.length);
+}
+
 function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
   const candidateText = text.trimStart();
   if (!LEADING_CURRENT_MESSAGE_CONTEXT_RE.test(candidateText)) {
@@ -1001,6 +1009,16 @@ function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
   // `Current message:` is current-turn transport context. Strip it only when a
   // real inbound envelope follows; otherwise preserve the text for normal capture.
   return candidateText.slice(envelopeIndex);
+}
+
+function stripLeadingPlainTextMetadataBody(text: string): string {
+  const candidateText = text.trimStart();
+  const markerBody = stripToCurrentMessageMarker(candidateText);
+  if (markerBody !== null) {
+    return markerBody;
+  }
+  const currentMessageBody = stripLeadingCurrentMessageContextBeforeEnvelope(candidateText);
+  return currentMessageBody === candidateText ? "" : currentMessageBody;
 }
 
 function stripLeadingInboundEnvelope(text: string): string {
@@ -1126,9 +1144,17 @@ export function sanitizeForMemoryCapture(text: string): string {
       cleaned = before;
       break;
     }
-    // Metadata header is at the very beginning -- strip it so the user text
-    // that follows survives. Loop continues so back-to-back headers at the new
-    // start are also handled.
+    // Metadata header is at the very beginning. Fenced metadata was already
+    // removed above; malformed plain-text bodies are untrusted context unless a
+    // current-message boundary names the real user body.
+    if (earliestMetaRe === INBOUND_META_LABEL_RE) {
+      const lineEnd = cleaned.indexOf("\n");
+      const afterHeader = lineEnd === -1 ? "" : cleaned.slice(lineEnd + 1);
+      if (!afterHeader.trimStart().startsWith("```json")) {
+        cleaned = stripLeadingPlainTextMetadataBody(afterHeader);
+        continue;
+      }
+    }
     cleaned = cleaned.replace(earliestMetaRe, "");
   }
 
