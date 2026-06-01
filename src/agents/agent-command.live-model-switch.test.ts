@@ -440,6 +440,7 @@ vi.mock("./model-selection.js", () => {
       allowAny: false,
     };
   };
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
 
   return {
     buildAllowedModelSet,
