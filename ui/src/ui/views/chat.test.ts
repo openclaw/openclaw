@@ -45,62 +45,60 @@ const loadSessionsMock = vi.hoisted(() =>
   }),
 );
 const buildChatItemsMock = vi.hoisted(() =>
-  vi.fn(
-    (props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
-      if (
-        props.messages.some(
-          (message) =>
-            typeof message === "object" &&
-            message !== null &&
-            (message as { __testDivider?: unknown })["__testDivider"] === true,
-        )
-      ) {
-        return [
-          {
-            kind: "divider",
-            key: "divider:compaction:test",
-            label: "Compacted history",
-            description:
-              "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
-            action: {
-              kind: "session-checkpoints",
-              label: "Open checkpoints",
+  vi.fn((props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
+    if (
+      props.messages.some(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          (message as { __testDivider?: unknown })["__testDivider"] === true,
+      )
+    ) {
+      return [
+        {
+          kind: "divider",
+          key: "divider:compaction:test",
+          label: "Compacted history",
+          description:
+            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+          action: {
+            kind: "session-checkpoints",
+            label: "Open checkpoints",
+          },
+          timestamp: 1,
+        },
+      ];
+    }
+    if (props.messages.length > 0) {
+      return [
+        {
+          kind: "group",
+          key: "group:assistant:test",
+          role: "assistant",
+          messages: props.messages.map((message, index) => ({
+            key: `message:${index}`,
+            message,
+          })),
+          timestamp: 1,
+          isStreaming: false,
+        },
+      ];
+    }
+    if (props.stream !== null) {
+      return props.stream
+        ? [
+            {
+              kind: "stream",
+              key: "stream:test",
+              text: props.stream,
+              startedAt: props.streamStartedAt ?? 1,
+              isStreaming: true,
             },
-            timestamp: 1,
-          },
-        ];
-      }
-      if (props.messages.length > 0) {
-        return [
-          {
-            kind: "group",
-            key: "group:assistant:test",
-            role: "assistant",
-            messages: props.messages.map((message, index) => ({
-              key: `message:${index}`,
-              message,
-            })),
-            timestamp: 1,
-            isStreaming: false,
-          },
-        ];
-      }
-      if (props.stream !== null) {
-        return props.stream
-          ? [
-              {
-                kind: "stream",
-                key: "stream:test",
-                text: props.stream,
-                startedAt: props.streamStartedAt ?? 1,
-                isStreaming: true,
-              },
-            ]
-          : [{ kind: "reading-indicator", key: "reading:test" }];
-      }
-      return [];
-    },
-  ),
+          ]
+        : [{ kind: "reading-indicator", key: "reading:test" }];
+    }
+    return [];
+  }),
 );
 
 function requireFirstAttachmentsChange(
@@ -1073,6 +1071,17 @@ describe("chat slash menu accessibility", () => {
     expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
+
+  it("does not request a slash-menu rerender for plain draft input when suggestions are closed", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onDraftChange, onRequestUpdate });
+
+    inputDraft(container, "plain first message");
+
+    expect(onDraftChange).toHaveBeenCalledWith("plain first message");
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+  });
 
   it("wires command suggestions to the composer with stable active option ids", () => {
     let draft = "";

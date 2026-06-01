@@ -872,6 +872,26 @@ function resetSlashMenuState(): void {
   vs.slashMenuExpanded = false;
 }
 
+function hasVisibleSlashMenuState(): boolean {
+  return (
+    vs.slashMenuOpen ||
+    vs.slashMenuMode !== "command" ||
+    vs.slashMenuCommand !== null ||
+    vs.slashMenuArgItems.length > 0 ||
+    vs.slashMenuItems.length > 0 ||
+    vs.slashMenuExpanded
+  );
+}
+
+function closeSlashMenuIfNeeded(requestUpdate: () => void): void {
+  if (!hasVisibleSlashMenuState()) {
+    return;
+  }
+  vs.slashMenuOpen = false;
+  resetSlashMenuState();
+  requestUpdate();
+}
+
 function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Arg mode: /command <partial-arg>
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
@@ -894,9 +914,7 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
         return;
       }
     }
-    vs.slashMenuOpen = false;
-    resetSlashMenuState();
-    requestUpdate();
+    closeSlashMenuIfNeeded(requestUpdate);
     return;
   }
 
@@ -911,8 +929,8 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
     vs.slashMenuCommand = null;
     vs.slashMenuArgItems = [];
   } else {
-    vs.slashMenuOpen = false;
-    resetSlashMenuState();
+    closeSlashMenuIfNeeded(requestUpdate);
+    return;
   }
   requestUpdate();
 }
