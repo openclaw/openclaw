@@ -280,6 +280,8 @@ describe("runCliTurnCompactionLifecycle", () => {
       totalTokens: 950,
       totalTokensFresh: true,
       agentHarnessId: "codex",
+      authProfileOverride: "github-copilot:work",
+      authProfileOverrideSource: "auto",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -402,8 +404,6 @@ describe("runCliTurnCompactionLifecycle", () => {
       totalTokens: 950,
       totalTokensFresh: true,
       agentHarnessId: "codex",
-      authProfileOverride: "github-copilot:work",
-      authProfileOverrideSource: "auto",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
