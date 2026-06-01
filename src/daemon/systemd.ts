@@ -315,7 +315,7 @@ function collectSystemdFileBackedEnvironment(params: {
       continue;
     }
     const key = normalizeSystemdEnvironmentKey(rawKey);
-    if (key && params.fileManagedKeys.has(key)) {
+    if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
       environment[rawKey] = rawValue;
     }
   }

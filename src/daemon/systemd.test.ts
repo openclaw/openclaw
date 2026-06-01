@@ -1299,6 +1299,35 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("does not re-stage unresolved file-backed values from preserved service env (#88274)", async () => {
+    await withStageFixture(async ({ env, unitPath, envFilePath }) => {
+      await fs.writeFile(envFilePath, "LLM_API_KEY=$SECRET_FROM_SHELL\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          LLM_API_KEY: "$SECRET_FROM_SHELL",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+        environmentValueSources: {
+          LLM_API_KEY: "file",
+        },
+      });
+
+      const unit = await fs.readFile(unitPath, "utf8");
+      expect(unit).not.toContain("EnvironmentFile=");
+      await expect(fs.access(envFilePath)).rejects.toThrow();
+    });
+  });
+
   it("sanitizes file-backed managed values out of the backup unit on re-stage", async () => {
     await withStageFixture(async ({ env, unitPath }) => {
       await fs.mkdir(path.dirname(unitPath), { recursive: true });
