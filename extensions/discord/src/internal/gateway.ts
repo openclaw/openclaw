@@ -172,7 +172,10 @@ export class GatewayPlugin extends Plugin {
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
-    return new ws.WebSocket(url);
+    return new ws.WebSocket(url, {
+      maxBufferedChunks: 0,
+      maxFragments: 0,
+    } as ws.ClientOptions);
   }
 
   private setupWebSocket(resume: boolean): void {
