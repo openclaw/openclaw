@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
-import type { WorkboardCard, WorkboardExecution, WorkboardStatus } from "./types.js";
+import type { WorkboardCard, WorkboardExecution } from "./types.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
@@ -126,10 +126,13 @@ function selectStartableCards(cards: WorkboardCard[], limit: number): WorkboardC
   if (limit <= 0) {
     return [];
   }
-  const activeStatuses = new Set<WorkboardStatus>(["running", "review"]);
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
-    if (!activeStatuses.has(card.status) || cardIsArchived(card)) {
+    const consumesOwnerSlot =
+      card.status === "running" ||
+      Boolean(card.metadata?.claim) ||
+      card.execution?.status === "running";
+    if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
     const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;

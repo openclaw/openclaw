@@ -162,7 +162,10 @@ describe("package acceptance workflow", () => {
     const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
-      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
+      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $cacheRoot "openclaw-pnpm-node-modules"',
+    );
+    expect(hydrateWindowsPnpm.run).toContain(
+      '$env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $env:PNPM_CONFIG_MODULES_DIR ".pnpm"',
     );
     expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");

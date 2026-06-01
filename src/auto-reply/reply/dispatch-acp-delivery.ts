@@ -192,6 +192,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   onReplyStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
   runId?: string;
@@ -199,7 +201,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
-  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const explicitAccountId =
+    normalizeOptionalString(params.originatingAccountId) ??
+    normalizeOptionalString(params.ctx.AccountId);
   const resolvedAccountId =
     explicitAccountId ??
     normalizeOptionalString(
@@ -404,10 +408,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
-      const threadId = resolveRoutedDeliveryThreadId({
-        ctx: params.ctx,
-        sessionKey: deliverySessionKey,
-      });
+      const threadId =
+        params.originatingThreadId ??
+        resolveRoutedDeliveryThreadId({
+          ctx: params.ctx,
+          sessionKey: deliverySessionKey,
+        });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,

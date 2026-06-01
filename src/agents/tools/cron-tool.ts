@@ -73,7 +73,7 @@ function nullableStringArraySchema(description: string) {
 
 function deliveryStringSchema(params: { description: string; nullableClears: boolean }) {
   return params.nullableClears
-    ? nullableStringSchema(params.description)
+    ? nullableStringSchema(`${params.description}, or null to clear`)
     : Type.Optional(Type.String({ description: params.description }));
 }
 

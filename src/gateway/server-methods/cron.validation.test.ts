@@ -404,6 +404,28 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
+  it("rejects whitespace-only cron payloads before calling add", async () => {
+    const agentTurn = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank agent turn",
+        payload: { kind: "agentTurn", message: "   " },
+      }),
+    );
+    expect(agentTurn.context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(agentTurn.respond, { code: "INVALID_REQUEST", messageIncludes: "message" });
+
+    const systemEvent = await invokeCronAdd({
+      name: "blank system event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "   " },
+    });
+    expect(systemEvent.context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(systemEvent.respond, { code: "INVALID_REQUEST", messageIncludes: "text" });
+  });
+
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 

@@ -212,7 +212,7 @@ async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> 
       () => {
         hasAuthFile = true;
       },
-      (error) => {
+      (error: unknown) => {
         if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
           throw error;
         }

@@ -40,6 +40,7 @@ const READY_OFFSET_LOG_NEEDLES = [
   Buffer.from("[gateway] http server listening"),
 ];
 const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
+const isolatedStateRoots = new WeakMap();
 
 function readPositiveInt(raw, fallback) {
   const text = String(raw ?? "").trim();
@@ -339,7 +340,7 @@ export function runCommand(command, args, options = {}) {
       if (clearCommandTimer) {
         clearTimeout(clearCommandTimer);
       }
-      reject(error);
+      reject(toLintErrorObject(error, "Command spawn failed"));
     });
     child.on("close", (status, signal) => {
       if (settled) {
@@ -533,7 +534,7 @@ async function assertReadyzProbe(options) {
   );
 }
 
-async function rpcCall(method, params, options) {
+export async function rpcCall(method, params, options) {
   const rpcStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-runtime-rpc-"));
   const args = [
     options.entrypoint,
@@ -550,15 +551,19 @@ async function rpcCall(method, params, options) {
     "--params",
     JSON.stringify(params ?? {}),
   ];
-  const { stdout } = await runCommand("node", args, {
-    env: {
-      ...process.env,
-      ...options.env,
-      OPENCLAW_NO_ONBOARD: "1",
-      OPENCLAW_STATE_DIR: rpcStateDir,
-    },
-  });
-  return unwrapRpcPayload(parseJsonOutput(stdout));
+  try {
+    const { stdout } = await runCommand("node", args, {
+      env: {
+        ...process.env,
+        ...options.env,
+        OPENCLAW_NO_ONBOARD: "1",
+        OPENCLAW_STATE_DIR: rpcStateDir,
+      },
+    });
+    return unwrapRpcPayload(parseJsonOutput(stdout));
+  } finally {
+    fs.rmSync(rpcStateDir, { force: true, recursive: true });
+  }
 }
 
 async function retryRpcCall(method, params, options) {
@@ -700,11 +705,7 @@ async function runManifestProbes(plan, options) {
       { probe: false, timeoutMs: 2000 },
       options,
     );
-    if (!isChannelVisible(status, channel)) {
-      console.log(
-        `Runtime channel status smoke skipped for ${options.pluginId}: ${channel} is not visible in dry channels.status`,
-      );
-    }
+    assertChannelVisible(status, channel, options.pluginId);
   }
   if (plan.runtimeSlashAliases.length > 0 && plan.activeInThisProbe) {
     await retryCommandsListWithAliases(plan.runtimeSlashAliases, options);
@@ -741,6 +742,15 @@ function isChannelVisible(payload, channel) {
     return true;
   }
   return false;
+}
+
+export function assertChannelVisible(payload, channel, pluginId) {
+  if (isChannelVisible(payload, channel)) {
+    return;
+  }
+  throw new Error(
+    `Runtime channel status missing manifest channel ${channel} for ${pluginId}: channels.status did not expose the declared channel`,
+  );
 }
 
 export function isCommandVisible(payload, alias) {
@@ -937,6 +947,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     throw error;
   } finally {
     await stopGateway(child);
+    cleanupIsolatedStateEnv(env);
   }
 }
 
@@ -999,6 +1010,7 @@ async function smokeOpenAiTts(pluginIndex) {
     throw error;
   } finally {
     await stopGateway(child);
+    cleanupIsolatedStateEnv(env);
   }
 }
 
@@ -1008,7 +1020,7 @@ export function createIsolatedStateEnv(label) {
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   fs.mkdirSync(stateDir, { recursive: true });
-  return {
+  const env = {
     ...process.env,
     HOME: home,
     USERPROFILE: home,
@@ -1016,6 +1028,17 @@ export function createIsolatedStateEnv(label) {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
   };
+  isolatedStateRoots.set(env, root);
+  return env;
+}
+
+export function cleanupIsolatedStateEnv(env) {
+  const root = isolatedStateRoots.get(env);
+  if (!root) {
+    return;
+  }
+  isolatedStateRoots.delete(env);
+  fs.rmSync(root, { force: true, recursive: true });
 }
 
 function tailFile(file) {

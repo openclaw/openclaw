@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -98,6 +99,25 @@ function createPhoneControlConfig(): Record<string, unknown> {
         denyCommands: [...WRITE_COMMANDS],
       },
     },
+  };
+}
+
+function createMockOpenKeyedStore(params: {
+  lookup: ReturnType<typeof vi.fn>;
+  delete?: ReturnType<typeof vi.fn>;
+}): OpenClawPluginApi["runtime"]["state"]["openKeyedStore"] {
+  return <T>() => {
+    const store: PluginStateKeyedStore<T> = {
+      register: vi.fn(async () => {}),
+      registerIfAbsent: vi.fn(async () => true),
+      update: vi.fn(async () => true),
+      lookup: params.lookup as (key: string) => Promise<T | undefined>,
+      consume: vi.fn(async () => undefined),
+      delete: (params.delete ?? vi.fn(async () => true)) as (key: string) => Promise<boolean>,
+      entries: vi.fn(async () => []),
+      clear: vi.fn(async () => {}),
+    };
+    return store;
   };
 }
 
@@ -343,7 +363,7 @@ describe("phone-control plugin", () => {
   it("does not block service startup on the initial expiry check", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), PHONE_CONTROL_STATE_PREFIX));
     try {
-      const lookup = vi.fn(async () => null);
+      const lookup = vi.fn(async () => undefined);
       let service: OpenClawPluginService | undefined;
 
       registerPhoneControl.register(
@@ -355,12 +375,7 @@ describe("phone-control plugin", () => {
           registerService: (registeredService) => {
             service = registeredService;
           },
-          openKeyedStore: () =>
-            ({
-              lookup,
-              delete: vi.fn(),
-              register: vi.fn(),
-            }) as ReturnType<OpenClawPluginApi["runtime"]["state"]["openKeyedStore"]>,
+          openKeyedStore: createMockOpenKeyedStore({ lookup }),
         }),
       );
 
@@ -376,7 +391,9 @@ describe("phone-control plugin", () => {
 
       expect(lookup).not.toHaveBeenCalled();
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(lookup).toHaveBeenCalledWith("current");
 
@@ -425,12 +442,7 @@ describe("phone-control plugin", () => {
           registerService: (registeredService) => {
             service = registeredService;
           },
-          openKeyedStore: () =>
-            ({
-              lookup,
-              delete: removeState,
-              register: vi.fn(),
-            }) as ReturnType<OpenClawPluginApi["runtime"]["state"]["openKeyedStore"]>,
+          openKeyedStore: createMockOpenKeyedStore({ lookup, delete: removeState }),
         }),
       );
 

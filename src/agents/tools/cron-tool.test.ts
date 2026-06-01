@@ -481,18 +481,26 @@ describe("cron tool", () => {
       "string",
       "null",
     ]);
+    expect(patch?.properties?.agentId?.type).toBeUndefined();
+    expect(patch?.properties?.agentId?.description).toContain("null to clear");
     expect(patch?.properties?.sessionKey?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
     ]);
+    expect(patch?.properties?.sessionKey?.type).toBeUndefined();
+    expect(patch?.properties?.sessionKey?.description).toContain("null to clear");
     expect(payload?.properties?.toolsAllow?.anyOf?.map((entry) => entry.type)).toEqual([
       "array",
       "null",
     ]);
+    expect(payload?.properties?.toolsAllow?.type).toBeUndefined();
+    expect(payload?.properties?.toolsAllow?.description).toContain("null to clear");
     expect(delivery?.properties?.channel?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
     ]);
+    expect(delivery?.properties?.channel?.type).toBeUndefined();
+    expect(delivery?.properties?.channel?.description).toContain("null to clear");
     expect(delivery?.properties?.failureDestination?.anyOf?.map((entry) => entry.type)).toEqual([
       "object",
       "null",
