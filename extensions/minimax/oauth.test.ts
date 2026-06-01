@@ -48,7 +48,7 @@ describe("loginMiniMaxPortalOAuth", () => {
     ] as const) {
       const requestedUrls: string[] = [];
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        requestedUrls.push(String(input));
+        requestedUrls.push(input instanceof Request ? input.url : String(input));
         const body =
           init?.body instanceof URLSearchParams
             ? init.body
