@@ -38,4 +38,16 @@ describe("QQBot outbound configuration errors", () => {
       /QQBot not configured.*QQBOT_APP_ID.*QQBOT_CLIENT_SECRET.*openclaw configure.*https:\/\/q\.qq\.com\/.*https:\/\/docs\.openclaw\.ai\/channels\/qqbot/,
     );
   });
+
+  it("returns account-scoped setup guidance for named accounts", async () => {
+    const result = await sendText({
+      to: "c2c:user-openid",
+      text: "hello",
+      account: account({ accountId: "ops", appId: "app-id" }),
+    });
+
+    expect(result.error).toMatch(
+      /QQBot account "ops" is not configured.*channels\.qqbot\.accounts\.ops\.appId.*channels\.qqbot\.accounts\.ops\.clientSecret.*QQBOT_APP_ID.*default QQBot account/,
+    );
+  });
 });

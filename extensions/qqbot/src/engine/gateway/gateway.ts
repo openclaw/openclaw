@@ -39,7 +39,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   initCommands(adapters.commands);
 
   if (!account.appId || !account.clientSecret) {
-    throw new Error(formatQqbotNotConfiguredError());
+    throw new Error(formatQqbotNotConfiguredError(account.accountId));
   }
 
   const diag = await runDiagnostics();

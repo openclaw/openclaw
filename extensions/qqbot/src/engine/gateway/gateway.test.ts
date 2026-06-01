@@ -3,7 +3,7 @@ import type { EngineAdapters } from "../adapter/index.js";
 import { startGateway } from "./gateway.js";
 import type { CoreGatewayContext, GatewayPluginRuntime } from "./types.js";
 
-function createContext(): CoreGatewayContext {
+function createContext(account: Partial<CoreGatewayContext["account"]> = {}): CoreGatewayContext {
   const runtime: GatewayPluginRuntime = {
     channel: {
       activity: { record: vi.fn() },
@@ -46,6 +46,7 @@ function createContext(): CoreGatewayContext {
       clientSecret: "",
       markdownSupport: false,
       config: {},
+      ...account,
     },
     cfg: {},
     log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -59,6 +60,14 @@ describe("QQBot gateway configuration errors", () => {
   it("throws actionable setup guidance when credentials are missing", async () => {
     await expect(startGateway(createContext())).rejects.toThrow(
       /QQBot not configured.*QQBOT_APP_ID.*QQBOT_CLIENT_SECRET.*openclaw configure.*https:\/\/q\.qq\.com\/.*https:\/\/docs\.openclaw\.ai\/channels\/qqbot/,
+    );
+  });
+
+  it("points named accounts at account-scoped credentials", async () => {
+    await expect(
+      startGateway(createContext({ accountId: "ops", appId: "app-id" })),
+    ).rejects.toThrow(
+      /QQBot account "ops" is not configured.*channels\.qqbot\.accounts\.ops\.appId.*channels\.qqbot\.accounts\.ops\.clientSecret.*QQBOT_APP_ID.*default QQBot account/,
     );
   });
 });

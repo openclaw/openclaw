@@ -275,7 +275,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: formatQqbotNotConfiguredError() };
+    return { channel: "qqbot", error: formatQqbotNotConfiguredError(account.accountId) };
   }
 
   try {
@@ -312,7 +312,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: formatQqbotNotConfiguredError() };
+    return { channel: "qqbot", error: formatQqbotNotConfiguredError(account.accountId) };
   }
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
