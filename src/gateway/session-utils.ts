@@ -2327,6 +2327,7 @@ export function loadGatewaySessionRow(
     agentId?: string;
     includeDerivedTitles?: boolean;
     includeLastMessage?: boolean;
+    modelCatalog?: ModelCatalogEntry[];
     now?: number;
     transcriptUsageMaxBytes?: number;
   },
@@ -2354,6 +2355,7 @@ export function loadGatewaySessionRow(
     now,
     includeDerivedTitles: options?.includeDerivedTitles,
     includeLastMessage: options?.includeLastMessage,
+    modelCatalog: options?.modelCatalog,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
     ...(options?.agentId ? { agentId: options.agentId } : {}),

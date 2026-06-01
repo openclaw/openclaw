@@ -50,6 +50,26 @@ describe("command session metadata notifications", () => {
     });
   });
 
+  it("canonicalizes scoped global metadata to the global row and parsed agent", async () => {
+    const entry = createEntry();
+    const sessionStore: Record<string, SessionEntry> = {};
+    const onSessionMetadataChanged = vi.fn();
+
+    await persistSessionEntry({
+      sessionKey: "agent:target:global",
+      agentId: "main",
+      sessionEntry: entry,
+      sessionStore,
+      opts: { onSessionMetadataChanged },
+    } as never);
+
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "target",
+      reason: "command-metadata",
+    });
+  });
+
   it("derives abort-target metadata agentId from the changed key", async () => {
     const entry = createEntry();
     const sessionStore: Record<string, SessionEntry> = {};

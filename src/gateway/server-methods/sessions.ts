@@ -912,7 +912,7 @@ async function handleSessionSend(params: {
         runId: startedRunId,
       });
     }
-    emitSessionsChanged(params.context, {
+    await emitSessionsChanged(params.context, {
       sessionKey: canonicalKey,
       ...(canonicalKey === "global" && requestedAgentId ? { agentId: requestedAgentId } : {}),
       reason: interruptedActiveRun ? "steer" : "send",
@@ -1037,7 +1037,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
       respond(true, result, undefined);
       for (const summary of appliedSummaries) {
-        emitSessionsChanged(context, {
+        await emitSessionsChanged(context, {
           reason: "cleanup",
           sessionKey: undefined,
         });
@@ -1424,7 +1424,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        emitSessionsChanged(context, {
+        await emitSessionsChanged(context, {
           sessionKey: resetResult.key,
           ...(resetResult.key === "global" ? { agentId: resetResult.agentId } : {}),
           reason: "new",
@@ -1609,13 +1609,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: target.canonicalKey,
       ...(target.canonicalKey === "global" ? { agentId: target.agentId } : {}),
       reason: "create",
     });
     if (runStarted) {
-      emitSessionsChanged(context, {
+      await emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
         ...(target.canonicalKey === "global" ? { agentId: target.agentId } : {}),
         reason: "send",
@@ -1750,14 +1750,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: canonicalKey,
       ...(canonicalKey === "global" && requestedAgent.agentId
         ? { agentId: requestedAgent.agentId }
         : {}),
       reason: "checkpoint-branch",
     });
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: nextKey,
       reason: "checkpoint-branch",
     });
@@ -1871,7 +1871,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: canonicalKey,
       ...(canonicalKey === "global" && requestedAgent.agentId
         ? { agentId: requestedAgent.agentId }
@@ -2066,7 +2066,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       isWebchatConnect,
     });
     if (abortedRunId) {
-      emitSessionsChanged(context, {
+      await emitSessionsChanged(context, {
         sessionKey: canonicalKey,
         ...(canonicalKey === "global" && abortAgentId ? { agentId: abortAgentId } : {}),
         reason: "abort",
@@ -2159,7 +2159,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     };
     respond(true, result, undefined);
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: target.canonicalKey,
       ...(target.canonicalKey === "global" && requestedAgentId
         ? { agentId: requestedAgentId }
@@ -2237,7 +2237,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: patched.key,
       reason: "plugin-patch",
     });
@@ -2265,7 +2265,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: result.key,
       ...(result.key === "global" ? { agentId: result.agentId } : {}),
       reason,
@@ -2382,7 +2382,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
     if (deleted) {
-      emitSessionsChanged(context, {
+      await emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
         ...(target.canonicalKey === "global" && requestedAgentId
           ? { agentId: requestedAgentId }
@@ -2631,7 +2631,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         undefined,
       );
       if (result.ok) {
-        emitSessionsChanged(context, {
+        await emitSessionsChanged(context, {
           sessionKey: target.canonicalKey,
           ...(target.canonicalKey === "global" && target.agentId
             ? { agentId: target.agentId }
@@ -2694,7 +2694,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    emitSessionsChanged(context, {
+    await emitSessionsChanged(context, {
       sessionKey: target.canonicalKey,
       ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
       reason: "compact",

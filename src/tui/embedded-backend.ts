@@ -99,6 +99,7 @@ type QueuedSessionRun = {
 };
 
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const EMBEDDED_TUI_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
@@ -140,6 +141,25 @@ async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
   return await loadGatewayModelCatalog(
     shouldLoadFullGatewayCatalogForReplaceMode(cfg) ? { readOnly: false } : undefined,
   );
+}
+
+async function loadEmbeddedTuiModelCatalogBestEffort(cfg: OpenClawConfig) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("embedded-tui-model-catalog-timeout");
+  try {
+    const result = await Promise.race([
+      loadEmbeddedTuiModelCatalog(cfg).catch(() => undefined),
+      new Promise<typeof timedOut>((resolve) => {
+        timeout = setTimeout(() => resolve(timedOut), EMBEDDED_TUI_MODEL_CATALOG_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+    return result === timedOut ? undefined : result;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function resolveBtwQuestion(message: string): string | undefined {
@@ -450,10 +470,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const messages = bounded.messages;
 
-    let modelCatalog: Awaited<ReturnType<typeof loadEmbeddedTuiModelCatalog>> | undefined;
+    const modelCatalog = await loadEmbeddedTuiModelCatalogBestEffort(cfg);
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      modelCatalog = await loadEmbeddedTuiModelCatalog(cfg);
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,

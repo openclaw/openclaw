@@ -13,9 +13,10 @@ const loggedSlowCatalogKeys = new Set<string>();
 
 /** Loads the gateway model catalog with a short timeout and one-time slow logs. */
 export async function loadOptionalServerMethodModelCatalog(
-  context: GatewayRequestContext,
+  context: Pick<GatewayRequestContext, "loadGatewayModelCatalog"> &
+    Partial<Pick<GatewayRequestContext, "logGateway">>,
   surface: string,
-  options?: { logOnceKey?: string },
+  options?: { logOnceKey?: string; readOnly?: boolean },
 ): Promise<ModelCatalogEntry[] | undefined> {
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = Symbol("server-method-model-catalog-timeout");
@@ -25,14 +26,16 @@ export async function loadOptionalServerMethodModelCatalog(
   });
   try {
     const result = await Promise.race([
-      context.loadGatewayModelCatalog().catch(() => undefined),
+      context.loadGatewayModelCatalog({ readOnly: options?.readOnly ?? true }).catch(
+        () => undefined,
+      ),
       timeoutPromise,
     ]);
     if (result === timedOut) {
       const logOnceKey = options?.logOnceKey ?? "session-metadata";
       if (!loggedSlowCatalogKeys.has(logOnceKey)) {
         loggedSlowCatalogKeys.add(logOnceKey);
-        context.logGateway.debug(
+        context.logGateway?.debug(
           `${surface} continuing without model catalog after ${OPTIONAL_MODEL_CATALOG_TIMEOUT_MS}ms`,
         );
       }

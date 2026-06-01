@@ -24,6 +24,14 @@ function createSessionMetadataChangedEvent(params: {
   sessionKey: string;
   agentId?: string;
 }): SessionMetadataChangedEvent {
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (parsed?.rest === "global") {
+    return {
+      sessionKey: "global",
+      agentId: normalizeAgentId(parsed.agentId),
+      reason: "command-metadata",
+    };
+  }
   const agentId = resolveSessionMetadataAgentId(params.sessionKey, params.agentId);
   return {
     sessionKey: params.sessionKey,

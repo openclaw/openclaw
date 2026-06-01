@@ -3360,7 +3360,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
       const pendingSessionMetadataEvents: SessionMetadataChangedEvent[] = [];
-      const flushSessionMetadataEvents = (options?: {
+      const flushSessionMetadataEvents = async (options?: {
         excludeActiveRunIds?: readonly string[];
       }) => {
         while (pendingSessionMetadataEvents.length > 0) {
@@ -3368,14 +3368,20 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!event) {
             continue;
           }
-          emitSessionsChanged(context, {
-            sessionKey: event.sessionKey,
-            ...(event.agentId ? { agentId: event.agentId } : {}),
-            reason: event.reason,
-            ...(options?.excludeActiveRunIds
-              ? { excludeActiveRunIds: options.excludeActiveRunIds }
-              : {}),
-          });
+          try {
+            await emitSessionsChanged(context, {
+              sessionKey: event.sessionKey,
+              ...(event.agentId ? { agentId: event.agentId } : {}),
+              reason: event.reason,
+              ...(options?.excludeActiveRunIds
+                ? { excludeActiveRunIds: options.excludeActiveRunIds }
+                : {}),
+            });
+          } catch (err) {
+            context.logGateway.warn(
+              `sessions.changed metadata broadcast failed: ${formatForLog(err)}`,
+            );
+          }
         }
       };
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
@@ -3602,7 +3608,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   runId !== clientRunId ? { agentRunId: runId } : undefined,
                   dispatchStartedAtMs,
                 );
-                flushSessionMetadataEvents();
+                void flushSessionMetadataEvents();
                 const connId = typeof client?.connId === "string" ? client.connId : undefined;
                 const wantsToolEvents = hasGatewayClientCap(
                   client?.connect?.caps,
@@ -3655,7 +3661,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               onSessionMetadataChanged: (event) => {
                 pendingSessionMetadataEvents.push(event);
                 if (agentRunStarted) {
-                  flushSessionMetadataEvents();
+                  void flushSessionMetadataEvents();
                 }
               },
             },
@@ -3663,7 +3669,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (dispatchResult.beforeAgentRunBlocked === true) {
             userTurnRecorder.markBlocked();
           }
-          flushSessionMetadataEvents(
+          await flushSessionMetadataEvents(
             agentRunStarted ? undefined : { excludeActiveRunIds: [clientRunId] },
           );
           return dispatchResult;
@@ -4276,8 +4282,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             dispatchStartedAtMs,
           );
         })
-        .catch(async (err) => {
-          flushSessionMetadataEvents(
+        .catch(async (err: unknown) => {
+          await flushSessionMetadataEvents(
             agentRunStarted ? undefined : { excludeActiveRunIds: [clientRunId] },
           );
           const emitAfterError =

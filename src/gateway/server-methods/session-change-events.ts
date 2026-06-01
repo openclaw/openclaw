@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
+import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type TrackedActiveSessionRun = {
@@ -105,7 +106,8 @@ export function emitSessionsChanged(
     | "chatAbortControllers"
     | "getRuntimeConfig"
     | "getSessionEventSubscriberConnIds"
-  >,
+  > &
+    Partial<Pick<GatewayRequestContext, "loadGatewayModelCatalog" | "logGateway">>,
   payload: {
     sessionKey?: string;
     agentId?: string;
@@ -114,17 +116,51 @@ export function emitSessionsChanged(
     hasActiveRun?: boolean;
     excludeActiveRunIds?: readonly string[];
   },
-) {
+): Promise<void> {
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
-    return;
+    return Promise.resolve();
   }
+  return emitSessionsChangedWithSubscribers(context, payload, connIds);
+}
+
+async function emitSessionsChangedWithSubscribers(
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "chatAbortControllers" | "getRuntimeConfig"
+  > &
+    Partial<Pick<GatewayRequestContext, "loadGatewayModelCatalog" | "logGateway">>,
+  payload: {
+    sessionKey?: string;
+    agentId?: string;
+    reason: string;
+    compacted?: boolean;
+    hasActiveRun?: boolean;
+    excludeActiveRunIds?: readonly string[];
+  },
+  connIds: ReadonlySet<string>,
+) {
+  const modelCatalog =
+    payload.sessionKey && context.loadGatewayModelCatalog
+      ? await loadOptionalServerMethodModelCatalog(
+          {
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+            ...(context.logGateway ? { logGateway: context.logGateway } : {}),
+          },
+          "sessions.changed",
+          { logOnceKey: "sessions.changed", readOnly: true },
+        )
+      : undefined;
+  const hasCatalogBackedThinkingMetadata = Array.isArray(modelCatalog);
   const sessionRow = payload.sessionKey
     ? loadGatewaySessionRow(
         payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
+        {
+          ...(payload.sessionKey === "global" && payload.agentId
+            ? { agentId: payload.agentId }
+            : {}),
+          ...(hasCatalogBackedThinkingMetadata ? { modelCatalog } : {}),
+        },
       )
     : null;
   const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
@@ -183,9 +219,13 @@ export function emitSessionsChanged(
             responseUsage: sessionRow.responseUsage,
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
-            thinkingLevels: sessionRow.thinkingLevels,
-            thinkingOptions: sessionRow.thinkingOptions,
-            thinkingDefault: sessionRow.thinkingDefault,
+            ...(hasCatalogBackedThinkingMetadata
+              ? {
+                  thinkingLevels: sessionRow.thinkingLevels,
+                  thinkingOptions: sessionRow.thinkingOptions,
+                  thinkingDefault: sessionRow.thinkingDefault,
+                }
+              : {}),
             status: sessionRow.status,
             hasActiveRun:
               payload.hasActiveRun ??
