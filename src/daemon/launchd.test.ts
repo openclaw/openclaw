@@ -1443,7 +1443,7 @@ describe("launchd install", () => {
     });
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19007);
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
   it("ignores invalid stored LaunchAgent environment ports for stale cleanup", async () => {
@@ -1465,51 +1465,32 @@ describe("launchd install", () => {
     expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
-  it("fails restart before kickstart when the configured gateway port remains busy", async () => {
+  it("does not require the configured gateway port to be free before kickstart", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "19002",
     };
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const originalPlist = [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<plist version="1.0">',
-      "  <dict>",
-      "    <key>Label</key>",
-      "    <string>ai.openclaw.gateway</string>",
-      "    <key>ProgramArguments</key>",
-      "    <array>",
-      "      <string>node</string>",
-      "      <string>gateway.js</string>",
-      "    </array>",
-      "    <key>StandardOutPath</key>",
-      "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
-      "  </dict>",
-      "</plist>",
-    ].join("\n");
-    state.files.set(plistPath, originalPlist);
     inspectPortUsage.mockResolvedValue({
       port: 19002,
       status: "busy",
       listeners: [],
       hints: [],
     });
-    formatPortDiagnostics.mockReturnValue(["Port 19002 is held by pid 4242."]);
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow(
-      "gateway port 19002 is still busy before LaunchAgent restart\nPort 19002 is held by pid 4242.",
-    );
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
 
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19002);
-    expect(state.files.get(plistPath)).toBe(originalPlist);
-    expect(state.fileWrites).toHaveLength(0);
-    expect(launchctlCommandNames()).not.toContain("kickstart");
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    expect(state.launchctlCalls).toEqual([
+      ["enable", serviceId],
+      ["kickstart", "-k", serviceId],
+    ]);
   });
 
   it("skips stale cleanup when no explicit launch agent port can be resolved", async () => {
