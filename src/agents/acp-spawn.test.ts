@@ -1102,6 +1102,26 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.timeout).toBe(45);
   });
 
+  it("passes zero timeout through to the gateway no-timeout path", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 0,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 0);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(0);
+  });
+
   it("uses configured subagent timeout for ACP spawns", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),

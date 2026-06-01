@@ -1570,7 +1570,7 @@ export async function spawnAcpDirect(
         deliver: deliveryPlan.useInlineDelivery,
         lane: AGENT_LANE_SUBAGENT,
         acpTurnSource: "manual_spawn",
-        ...(runTimeoutSeconds > 0 ? { timeout: runTimeoutSeconds } : {}),
+        timeout: runTimeoutSeconds,
         label: params.label || undefined,
         ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
       },
