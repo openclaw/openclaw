@@ -1053,8 +1053,8 @@ async function getExistingSession(
 
   const pending = pendingSessions.get(cacheKey);
   if (pending) {
-    let pendingLease: PendingChromeMcpSessionLease | undefined;
-    pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+    const pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+    let pendingLeaseReleased = false;
     session = pendingLease.session;
     try {
       await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
@@ -1062,26 +1062,28 @@ async function getExistingSession(
         forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
         forgetPendingChromeMcpSessionIfCurrent(cacheKey, pending);
         await pendingLease.release(true);
-        pendingLease = undefined;
+        pendingLeaseReleased = true;
         return null;
       }
       return session;
     } catch (err) {
       if (signal?.aborted) {
         await pendingLease.release(true);
-        pendingLease = undefined;
+        pendingLeaseReleased = true;
       } else if (pending.state.waiters > 1) {
         await pendingLease.release(false);
-        pendingLease = undefined;
+        pendingLeaseReleased = true;
       } else {
         forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
         forgetPendingChromeMcpSessionIfCurrent(cacheKey, pending);
         await pendingLease.release(true);
-        pendingLease = undefined;
+        pendingLeaseReleased = true;
       }
       throw err;
     } finally {
-      await pendingLease?.release(false);
+      if (!pendingLeaseReleased) {
+        await pendingLease.release(false);
+      }
     }
   }
 
