@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
@@ -10,8 +11,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 import { deleteWebhook, getWebhookInfo, sendChatAction, sendPhoto, type ZaloFetch } from "./api.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 function createOkFetcher() {
   return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
@@ -60,7 +59,7 @@ describe("Zalo API request methods", () => {
     try {
       const fetcher = vi.fn<ZaloFetch>(
         (_, init) =>
-          new Promise<Response>((_, reject) => {
+          new Promise<Response>((_Local, reject) => {
             init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
               once: true,
             });

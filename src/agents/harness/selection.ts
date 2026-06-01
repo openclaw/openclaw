@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveUserPath } from "../../utils.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -9,11 +12,13 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../agent-tools.policy.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
+import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
+import { getApiKeyForModel } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
@@ -484,27 +489,104 @@ function logAgentHarnessSelection(
   });
 }
 
+function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams): {
+  agentDir: string;
+  agentId: string;
+} {
+  const agentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return {
+    agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId),
+    agentId: params.agentId ?? agentIds.sessionAgentId,
+  };
+}
+
+async function resolveHarnessCompactApiKey(params: {
+  agentDir: string;
+  compactParams: CompactEmbeddedAgentSessionParams;
+}): Promise<string | undefined> {
+  const { agentDir, compactParams } = params;
+  const existing = compactParams.resolvedApiKey?.trim();
+  if (existing) {
+    return existing;
+  }
+  if (
+    !compactParams.authProfileId?.trim() ||
+    !compactParams.provider?.trim() ||
+    !compactParams.model?.trim()
+  ) {
+    return undefined;
+  }
+  const workspaceDir = resolveUserPath(compactParams.workspaceDir);
+  const { model } = await resolveModelAsync(
+    compactParams.provider,
+    compactParams.model,
+    agentDir,
+    compactParams.config,
+    {
+      authProfileId: compactParams.authProfileId,
+      workspaceDir,
+    },
+  );
+  if (!model) {
+    return undefined;
+  }
+  const apiKeyInfo = await getApiKeyForModel({
+    model,
+    cfg: compactParams.config,
+    profileId: compactParams.authProfileId,
+    agentDir,
+    workspaceDir,
+  });
+  return apiKeyInfo.apiKey?.trim() || undefined;
+}
+
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
     return undefined;
   }
+  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const runtimePolicyAgentId =
+    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+      ? undefined
+      : params.agentId;
   const runtime = resolveConfiguredAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
     config: params.config,
-    sessionKey: params.sessionKey,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
   }).runtime;
   if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
     return undefined;
   }
-  const harness = selectAgentHarness({
-    provider: params.provider ?? "",
-    modelId: params.model,
-    config: params.config,
-    sessionKey: params.sessionKey,
-  });
+  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const agentHarnessRuntimeOverride =
+    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
+  let harness: AgentHarness;
+  try {
+    harness = selectAgentHarness({
+      provider: params.provider ?? "",
+      modelId: params.model,
+      config: params.config,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessRuntimeOverride,
+    });
+  } catch (err) {
+    if (agentHarnessRuntimeOverride) {
+      const message = formatErrorMessage(err);
+      if (message.includes("does not support")) {
+        return undefined;
+      }
+    }
+    throw err;
+  }
   if (!harness.compact) {
     if (harness.id !== "openclaw") {
       return {
@@ -516,7 +598,24 @@ export async function maybeCompactAgentHarnessSession(
     }
     return undefined;
   }
-  return harness.compact(params);
+  const compactIdentity = resolveHarnessCompactIdentity(params);
+  const compactParams = {
+    ...params,
+    agentDir: compactIdentity.agentDir,
+    agentId: compactIdentity.agentId,
+  };
+  let resolvedApiKey: string | undefined;
+  try {
+    resolvedApiKey = await resolveHarnessCompactApiKey({
+      agentDir: compactIdentity.agentDir,
+      compactParams,
+    });
+  } catch (err) {
+    log.debug("agent harness compaction credential lookup failed", {
+      error: formatErrorMessage(err),
+    });
+  }
+  return harness.compact(resolvedApiKey ? { ...compactParams, resolvedApiKey } : compactParams);
 }
 function formatProviderModel(params: { provider: string; modelId?: string }): string {
   return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;

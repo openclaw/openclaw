@@ -1,7 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeGatewayUrl, probeLocalCommand } from "./probes.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 describe("crestodian probes", () => {
   afterEach(() => {

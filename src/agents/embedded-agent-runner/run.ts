@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -9,7 +11,7 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -18,9 +20,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -87,11 +87,11 @@ import {
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
   resolveContextConfigProviderForRuntime,
   resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-codex-routing.js";
+} from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -134,7 +134,7 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
-import { resolveCodexAppServerClientCloseRetry } from "./run/codex-app-server-recovery.js";
+import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -360,7 +360,7 @@ function createScopedAuthProfileStore(
   const profiles = store.profiles ?? {};
   const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
     .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => !!profileId);
+    .filter((profileId): profileId is string => Boolean(profileId));
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];
@@ -456,8 +456,9 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 }
 
 export async function runEmbeddedAgent(
-  params: RunEmbeddedAgentParams,
+  paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  let params = paramsInput;
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -704,7 +705,10 @@ export async function runEmbeddedAgent(
             // first generating OpenClaw models.json. This keeps one-shot model runs from
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
+            allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+            preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
             workspaceDir: resolvedWorkspace,
+            authProfileId: params.authProfileId,
           },
         );
         firstModelResolution ??= candidateResolution;
@@ -715,7 +719,7 @@ export async function runEmbeddedAgent(
         }
       }
       if (!modelResolution && pluginHarnessOwnsTransport) {
-        modelResolution = firstModelResolution;
+        modelResolution ??= firstModelResolution;
       }
       if (!modelResolution) {
         await ensureOpenClawModelsJson(params.config, agentDir, {
@@ -729,6 +733,7 @@ export async function runEmbeddedAgent(
             params.config,
             {
               workspaceDir: resolvedWorkspace,
+              authProfileId: params.authProfileId,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -768,6 +773,7 @@ export async function runEmbeddedAgent(
         contextConfigProvider: resolveContextConfigProviderForRuntime({
           provider: modelConfigProvider,
           runtimeId: agentHarness.id,
+          config: params.config,
         }),
         modelId,
         runtimeModel,
@@ -779,17 +785,17 @@ export async function runEmbeddedAgent(
 
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        provider === OPENAI_PROVIDER_ID &&
+        effectiveModel.api === "openai-chatgpt-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        provider === OPENAI_PROVIDER_ID &&
+        effectiveModel.api === "openai-chatgpt-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
         : openClawNativeCodexResponsesNeedsAuthBootstrap
           ? {
-              providerIds: [OPENAI_CODEX_PROVIDER_ID],
+              providerIds: [OPENAI_PROVIDER_ID],
               ignoreAutoPreferredProfile: false,
             }
           : resolveExternalCliAuthOverlayScopeFromSelection({
@@ -826,7 +832,7 @@ export async function runEmbeddedAgent(
           ? createEmptyAuthProfileStore()
           : pluginHarnessNeedsOpenClawAuthBootstrap
             ? ensureAuthProfileStore(agentDir, {
-                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
+                externalCliProviderIds: [OPENAI_PROVIDER_ID],
                 allowKeychainPrompt: false,
               })
             : piExternalCliAuthScope.providerIds
@@ -1209,7 +1215,7 @@ export async function runEmbeddedAgent(
       });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
-      let codexAppServerClientCloseRetries = 0;
+      let codexAppServerRecoveryRetries = 0;
       // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
       // end a turn with stopReason="error" + zero output tokens, producing no
       // user-visible text. This is an orthogonal, model-agnostic resubmission
@@ -1241,7 +1247,7 @@ export async function runEmbeddedAgent(
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
       };
-      const maybeEscalateRateLimitProfileFallback = (params: {
+      const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
         failoverModel: string;
         logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
@@ -1254,13 +1260,13 @@ export async function runEmbeddedAgent(
         log.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
-        params.logFallbackDecision("fallback_model", { status });
+        paramsLocal.logFallbackDecision("fallback_model", { status });
         throw new FailoverError(
           "The AI service is temporarily rate-limited. Please try again in a moment.",
           {
             reason: "rate_limit",
-            provider: params.failoverProvider,
-            model: params.failoverModel,
+            provider: paramsLocal.failoverProvider,
+            model: paramsLocal.failoverModel,
             profileId: lastProfileId,
             sessionId: activeSessionId,
             lane: globalLane,
@@ -1343,6 +1349,10 @@ export async function runEmbeddedAgent(
           const nextSessionFile = compactResult.result?.sessionFile;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
+            // Keep the run context's sessionId tracking the live session so
+            // lifecycle persistence isn't treated as stale after a legitimate
+            // mid-run compaction rotation (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
@@ -1701,6 +1711,8 @@ export async function runEmbeddedAgent(
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
+            // Track the live session for lifecycle persistence identity (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
@@ -1905,6 +1917,7 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    harnessRuntime: agentHarness.id,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -2096,6 +2109,7 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    harnessRuntime: agentHarness.id,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
@@ -2378,26 +2392,47 @@ export async function runEmbeddedAgent(
             };
           }
 
-          if (promptError && !aborted && promptErrorSource !== "compaction") {
-            const codexClientCloseRetry = resolveCodexAppServerClientCloseRetry({
+          const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
+            attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
+          );
+          let shouldSurfaceCodexCompletionTimeout = false;
+          if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
+            // Retry replay-safe Codex app-server failures.
+            const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
-              alreadyRetried: codexAppServerClientCloseRetries > 0,
+              alreadyRetried: codexAppServerRecoveryRetries > 0,
             });
-            if (codexClientCloseRetry.retry) {
-              codexAppServerClientCloseRetries += 1;
+            if (codexAppServerRecoveryRetry.retry) {
+              codexAppServerRecoveryRetries += 1;
               suppressNextUserMessagePersistence = true;
               log.warn(
-                `codex app-server stdio client closed before turn completion; retrying once ` +
+                `codex app-server replay-safe failure; retrying once ` +
+                  `failureKind=${attempt.codexAppServerFailure?.kind} ` +
                   `runId=${params.runId} sessionId=${params.sessionId}`,
               );
               continue;
             }
-            if (attempt.codexAppServerFailure) {
-              throw promptError;
+            // Completion-idle timeouts are timeout outcomes even when the
+            // app-server transport is not retryable, or the retry was exhausted.
+            shouldSurfaceCodexCompletionTimeout =
+              attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
+              attempt.timedOut;
+            if (
+              attempt.codexAppServerFailure &&
+              !hasRecoverableCodexAppServerTimeoutOutcome &&
+              !shouldSurfaceCodexCompletionTimeout
+            ) {
+              throw toLintErrorObject(promptError, "Prompt failed");
             }
           }
 
-          if (promptError && !aborted && promptErrorSource !== "compaction") {
+          if (
+            promptError &&
+            !aborted &&
+            promptErrorSource !== "compaction" &&
+            !hasRecoverableCodexAppServerTimeoutOutcome &&
+            !shouldSurfaceCodexCompletionTimeout
+          ) {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
             //
@@ -2559,7 +2594,7 @@ export async function runEmbeddedAgent(
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
-                }).catch((err) => {
+                }).catch((err: unknown) => {
                   log.warn(`prompt profile failure mark failed: ${String(err)}`);
                 });
               }
@@ -2651,7 +2686,7 @@ export async function runEmbeddedAgent(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw promptError;
+            throw toLintErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -2961,7 +2996,7 @@ export async function runEmbeddedAgent(
           if (
             timedOutDuringPrompt &&
             !hasSuccessfulFinalAssistantAfterPromptTimeout &&
-            !hasMessagingToolDeliveryEvidence(attempt)
+            (shouldSurfaceCodexCompletionTimeout || !hasMessagingToolDeliveryEvidence(attempt))
           ) {
             const defaultTimeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
@@ -3181,6 +3216,7 @@ export async function runEmbeddedAgent(
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
                 aborted,
+                externalAbort,
                 timedOut,
                 attempt,
               });
@@ -3288,6 +3324,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
             return {
@@ -3407,6 +3444,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
 
@@ -3578,9 +3616,9 @@ export async function runEmbeddedAgent(
             step: "bundle-mcp-retire",
             log,
             cleanup: async () => {
-              const onError = (error: unknown, sessionId: string) => {
+              const onError = (errorLocal: unknown, sessionId: string) => {
                 log.warn(
-                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
                 );
               };
               const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
@@ -3614,4 +3652,18 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

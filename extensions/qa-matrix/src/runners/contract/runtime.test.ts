@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as liveTesting } from "./runtime.js";
@@ -104,6 +105,8 @@ describe("matrix live qa runtime", () => {
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
       process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = "1.5";
       expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(30 * 60_000);
+      process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS = String(Number.MAX_SAFE_INTEGER);
+      expect(liveTesting.createMatrixQaRunDeadline().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;

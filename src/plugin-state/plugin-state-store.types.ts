@@ -8,6 +8,11 @@ export type PluginStateEntry<T> = {
 export type PluginStateKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
+  update?: (
+    key: string,
+    updateValue: (current: T | undefined) => T | undefined,
+    opts?: { ttlMs?: number },
+  ) => Promise<boolean>;
   lookup(key: string): Promise<T | undefined>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
@@ -18,6 +23,11 @@ export type PluginStateKeyedStore<T> = {
 export type PluginStateSyncKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
+  update?: (
+    key: string,
+    updateValue: (current: T | undefined) => T | undefined,
+    opts?: { ttlMs?: number },
+  ) => boolean;
   lookup(key: string): T | undefined;
   consume(key: string): T | undefined;
   delete(key: string): boolean;
@@ -35,7 +45,6 @@ export type OpenKeyedStoreOptions = {
 export type PluginStateStoreErrorCode =
   | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
   | "PLUGIN_STATE_OPEN_FAILED"
-  | "PLUGIN_STATE_SCHEMA_UNSUPPORTED"
   | "PLUGIN_STATE_WRITE_FAILED"
   | "PLUGIN_STATE_READ_FAILED"
   | "PLUGIN_STATE_CORRUPT"
@@ -88,6 +97,6 @@ export type PluginStateStoreProbeStep = {
 
 export type PluginStateStoreProbeResult = {
   ok: boolean;
-  dbPath: string;
+  databasePath: string;
   steps: PluginStateStoreProbeStep[];
 };

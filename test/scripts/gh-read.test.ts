@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,
   githubJson,
@@ -11,6 +11,10 @@ import {
 } from "../../scripts/gh-read.js";
 
 describe("gh-read helpers", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("finds repo from gh args", () => {
     expect(parseRepoArg(["pr", "view", "42", "-R", "openclaw/openclaw"])).toBe("openclaw/openclaw");
     expect(parseRepoArg(["run", "list", "--repo=openclaw/docs"])).toBe("openclaw/docs");
@@ -56,26 +60,43 @@ describe("gh-read helpers", () => {
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+
+    vi.useFakeTimers();
     const request = githubJson("/app", "token", undefined, {
       timeoutMs: 5,
       fetchImpl: ((_url, init) => {
         signal = init?.signal ?? undefined;
+        markFetchStarted();
         return new Promise(() => {});
       }) as typeof fetch,
     });
+    const rejection = expect(request).rejects.toThrow(/GitHub API GET \/app exceeded timeout/u);
 
-    await expect(request).rejects.toThrow(/GitHub API GET \/app exceeded timeout/u);
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
     expect(signal?.aborted).toBe(true);
   });
 
   it("times out stalled GitHub API response body reads", async () => {
+    vi.useFakeTimers();
     const response = new Response(new ReadableStream({}), { status: 200 });
     const request = githubJson("/app/installations", "token", undefined, {
       timeoutMs: 5,
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
     });
+    const rejection = expect(request).rejects.toThrow(
+      /GitHub API GET \/app\/installations exceeded timeout/u,
+    );
 
-    await expect(request).rejects.toThrow(/GitHub API GET \/app\/installations exceeded timeout/u);
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
   });
 
   it("bounds GitHub API error response bodies", async () => {

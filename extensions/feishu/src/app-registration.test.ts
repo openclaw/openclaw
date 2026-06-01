@@ -55,7 +55,7 @@ describe("Feishu app registration", () => {
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
-    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await vi.runOnlyPendingTimersAsync();
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
 });

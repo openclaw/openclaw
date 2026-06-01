@@ -125,7 +125,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       "dashboard:child": sessionStoreEntry("sess-child", {
         updatedAt: Date.now() - 1_000,
         modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
+        model: "test-model-without-catalog-context",
         parentSessionKey: "agent:main:main",
         totalTokens: 0,
         totalTokensFresh: false,
@@ -164,7 +164,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   expect(child?.contextTokens).toBeUndefined();
   expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
-  expect(child?.model).toBe("claude-sonnet-4-6");
+  expect(child?.model).toBe("test-model-without-catalog-context");
 
   ws.close();
 });
@@ -281,6 +281,42 @@ test("sessions.list ignores terminal abortable runs kept for retry guards", asyn
       loadGatewayModelCatalog: async () => [],
       chatAbortControllers: new Map([
         ["run-1", { sessionKey: "agent:main:main", projectSessionActive: false }],
+      ]),
+    } as never,
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expect(session.hasActiveRun).toBe(false);
+});
+
+test("sessions.list ignores hidden internal abortable runs", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-hidden-run",
+      method: "sessions.list",
+      params: {},
+    },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", controlUiVisible: false }],
       ]),
     } as never,
   });
@@ -407,7 +443,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         id: "msg-usage-zero",
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.3-codex-spark",
           usage: {
             input: 5_107,
@@ -425,7 +461,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
         contextTokens: 123_456,
         totalTokens: 0,
@@ -449,7 +485,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -464,7 +500,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     totalTokensFresh: true,
     contextTokens: 123_456,
     estimatedCostUsd: 0,
-    modelProvider: "openai-codex",
+    modelProvider: "openai",
     model: "gpt-5.3-codex-spark",
   });
 });
@@ -500,7 +536,7 @@ test("sessions.changed mutation events include live session setting metadata", a
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -546,7 +582,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,
@@ -674,7 +710,12 @@ test("sessions.compact scopes selected global truncation to the requested agent"
   await fs.writeFile(
     workStorePath,
     JSON.stringify(
-      { global: sessionStoreEntry("sess-work-global", { sessionFile: workTranscript }) },
+      {
+        global: sessionStoreEntry("sess-work-global", {
+          authProfileOverride: "github-copilot:work",
+          sessionFile: workTranscript,
+        }),
+      },
       null,
       2,
     ),
@@ -763,7 +804,12 @@ test("sessions.compact passes the selected global agent into embedded compaction
   await fs.writeFile(
     workStorePath,
     JSON.stringify(
-      { global: sessionStoreEntry("sess-work-global", { sessionFile: workTranscript }) },
+      {
+        global: sessionStoreEntry("sess-work-global", {
+          authProfileOverride: "github-copilot:work",
+          sessionFile: workTranscript,
+        }),
+      },
       null,
       2,
     ),
@@ -815,6 +861,7 @@ test("sessions.compact passes the selected global agent into embedded compaction
     sessionId: "sess-work-global",
     sessionKey: "global",
     agentId: "work",
+    authProfileId: "github-copilot:work",
   });
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
@@ -854,7 +901,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       loadGatewayModelCatalog: async () => ({ providers: [] }),
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
     } as never,
     client: null,
     isWebchatConnect: () => false,

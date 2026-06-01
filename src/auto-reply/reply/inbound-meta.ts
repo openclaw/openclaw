@@ -1,10 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { isRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
@@ -467,8 +467,8 @@ export function buildInboundUserContextPrefix(
   const chatWindowCoversReplyContext =
     replyChainPayload.length > 0
       ? replyChainPayload.every((entry) => {
-          const messageId = normalizePromptMetadataString(entry["message_id"]);
-          return messageId ? chatWindowMessageIds.has(messageId) : false;
+          const messageIdLocal = normalizePromptMetadataString(entry["message_id"]);
+          return messageIdLocal ? chatWindowMessageIds.has(messageIdLocal) : false;
         })
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);

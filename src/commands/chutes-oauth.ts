@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
   CHUTES_AUTHORIZE_ENDPOINT,
@@ -9,7 +10,6 @@ import {
 } from "../agents/chutes-oauth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type OAuthPrompt = {
   message: string;
@@ -130,7 +130,7 @@ async function waitForLocalCallback(params: {
           clearTimeout(timeout);
         }
         server.close();
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       }
     });
 
@@ -215,4 +215,18 @@ export async function loginChutes(params: {
     codeVerifier: verifier,
     fetchFn: params.fetchFn,
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
