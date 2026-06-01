@@ -74,6 +74,28 @@ export function normalizeIMessageHandle(raw: string): string {
   return trimmed.replace(/\s+/g, "");
 }
 
+export function resolveIMessageDirectChatHandle(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const serviceMatch = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(trimmed);
+  const serviceHandle = serviceMatch?.[1]?.trim();
+  if (serviceHandle) {
+    return serviceHandle;
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^\+[0-9][0-9\s().-]*$/u.test(trimmed)) {
+    const digitCount = trimmed.replace(/\D/g, "").length;
+    if (digitCount >= 7 && digitCount <= 15) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
 export function parseIMessageTarget(raw: string): IMessageTarget {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -131,6 +153,13 @@ export function inferIMessageTargetChatType(raw: string): "direct" | "group" | u
   try {
     const parsed = parseIMessageTarget(raw);
     if (parsed.kind === "handle") {
+      return "direct";
+    }
+    if (
+      (parsed.kind === "chat_identifier" &&
+        resolveIMessageDirectChatHandle(parsed.chatIdentifier) !== null) ||
+      (parsed.kind === "chat_guid" && resolveIMessageDirectChatHandle(parsed.chatGuid) !== null)
+    ) {
       return "direct";
     }
     return "group";

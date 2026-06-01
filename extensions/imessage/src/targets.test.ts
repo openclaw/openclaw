@@ -160,6 +160,10 @@ describe("imessage targets", () => {
 
   it("infers direct and group chat types from normalized targets", () => {
     expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_identifier:+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_identifier:iMessage;-;+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_guid:SMS;-;+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_identifier:team-thread")).toBe("group");
     expect(inferIMessageTargetChatType("chat_id:42")).toBe("group");
   });
 });
