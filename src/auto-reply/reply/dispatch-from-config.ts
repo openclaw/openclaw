@@ -1411,7 +1411,7 @@ export async function dispatchReplyFromConfig(
   const isInternalWebchatTurn =
     normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
     (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
-    effectiveExplicitDeliverRoute !== true;
+    !effectiveExplicitDeliverRoute;
   const hasRouteReplyCandidate = Boolean(
     !suppressAcpChildUserDelivery &&
     !isInternalWebchatTurn &&
