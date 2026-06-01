@@ -48,7 +48,7 @@ describe("minimax onboard", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.7": {
+              "minimax/MiniMax-M3": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -56,9 +56,9 @@ describe("minimax onboard", () => {
           },
         },
       },
-      "MiniMax-M2.7",
+      "MiniMax-M3",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toEqual({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M3"]).toEqual({
       alias: "Minimax",
       params: { custom: "value" },
     });

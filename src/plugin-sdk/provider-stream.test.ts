@@ -164,6 +164,17 @@ describe("buildProviderStreamFamilyHooks", () => {
     );
     expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
 
+    await minimaxStream(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M3",
+      } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedModelId).toBe("MiniMax-M3");
+
     const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({

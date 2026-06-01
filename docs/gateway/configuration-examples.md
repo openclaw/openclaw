@@ -618,7 +618,7 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
       workspace: "~/.openclaw/workspace",
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.7"],
+        fallbacks: ["minimax/MiniMax-M3"],
       },
     },
   },

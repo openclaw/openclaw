@@ -755,6 +755,7 @@ export function describeMinimaxProviderDiscoveryContract(
         authHeader: true,
         apiKey: "minimax-oauth",
       });
+      expect(providerModelIds(provider)).toContain("MiniMax-M3");
       expect(providerModelIds(provider)).toContain("MiniMax-M2.7");
     });
 

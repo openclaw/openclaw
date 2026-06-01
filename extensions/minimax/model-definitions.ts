@@ -10,6 +10,28 @@ export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 204800;
 export const MINIMAX_M3_CONTEXT_WINDOW = 1_000_000;
 export const DEFAULT_MINIMAX_MAX_TOKENS = 131072;
 
+export const MINIMAX_M3_API_COST = {
+  input: 0.6,
+  output: 2.4,
+  cacheRead: 0.12,
+  cacheWrite: 0,
+  tieredPricing: [
+    {
+      range: [0, 512_000],
+      input: 0.6,
+      output: 2.4,
+      cacheRead: 0.12,
+      cacheWrite: 0,
+    },
+    {
+      range: [512_000],
+      input: 1.2,
+      output: 4.8,
+      cacheRead: 0.24,
+      cacheWrite: 0,
+    },
+  ],
+};
 export const MINIMAX_API_COST = {
   input: 0.6,
   output: 2.4,
@@ -56,6 +78,9 @@ export const MINIMAX_LM_STUDIO_COST = {
 type MinimaxCatalogId = keyof typeof MINIMAX_TEXT_MODEL_CATALOG;
 
 export function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
+  if (modelId === "MiniMax-M3") {
+    return MINIMAX_M3_API_COST;
+  }
   if (modelId === "MiniMax-M2.7") {
     return MINIMAX_M27_API_COST;
   }

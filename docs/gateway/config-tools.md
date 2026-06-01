@@ -669,7 +669,16 @@ Interactive custom-provider onboarding infers image input for common vision mode
                 name: "MiniMax M3",
                 reasoning: true,
                 input: ["text", "image"],
-                cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+                cost: {
+                  input: 0.6,
+                  output: 2.4,
+                  cacheRead: 0.12,
+                  cacheWrite: 0,
+                  tieredPricing: [
+                    { range: [0, 512000], input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+                    { range: [512000], input: 1.2, output: 4.8, cacheRead: 0.24, cacheWrite: 0 },
+                  ],
+                },
                 contextWindow: 1000000,
                 maxTokens: 131072,
               },

@@ -8,6 +8,7 @@ import {
   MINIMAX_API_HIGHSPEED_COST,
   MINIMAX_HOSTED_MODEL_ID,
   MINIMAX_M27_API_COST,
+  MINIMAX_M3_API_COST,
   MINIMAX_M25_API_COST,
   MINIMAX_M25_API_HIGHSPEED_COST,
   MINIMAX_M3_CONTEXT_WINDOW,
@@ -27,6 +28,31 @@ describe("minimax model definitions", () => {
       output: 2.4,
       cacheRead: 0.12,
       cacheWrite: 0,
+    });
+  });
+
+  it("uses tiered M3 pricing with no cache-write billing", () => {
+    expect(MINIMAX_M3_API_COST).toEqual({
+      input: 0.6,
+      output: 2.4,
+      cacheRead: 0.12,
+      cacheWrite: 0,
+      tieredPricing: [
+        {
+          range: [0, 512_000],
+          input: 0.6,
+          output: 2.4,
+          cacheRead: 0.12,
+          cacheWrite: 0,
+        },
+        {
+          range: [512_000],
+          input: 1.2,
+          output: 4.8,
+          cacheRead: 0.24,
+          cacheWrite: 0,
+        },
+      ],
     });
   });
 
@@ -66,9 +92,9 @@ describe("minimax model definitions", () => {
     });
   });
 
-  it("builds API model definition with standard cost for M3", () => {
+  it("builds API model definition with tiered cost for M3", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M3");
-    expect(model.cost).toEqual(MINIMAX_API_COST);
+    expect(model.cost).toEqual(MINIMAX_M3_API_COST);
     expect(model.contextWindow).toBe(MINIMAX_M3_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
     expect(model.input).toEqual(["text", "image"]);

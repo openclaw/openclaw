@@ -550,6 +550,14 @@ export interface Model<TApi extends Api = Api> {
     output: number; // $/million tokens
     cacheRead: number; // $/million tokens
     cacheWrite: number; // $/million tokens
+    tieredPricing?: Array<{
+      input: number; // $/million tokens
+      output: number; // $/million tokens
+      cacheRead: number; // $/million tokens
+      cacheWrite: number; // $/million tokens
+      /** Half-open input-token range [start, end), or [start, Infinity) when end is omitted. */
+      range: [number, number] | [number];
+    }>;
   };
   contextWindow: number;
   /**

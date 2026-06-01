@@ -1,10 +1,33 @@
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
+function resolvePerMillionRate(
+  model: Model<Api>,
+  key: "input" | "output" | "cacheRead" | "cacheWrite",
+  inputTokens: number,
+): number {
+  const tiers = model.cost.tieredPricing;
+  if (!tiers || tiers.length === 0) {
+    return model.cost[key];
+  }
+  for (const tier of tiers) {
+    const [start, rawEnd] = tier.range;
+    const end = rawEnd ?? Number.POSITIVE_INFINITY;
+    if (inputTokens >= start && inputTokens < end) {
+      return tier[key];
+    }
+  }
+  return model.cost[key];
+}
+
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
-  usage.cost.input = (model.cost.input / 1000000) * usage.input;
-  usage.cost.output = (model.cost.output / 1000000) * usage.output;
-  usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * usage.cacheRead;
-  usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
+  const inputRate = resolvePerMillionRate(model, "input", usage.input);
+  const outputRate = resolvePerMillionRate(model, "output", usage.input);
+  const cacheReadRate = resolvePerMillionRate(model, "cacheRead", usage.input);
+  const cacheWriteRate = resolvePerMillionRate(model, "cacheWrite", usage.input);
+  usage.cost.input = (inputRate / 1000000) * usage.input;
+  usage.cost.output = (outputRate / 1000000) * usage.output;
+  usage.cost.cacheRead = (cacheReadRate / 1000000) * usage.cacheRead;
+  usage.cost.cacheWrite = (cacheWriteRate / 1000000) * usage.cacheWrite;
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
   return usage.cost;

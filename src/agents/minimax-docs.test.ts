@@ -21,7 +21,7 @@ describe("MiniMax docs sync", () => {
     expect(minimaxDoc).toContain(MINIMAX_DEFAULT_MODEL_ID);
     expect(minimaxDoc).toContain(MINIMAX_DEFAULT_MODEL_REF);
     expect(minimaxDoc).toContain(`Unknown model: ${MINIMAX_DEFAULT_MODEL_REF}`);
-    for (const modelRef of MINIMAX_TEXT_MODEL_REFS.slice(3)) {
+    for (const modelRef of MINIMAX_TEXT_MODEL_REFS.slice(1)) {
       expect(minimaxDoc).toContain(modelRef);
     }
     expect(minimaxDoc).not.toContain("(unreleased at the time of writing)");

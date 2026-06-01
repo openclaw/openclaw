@@ -118,4 +118,25 @@ describe("createMinimaxFastModeWrapper", () => {
 
     expect(capturedId).toBe("MiniMax-M2.7-highspeed");
   });
+
+  it("keeps MiniMax-M3 unchanged in fast mode", () => {
+    let capturedId = "";
+    const baseStreamFn: StreamFn = (model) => {
+      capturedId = model.id;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, true);
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M3",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedId).toBe("MiniMax-M3");
+  });
 });
