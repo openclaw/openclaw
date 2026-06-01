@@ -1,3 +1,7 @@
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
@@ -64,10 +68,10 @@ describe("script-specific dev tooling hardening", () => {
 
   it("redacts Discord webhook tokens from API paths", () => {
     const token = "webhook-secret-token-abcdef123456"; // pragma: allowlist secret
-    const path = `/webhooks/123/${token}?wait=true`;
+    const apiPath = `/webhooks/123/${token}?wait=true`;
 
-    expect(discordSmokeTesting.redactDiscordApiPath(path)).not.toContain(token);
-    expect(discordSmokeTesting.redactDiscordApiPath(path)).toContain("/webhooks/123/");
+    expect(discordSmokeTesting.redactDiscordApiPath(apiPath)).not.toContain(token);
+    expect(discordSmokeTesting.redactDiscordApiPath(apiPath)).toContain("/webhooks/123/");
   });
 
   it("computes the remaining Discord smoke timeout budget", () => {
@@ -268,6 +272,88 @@ describe("script-specific dev tooling hardening", () => {
         "https://api.anthropic.com",
       ),
     ).toThrow(/refusing non-origin proxy request URL/u);
+  });
+
+  it("cleans Anthropic prompt probe temp dirs unless explicitly kept", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
+    const keepRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
+
+    expect(promptProbeTesting.promptProbeTmpResult(tempRoot, false)).toEqual({});
+    expect(promptProbeTesting.promptProbeTmpResult(keepRoot, true)).toEqual({ tmpDir: keepRoot });
+
+    await promptProbeTesting.cleanupPromptProbeTmpDir(tempRoot, false);
+    await promptProbeTesting.cleanupPromptProbeTmpDir(keepRoot, true);
+
+    await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(keepRoot)).resolves.toBeTruthy();
+    await fs.rm(keepRoot, { force: true, recursive: true });
+  });
+
+  it("waits for the Anthropic prompt gateway child after SIGKILL cleanup", async () => {
+    const events = new EventEmitter();
+    const signals: NodeJS.Signals[] = [];
+    let closeCalls = 0;
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal: NodeJS.Signals) {
+        signals.push(signal);
+        if (signal === "SIGKILL") {
+          setTimeout(() => {
+            child.signalCode = "SIGKILL";
+            events.emit("exit");
+          }, 1);
+        }
+        return true;
+      },
+      once(event: "exit", listener: () => void) {
+        events.once(event, listener);
+      },
+    };
+
+    const stopped = await promptProbeTesting.stopGatewayPromptChild(
+      child,
+      {
+        close: async () => {
+          closeCalls += 1;
+        },
+      },
+      1,
+      50,
+    );
+
+    expect(stopped).toBe(true);
+    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(closeCalls).toBe(1);
+  });
+
+  it("bounds Anthropic prompt gateway cleanup when the child never exits", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let closeCalls = 0;
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal: NodeJS.Signals) {
+        signals.push(signal);
+        return false;
+      },
+      once(_event: "exit", _listener: () => void) {},
+    };
+
+    const stopped = await promptProbeTesting.stopGatewayPromptChild(
+      child,
+      {
+        close: async () => {
+          closeCalls += 1;
+        },
+      },
+      1,
+      1,
+    );
+
+    expect(stopped).toBe(false);
+    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(closeCalls).toBe(1);
   });
 
   it("uses exact Claude cookie host matchers instead of broad substring matches", () => {

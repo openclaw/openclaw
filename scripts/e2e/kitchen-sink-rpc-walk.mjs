@@ -43,6 +43,7 @@ const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
+const POSIX_PROCESS_SNAPSHOT_ARGS = ["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="];
 const ERROR_LOG_DENY_PATTERNS = [
   /\buncaught exception\b/iu,
   /\bunhandled rejection\b/iu,
@@ -1034,7 +1035,7 @@ async function samplePosixProcessWithDescendants(pid, run) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1054,7 +1055,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);

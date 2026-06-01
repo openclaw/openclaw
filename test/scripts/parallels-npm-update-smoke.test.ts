@@ -10,8 +10,10 @@ import {
 } from "../../scripts/e2e/parallels/npm-update-scripts.ts";
 import {
   freshLaneTimeoutMs,
+  NpmUpdateSmoke,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -65,12 +67,51 @@ afterEach(() => {
 });
 
 describe("parallels npm update smoke", () => {
-  it("does not leave guard/server children attached to the wrapper", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it("stops the host artifact server when the wrapper fails mid-run", async () => {
+    let stopCalls = 0;
+    const server: HostServer = {
+      hostIp: "127.0.0.1",
+      port: 48123,
+      stop: async () => {
+        stopCalls += 1;
+      },
+      urlFor: (filePath) => `http://127.0.0.1:48123/${path.basename(filePath)}`,
+    };
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
 
-    expect(script).toContain("spawnLogged");
-    expect(script).toContain('child.on("close"');
-    expect(script).toContain("await this.server?.stop()");
+    class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
+      protected override async makeRunTempDir(prefix: string): Promise<string> {
+        void prefix;
+        return makeTempDir();
+      }
+
+      protected override async runSteps(): Promise<void> {
+        this.server = server;
+        throw new Error("forced wrapper failure");
+      }
+    }
+
+    try {
+      const smoke = new FailingNpmUpdateSmoke({
+        ...TEST_AUTH,
+        json: false,
+        packageSpec: "openclaw@latest",
+        platforms: new Set<Platform>(["linux"]),
+        provider: "openai",
+        updateTarget: "local-main",
+      });
+
+      await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+
+    expect(stopCalls).toBe(1);
   });
 
   it("has a one-command beta validation mode with fresh target coverage", () => {
