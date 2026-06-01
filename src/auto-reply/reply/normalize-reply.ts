@@ -6,6 +6,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import {
   HEARTBEAT_TOKEN,
+  isInternalFormattingArtifact,
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -19,7 +20,7 @@ import {
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "internalArtifact";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -95,6 +96,13 @@ export function normalizeReplyPayload(
       return null;
     }
     text = stripped.text;
+  }
+
+  // Suppress standalone internal protocol artifacts (Codex/Harmony channel
+  // markers, reasoning directives) before they reach messaging channels. #88128
+  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    opts.onSkip?.("internalArtifact");
+    return null;
   }
 
   if (text) {

@@ -150,7 +150,7 @@ describe("normalizeReplyPayload", () => {
     expect(reply.channelData).toEqual(payload.channelData);
   });
 
-  it("records skip reasons for silent/empty payloads", () => {
+  it("records skip reasons for silent/empty/internal-artifact payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
       {
@@ -159,6 +159,21 @@ describe("normalizeReplyPayload", () => {
         reason: "silent",
       },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
+      {
+        name: "internalArtifact <channel|>",
+        payload: { text: "<channel|>" },
+        reason: "internalArtifact",
+      },
+      {
+        name: "internalArtifact set-thought",
+        payload: { text: "set-thought <channel|>" },
+        reason: "internalArtifact",
+      },
+      {
+        name: "internalArtifact box-drawing separator",
+        payload: { text: "───" },
+        reason: "internalArtifact",
+      },
     ] as const;
     for (const testCase of cases) {
       const reasons: string[] = [];

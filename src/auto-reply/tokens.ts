@@ -6,6 +6,30 @@ export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
+// Narrow protocol-only matcher for internal streaming artifacts that LLM
+// providers (Codex/Harmony) emit as standalone fragments during response
+// generation. Only matches patterns that are never valid user-facing content.
+// Intentionally excludes generic markdown separators (---, ***, ___) and
+// XML-like tags (<tag>, </tag>) which could appear in legitimate replies.
+const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
+const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
+
+/**
+ * Returns true when text consists entirely of an internal runtime/protocol
+ * artifact that must never be delivered to user-facing messaging channels.
+ *
+ * Scoped to observed Codex/Harmony markers only:
+ * - `<channel|>`, `<word|value>` — provider channel routing markers
+ * - `set-thought <channel|>` — reasoning lane transition directives
+ * - `───` (box-drawing HR) — internal markdown renderer separator
+ */
+export function isInternalFormattingArtifact(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return HARMONY_CHANNEL_MARKER_RE.test(text) || BOX_DRAWING_HR_ONLY_RE.test(text);
+}
+
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
 const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
