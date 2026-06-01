@@ -453,6 +453,24 @@ describe("normalizePluginDiscoveryResult", () => {
         },
       },
     },
+    {
+      name: "keeps minimal model rows with id-only labels",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [{ id: "local-tiny" } as ModelDefinitionConfig],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [{ id: "local-tiny", name: "local-tiny" }],
+        },
+      },
+    },
   ];
 
   it.each(cases)("$name", ({ provider, result, expected }) => {

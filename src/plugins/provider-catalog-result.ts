@@ -92,11 +92,14 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
   }
   const id = readRecordValue(model, "id");
   const name = readRecordValue(model, "name");
-  if (typeof id !== "string" || typeof name !== "string") {
+  if (typeof id !== "string") {
     return undefined;
   }
 
-  const copied: Partial<ModelDefinitionConfig> = { id, name };
+  const copied: Partial<ModelDefinitionConfig> = {
+    id,
+    name: typeof name === "string" ? name : id,
+  };
   for (const key of MODEL_DEFINITION_CONFIG_KEYS) {
     const value = readRecordValue(model, key);
     if (value !== undefined) {
