@@ -5,9 +5,8 @@ import {
   inspectHostExecEnvOverrides,
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
-  sanitizeHostExecEnv,
+  setSanitizedHostProcessEnvOverride,
 } from "../../infra/host-env-security.js";
-import { OPENCLAW_CLI_ENV_VAR } from "../../infra/openclaw-exec-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSkillConfig } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
@@ -257,19 +256,22 @@ function applySkillConfigEnvOverrides(params: {
     log.warn(`Suspicious skill env overrides for ${skillKey}: ${sanitized.warnings.join(", ")}`);
   }
 
-  const processEnvOverrides = sanitizeHostExecEnv({
-    baseEnv: {},
-    overrides: sanitized.allowed,
-    blockPathOverrides: true,
-  });
-  delete processEnvOverrides[OPENCLAW_CLI_ENV_VAR];
-
-  for (const [envKey, envValue] of Object.entries(processEnvOverrides)) {
+  for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
     if (!acquireActiveSkillEnvKey(envKey, envValue)) {
       continue;
     }
+    const processEnvValue = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
+    if (
+      !setSanitizedHostProcessEnvOverride({
+        key: envKey,
+        value: processEnvValue,
+        blockPathOverrides: true,
+      })
+    ) {
+      releaseActiveSkillEnvKey(envKey);
+      continue;
+    }
     updates.push({ key: envKey });
-    process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
   }
 }
 

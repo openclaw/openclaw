@@ -1,6 +1,6 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
-import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
+import { OPENCLAW_CLI_ENV_VAR, markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
@@ -249,6 +249,29 @@ export function sanitizeHostExecEnv(params?: {
   blockPathOverrides?: boolean;
 }): Record<string, string> {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
+}
+
+export function setSanitizedHostProcessEnvOverride(params: {
+  key: string;
+  value: string;
+  blockPathOverrides?: boolean;
+  processEnv?: NodeJS.ProcessEnv;
+}): boolean {
+  const normalized = normalizeHostOverrideEnvVarKey(params.key);
+  if (!normalized || normalized === OPENCLAW_CLI_ENV_VAR) {
+    return false;
+  }
+  const sanitized = sanitizeHostExecEnv({
+    baseEnv: {},
+    overrides: { [normalized]: params.value },
+    blockPathOverrides: params.blockPathOverrides ?? true,
+  });
+  const sanitizedValue = sanitized[normalized];
+  if (sanitizedValue === undefined) {
+    return false;
+  }
+  (params.processEnv ?? process.env)[normalized] = sanitizedValue;
+  return true;
 }
 
 export function sanitizeSystemRunEnvOverrides(params?: {
