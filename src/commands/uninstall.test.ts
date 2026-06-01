@@ -3,6 +3,7 @@ import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   removeStateAndLinkedPaths,
+  removeWorkspaceAttestationPaths,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
@@ -81,6 +82,21 @@ describe("uninstallCommand", () => {
         dryRun: true,
         preservePaths: [],
       }),
+    );
+  });
+
+  it("removes workspace attestations when workspace removal is selected", async () => {
+    await uninstallCommand(runtime, {
+      workspace: true,
+      yes: true,
+      nonInteractive: true,
+      dryRun: true,
+    });
+
+    expect(removeWorkspaceAttestationPaths).toHaveBeenCalledWith(
+      ["/tmp/.openclaw/workspace"],
+      runtime,
+      { dryRun: true },
     );
   });
 });
