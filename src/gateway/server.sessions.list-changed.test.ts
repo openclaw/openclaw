@@ -290,6 +290,42 @@ test("sessions.list ignores terminal abortable runs kept for retry guards", asyn
   expect(session.hasActiveRun).toBe(false);
 });
 
+test("sessions.list ignores hidden internal abortable runs", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-hidden-run",
+      method: "sessions.list",
+      params: {},
+    },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", controlUiVisible: false }],
+      ]),
+    } as never,
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expect(session.hasActiveRun).toBe(false);
+});
+
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { dir } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};

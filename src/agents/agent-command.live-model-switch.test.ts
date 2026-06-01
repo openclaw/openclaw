@@ -372,6 +372,7 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => {
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const buildAllowedModelSet = ({
     cfg,
     catalog,
@@ -535,7 +536,9 @@ vi.mock("./model-selection.js", () => {
       return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
     modelKey: (p: string, m: string) => `${p}/${m}`,
-    normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
+    normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
@@ -552,50 +555,6 @@ vi.mock("./model-selection.js", () => {
       return { provider, model: modelParts.join("/") || "claude" };
     },
     resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
-    normalizeProviderId: (provider: string): string => {
-      const normalized = (provider ?? "").trim().toLowerCase();
-      if (normalized === "modelstudio" || normalized === "qwencloud") {
-        return "qwen";
-      }
-      if (normalized === "z.ai" || normalized === "z-ai") {
-        return "zai";
-      }
-      if (normalized === "opencode-zen") {
-        return "opencode";
-      }
-      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
-        return "kimi";
-      }
-      if (normalized === "moonshotai" || normalized === "moonshot-ai") {
-        return "moonshot";
-      }
-      if (normalized === "bedrock" || normalized === "aws-bedrock") {
-        return "amazon-bedrock";
-      }
-      return normalized;
-    },
-    normalizeProviderIdForAuth: (provider: string): string => {
-      const normalized = (provider ?? "").trim().toLowerCase();
-      if (normalized === "modelstudio" || normalized === "qwencloud") {
-        return "qwen";
-      }
-      if (normalized === "z.ai" || normalized === "z-ai") {
-        return "zai";
-      }
-      if (normalized === "opencode-zen") {
-        return "opencode";
-      }
-      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
-        return "kimi";
-      }
-      if (normalized === "moonshotai" || normalized === "moonshot-ai") {
-        return "moonshot";
-      }
-      if (normalized === "bedrock" || normalized === "aws-bedrock") {
-        return "amazon-bedrock";
-      }
-      return normalized;
-    },
   };
 });
 

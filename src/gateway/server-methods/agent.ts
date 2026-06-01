@@ -1227,6 +1227,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             status: "accepted" as const,
             sessionKey,
             ...(dedupeSessionResolvesGlobal && dedupeAgentId ? { agentId: dedupeAgentId } : {}),
+            controlUiVisible: !suppressVisibleSessionEffects,
             acceptedAt,
             dedupeKeys: agentDedupeKeys,
             expiresAtMs: resolveAgentRunExpiresAtMs({
@@ -2226,6 +2227,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
       });
       const existingRunAbort = context.chatAbortControllers.get(runId);
@@ -2280,6 +2282,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       };
       const acceptedDedupePayload = {
         ...accepted,
+        controlUiVisible: !suppressVisibleSessionEffects,
         dedupeKeys: agentDedupeKeys,
         ownerConnId,
         ownerDeviceId,

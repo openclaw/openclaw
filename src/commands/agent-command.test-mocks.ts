@@ -81,32 +81,12 @@ vi.mock("../agents/model-selection.js", () => {
     return { provider: defaultProvider, model: value };
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: provider.trim().toLowerCase(),
+    provider: normalizeProviderId(provider),
     model: model.trim(),
   });
-  const normalizeProviderId = (provider: string): string => {
-    const normalized = (provider ?? "").trim().toLowerCase();
-    if (normalized === "modelstudio" || normalized === "qwencloud") {
-      return "qwen";
-    }
-    if (normalized === "z.ai" || normalized === "z-ai") {
-      return "zai";
-    }
-    if (normalized === "opencode-zen") {
-      return "opencode";
-    }
-    if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
-      return "kimi";
-    }
-    if (normalized === "moonshotai" || normalized === "moonshot-ai") {
-      return "moonshot";
-    }
-    if (normalized === "bedrock" || normalized === "aws-bedrock") {
-      return "amazon-bedrock";
-    }
-    return normalized;
-  };
+
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {

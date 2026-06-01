@@ -178,6 +178,25 @@ describe("registerChatAbortController", () => {
     expect(resolveChatRunExpiresAtMs({ now: 8_640_000_000_000_000, timeoutMs: 60_000 })).toBe(0);
     expect(resolveAgentRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
   });
+
+  it("records hidden/internal visibility for agent registrations", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-internal-agent",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      controlUiVisible: false,
+      kind: "agent",
+    });
+
+    expect(registration.entry).toMatchObject({
+      controlUiVisible: false,
+      kind: "agent",
+    });
+    expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
+  });
 });
 
 describe("abortChatRunById", () => {
@@ -236,6 +255,21 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("aborts hidden internal runs without broadcasting chat events", () => {
+    const runId = "run-hidden";
+    const sessionKey = "main";
+    const entry = { ...createActiveEntry(sessionKey), controlUiVisible: false };
+    const ops = createOps({ runId, entry, buffer: "hidden partial" });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
+
+    expect(result).toEqual({ aborted: true });
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(ops.chatAbortControllers.has(runId)).toBe(false);
+    expect(ops.broadcast).not.toHaveBeenCalled();
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("fans out default-agent global aborts to scoped and legacy global subscribers", () => {
@@ -358,6 +392,7 @@ describe("resolveInFlightRunSnapshot", () => {
     opts?: {
       agentId?: string;
       aborted?: boolean;
+      controlUiVisible?: boolean;
       projectSessionActive?: boolean;
       startedAtMs?: number;
       kind?: ChatAbortControllerEntry["kind"];
@@ -376,6 +411,7 @@ describe("resolveInFlightRunSnapshot", () => {
       agentId: opts?.agentId,
       startedAtMs,
       expiresAtMs: startedAtMs + 10_000,
+      controlUiVisible: opts?.controlUiVisible,
       projectSessionActive: opts?.projectSessionActive ?? true,
       kind: opts?.kind,
     };
@@ -435,6 +471,7 @@ describe("resolveInFlightRunSnapshot", () => {
     const variants: ChatAbortControllerEntry[] = [
       inFlightEntry("agent:main:s", { aborted: true }),
       inFlightEntry("agent:main:s", { projectSessionActive: false }),
+      inFlightEntry("agent:main:s", { controlUiVisible: false }),
       inFlightEntry("agent:main:other"),
     ];
     for (const entry of variants) {

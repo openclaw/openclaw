@@ -75,7 +75,10 @@ function hasLegacyIMessageStateFiles(stateDir: string): boolean {
 }
 
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
-  if (fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json"))) {
+  if (
+    fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json")) ||
+    fileOrDirExists(path.join(stateDir, "discord", "thread-bindings.json"))
+  ) {
     return true;
   }
   if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {

@@ -100,6 +100,31 @@ describe("chat.abort authorization", () => {
     expect(context.chatAbortControllers.has("run-1")).toBe(false);
   });
 
+  it("does not abort hidden internal runs by visible session key", async () => {
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-hidden", createActiveRun("main", { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      client: {
+        connId: "conn-owner",
+        connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+      },
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    const abortPayload = payload as AbortResponsePayload | undefined;
+    expect(abortPayload?.aborted).toBe(false);
+    expect(abortPayload?.runIds).toEqual([]);
+    expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
+  });
+
   it("clears agent text throttle state through the real abort caller", async () => {
     const context = createChatAbortContext({
       chatAbortControllers: new Map([
