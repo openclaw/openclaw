@@ -14,6 +14,7 @@ import {
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName,
+  parseSessionArchiveTimestamp,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
@@ -298,6 +299,13 @@ function isUnreferencedSessionArtifactFile(
   );
 }
 
+function isSessionCleanupArchiveExpired(fileName: string, cutoffMs: number): boolean {
+  const timestamp =
+    parseSessionArchiveTimestamp(fileName, "deleted") ??
+    parseSessionArchiveTimestamp(fileName, "reset");
+  return timestamp != null && timestamp <= cutoffMs;
+}
+
 // An orphaned `sessions.json.<pid>.<uuid>.tmp` older than this is never a live
 // atomic write (those rename within milliseconds), so it is safe to reclaim
 // regardless of the general unreferenced-artifact age threshold (#56827).
@@ -473,7 +481,10 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
       return file.mtimeMs <= tempCutoffMs;
     }
-    return file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths);
+    return (
+      (file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths)) ||
+      isSessionCleanupArchiveExpired(file.name, cutoffMs)
+    );
   });
   const removablePromptBlobFiles = promptBlobFiles.filter((file) => {
     if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
