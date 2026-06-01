@@ -608,6 +608,8 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     const setupResult = await runSkillSetupHook({
       targetDir: path.resolve(entry.skill.baseDir),
       mode: "install",
+      config: params.config,
+      skillKey: resolveSkillKey(entry.skill, entry),
     });
     if (!setupResult.ok) {
       return withWarnings(

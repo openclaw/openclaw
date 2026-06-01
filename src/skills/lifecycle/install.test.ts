@@ -25,13 +25,15 @@ vi.mock("../loading/plugin-skills.js", () => ({
 async function writeInstallableSkill(
   workspaceDir: string,
   name: string,
-  options?: { setupScript?: string },
+  options?: { setupScript?: string; envVars?: string[]; primaryEnv?: string },
 ): Promise<string> {
   const skillDir = path.join(workspaceDir, "skills", name);
   const metadata = JSON.stringify({
     openclaw: {
       install: [{ id: "deps", kind: "node", package: "example-package" }],
       ...(options?.setupScript ? { setup: { script: options.setupScript } } : {}),
+      ...(options?.envVars?.length ? { requires: { env: options.envVars } } : {}),
+      ...(options?.primaryEnv ? { primaryEnv: options.primaryEnv } : {}),
     },
   });
   await fs.mkdir(skillDir, { recursive: true });
@@ -214,6 +216,44 @@ describe("installSkill install policy hooks", () => {
       expect(options.baseEnv).toEqual({});
       expect(options.env?.OPENCLAW_HOOK_KIND).toBe("install");
       expect(options.env?.SKILL_DIR).toBe(skillDir);
+    });
+  });
+
+  it("passes configured skill env to non-download setup hooks", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const skillDir = await writeInstallableSkill(workspaceDir, "setup-config-skill", {
+        setupScript: "scripts/setup.sh",
+        envVars: ["SETUP_TOKEN", "PRIMARY_TOKEN"],
+        primaryEnv: "PRIMARY_TOKEN",
+      });
+      const setupScriptPath = path.join(skillDir, "scripts", "setup.sh");
+      await fs.mkdir(path.dirname(setupScriptPath), { recursive: true });
+      await fs.writeFile(setupScriptPath, "#!/bin/sh\necho setup\n");
+      await fs.chmod(setupScriptPath, 0o755);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "setup-config-skill",
+        installId: "deps",
+        allowSetupHooks: true,
+        config: {
+          skills: {
+            entries: {
+              "setup-config-skill": {
+                env: { SETUP_TOKEN: "configured-token" },
+                apiKey: "configured-primary",
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+      const setupCall = lastRunCommandCall();
+      const options = setupCall?.[1] as { env?: Record<string, string> };
+      expect(options.env?.SETUP_TOKEN).toBe("configured-token");
+      expect(options.env?.PRIMARY_TOKEN).toBe("configured-primary");
     });
   });
 
