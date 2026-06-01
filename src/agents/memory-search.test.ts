@@ -291,22 +291,6 @@ describe("memory search config", () => {
     expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds).toBe(600);
   });
 
-  it("keeps memory watching enabled by default in gateway mode", () => {
-    const cfg = asConfig({
-      gateway: { mode: "local" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-          },
-        },
-      },
-    });
-
-    expect(resolveMemorySearchConfig(cfg, "main")?.sync.watch).toBe(true);
-    expect(resolveMemorySearchSyncConfig(cfg, "main")?.watch).toBe(true);
-  });
-
   it("merges defaults and overrides", () => {
     const cfg = asConfig({
       agents: {

@@ -1616,10 +1616,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.watcher.on("add", markDirty);
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
-    this.watcher.on("error", (err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd watcher error: ${message}`);
-    });
     this.watcher.once("ready", () => {
       log.info(
         `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,

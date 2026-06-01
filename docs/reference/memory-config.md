@@ -527,9 +527,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
   </Accordion>
 </AccordionGroup>
 
-QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager owns the regular file watcher and interval timers when memory search is opened for interactive use.
-
-Local Gateway configs can warn when memory file watching may keep too many files open. If you see open-file or watcher errors, set `sync.watch: false` for the affected agents and use manual indexing or `sync.intervalMinutes` to refresh memory.
+QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
 
 ### Full QMD example
 

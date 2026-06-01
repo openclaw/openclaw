@@ -523,7 +523,6 @@ export type MemorySearchConfig = {
   sync?: {
     onSessionStart?: boolean;
     onSearch?: boolean;
-    /** Watch memory files for reindexing (default: true). */
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
