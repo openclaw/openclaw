@@ -1516,7 +1516,7 @@ async function injectTtsAuthProfileApiKey(params: {
   const tts = { ...(messages.tts ?? {}) };
   const providers = { ...(tts.providers ?? {}) };
   const providerConfigKey = existingProviderConfig?.key ?? providerId;
-  providers[providerConfigKey] = {
+  const nextProviderConfig = {
     ...(existingProviderConfig?.value &&
     typeof existingProviderConfig.value === "object" &&
     !Array.isArray(existingProviderConfig.value)
@@ -1524,36 +1524,84 @@ async function injectTtsAuthProfileApiKey(params: {
       : {}),
     apiKey: auth.apiKey,
   };
+  const nextTts: Record<string, unknown> = { ...tts };
+  if (existingProviderConfig?.container === "direct") {
+    nextTts[providerConfigKey] = nextProviderConfig;
+  } else {
+    providers[providerConfigKey] = nextProviderConfig;
+    nextTts.providers = providers;
+  }
   return {
     ...params.cfg,
     messages: {
       ...messages,
-      tts: {
-        ...tts,
-        providers,
-      },
+      tts: nextTts,
     },
   };
 }
 
+type ExistingTtsProviderConfig = {
+  container: "providers" | "direct";
+  key: string;
+  value: unknown;
+};
+
 function resolveExistingTtsProviderConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
-}): { key: string; value: unknown } | undefined {
-  const providers = params.cfg.messages?.tts?.providers;
+}): ExistingTtsProviderConfig | undefined {
+  const tts = params.cfg.messages?.tts;
+  const providers = tts?.providers;
   if (!providers) {
-    return undefined;
+    return resolveDirectTtsProviderConfig(params);
   }
   const exact = providers[params.providerId];
   if (exact !== undefined) {
-    return { key: params.providerId, value: exact };
+    return { container: "providers", key: params.providerId, value: exact };
   }
   for (const [key, value] of Object.entries(providers)) {
     const normalizedKey = normalizeLowercaseStringOrEmpty(
       canonicalizeSpeechProviderId(key, params.cfg) ?? key,
     );
     if (normalizedKey === params.providerId) {
-      return { key, value };
+      return { container: "providers", key, value };
+    }
+  }
+  return resolveDirectTtsProviderConfig(params);
+}
+
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+function resolveDirectTtsProviderConfig(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): ExistingTtsProviderConfig | undefined {
+  const tts = params.cfg.messages?.tts;
+  if (!tts) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(tts)) {
+    if (TTS_CONFIG_RESERVED_KEYS.has(key)) {
+      continue;
+    }
+    const normalizedKey = normalizeLowercaseStringOrEmpty(
+      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+    );
+    if (normalizedKey === params.providerId) {
+      return { container: "direct", key, value };
     }
   }
   return undefined;
