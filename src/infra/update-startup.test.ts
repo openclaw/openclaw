@@ -77,6 +77,8 @@ describe("update-startup", () => {
     tempDir = await suiteRootTracker.make("case");
     envSnapshot = captureEnv([
       "OPENCLAW_NO_AUTO_UPDATE",
+      "OPENCLAW_SERVICE_KIND",
+      "OPENCLAW_SERVICE_MARKER",
       "OPENCLAW_STATE_DIR",
       "NODE_ENV",
       "VITEST",
@@ -485,6 +487,8 @@ describe("update-startup", () => {
     });
 
     const originalArgv = process.argv.slice();
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     process.argv = [process.execPath, "/opt/openclaw/dist/entry.js"];
     try {
       await runAutoUpdateCheckWithDefaults({
@@ -509,6 +513,8 @@ describe("update-startup", () => {
       timeoutMs: 45 * 60 * 1000,
       env: {
         OPENCLAW_AUTO_UPDATE: "1",
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
       },
     });
   });

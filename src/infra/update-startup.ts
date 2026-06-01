@@ -292,6 +292,8 @@ async function runAutoUpdateCommand(params: {
       timeoutMs: params.timeoutMs,
       env: {
         OPENCLAW_AUTO_UPDATE: "1",
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
       },
     });
     return {
