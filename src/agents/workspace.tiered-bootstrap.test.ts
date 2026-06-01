@@ -150,4 +150,53 @@ describe("filterBootstrapFilesForSession", () => {
     const full = filterBootstrapFilesForSession(files, MAIN_KEY, "full");
     expect(full).toHaveLength(3);
   });
+
+  it("minimal tier excludes hook-sourced files even when basename matches the allowlist", () => {
+    // Same regression as the standard-tier guard above, but for the minimal
+    // tier: a hook-loaded `packages/api/AGENTS.md` must NOT slip into a
+    // subagent or cron session just because its basename is in
+    // MINIMAL_BOOTSTRAP_ALLOWLIST. Without this guard, `minimal` could return
+    // more files than `standard` for the same input, breaking the natural
+    // `minimal ⊂ standard ⊂ full` inclusion expected by callers.
+    const rootAgents = makeFile("AGENTS.md");
+    const rootTools = makeFile("TOOLS.md");
+    const rootSoul = makeFile("SOUL.md");
+    const rootIdentity = makeFile("IDENTITY.md");
+    const rootUser = makeFile("USER.md");
+    const hookAgents = makeHookFile("AGENTS.md", "packages/api/AGENTS.md");
+    const hookAgentsWeb = makeHookFile("AGENTS.md", "packages/web/AGENTS.md");
+    const files = [
+      rootAgents,
+      rootTools,
+      rootSoul,
+      rootIdentity,
+      rootUser,
+      hookAgents,
+      hookAgentsWeb,
+    ];
+
+    const minimal = filterBootstrapFilesForSession(files, SUBAGENT_KEY);
+    expect(minimal).toHaveLength(5);
+    for (const file of minimal) {
+      expect(file.source).toBe("root");
+    }
+    expect(minimal.map((f) => f.name).sort()).toEqual([
+      "AGENTS.md",
+      "IDENTITY.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "USER.md",
+    ]);
+
+    // Inclusion check: every file the minimal tier returns must also be
+    // returned by the standard and full tiers for the same input set.
+    const standard = filterBootstrapFilesForSession(files, MAIN_KEY, "standard");
+    const full = filterBootstrapFilesForSession(files, MAIN_KEY, "full");
+    const standardPaths = new Set(standard.map((f) => f.path));
+    const fullPaths = new Set(full.map((f) => f.path));
+    for (const file of minimal) {
+      expect(standardPaths.has(file.path)).toBe(true);
+      expect(fullPaths.has(file.path)).toBe(true);
+    }
+  });
 });
