@@ -88,7 +88,7 @@ describe("deliverReplies", () => {
     ]);
   });
 
-  it("does not stamp payload reply ids as implicit through text sends", async () => {
+  it("defaults trusted monitor reply ids to implicit through text sends", async () => {
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
       replies: [{ text: "reply", replyToId: "reply-3" }],
@@ -111,6 +111,7 @@ describe("deliverReplies", () => {
           client,
           accountId: "acct-3",
           replyToId: "reply-3",
+          replyToIdSource: "implicit",
           replyRequesterSender: "+15551230000",
         },
       ],
@@ -200,7 +201,7 @@ describe("deliverReplies", () => {
     ]);
   });
 
-  it("does not stamp payload reply ids as implicit through media sends", async () => {
+  it("defaults trusted monitor reply ids to implicit through media sends", async () => {
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
       replies: [
@@ -230,6 +231,7 @@ describe("deliverReplies", () => {
           client,
           accountId: "acct-4",
           replyToId: "reply-4",
+          replyToIdSource: "implicit",
           replyRequesterSender: "+15551230000",
         },
       ],

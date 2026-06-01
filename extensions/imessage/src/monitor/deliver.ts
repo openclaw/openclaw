@@ -44,6 +44,9 @@ export async function deliverReplies(params: {
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
     const replyPayload = payload as ReplyPayloadWithReplySource;
+    const replyToIdSource =
+      replyPayload.replyToIdSource ??
+      (payload.replyToId && params.replyRequesterSender ? "implicit" : undefined);
     const rawText = sanitizeOutboundText(payload.text ?? "");
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(rawText, tableMode),
@@ -59,9 +62,7 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
-          ...(replyPayload.replyToIdSource
-            ? { replyToIdSource: replyPayload.replyToIdSource }
-            : {}),
+          ...(replyToIdSource ? { replyToIdSource } : {}),
           ...(params.replyRequesterSender
             ? { replyRequesterSender: params.replyRequesterSender }
             : {}),
@@ -83,9 +84,7 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
-          ...(replyPayload.replyToIdSource
-            ? { replyToIdSource: replyPayload.replyToIdSource }
-            : {}),
+          ...(replyToIdSource ? { replyToIdSource } : {}),
           ...(params.replyRequesterSender
             ? { replyRequesterSender: params.replyRequesterSender }
             : {}),

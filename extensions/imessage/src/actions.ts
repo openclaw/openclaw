@@ -36,6 +36,7 @@ const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
 const log = createSubsystemLogger("channels/imessage");
 
 const providerId = "imessage";
+const MESSAGE_ACTION_INFERRED_TARGET_PARAM = "__openclawInferredTargetFromCurrentChannel";
 
 const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
   ...IMESSAGE_ACTION_NAMES,
@@ -256,13 +257,23 @@ function readOutboundActionTarget(params: {
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
-function hasExplicitOutboundActionTarget(params: Record<string, unknown>): boolean {
+function hasExplicitOutboundActionTarget(
+  params: Record<string, unknown>,
+  currentChannelId?: string,
+): boolean {
+  const currentTarget = currentChannelId?.trim();
+  const targetParam = readStringParam(params, "target")?.trim();
+  const toParam = readStringParam(params, "to")?.trim();
+  const targetWasInferred =
+    params[MESSAGE_ACTION_INFERRED_TARGET_PARAM] === true &&
+    Boolean(currentTarget) &&
+    (targetParam === currentTarget || toParam === currentTarget);
   return (
     Boolean(readStringParam(params, "chatGuid")?.trim()) ||
     typeof readPositiveIntegerParam(params, "chatId") === "number" ||
     Boolean(readStringParam(params, "chatIdentifier")?.trim()) ||
-    Boolean(readStringParam(params, "to")?.trim()) ||
-    Boolean(readStringParam(params, "target")?.trim())
+    (!targetWasInferred && Boolean(toParam)) ||
+    (!targetWasInferred && Boolean(targetParam))
   );
 }
 
@@ -508,7 +519,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         currentChannelId: toolContext?.currentChannelId,
       });
       if (target) {
-        const replyRequesterSender = hasExplicitOutboundActionTarget(params)
+        const replyRequesterSender = hasExplicitOutboundActionTarget(
+          params,
+          toolContext?.currentChannelId,
+        )
           ? undefined
           : assertOpts?.replyRequesterSender;
         await assertIMessageOutboundAllowed({

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import {
+  MESSAGE_ACTION_INFERRED_TARGET_PARAM,
+  normalizeMessageActionInput,
+} from "./message-action-normalization.js";
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   getBootstrapChannelPlugin: (
@@ -62,13 +65,18 @@ describe("normalizeMessageActionInput", () => {
           currentChannelId: "channel:C1",
         },
       },
-      expectedFields: { target: "channel:C1", to: "channel:C1" },
+      expectedFields: {
+        target: "channel:C1",
+        to: "channel:C1",
+        [MESSAGE_ACTION_INFERRED_TARGET_PARAM]: true,
+      },
     },
     {
       input: {
         action: "send",
         args: {
           target: "channel:C1",
+          [MESSAGE_ACTION_INFERRED_TARGET_PARAM]: true,
         },
         toolContext: {
           currentChannelId: "C1",
@@ -76,6 +84,7 @@ describe("normalizeMessageActionInput", () => {
         },
       },
       expectedFields: { channel: "workspace" },
+      absentFields: [MESSAGE_ACTION_INFERRED_TARGET_PARAM],
     },
     {
       input: {
