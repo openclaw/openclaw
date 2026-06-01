@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { type GatewayErrorInfo, isNonRecoverableAuthError } from "../../ui/src/ui/gateway.ts";
-import { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
 
 function makeError(detailCode: string): GatewayErrorInfo {
   return { code: "connect_failed", message: "auth failed", details: { code: detailCode } };
@@ -61,6 +61,21 @@ describe("isNonRecoverableAuthError", () => {
     expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.PAIRING_REQUIRED))).toBe(
       true,
     );
+  });
+
+  it("allows reconnect for PAIRING_REQUIRED when retry hints keep reconnect active", () => {
+    expect(
+      isNonRecoverableAuthError({
+        code: "connect_failed",
+        message: "auth failed",
+        details: {
+          code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          reason: "not-paired",
+          recommendedNextStep: "wait_then_retry",
+          pauseReconnect: false,
+        },
+      }),
+    ).toBe(false);
   });
 
   it("allows reconnect for AUTH_TOKEN_MISMATCH (device-token fallback flow)", () => {

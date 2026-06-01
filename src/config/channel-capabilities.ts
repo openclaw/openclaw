@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -16,7 +17,7 @@ function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): st
   if (!isStringArray(capabilities)) {
     return undefined;
   }
-  const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
+  const normalized = normalizeStringEntries(capabilities);
   return normalized.length > 0 ? normalized : undefined;
 }
 

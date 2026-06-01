@@ -88,6 +88,16 @@ describe("google generative ai helpers", () => {
   it("normalizes transport baseUrls only for Google Generative AI", () => {
     expect(
       resolveGoogleGenerativeAiTransport({
+        provider: "google",
+        api: undefined,
+        baseUrl: "https://generativelanguage.googleapis.com",
+      }),
+    ).toEqual({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+    expect(
+      resolveGoogleGenerativeAiTransport({
         api: "google-generative-ai",
         baseUrl: "https://generativelanguage.googleapis.com",
       }),
@@ -132,7 +142,7 @@ describe("google generative ai helpers", () => {
         {
           contextWindow: 1,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          id: "gemini-3.1-flash-lite-preview",
+          id: "gemini-3.1-flash-lite",
           input: ["text"],
           maxTokens: 1,
           name: "Gemini Flash Lite",

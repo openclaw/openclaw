@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
 
 function withStdinIsRaw<T>(isRaw: boolean, run: () => T): T {
@@ -98,5 +99,57 @@ describe("cli progress", () => {
     });
 
     expect(writes).toStrictEqual([]);
+  });
+
+  it("unregisters a delayed tty progress line when done before start", () => {
+    const firstWrites: string[] = [];
+    const firstStream = {
+      isTTY: true,
+      write: vi.fn((chunk: string) => {
+        firstWrites.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+    const secondStream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const delayed = createCliProgress({
+      label: "Delayed",
+      stream: firstStream,
+      fallback: "line",
+      delayMs: 10_000,
+    });
+    delayed.done();
+
+    const next = createCliProgress({
+      label: "Next",
+      stream: secondStream,
+      fallback: "line",
+    });
+    next.done();
+
+    expect(firstWrites).toStrictEqual([]);
+  });
+
+  it("clamps oversized delayed progress timers", () => {
+    const stream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const progress = createCliProgress({
+        label: "Delayed",
+        stream,
+        fallback: "line",
+        delayMs: Number.MAX_SAFE_INTEGER,
+      });
+      progress.done();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -131,6 +131,27 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
+export function wrapCopilotOpenAICompletionsStream(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn | undefined {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  const underlying = baseStreamFn;
+  return (model, context, options) => {
+    if (model.provider !== "github-copilot" || model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    return underlying(model, context, {
+      ...options,
+      headers: buildCopilotRequestHeaders(context, options?.headers),
+    });
+  };
+}
+
 export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  return wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
+  return wrapCopilotOpenAICompletionsStream(
+    wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn)),
+  );
 }

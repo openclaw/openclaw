@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../config/config.js", () => ({
@@ -54,7 +54,7 @@ function createInvokeParams(params: Record<string, unknown>) {
 }
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const arg = mock.mock.calls.at(0)?.at(0);
+  const arg = mock.mock.calls[0]?.[0];
   if (arg === undefined) {
     throw new Error(`Expected ${label}`);
   }
@@ -62,7 +62,7 @@ function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): un
 }
 
 function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  const call = respond.mock.calls.at(0) as RespondCall | undefined;
+  const call = respond.mock.calls[0] as RespondCall | undefined;
   if (!call) {
     throw new Error("expected respond call");
   }

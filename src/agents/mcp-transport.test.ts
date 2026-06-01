@@ -4,6 +4,7 @@ import { resolveMcpTransport } from "./mcp-transport.js";
 type StreamableTransportOptions = {
   requestInit?: RequestInit;
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  authProvider?: unknown;
 };
 
 const { runtimeFetchMock, streamableTransportConstructorMock } = vi.hoisted(() => ({
@@ -39,7 +40,10 @@ function redirectWithoutLocationResponse(status = 302): Response {
 }
 
 function latestStreamableTransportOptions(): StreamableTransportOptions {
-  const options = streamableTransportConstructorMock.mock.calls.at(-1)?.[1];
+  const latestCall = streamableTransportConstructorMock.mock.calls[
+    streamableTransportConstructorMock.mock.calls.length - 1
+  ] as unknown[] | undefined;
+  const options = latestCall?.[1];
   if (!options || typeof options !== "object") {
     throw new Error("Expected streamable HTTP transport options");
   }
@@ -54,8 +58,14 @@ function latestStreamableFetch() {
   return fetch;
 }
 
-function runtimeFetchCall(index: number) {
-  return runtimeFetchMock.mock.calls.at(index);
+function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | undefined] {
+  const call = runtimeFetchMock.mock.calls[index] as
+    | [RequestInfo | URL, RequestInit | undefined]
+    | undefined;
+  if (!call) {
+    throw new Error(`Expected runtime fetch call ${index}`);
+  }
+  return call;
 }
 
 describe("resolveMcpTransport", () => {
@@ -216,5 +226,43 @@ describe("resolveMcpTransport", () => {
     await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).resolves.toBe(response);
 
     expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes OAuth providers and TLS options into HTTP transports", () => {
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      headers: {
+        Authorization: "Bearer static",
+        "X-Tenant": "docs",
+      },
+      sslVerify: false,
+    });
+
+    const options = latestStreamableTransportOptions();
+    expect(options.authProvider).toBeTypeOf("object");
+    expect(options.fetch).toBeTypeOf("function");
+    expect(options.requestInit).toBeUndefined();
+  });
+
+  it("keeps OAuth runtime headers scoped to the MCP resource origin", async () => {
+    runtimeFetchMock.mockResolvedValue(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      headers: {
+        "X-Tenant": "docs",
+      },
+    });
+
+    const options = latestStreamableTransportOptions();
+    await options.fetch?.("https://mcp.example.com/mcp");
+    await options.fetch?.("https://auth.example.com/token");
+
+    expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
+    expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
   });
 });

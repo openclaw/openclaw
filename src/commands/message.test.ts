@@ -17,7 +17,7 @@ type RunMessageActionParams = {
 
 function readOnlyMessageActionCall(): RunMessageActionParams {
   expect(runMessageActionMock).toHaveBeenCalledOnce();
-  const call = runMessageActionMock.mock.calls.at(0)?.[0];
+  const call = runMessageActionMock.mock.calls[0]?.[0];
   if (!call) {
     throw new Error("Expected message action call");
   }
@@ -208,7 +208,7 @@ describe("messageCommand", () => {
     expect(actionCall.gateway?.clientName).toBe("cli");
     expect(actionCall.gateway?.mode).toBe("cli");
     expect(actionCall.cfg).not.toBe(rawConfig);
-    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls.at(0)?.[0] as {
+    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
       commandName?: string;
       config?: unknown;
       targetIds?: Set<string>;
@@ -298,6 +298,40 @@ describe("messageCommand", () => {
     expect(actionCall.params.channel).toBe("telegram");
     expect(actionCall.params.target).toBe("123456789");
     expect(actionCall.params.pollQuestion).toBe("Ship it?");
+  });
+
+  it("includes a stable top-level messageId in JSON output", async () => {
+    runMessageActionMock.mockResolvedValueOnce({
+      kind: "send",
+      channel: "discord",
+      action: "send",
+      to: "channel:general",
+      handledBy: "plugin",
+      payload: {
+        ok: true,
+        result: {
+          messageId: "msg-json-1",
+          channelId: "general",
+        },
+      } as { ok: boolean } & Record<string, unknown>,
+      dryRun: false,
+    });
+
+    await runMessageCommand({
+      channel: "discord",
+      target: "channel:general",
+    });
+
+    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
+    const json = JSON.parse(String(output)) as { messageId?: string; payload?: unknown };
+    expect(json.messageId).toBe("msg-json-1");
+    expect(json.payload).toEqual({
+      ok: true,
+      result: {
+        messageId: "msg-json-1",
+        channelId: "general",
+      },
+    });
   });
 
   it("rejects unknown message actions before dispatch", async () => {

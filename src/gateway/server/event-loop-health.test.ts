@@ -288,7 +288,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setNow(1_250);
     harness.monitor.stop();
 
-    expect(harness.delayMonitor.disable).toHaveBeenCalledTimes(1);
+    expect(harness.delayMonitor["disable"]).toHaveBeenCalledTimes(1);
     expect(harness.monitor.snapshot()).toBeUndefined();
   });
 });

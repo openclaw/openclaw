@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
 }));
@@ -19,6 +20,7 @@ const {
   modelsAuthAddCommand,
   modelsAuthListCommand,
   modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   modelsSetCommand,
@@ -35,6 +37,7 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 vi.mock("../commands/models/auth.js", () => ({
   modelsAuthAddCommand: mocks.modelsAuthAddCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand: mocks.modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
 }));
@@ -78,6 +81,7 @@ describe("models cli", () => {
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
+    modelsAuthPasteApiKeyCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
     modelsSetCommand.mockClear();
@@ -111,7 +115,7 @@ describe("models cli", () => {
     expected: Record<string, unknown>,
   ) {
     expect(command).toHaveBeenCalledTimes(1);
-    const [options, context] = command.mock.calls.at(0) ?? [];
+    const [options, context] = command.mock.calls[0] ?? [];
     const optionRecord = options as Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(expected)) {
       expect(optionRecord?.[key]).toEqual(value);
@@ -158,15 +162,15 @@ describe("models cli", () => {
     },
     {
       label: "list",
-      args: ["models", "auth", "--agent", "poe", "list", "--provider", "openai-codex"],
+      args: ["models", "auth", "--agent", "poe", "list", "--provider", "openai"],
       command: modelsAuthListCommand,
-      expected: { agent: "poe", provider: "openai-codex" },
+      expected: { agent: "poe", provider: "openai" },
     },
     {
       label: "login",
-      args: ["models", "auth", "--agent", "poe", "login", "--provider", "openai-codex"],
+      args: ["models", "auth", "--agent", "poe", "login", "--provider", "openai"],
       command: modelsAuthLoginCommand,
-      expected: { agent: "poe", provider: "openai-codex" },
+      expected: { agent: "poe", provider: "openai" },
     },
     {
       label: "setup-token",
@@ -179,6 +183,12 @@ describe("models cli", () => {
       args: ["models", "auth", "--agent", "poe", "paste-token", "--provider", "anthropic"],
       command: modelsAuthPasteTokenCommand,
       expected: { agent: "poe", provider: "anthropic" },
+    },
+    {
+      label: "paste-api-key",
+      args: ["models", "auth", "--agent", "poe", "paste-api-key", "--provider", "openai"],
+      command: modelsAuthPasteApiKeyCommand,
+      expected: { agent: "poe", provider: "openai" },
     },
     {
       label: "login-github-copilot",
@@ -206,6 +216,15 @@ describe("models cli", () => {
     expectCommandOptions(modelsAuthLoginCommand, {
       provider: "openai",
       method: "api-key",
+    });
+  });
+
+  it("maps --device-code to the provider device-code auth method", async () => {
+    await runModelsCommand(["models", "auth", "login", "--provider", "openai", "--device-code"]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "device-code",
     });
   });
 

@@ -2,7 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import type {
   ButtonInteraction,
   ComponentData,
@@ -44,17 +44,34 @@ let sendComponents: typeof import("../send.components.js");
 
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function mockCall(mock: MockWithCalls, index: number, label: string): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function mockCallArg(mock: MockWithCalls, index: number, label: string): unknown {
+  return mockCall(mock, index, label)[0];
+}
+
 function getLastRecordedCtx(): Record<string, unknown> | undefined {
-  const params = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
-    | { ctx?: Record<string, unknown> }
-    | undefined;
+  const params = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
+    ctx?: Record<string, unknown>;
+  };
   return params?.ctx;
 }
 
 function getLastPluginDispatchCtx(): Record<string, unknown> | undefined {
-  const params = dispatchPluginInteractiveHandlerMock.mock.calls.at(-1)?.[0] as
-    | { ctx?: Record<string, unknown> }
-    | undefined;
+  const params = mockCallArg(
+    dispatchPluginInteractiveHandlerMock,
+    -1,
+    "dispatchPluginInteractiveHandler",
+  ) as { ctx?: Record<string, unknown> };
   return params?.ctx;
 }
 
@@ -65,14 +82,8 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-type MockWithCalls = { mock: { calls: unknown[][] } };
-
 function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
+  return mockCall(mock, 0, label);
 }
 
 function firstMockArg(mock: MockWithCalls, label: string) {
@@ -355,6 +366,19 @@ describe("discord component interactions", () => {
     expect(lastDispatchCtx?.To).toBe("channel:dm-channel");
     expect(getLastRecordedCtx()?.OriginatingTo).toBe("user:123456789");
     expect(getLastRecordedCtx()?.To).toBe("channel:dm-channel");
+    const recordParams = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
+      updateLastRoute?: {
+        channel?: string;
+        mainDmOwnerPin?: unknown;
+        sessionKey?: string;
+        to?: string;
+      };
+    };
+    expect(recordParams.updateLastRoute?.sessionKey).toBe("session-1");
+    expect(recordParams.updateLastRoute?.sessionKey).not.toBe("agent:agent-1:main");
+    expect(recordParams.updateLastRoute?.channel).toBe("discord");
+    expect(recordParams.updateLastRoute?.to).toBe("user:123456789");
+    expect(recordParams.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {
@@ -370,6 +394,27 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not execute opaque callback actions as built-in fallback commands", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        createButtonEntry({
+          callbackData: "/codex permissions yolo",
+          callbackDataKind: "callback",
+        }),
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -400,6 +445,74 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Alpha from "Pick".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses selected command action values for select fallback", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "command",
+          selectType: "string",
+          options: [{ value: "/codex permissions yolo", label: "Yolo" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction({
+      values: ["/codex permissions yolo"],
+    });
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex permissions yolo");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches selected callback action values to plugin interactive handlers", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "callback",
+          selectType: "string",
+          options: [{ value: "inspect:123", label: "Inspect" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction({
+      values: ["inspect:123"],
+    });
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    const pluginDispatch = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      -1,
+      "dispatchPluginInteractiveHandler",
+    ) as { data?: unknown; ctx?: { interaction?: { values?: unknown } } };
+    expect(pluginDispatch.data).toBe("inspect:123");
+    expect(pluginDispatch.ctx?.interaction?.values).toEqual(["Inspect"]);
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Inspect from "Pick".');
   });
 
   it("keeps reusable buttons active after use", async () => {

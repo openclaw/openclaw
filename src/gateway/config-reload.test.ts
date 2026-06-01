@@ -1,9 +1,5 @@
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getSkillsSnapshotVersion,
-  resetSkillsRefreshStateForTest,
-} from "../agents/skills/refresh-state.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type {
@@ -17,6 +13,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
@@ -24,6 +24,7 @@ import {
   type GatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
+  resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
   shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
@@ -298,6 +299,12 @@ describe("buildGatewayReloadPlan", () => {
       "plugins.installs.lossless-claw.resolvedAt",
       "plugins.installs.lossless-claw.installedAt",
     ]);
+    expect(resolveConfigReloadMetadata("plugins.installs.lossless-claw.resolvedAt").kind).toBe(
+      "none",
+    );
+    expect(resolveConfigReloadMetadata("plugins.installs.lossless-claw.installedAt").kind).toBe(
+      "none",
+    );
   });
 
   it("restarts for whole-record plugin install changes", () => {
@@ -397,6 +404,27 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
   });
 
+  it("hot-reloads diagnostics memory pressure snapshot toggles", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureSnapshot"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureSnapshot");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("hot-reloads auth cooldown changes without a gateway restart", () => {
+    const changedPaths = [
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata("auth.cooldowns.billingBackoffHours").kind).toBe("hot");
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);
@@ -449,6 +477,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "auth.cooldowns.billingBackoffHours",
+      expectRestartGateway: false,
+      expectHotPath: "auth.cooldowns.billingBackoffHours",
     },
     {
       path: "gateway.auth.token",
@@ -634,7 +667,7 @@ type ReloaderHarness = ReturnType<typeof createReloaderHarness>;
 
 function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
   expect(harness.onRestart).toHaveBeenCalledTimes(1);
-  const call = harness.onRestart.mock.calls.at(0);
+  const call = harness.onRestart.mock.calls[0];
   if (!call) {
     throw new Error("expected one restart call");
   }
@@ -643,9 +676,20 @@ function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenC
 
 function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
   expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-  const call = harness.onHotReload.mock.calls.at(0);
+  const call = harness.onHotReload.mock.calls[0];
   if (!call) {
     throw new Error("expected one hot reload call");
+  }
+  return call;
+}
+
+function getOnlyPromoteSnapshotCall(promoteSnapshot: {
+  mock: { calls: Array<readonly [ConfigFileSnapshot, string]> };
+}): readonly [ConfigFileSnapshot, string] {
+  expect(promoteSnapshot).toHaveBeenCalledTimes(1);
+  const call = promoteSnapshot.mock.calls[0];
+  if (!call) {
+    throw new Error("expected one promote snapshot call");
   }
   return call;
 }
@@ -874,6 +918,38 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("hot-reloads direct diagnostics memory pressure snapshot edits", async () => {
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      diagnostics: { memoryPressureSnapshot: false },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: nextConfig,
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        hash: "diagnostics-memory-pressure-snapshot-1",
+      }),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      diagnostics: { memoryPressureSnapshot: true },
+    };
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureSnapshot"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("does not promote external config edits when hot reload rejects them", async () => {
     const acceptedSnapshot = makeSnapshot({
       config: {
@@ -958,7 +1034,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls.at(0) ?? [];
+    const [promotedSnapshot, promotionReason] = getOnlyPromoteSnapshotCall(promoteSnapshot);
     expect(promotedSnapshot?.hash).toBe("internal-1");
     expect(promotionReason).toBe("in-process-write");
 
@@ -997,7 +1073,7 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.log.info).toHaveBeenCalledWith(
       "config reload skipped by writer intent (caller handles follow-up)",
     );
-    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls.at(0) ?? [];
+    const [promotedSnapshot, promotionReason] = getOnlyPromoteSnapshotCall(promoteSnapshot);
     expect(promotedSnapshot?.hash).toBe("internal-none");
     expect(promotionReason).toBe("in-process-write");
 
@@ -1272,6 +1348,57 @@ describe("startGatewayConfigReloader", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.hotReasons).toEqual(["plugins.entries.telegram.enabled"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("keeps external auth cooldown writes on the hot reload path", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      auth: {
+        cooldowns: {
+          billingBackoffHours: 1,
+          billingBackoffHoursByProvider: { anthropic: 2 },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      auth: {
+        cooldowns: {
+          billingBackoffHours: 3,
+          billingBackoffHoursByProvider: { anthropic: 4 },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "external-auth-cooldowns-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual([
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual([
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ]);
+    expect(plan.noopPaths).toStrictEqual([]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

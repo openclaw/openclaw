@@ -29,7 +29,7 @@ const acpManagerMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../acp/control-plane/manager.js", () => ({
-  __testing: {
+  testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
         resolveSession: vi.fn(() => null),
@@ -42,9 +42,9 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
@@ -81,12 +81,13 @@ vi.mock("../agents/model-selection.js", () => {
     return { provider: defaultProvider, model: value };
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: provider.trim().toLowerCase(),
+    provider: normalizeProviderId(provider),
     model: model.trim(),
   });
   const modelKey = (provider: string, model: string) =>
-    `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+    `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
     if (allowedKeys.has(key)) {
       return true;
@@ -184,6 +185,8 @@ vi.mock("../agents/model-selection.js", () => {
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
@@ -239,37 +242,35 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../agents/skills.js", () => ({
+vi.mock("../skills/loading/workspace.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
   loadWorkspaceSkillEntries: vi.fn(() => []),
 }));
 
-vi.mock("../agents/skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../agents/skills/refresh-state.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
-  shouldRefreshSnapshotForVersion: vi.fn(() => false),
+vi.mock("../skills/discovery/agent-filter.js", () => ({
+  resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));
 
-vi.mock("../agents/skills/filter.js", () => ({
-  normalizeSkillFilter: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter?.map((entry) => String(entry).trim()).filter(Boolean),
+vi.mock("../skills/runtime/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(
+    (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
+      snapshot: params?.existingSnapshot ?? {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+        ...(params?.skillFilter === undefined ? {} : { skillFilter: params.skillFilter }),
+        version: 0,
+      },
+      shouldRefresh: !params?.existingSnapshot,
+      snapshotVersion: 0,
+    }),
   ),
-  normalizeSkillFilterForComparison: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter
-      ?.map((entry) => String(entry).trim())
-      .filter(Boolean)
-      .toSorted(),
-  ),
-  matchesSkillFilter: vi.fn(() => true),
 }));
 
 vi.mock("../agents/exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
-}));
-
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => undefined),
 }));

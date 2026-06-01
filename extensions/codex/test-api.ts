@@ -42,8 +42,16 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  developerInstructionAdditions?: string;
+  turnScopedDeveloperInstructions?: string;
+  heartbeatCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
-  const developerInstructions = buildDeveloperInstructions(params.attempt);
+  const developerInstructions = joinPresentSections(
+    buildDeveloperInstructions(params.attempt, {
+      dynamicTools: params.dynamicTools,
+    }),
+    params.developerInstructionAdditions,
+  );
   return {
     developerInstructions,
     threadStartParams: buildThreadStartParams(params.attempt, {
@@ -64,8 +72,14 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
+      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),
   };
+}
+
+function joinPresentSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function createCodexDynamicToolSpecsForPromptSnapshot(params: {

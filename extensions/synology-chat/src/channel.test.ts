@@ -1,4 +1,4 @@
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -27,7 +27,7 @@ function makeSecurityAccount(
 }
 
 function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.some((value) => value.includes(expected))).toBe(true);
+  expect(values.join("\n")).toContain(expected);
 }
 
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {

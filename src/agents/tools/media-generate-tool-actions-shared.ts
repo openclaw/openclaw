@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   listMediaGenerationProviderModels,
   synthesizeMediaGenerationCatalogEntries,
   type MediaGenerationCatalogKind,
-} from "../../media-generation/catalog.js";
+} from "../../../packages/media-generation-core/src/catalog.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
@@ -45,6 +45,7 @@ export function createMediaGenerateProviderListActionResult<
   providers: TProvider[];
   emptyText: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   listModes: (provider: TProvider) => string[];
@@ -72,6 +73,7 @@ export function createMediaGenerateProviderListActionResult<
           providers: params.providers,
           provider,
           cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
         }),

@@ -26,11 +26,11 @@ function getSentNoticeBodies(sendMessage: ReturnType<typeof vi.fn>): string[] {
 }
 
 function expectBodiesContain(bodies: string[], text: string) {
-  expect(bodies.some((body) => body.includes(text))).toBe(true);
+  expect(bodies.join("\n")).toContain(text);
 }
 
 function expectBodiesExclude(bodies: string[], text: string) {
-  expect(bodies.some((body) => body.includes(text))).toBe(false);
+  expect(bodies.join("\n")).not.toContain(text);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -112,7 +112,7 @@ function createHarness(params?: {
   const runDetachedTask = vi.fn((_label: string, task: () => Promise<void>) => {
     const promise = Promise.resolve()
       .then(task)
-      .catch((error) => {
+      .catch((error: unknown) => {
         throw error;
       })
       .finally(() => {
@@ -1623,10 +1623,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
     try {
-      let healthySyncSinceMs: number | undefined;
+      const healthySync = { sinceMs: undefined as number | undefined };
       const { logger, failedDecryptListener } = createHarness({
         accountId: "ops",
-        getHealthySyncSinceMs: () => healthySyncSinceMs,
+        getHealthySyncSinceMs: () => healthySync.sinceMs,
       });
       if (!failedDecryptListener) {
         throw new Error("room.failed_decryption listener was not registered");
@@ -1650,7 +1650,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         freshAfterHealthySync: false,
       });
 
-      healthySyncSinceMs = Date.now();
+      healthySync.sinceMs = Date.now();
 
       await failedDecryptListener(
         "!room:example.org",

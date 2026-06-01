@@ -59,7 +59,7 @@ export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 export type {
@@ -103,7 +103,7 @@ export type {
 } from "../plugins/memory-state.js";
 export type { CliBackendConfig } from "../config/types.js";
 export type * from "./image-generation.js";
-export * from "./music-generation.js";
+export type * from "./music-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { HookEntry } from "../hooks/types.js";
@@ -120,8 +120,11 @@ export type {
   BootstrapResult,
   CompactResult,
   ContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineHostRequirements,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineOperation,
   ContextEngineRuntimeContext,
   IngestBatchResult,
   IngestResult,
@@ -134,6 +137,7 @@ export type {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
+export { assertContextEngineHostSupport } from "../context-engine/host-compat.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,

@@ -194,7 +194,7 @@ function expectMarketplaceInstallSuccess(
 
 function expectRemoteCloneCommand() {
   expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-  const [argv, options] = runCommandWithTimeoutMock.mock.calls.at(0) ?? [];
+  const [argv, options] = runCommandWithTimeoutMock.mock.calls[0] ?? [];
   expect(Array.isArray(argv)).toBe(true);
   expect((argv as unknown[]).slice(0, 5)).toEqual([
     "git",
@@ -824,16 +824,22 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("cleans up a partial download temp dir when streaming the archive fails", async () => {
+  it("rejects malformed archive content-length headers before streaming", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      const beforeTempDirs = await listMarketplaceDownloadTempDirs();
+      const reader = {
+        read: vi.fn(),
+        cancel: vi.fn(async () => undefined),
+        releaseLock: vi.fn(),
+      };
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: new Response("x".repeat(1024), {
+        response: {
+          ok: true,
           status: 200,
-          headers: {
-            "content-length": String(300 * 1024 * 1024),
-          },
-        }),
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers({ "content-length": "1e9" }),
+        } as unknown as Response,
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
@@ -855,8 +861,57 @@ describe("marketplace plugins", () => {
         ok: false,
         error:
           "failed to download https://example.com/frontend-design.tgz: " +
-          "download too large: 314572800 bytes (limit: 268435456 bytes)",
+          "invalid content-length header: 1e9",
       });
+      expect(reader.read).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("cleans up a partial download temp dir when streaming the archive fails", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const beforeTempDirs = await listMarketplaceDownloadTempDirs();
+      const reader = {
+        read: vi.fn(async () => ({
+          done: false,
+          value: { length: 268_435_457 },
+        })),
+        releaseLock: vi.fn(),
+      };
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers(),
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "download too large: 268435457 bytes (limit: 268435456 bytes)",
+      });
+      expect(reader.read).toHaveBeenCalledTimes(1);
+      expect(reader.releaseLock).toHaveBeenCalledTimes(1);
       expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });

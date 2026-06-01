@@ -1,5 +1,6 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
@@ -19,6 +20,7 @@ import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import { extractToolPayload } from "./tool-payload.js";
 
+/** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
   url?: string;
   token?: string;
@@ -28,6 +30,7 @@ export type OutboundGatewayContext = {
   mode: GatewayClientMode;
 };
 
+/** Shared execution context for message-tool send and poll actions. */
 export type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -40,11 +43,12 @@ export type OutboundSendContext = {
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
+  senderIsOwner?: boolean;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
-  senderIsOwner?: boolean;
   sessionId?: string;
+  inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
@@ -159,6 +163,7 @@ async function tryHandleWithPluginAction(params: {
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
+    inboundEventKind: params.ctx.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
@@ -194,6 +199,7 @@ function createChannelActionContext(params: {
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
+    inboundEventKind: params.ctx.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
@@ -230,6 +236,7 @@ async function tryPreparePluginSendPayload(params: {
   );
 }
 
+/** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -266,6 +273,7 @@ export async function executeSendAction(params: {
   });
   if (preparedPayload) {
     throwIfAborted(params.ctx.abortSignal);
+    // Prepared plugin payloads still use core delivery so queueing, hooks, and mirrors stay uniform.
     const result = await sendCoreMessage({
       ...params,
       queuePolicy,
@@ -318,6 +326,7 @@ export async function executeSendAction(params: {
   };
 }
 
+/** Executes a message-tool poll through plugin handlers or the core poll path. */
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
   resolveCorePoll: () => {

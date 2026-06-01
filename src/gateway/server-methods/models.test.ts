@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { modelsHandlers } from "./models.js";
 
 type Deferred<T> = {
@@ -128,11 +128,49 @@ describe("models.list", () => {
     }
   });
 
+  it("does not expose runtime params from catalog rows", async () => {
+    const respond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-redact-params",
+        method: "models.list",
+        params: { view: "all" },
+      },
+      params: { view: "all" },
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([
+            {
+              id: "qwen-local",
+              name: "Qwen Local",
+              provider: "vllm",
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          ]),
+        ),
+        logGateway: {
+          debug: vi.fn(),
+        },
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm" }] },
+      undefined,
+    );
+  });
+
   it("loads the full catalog for provider-scoped configured view and filters only providers", async () => {
     const catalog = [
       { id: "claude-test", name: "Claude Test", provider: "anthropic" },
-      { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai-codex" },
-      { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai-codex" },
+      { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
+      { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
       { id: "llama-local", name: "Llama Local", provider: "vllm" },
       { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
     ];
@@ -140,14 +178,14 @@ describe("models.list", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/*": {},
+            "openai/*": {},
             "vllm/*": {},
           },
         },
       },
       models: {
         providers: {
-          "openai-codex": { apiKey: "test-key" },
+          openai: { apiKey: "test-key" },
           vllm: { apiKey: "test-key" },
         },
       },
@@ -179,8 +217,8 @@ describe("models.list", () => {
       true,
       {
         models: [
-          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai-codex" },
-          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai-codex" },
+          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
+          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
           { id: "llama-local", name: "Llama Local", provider: "vllm" },
           { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
         ],

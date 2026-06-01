@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
@@ -40,6 +40,16 @@ function directText(element: Element | null | undefined): string | undefined {
     .map((node) => node.textContent ?? "")
     .join("")
     .trim();
+}
+
+function expectAgentTab(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    (candidate) => directText(candidate) === text,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected agent tab "${text}"`);
+  }
+  return button;
 }
 
 function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
@@ -262,6 +272,36 @@ describe("renderAgents", () => {
     expect(alphaSelect).not.toBe(betaSelect);
   });
 
+  it("renders the resolved per-agent thinking default in the overview", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgents(
+        createProps({
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "workspace",
+            agents: [
+              { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
+              { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
+            ],
+          },
+          selectedAgentId: "beta",
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    const thinkingKv = Array.from(container.querySelectorAll(".agent-kv")).find(
+      (entry) =>
+        entry.querySelector(".label")?.textContent?.trim() === t("agents.context.thinkingDefault"),
+    );
+    expect(thinkingKv?.textContent).toContain("xhigh");
+  });
+
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
     render(
@@ -284,11 +324,9 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    let skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-      (button) => button.textContent?.includes("Skills"),
-    );
+    let skillsTab = expectAgentTab(container, "Skills");
 
-    expect(skillsTab?.textContent?.trim()).toBe("Skills");
+    expect(skillsTab.textContent?.trim()).toBe("Skills");
 
     render(
       renderAgents(
@@ -310,12 +348,10 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-      (button) => button.textContent?.includes("Skills"),
-    );
+    skillsTab = expectAgentTab(container, "Skills");
 
     expect(directText(skillsTab)).toBe("Skills");
-    expect(skillsTab?.querySelector(".agent-tab-count")?.textContent).toBe("1");
+    expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
   });
 
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
@@ -345,7 +381,8 @@ describe("renderAgents", () => {
       );
 
       expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs"]);
-      expect(container.textContent).toContain("上次刷新：从未");
+      const cards = container.querySelectorAll("section.card");
+      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();
@@ -502,18 +539,31 @@ describe("renderAgentFiles", () => {
     expect(dialog).toBeInstanceOf(HTMLDialogElement);
     expect(panel).toBeInstanceOf(HTMLElement);
     expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    expandButton!.click();
+    const previewPanel = panel!;
+    const previewExpandButton = expandButton!;
+    previewExpandButton.click();
 
-    expect(panel?.classList.contains("fullscreen")).toBe(true);
-    expect(expandButton?.classList.contains("is-fullscreen")).toBe(true);
-    expect(expandButton?.getAttribute("aria-pressed")).toBe("true");
-    expect(expandButton?.getAttribute("aria-label")).toBe("Collapse preview");
+    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel", "fullscreen"]);
+    expect([...previewExpandButton.classList]).toEqual([
+      "btn",
+      "btn--sm",
+      "md-preview-icon-btn",
+      "md-preview-expand-btn",
+      "is-fullscreen",
+    ]);
+    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
+    expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
 
     dialog!.dispatchEvent(new Event("close"));
 
-    expect(panel?.classList.contains("fullscreen")).toBe(false);
-    expect(expandButton?.classList.contains("is-fullscreen")).toBe(false);
-    expect(expandButton?.getAttribute("aria-pressed")).toBe("false");
-    expect(expandButton?.getAttribute("aria-label")).toBe("Expand preview");
+    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
+    expect([...previewExpandButton.classList]).toEqual([
+      "btn",
+      "btn--sm",
+      "md-preview-icon-btn",
+      "md-preview-expand-btn",
+    ]);
+    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
+    expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
   });
 });

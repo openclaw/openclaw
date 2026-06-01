@@ -75,7 +75,7 @@ async function readLeaseFile(filePath: string): Promise<LeaseFile> {
     leases: [],
   });
   const leases = Array.isArray(value.leases)
-    ? value.leases.map(normalizeLease).filter((lease): lease is AcpxProcessLease => !!lease)
+    ? value.leases.map(normalizeLease).filter((lease): lease is AcpxProcessLease => Boolean(lease))
     : [];
   return { version: 1, leases };
 }
@@ -147,6 +147,20 @@ function quoteEnvValue(value: string): string {
   return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function appendAcpxLeaseArgs(params: {
+  command: string;
+  leaseId: string;
+  gatewayInstanceId: string;
+}): string {
+  return [
+    params.command,
+    OPENCLAW_ACPX_LEASE_ID_ARG,
+    quoteEnvValue(params.leaseId),
+    OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+    quoteEnvValue(params.gatewayInstanceId),
+  ].join(" ");
+}
+
 export function withAcpxLeaseEnvironment(params: {
   command: string;
   leaseId: string;
@@ -154,16 +168,12 @@ export function withAcpxLeaseEnvironment(params: {
   platform?: NodeJS.Platform;
 }): string {
   if ((params.platform ?? process.platform) === "win32") {
-    return params.command;
+    return appendAcpxLeaseArgs(params);
   }
   return [
     "env",
     `${OPENCLAW_ACPX_LEASE_ID_ENV}=${quoteEnvValue(params.leaseId)}`,
     `${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=${quoteEnvValue(params.gatewayInstanceId)}`,
-    params.command,
-    OPENCLAW_ACPX_LEASE_ID_ARG,
-    quoteEnvValue(params.leaseId),
-    OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-    quoteEnvValue(params.gatewayInstanceId),
+    appendAcpxLeaseArgs(params),
   ].join(" ");
 }

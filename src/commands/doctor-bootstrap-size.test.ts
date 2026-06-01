@@ -8,7 +8,7 @@ const resolveBootstrapContextForRun = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -21,7 +21,7 @@ vi.mock("../agents/bootstrap-files.js", () => ({
   resolveBootstrapContextForRun,
 }));
 
-vi.mock("../agents/pi-embedded-helpers.js", () => ({
+vi.mock("../agents/embedded-agent-helpers.js", () => ({
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 }));
@@ -52,7 +52,7 @@ describe("noteBootstrapFileSize", () => {
     });
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls.at(0) ?? [];
+    const [message, title] = note.mock.calls[0] ?? [];
     expect(title).toBe("Bootstrap file size");
     expect(message).toBe(
       [

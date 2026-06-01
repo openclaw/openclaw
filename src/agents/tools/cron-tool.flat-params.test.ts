@@ -17,7 +17,7 @@ describe("cron tool flat-params", () => {
   });
 
   function firstGatewayToolCall<TParams>(): [string, unknown, TParams] {
-    const call = callGatewayToolMock.mock.calls.at(0);
+    const call = callGatewayToolMock.mock.calls[0];
     if (!call) {
       throw new Error("expected callGatewayTool to be called");
     }
@@ -90,6 +90,24 @@ describe("cron tool flat-params", () => {
       expr: "0 18 * * *",
       tz: "Asia/Shanghai",
     });
+  });
+
+  it("leaves out-of-range flat atMs for gateway validation", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    const invalidAtMs = 8_640_000_000_000_001;
+
+    await tool.execute("call-flat-invalid-atms-add", {
+      action: "add",
+      name: "bad date",
+      atMs: invalidAtMs,
+      message: "send reminder",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: { at?: unknown; kind?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({ kind: "at", at: invalidAtMs });
   });
 
   it("recovers flat cron schedule shorthand for update", async () => {

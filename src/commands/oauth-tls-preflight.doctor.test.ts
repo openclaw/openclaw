@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -13,8 +13,22 @@ function buildOpenAICodexOAuthConfig(): OpenClawConfig {
   return {
     auth: {
       profiles: {
-        "openai-codex:user@example.com": {
-          provider: "openai-codex",
+        "openai:user@example.com": {
+          provider: "openai",
+          mode: "oauth",
+          email: "user@example.com",
+        },
+      },
+    },
+  };
+}
+
+function buildOpenAIOAuthConfig(): OpenClawConfig {
+  return {
+    auth: {
+      profiles: {
+        "openai:user@example.com": {
+          provider: "openai",
           mode: "oauth",
           email: "user@example.com",
         },
@@ -44,7 +58,7 @@ describe("noteOpenAIOAuthTlsPrerequisites", () => {
     }
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls.at(0) as [string, string];
+    const [message, title] = note.mock.calls[0] as [string, string];
     expect(title).toBe("OAuth TLS prerequisites");
     expect(message).toContain("brew postinstall ca-certificates");
   });
@@ -60,6 +74,21 @@ describe("noteOpenAIOAuthTlsPrerequisites", () => {
     } finally {
       vi.stubGlobal("fetch", originalFetch);
     }
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("runs the preflight for canonical OpenAI OAuth profiles", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 400 }));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await noteOpenAIOAuthTlsPrerequisites({ cfg: buildOpenAIOAuthConfig() });
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(note).not.toHaveBeenCalled();
   });
 

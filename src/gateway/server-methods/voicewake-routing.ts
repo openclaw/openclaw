@@ -1,10 +1,10 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   loadVoiceWakeRoutingConfig,
   normalizeVoiceWakeRoutingConfig,
   setVoiceWakeRoutingConfig,
   validateVoiceWakeRoutingConfigInput,
 } from "../../infra/voicewake-routing.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const voicewakeRoutingHandlers: GatewayRequestHandlers = {
@@ -35,6 +35,8 @@ export const voicewakeRoutingHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      // Validate first for caller-friendly errors, then normalize before
+      // persistence so broadcasts carry the canonical routing shape.
       const normalized = normalizeVoiceWakeRoutingConfig(params.config);
       const config = await setVoiceWakeRoutingConfig(normalized);
       context.broadcastVoiceWakeRoutingChanged(config);

@@ -14,7 +14,7 @@ type SessionEndHookEvent = {
   sessionKey?: string;
 };
 
-const runSessionEndMock = vi.fn(async (_event: SessionEndHookEvent) => undefined);
+const runSessionEndMock = vi.fn(async (_eventValue: SessionEndHookEvent) => undefined);
 const hasHooksMock = vi.fn((name: string) => name === "session_end");
 const getGlobalHookRunnerMock = vi.fn(() => ({
   hasHooks: hasHooksMock,
@@ -55,7 +55,7 @@ const { clearActiveSessionsForShutdownTracker, listActiveSessionsForShutdown } =
 const cfg: OpenClawConfig = {};
 
 const requireSessionEndHookEvent = (index: number): SessionEndHookEvent => {
-  const call = runSessionEndMock.mock.calls.at(index);
+  const call = runSessionEndMock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected session_end hook call ${index}`);
   }
@@ -193,7 +193,7 @@ describe("drainActiveSessionsForShutdown", () => {
   it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
     runSessionEndMock.mockImplementation(async (event: SessionEndHookEvent) => {
       if (event.sessionId === "sess-A") {
-        await new Promise<void>(() => undefined);
+        await new Promise<void>(() => {});
       }
     });
     emitGatewaySessionStartPluginHook({

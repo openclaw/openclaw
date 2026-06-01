@@ -44,7 +44,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadStartParams.ts",
     snippets: [
-      "permissions?: PermissionProfileSelectionParams | null",
+      "permissions?: string | null",
       "dynamicTools?: Array<DynamicToolSpec> | null",
       "experimentalRawEvents: boolean",
       "persistExtendedHistory: boolean",
@@ -52,10 +52,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/TurnStartParams.ts",
-    snippets: [
-      "permissions?: PermissionProfileSelectionParams | null",
-      "serviceTier?: string | null",
-    ],
+    snippets: ["permissions?: string | null", "serviceTier?: string | null"],
   },
   {
     file: "ReviewDecision.ts",
@@ -115,10 +112,10 @@ async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<v
   for (const schema of selectedCodexAppServerJsonSchemas) {
     const sourcePath = path.join(sourceJsonRoot, schema);
     const targetPath = path.join(generatedRoot, "json", schema);
-    let source: string;
+    let sourceValue: string;
     let target: string;
     try {
-      source = await fs.readFile(sourcePath, "utf8");
+      sourceValue = await fs.readFile(sourcePath, "utf8");
     } catch (error) {
       failures.push(
         `protocol-generated/json/${schema}: missing upstream schema (${String(error)})`,
@@ -131,12 +128,12 @@ async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<v
       failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
       continue;
     }
-    if (normalizeJsonSchema(source) !== normalizeJsonSchema(target)) {
+    if (normalizeJsonSchema(sourceValue) !== normalizeJsonSchema(target)) {
       failures.push(`protocol-generated/json/${schema}: differs from source schema`);
     }
   }
 }
 
-function normalizeJsonSchema(source: string): string {
-  return JSON.stringify(JSON.parse(source));
+function normalizeJsonSchema(sourceLocal: string): string {
+  return JSON.stringify(JSON.parse(sourceLocal));
 }

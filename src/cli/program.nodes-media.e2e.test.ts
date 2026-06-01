@@ -8,7 +8,7 @@ installBaseProgramMocks();
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 function getFirstRuntimeLogLine(): string {
-  const first = runtime.log.mock.calls.at(0)?.[0];
+  const first = runtime.log.mock.calls[0]?.[0];
   if (typeof first !== "string") {
     throw new Error(`Expected runtime.log first arg to be string, got ${typeof first}`);
   }
@@ -20,7 +20,7 @@ async function expectLoggedSingleMediaFile(params?: {
   expectedPathPattern?: RegExp;
 }): Promise<string> {
   const out = getFirstRuntimeLogLine();
-  const mediaPath = out.replace(/^MEDIA:/, "").trim();
+  const mediaPath = out.trim();
   if (params?.expectedPathPattern) {
     expect(mediaPath).toMatch(params.expectedPathPattern);
   }
@@ -141,10 +141,10 @@ describe("cli program (nodes media)", () => {
     const out = getFirstRuntimeLogLine();
     const mediaPaths: string[] = [];
     for (const line of out.split("\n")) {
-      if (!line.startsWith("MEDIA:")) {
+      const mediaPath = line.trim();
+      if (!mediaPath) {
         continue;
       }
-      const mediaPath = line.replace(/^MEDIA:/, "");
       if (mediaPath.length > 0) {
         mediaPaths.push(mediaPath);
       }

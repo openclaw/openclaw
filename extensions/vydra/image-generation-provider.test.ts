@@ -9,7 +9,7 @@ import {
 } from "./provider-test-helpers.test.js";
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, RequestInit] {
-  const call = fetchMock.mock.calls.at(index);
+  const call = fetchMock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected fetch call ${index}`);
   }
@@ -69,6 +69,28 @@ describe("vydra image-generation provider", () => {
         status: "completed",
       },
     });
+  });
+
+  it("rejects generated image downloads that exceed the configured media cap", async () => {
+    stubVydraApiKey();
+    stubFetch(
+      jsonResponse({
+        jobId: "job-123",
+        status: "completed",
+        imageUrl: "https://cdn.vydra.ai/generated/test.png",
+      }),
+      binaryResponse("too-large", "image/png"),
+    );
+
+    const provider = buildVydraImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "draw a cat",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Vydra image download exceeds 1 bytes");
   });
 
   it("passes request SSRF policy to the image creation request", async () => {

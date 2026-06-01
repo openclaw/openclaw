@@ -176,7 +176,11 @@ const pwMocks = vi.hoisted(() => ({
   fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
   getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+  getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
+    dialogs: { pending: [], recent: [] },
+  })),
   getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
+  highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
@@ -250,10 +254,12 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   select: {
     mock: pwMocks.selectOptionViaPlaywright,
     fields: ["ref", "selector", "values", "timeoutMs"],
+    includeSsrf: true,
   },
   fill: {
     mock: pwMocks.fillFormViaPlaywright,
     fields: ["fields", "timeoutMs"],
+    includeSsrf: true,
   },
   resize: {
     mock: pwMocks.resizeViewportViaPlaywright,
@@ -421,7 +427,30 @@ vi.mock("../config/config.js", async () => {
       },
     };
   };
-  const writeConfigFile = vi.fn(async () => {});
+  const writeConfigFile = vi.fn(async (_cfg?: ReturnType<typeof loadConfig>) => {});
+  const mutateConfigFile = vi.fn(
+    async (params: {
+      mutate: (
+        draft: ReturnType<typeof loadConfig>,
+        context: { snapshot: { path: string } },
+      ) => unknown;
+    }) => {
+      const draft = structuredClone(loadConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        persistedHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  );
   return {
     ...actual,
     createConfigIO: vi.fn(() => ({
@@ -432,6 +461,7 @@ vi.mock("../config/config.js", async () => {
     getRuntimeConfigSnapshot: vi.fn(() => null),
     loadConfig,
     writeConfigFile,
+    mutateConfigFile,
   };
 });
 

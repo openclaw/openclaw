@@ -41,7 +41,7 @@ function buildFocusSessionBindingService() {
   };
 }
 
-vi.mock("../../acp/runtime/session-identifiers.js", () => ({
+vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
   resolveAcpSessionCwd: () => undefined,
   resolveAcpThreadSessionDetailLines: (params: {
     meta?: { identity?: Record<string, unknown> };
@@ -178,7 +178,7 @@ type SessionBindingBindInput = {
 };
 
 function firstFocusTargetSessionParams(): FocusTargetSessionParams {
-  const firstCall = hoisted.resolveFocusTargetSessionMock.mock.calls.at(0);
+  const firstCall = hoisted.resolveFocusTargetSessionMock.mock.calls[0];
   if (!firstCall) {
     throw new Error("Expected focus target session call");
   }
@@ -186,7 +186,7 @@ function firstFocusTargetSessionParams(): FocusTargetSessionParams {
 }
 
 function firstSessionBindingBindInput(): SessionBindingBindInput {
-  const firstCall = hoisted.sessionBindingBindMock.mock.calls.at(0);
+  const firstCall = hoisted.sessionBindingBindMock.mock.calls[0];
   if (!firstCall) {
     throw new Error("Expected session binding bind call");
   }

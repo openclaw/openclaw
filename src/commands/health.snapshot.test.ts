@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
@@ -474,6 +475,23 @@ describe("getHealthSnapshot", () => {
     vi.unstubAllEnvs();
   });
 
+  it("clamps oversized probe timeouts", async () => {
+    testConfig = {
+      session: { store: "/tmp/x" },
+      channels: { telegram: { botToken: "123:test" } },
+    };
+    testStore = {};
+    const timeouts: number[] = [];
+    probeTelegramAccountForTestOverride = async (_account, timeoutMs) => {
+      timeouts.push(timeoutMs);
+      return { ok: true };
+    };
+
+    await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+    expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+  });
+
   it("includes active plugin load errors in the health snapshot", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {};
@@ -557,8 +575,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.some((call) => call.includes("/getMe"))).toBe(true);
-    expect(calls.some((call) => call.includes("/getWebhookInfo"))).toBe(true);
+    expect(calls.join("\n")).toContain("/getMe");
+    expect(calls.join("\n")).toContain("/getWebhookInfo");
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -570,7 +588,7 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.some((call) => call.includes("bott-file/getMe"))).toBe(true);
+      expect(tokenFileProbe.calls.join("\n")).toContain("bott-file/getMe");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -816,13 +834,13 @@ describe("getHealthSnapshot", () => {
     };
 
     expect(imessage.configured).toBe(true);
-    expect(imessage.probe).toMatchObject({
+    expect(imessage.probe).toEqual({
       ok: false,
       error:
         "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     });
     expect(imessage.probe?.privateApi).toBeUndefined();
-    expect(imessage.accounts?.default?.probe).toMatchObject({
+    expect(imessage.accounts?.default?.probe).toEqual({
       ok: false,
       error:
         "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",

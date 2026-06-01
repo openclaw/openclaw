@@ -29,13 +29,13 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 const getApiKeyForModelMock = vi.hoisted(() =>
   vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
 );
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 const { MediaFetchErrorMock } = vi.hoisted(() => {
-  class MediaFetchErrorMock extends Error {
+  class MediaFetchErrorMockLocal extends Error {
     code: string;
     constructor(message: string, code: string) {
       super(message);
@@ -43,7 +43,7 @@ const { MediaFetchErrorMock } = vi.hoisted(() => {
       this.code = code;
     }
   }
-  return { MediaFetchErrorMock };
+  return { MediaFetchErrorMock: MediaFetchErrorMockLocal };
 });
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ function disableImageUnderstanding(cfg: OpenClawConfig): void {
 
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-  const firstCall = mockDeliverOutboundPayloads.mock.calls.at(0);
+  const firstCall = mockDeliverOutboundPayloads.mock.calls[0];
   if (!firstCall) {
     throw new Error("Expected echo transcript delivery call");
   }
@@ -160,13 +160,20 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     vi.doMock("../agents/model-auth.js", () => ({
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      isProviderAuthError: (err: unknown, code?: string) =>
+        err instanceof Error &&
+        "code" in err &&
+        (code === undefined || (err as { code?: unknown }).code === code),
       requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
         if (auth?.apiKey) {
           return auth.apiKey;
         }
-        throw new Error(
+        const err = new Error(
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
+        (err as { code?: string; provider?: string }).code = "missing-api-key";
+        (err as { code?: string; provider?: string }).provider = provider;
+        throw err;
       },
       resolveAwsSdkEnvVarName: vi.fn(() => undefined),
       resolveEnvApiKey: vi.fn(() => null),
@@ -177,7 +184,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       resolveAuthProfileOrder: vi.fn(() => []),
     }));
     vi.doMock("../media/fetch.js", () => ({
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
       MediaFetchError: MediaFetchErrorMock,
     }));
     vi.doMock("../process/exec.js", () => ({
@@ -232,7 +239,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     resolveApiKeyForProviderMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    readRemoteMediaBufferMock.mockClear();
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();

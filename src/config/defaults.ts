@@ -1,8 +1,17 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  collectManifestModelIdNormalizationPolicies,
+  normalizeConfiguredProviderCatalogModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "./agent-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "./cron-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
@@ -15,13 +24,14 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
-let defaultWarnState: WarnState = { warned: false };
+const defaultWarnState: WarnState = { warned: false };
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-7",
+  // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
+  opus: "anthropic/claude-opus-4-8",
   sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
@@ -29,10 +39,10 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
 
-  // Google Gemini (3.x are preview ids in the catalog)
+  // Google Gemini (3.x — flash-lite is GA; pro and flash are still preview)
   gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
+  "gemini-flash-lite": "google/gemini-3.1-flash-lite",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -149,6 +159,10 @@ export function applyModelDefaults(
 
   const providerConfig = nextCfg.models?.providers;
   if (providerConfig) {
+    const manifestRegistry = options.manifestRegistry ?? options.loadManifestRegistry?.();
+    const modelIdNormalizationPolicies = manifestRegistry
+      ? collectManifestModelIdNormalizationPolicies(manifestRegistry.plugins)
+      : undefined;
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
@@ -165,7 +179,7 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
-      let nextProvider = normalizedProvider;
+      const nextProvider = normalizedProvider;
       if (nextProvider !== provider) {
         mutated = true;
       }
@@ -173,7 +187,11 @@ export function applyModelDefaults(
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
-        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id);
+        const id = normalizeConfiguredProviderCatalogModelId(
+          providerId,
+          raw.id,
+          modelIdNormalizationPolicies,
+        );
         if (id !== raw.id) {
           modelMutated = true;
         }
@@ -258,9 +276,43 @@ export function applyModelDefaults(
     }
   }
 
-  const existingAgent = nextCfg.agents?.defaults;
+  let nextAgents = nextCfg.agents;
+  const rawAgentList = nextAgents?.list;
+  if (Array.isArray(rawAgentList)) {
+    let listMutated = false;
+    const agentList = rawAgentList.map((agent) => {
+      if (!isRecord(agent)) {
+        return agent;
+      }
+      let nextAgent = agent;
+      if (Object.hasOwn(agent, "model")) {
+        const normalizedModel = normalizeAgentModelConfigForDefaults(agent.model);
+        if (normalizedModel !== agent.model) {
+          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+          listMutated = true;
+        }
+      }
+      if (isRecord(agent.models)) {
+        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+        if (normalizedModels !== agent.models) {
+          nextAgent = { ...nextAgent, models: normalizedModels };
+          listMutated = true;
+        }
+      }
+      return nextAgent;
+    });
+    if (listMutated) {
+      nextAgents = { ...nextAgents, list: agentList };
+      mutated = true;
+    }
+  }
+
+  const existingAgent = nextAgents?.defaults;
   if (!existingAgent) {
-    return mutated ? nextCfg : cfg;
+    if (!mutated) {
+      return cfg;
+    }
+    return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
   }
 
   let nextAgent = existingAgent;
@@ -280,7 +332,7 @@ export function applyModelDefaults(
       ? {
           ...nextCfg,
           agents: {
-            ...nextCfg.agents,
+            ...nextAgents,
             defaults: nextAgent,
           },
         }
@@ -310,7 +362,7 @@ export function applyModelDefaults(
   return {
     ...nextCfg,
     agents: {
-      ...nextCfg.agents,
+      ...nextAgents,
       defaults: { ...nextAgent, models: nextModels },
     },
   };
@@ -356,7 +408,10 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  const hasSubArchive =
+    typeof defaults?.subagents?.archiveAfterMinutes === "number" &&
+    Number.isFinite(defaults.subagents.archiveAfterMinutes);
+  if (hasMax && hasSubMax && hasSubArchive) {
     return cfg;
   }
 
@@ -372,6 +427,10 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
     nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
     mutated = true;
   }
+  if (!hasSubArchive) {
+    nextSubagents.archiveAfterMinutes = DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
+    mutated = true;
+  }
 
   if (!mutated) {
     return cfg;
@@ -385,6 +444,20 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
         ...nextDefaults,
         subagents: nextSubagents,
       },
+    },
+  };
+}
+
+export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const raw = cfg.cron?.maxConcurrentRuns;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    cron: {
+      ...cfg.cron,
+      maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
     },
   };
 }

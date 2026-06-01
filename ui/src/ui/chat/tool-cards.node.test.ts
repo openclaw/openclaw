@@ -47,8 +47,10 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.id).toBe("msg:1:call-1");
     expect(cards[0]?.name).toBe("browser.open");
     expect(cards[0]?.outputText).toBe("Opened page");
-    expect(cards[0]?.inputText).toContain('"url": "https://example.com"');
-    expect(cards[0]?.inputText).toContain('"retry": 0');
+    expect(cards[0]?.inputText).toBe(`{
+  "url": "https://example.com",
+  "retry": 0
+}`);
   });
 
   it("preserves string args verbatim and keeps empty-output cards", () => {
@@ -89,8 +91,10 @@ describe("tool-card extraction", () => {
     );
 
     expect(cards).toHaveLength(1);
-    expect(cards[0]?.inputText).toContain('"deck": "Example Deck"');
-    expect(cards[0]?.inputText).toContain('"mode": "preview"');
+    expect(cards[0]?.inputText).toBe(`{
+  "deck": "Example Deck",
+  "mode": "preview"
+}`);
   });
 
   it("pairs interleaved nameless tool results in content order", () => {
@@ -130,6 +134,80 @@ describe("tool-card extraction", () => {
     expect(cards[1]?.outputText).toBe("Opened B");
   });
 
+  it("pairs sequential nameless same-name tool results with the earliest unmatched call", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            name: "read",
+            input: { path: "a.txt" },
+          },
+          {
+            type: "tool_use",
+            name: "read",
+            input: { path: "b.txt" },
+          },
+          {
+            type: "tool_result",
+            name: "read",
+            text: "A contents",
+          },
+          {
+            type: "tool_result",
+            name: "read",
+            text: "B contents",
+          },
+        ],
+      },
+      "msg:sequential",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.inputText).toBe('{\n  "path": "a.txt"\n}');
+    expect(cards[0]?.outputText).toBe("A contents");
+    expect(cards[1]?.inputText).toBe('{\n  "path": "b.txt"\n}');
+    expect(cards[1]?.outputText).toBe("B contents");
+  });
+
+  it("does not reuse nameless same-name calls after an empty result", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            name: "read",
+            input: { path: "empty.txt" },
+          },
+          {
+            type: "tool_use",
+            name: "read",
+            input: { path: "next.txt" },
+          },
+          {
+            type: "tool_result",
+            name: "read",
+            text: "",
+          },
+          {
+            type: "tool_result",
+            name: "read",
+            text: "Next contents",
+          },
+        ],
+      },
+      "msg:empty-result",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.inputText).toBe('{\n  "path": "empty.txt"\n}');
+    expect(cards[0]?.outputText).toBe("");
+    expect(cards[1]?.inputText).toBe('{\n  "path": "next.txt"\n}');
+    expect(cards[1]?.outputText).toBe("Next contents");
+  });
+
   it("extracts tool result output from text block content arrays", () => {
     const cards = extractToolCards(
       {
@@ -159,6 +237,61 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.outputText).toBe("# Heading\nfile body");
   });
 
+  it("preserves explicit tool error flags from tool result items and messages", () => {
+    const pairedCards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-error",
+            name: "lookup",
+          },
+          {
+            type: "tool_result",
+            id: "call-error",
+            name: "lookup",
+            text: "lookup failed",
+            isError: true,
+          },
+        ],
+      },
+      "msg:error-item",
+    );
+
+    expect(pairedCards[0]?.isError).toBe(true);
+
+    const messageFlagCards = extractToolCards(
+      {
+        role: "toolResult",
+        isError: true,
+        content: [
+          {
+            type: "tool_result",
+            id: "call-message-error",
+            name: "lookup",
+            text: "lookup failed",
+          },
+        ],
+      },
+      "msg:error-message-flag",
+    );
+
+    expect(messageFlagCards[0]?.isError).toBe(true);
+
+    const standaloneCards = extractToolCards(
+      {
+        role: "tool",
+        toolName: "lookup",
+        content: "lookup failed",
+        isError: true,
+      },
+      "msg:error-message",
+    );
+
+    expect(standaloneCards[0]?.isError).toBe(true);
+  });
+
   it("builds sidebar content with input and empty output status", () => {
     const [card] = extractToolCards(
       {
@@ -176,11 +309,32 @@ describe("tool-card extraction", () => {
     );
 
     const sidebar = buildToolCardSidebarContent(card);
-    expect(sidebar).toContain("## Deck Manage");
-    expect(sidebar).toContain("### Tool input");
-    expect(sidebar).toContain("with Example Deck");
-    expect(sidebar).toContain("### Tool output");
-    expect(sidebar).toContain("No output");
+    expect(sidebar).toBe(`## Deck Manage
+
+**Tool:** \`deck_manage\`
+
+### Tool input
+\`\`\`text
+with Example Deck
+\`\`\`
+
+### Tool output
+*No output — tool completed successfully.*`);
+  });
+
+  it("builds sidebar content with a failed empty-output status for explicit errors", () => {
+    const sidebar = buildToolCardSidebarContent({
+      id: "msg:error-empty",
+      name: "lookup",
+      isError: true,
+    });
+
+    expect(sidebar).toBe(`## Lookup
+
+**Tool:** \`lookup\`
+
+### Tool error
+*No output — tool failed.*`);
   });
 
   it("extracts canvas handle payloads into canvas previews", () => {
@@ -212,6 +366,21 @@ describe("tool-card extraction", () => {
     expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
     expect(card?.preview?.title).toBe("Inline demo");
     expect(card?.preview?.preferredHeight).toBe(420);
+  });
+
+  it("uses transcript metadata ids for history-backed tool messages", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "browser.open",
+        content: [{ type: "text", text: "Opened page" }],
+        __openclaw: { id: "msg-tool-history-1", seq: 7 },
+      },
+      "msg:history",
+    );
+
+    expect(card?.messageId).toBe("msg-tool-history-1");
+    expect(card?.outputText).toBe("Opened page");
   });
 
   it("does not create previews for non-assistant canvas or generic outputs", () => {

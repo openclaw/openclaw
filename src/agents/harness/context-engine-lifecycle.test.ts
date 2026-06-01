@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -151,6 +151,67 @@ describe("harness context engine lifecycle", () => {
 
     const assembleParams = assemble.mock.calls.at(0)?.[0];
     expect(assembleParams).not.toHaveProperty("currentTokenCount");
+  });
+
+  describe("assembleHarnessContextEngine result validation", () => {
+    // Regression for #75541: plugins that return a malformed assemble result
+    // previously poisoned activeSession.messages with `undefined`, which then
+    // crashed downstream with "Cannot read properties of undefined (reading
+    // 'length')". The harness wrapper now throws a descriptive error so the
+    // runner's existing assemble try/catch can log the engine id and fall
+    // back to the pipeline messages instead of corrupting session state.
+    const visibleUser = textMessage("user", "ping", 1);
+
+    async function runAssembleWithEngineResult(result: unknown) {
+      return assembleHarnessContextEngine({
+        contextEngine: createContextEngine({
+          info: { id: "broken-engine", name: "Broken engine" },
+          assemble: vi.fn(async () => result as never),
+        }),
+        sessionId: sessionParams.sessionId,
+        sessionKey: sessionParams.sessionKey,
+        messages: [visibleUser],
+        modelId: "gpt-test",
+      });
+    }
+
+    it("passes through a well-formed AssembleResult unchanged", async () => {
+      const wellFormed = { messages: [visibleUser], estimatedTokens: 0 };
+      await expect(runAssembleWithEngineResult(wellFormed)).resolves.toBe(wellFormed);
+    });
+
+    it("rejects an undefined assemble result with the engine id", async () => {
+      await expect(runAssembleWithEngineResult(undefined)).rejects.toThrow(
+        /context engine "broken-engine"[\s\S]*messages/,
+      );
+    });
+
+    it("rejects a null assemble result with the engine id", async () => {
+      await expect(runAssembleWithEngineResult(null)).rejects.toThrow(
+        /context engine "broken-engine"[\s\S]*messages/,
+      );
+    });
+
+    it("rejects an assemble result missing the messages array (lossless-claw shape)", async () => {
+      // Mirrors the malformed shape reported in #75541, where the plugin
+      // returned an object that satisfied the truthy `if (!assembled)` guard
+      // but omitted the required `messages` field.
+      await expect(runAssembleWithEngineResult({ estimatedTokens: 0 })).rejects.toThrow(
+        /assemble\(\) returned an invalid result[\s\S]*messages of type undefined/,
+      );
+    });
+
+    it("rejects an assemble result whose messages field is not an array", async () => {
+      await expect(
+        runAssembleWithEngineResult({ messages: "all of them", estimatedTokens: 0 }),
+      ).rejects.toThrow(/messages of type string/);
+    });
+
+    it("rejects an assemble result whose messages field is null", async () => {
+      await expect(
+        runAssembleWithEngineResult({ messages: null, estimatedTokens: 0 }),
+      ).rejects.toThrow(/messages of type null/);
+    });
   });
 
   it("keeps hidden runtime-context custom messages out of ingestBatch fallbacks", async () => {

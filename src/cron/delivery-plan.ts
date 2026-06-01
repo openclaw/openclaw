@@ -1,13 +1,14 @@
-import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
+/** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
@@ -18,6 +19,13 @@ export type CronDeliveryPlan = {
   source: "delivery";
   requested: boolean;
 };
+
+/** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
+export function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+  );
+}
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
@@ -41,6 +49,7 @@ function resolveAnnounceChannel(params: {
   );
 }
 
+/** Resolves primary delivery config into the runtime mode/channel/target plan. */
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
@@ -104,6 +113,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   };
 }
 
+/** Normalized destination for notifying about cron execution failures. */
 export type CronFailureDeliveryPlan = {
   mode: "announce" | "webhook";
   channel?: CronMessageChannel;
@@ -111,6 +121,7 @@ export type CronFailureDeliveryPlan = {
   accountId?: string;
 };
 
+/** Job-level failure destination override fields before global defaults are merged. */
 export type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
@@ -126,6 +137,7 @@ function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefine
   return undefined;
 }
 
+/** Resolves job-level failure notification routing layered over global defaults. */
 export function resolveFailureDestination(
   job: CronJob,
   globalConfig?: CronFailureDestinationConfig,
@@ -169,6 +181,7 @@ export function resolveFailureDestination(
     if (jobMode !== undefined) {
       const globalMode = globalConfig?.mode ?? "announce";
       if (!jobToExplicitValue && globalMode !== jobMode) {
+        // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }
       mode = jobMode;

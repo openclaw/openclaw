@@ -22,6 +22,13 @@ vi.mock("../../../plugins/provider-auth-choices.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  applyNonInteractivePluginProviderChoice.mockReset();
+  applyNonInteractivePluginProviderChoice.mockResolvedValue(undefined);
+  resolveNonInteractiveApiKey.mockReset();
+  resolveManifestDeprecatedProviderAuthChoice.mockReset();
+  resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
+  resolveManifestProviderAuthChoices.mockReset();
+  resolveManifestProviderAuthChoices.mockReturnValue([]);
 });
 
 function createRuntime() {
@@ -54,7 +61,7 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("fails with manifest-owned replacement guidance for deprecated auth choices", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
       choiceId: "demo-provider-modern-api",
     } as never);
 
@@ -127,7 +134,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       "custom-models-custom-local/local-large",
     );
     expect(resolveNonInteractiveApiKey).toHaveBeenCalledOnce();
-    const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls.at(0) ?? [];
+    const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls[0] ?? [];
     expect(apiKeyParams?.provider).toBe("custom-models-custom-local");
     expect(apiKeyParams?.flagName).toBe("--custom-api-key");
     expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");

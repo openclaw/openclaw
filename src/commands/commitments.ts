@@ -1,3 +1,8 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   listCommitments,
@@ -7,10 +12,7 @@ import {
 import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { isRich, theme } from "../terminal/theme.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const STATUS_VALUES = new Set<CommitmentStatus>([
   "pending",
@@ -48,7 +50,7 @@ function isActiveCommitment(commitment: CommitmentRecord): boolean {
 }
 
 function formatDue(ms: number): string {
-  return new Date(ms).toISOString();
+  return timestampMsToIsoString(ms) ?? "n/a";
 }
 
 function formatRows(commitments: CommitmentRecord[], rich: boolean): string[] {
@@ -104,19 +106,13 @@ export async function commitmentsListCommand(
   ).filter((commitment) => opts.all || status || isActiveCommitment(commitment));
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: commitments.length,
-          status: status ?? (opts.all ? null : "pending"),
-          agentId: normalizeOptionalString(opts.agent) ?? null,
-          store: resolveCommitmentStorePath(),
-          commitments,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: commitments.length,
+      status: status ?? (opts.all ? null : "pending"),
+      agentId: normalizeOptionalString(opts.agent) ?? null,
+      store: resolveCommitmentStorePath(),
+      commitments,
+    });
     return;
   }
 
@@ -143,7 +139,7 @@ export async function commitmentsDismissCommand(
   opts: { ids: string[]; json?: boolean },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const ids = opts.ids.map((id) => id.trim()).filter(Boolean);
+  const ids = normalizeStringEntries(opts.ids);
   if (ids.length === 0) {
     runtime.error(
       `At least one commitment id is required. Run ${formatCliCommand("openclaw commitments list")} to choose one.`,
@@ -159,7 +155,7 @@ export async function commitmentsDismissCommand(
     nowMs: Date.now(),
   });
   if (opts.json) {
-    runtime.log(JSON.stringify({ dismissed: ids }, null, 2));
+    writeRuntimeJson(runtime, { dismissed: ids });
     return;
   }
   runtime.log(info(`Dismissed commitments: ${ids.join(", ")}`));

@@ -1,4 +1,5 @@
-import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import type { CommandNormalizeOptions } from "../auto-reply/commands-registry.js";
 import {
   createInboundDebouncer,
@@ -6,7 +7,6 @@ import {
   type InboundDebounceCreateParams,
 } from "../auto-reply/inbound-debounce.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;
@@ -25,7 +25,7 @@ export function shouldDebounceTextInbound(params: {
   if (!text) {
     return false;
   }
-  return !hasControlCommand(text, params.cfg, params.commandOptions);
+  return !isControlCommandMessage(text, params.cfg, params.commandOptions);
 }
 
 export function createChannelInboundDebouncer<T>(

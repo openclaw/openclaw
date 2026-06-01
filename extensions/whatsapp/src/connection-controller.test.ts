@@ -1,7 +1,12 @@
 import { EventEmitter } from "node:events";
+import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
-import { closeWaSocket, WhatsAppConnectionController } from "./connection-controller.js";
+import {
+  closeWaSocket,
+  waitForWhatsAppLoginResult,
+  WhatsAppConnectionController,
+} from "./connection-controller.js";
 import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
@@ -93,7 +98,7 @@ describe("WhatsAppConnectionController", () => {
 
     expect(createListener).not.toHaveBeenCalled();
     expect(sock.end).toHaveBeenCalledOnce();
-    const closeError = sock.end.mock.calls.at(0)?.[0] as Error | undefined;
+    const closeError = sock.end.mock.calls[0]?.[0] as Error | undefined;
     expect(closeError).toBeInstanceOf(Error);
     expect(closeError?.message).toBe("OpenClaw WhatsApp socket close");
     expect(sock.ws.close).not.toHaveBeenCalled();
@@ -125,6 +130,120 @@ describe("WhatsAppConnectionController", () => {
     });
 
     expect(callOrder).toEqual(["create", "wait-for-connection"]);
+  });
+
+  it("restarts login once on status 408 and preserves replacement socket options", async () => {
+    const initialSock = createSocketWithTransportEmitter();
+    const replacementSock = createSocketWithTransportEmitter();
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce({ output: { statusCode: DisconnectReason.timedOut } })
+      .mockResolvedValueOnce(undefined);
+    const onQr = vi.fn();
+    const onSocketReplaced = vi.fn();
+    const createSocket = vi.fn(
+      async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
+        opts?.onQr?.("qr-after-timeout");
+        return replacementSock;
+      },
+    );
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: initialSock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: true,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+      socketTiming: {
+        connectTimeoutMs: 10_000,
+        defaultQueryTimeoutMs: 20_000,
+        keepAliveIntervalMs: 30_000,
+      },
+      onQr,
+      onSocketReplaced,
+    });
+
+    expect(result).toEqual({
+      outcome: "connected",
+      restarted: true,
+      sock: replacementSock,
+    });
+    expect(initialSock.end).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledWith(false, true, {
+      authDir: "/tmp/wa-auth",
+      connectTimeoutMs: 10_000,
+      defaultQueryTimeoutMs: 20_000,
+      keepAliveIntervalMs: 30_000,
+      onQr,
+    });
+    expect(onQr).toHaveBeenCalledWith("qr-after-timeout");
+    expect(onSocketReplaced).toHaveBeenCalledWith(replacementSock);
+  });
+
+  it("still honors the post-pairing 515 restart after a status 408 recovery", async () => {
+    const initialSock = createSocketWithTransportEmitter();
+    const afterTimeoutSock = createSocketWithTransportEmitter();
+    const afterPairingRestartSock = createSocketWithTransportEmitter();
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce({ output: { statusCode: DisconnectReason.timedOut } })
+      .mockRejectedValueOnce({ output: { statusCode: 515 } })
+      .mockResolvedValueOnce(undefined);
+    const createSocket = vi
+      .fn()
+      .mockResolvedValueOnce(afterTimeoutSock)
+      .mockResolvedValueOnce(afterPairingRestartSock);
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: initialSock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+    });
+
+    expect(result).toEqual({
+      outcome: "connected",
+      restarted: true,
+      sock: afterPairingRestartSock,
+    });
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(waitForConnection).toHaveBeenCalledTimes(3);
+    expect(initialSock.end).toHaveBeenCalledOnce();
+    expect(afterTimeoutSock.end).toHaveBeenCalledOnce();
+  });
+
+  it("does not keep recreating sockets when login status 408 persists", async () => {
+    const initialSock = createSocketWithTransportEmitter();
+    const replacementSock = createSocketWithTransportEmitter();
+    const timeoutError = { output: { statusCode: DisconnectReason.timedOut } };
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce(timeoutError)
+      .mockRejectedValueOnce(timeoutError);
+    const createSocket = vi.fn(async () => replacementSock);
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: initialSock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      statusCode: DisconnectReason.timedOut,
+      error: timeoutError,
+    });
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(waitForConnection).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the previous registered controller until a replacement listener is ready", async () => {
@@ -193,7 +312,7 @@ describe("WhatsAppConnectionController", () => {
 
   it("tracks real websocket frame activity in the connection snapshot", async () => {
     vi.useFakeTimers();
-    const controller = new WhatsAppConnectionController({
+    const controllerValue = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
       verbose: false,
@@ -217,7 +336,7 @@ describe("WhatsAppConnectionController", () => {
       waitForWaConnectionMock.mockResolvedValueOnce(undefined);
 
       const snapshots: Array<{ lastTransportActivityAt: number }> = [];
-      await controller.openConnection({
+      await controllerValue.openConnection({
         connectionId: "conn-frame-activity",
         createListener: async () => createListenerStub() as never,
         onHeartbeat: (snapshot) => snapshots.push(snapshot),
@@ -235,14 +354,14 @@ describe("WhatsAppConnectionController", () => {
       const lastSnapshot = snapshots.at(-1);
       expect(lastSnapshot?.lastTransportActivityAt).toBeGreaterThan(firstTransportAt);
     } finally {
-      await controller.shutdown();
+      await controllerValue.shutdown();
       vi.useRealTimers();
     }
   });
 
   it("forces reconnect on transport stall before the long app-silence window", async () => {
     vi.useFakeTimers();
-    const controller = new WhatsAppConnectionController({
+    const controllerLocal = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
       verbose: false,
@@ -266,7 +385,7 @@ describe("WhatsAppConnectionController", () => {
       waitForWaConnectionMock.mockResolvedValueOnce(undefined);
 
       const timeouts: string[] = [];
-      await controller.openConnection({
+      await controllerLocal.openConnection({
         connectionId: "conn-transport-timeout",
         createListener: async () => createListenerStub() as never,
         onWatchdogTimeout: () => timeouts.push("timeout"),
@@ -276,7 +395,7 @@ describe("WhatsAppConnectionController", () => {
 
       expect(timeouts.length).toBeGreaterThanOrEqual(1);
     } finally {
-      await controller.shutdown();
+      await controllerLocal.shutdown();
       vi.useRealTimers();
     }
   });

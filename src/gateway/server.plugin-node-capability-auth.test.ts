@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Socket } from "node:net";
+import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -82,7 +82,9 @@ async function listen(
       sockets.delete(socket);
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, host, resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, host, resolve);
+  });
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
@@ -93,9 +95,9 @@ async function listen(
         socket.destroy();
       }
       await withTimeout(
-        new Promise<void>((resolve, reject) =>
-          server.close((err) => (err ? reject(err) : resolve())),
-        ),
+        new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        }),
         SERVER_CLOSE_TIMEOUT_MS,
         "gateway test server close",
       );
@@ -167,6 +169,50 @@ async function expectWsConnected(url: string, headers?: Record<string, string>):
       );
     });
     ws.once("error", (err) => {
+      finish(() => reject(err));
+    });
+  });
+}
+
+async function sendRawHttpRequest(params: {
+  host: string;
+  port: number;
+  requestTarget: string;
+  headers?: readonly string[];
+}): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const socket = connect({ host: params.host, port: params.port }, () => {
+      const headers = params.headers ?? ["Host: localhost", "Connection: close"];
+      socket.write([`GET ${params.requestTarget} HTTP/1.1`, ...headers, "", ""].join("\r\n"));
+    });
+    let response = "";
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.setTimeout(0);
+      fn();
+    };
+    socket.setEncoding("utf8");
+    socket.setTimeout(WS_REJECT_TIMEOUT_MS, () => {
+      const error = new Error("timeout");
+      finish(() => {
+        socket.destroy(error);
+        reject(error);
+      });
+    });
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    socket.once("end", () => {
+      finish(() => resolve(response));
+    });
+    socket.once("close", () => {
+      finish(() => resolve(response));
+    });
+    socket.once("error", (err) => {
       finish(() => reject(err));
     });
   });
@@ -291,8 +337,12 @@ async function withCanvasGatewayHarness(params: {
     for (const ws of wss.clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => canvasWss.close(() => resolve()));
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      canvasWss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
     await listener.close();
     params.rateLimiter?.dispose();
   }
@@ -406,6 +456,53 @@ describe("gateway plugin node capability auth", () => {
         },
       });
     }, "openclaw-canvas-auth-test-");
+  }, 60_000);
+
+  test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        for (const requestTarget of ["//", "///", "//${jndi:ldap://example}.action"]) {
+          const response = await sendRawHttpRequest({
+            host: "127.0.0.1",
+            port: listener.port,
+            requestTarget,
+          });
+          expect(response).toMatch(/^HTTP\/1\.1 401 /);
+        }
+
+        const res = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+        expect(res.status).toBe(401);
+      },
+    });
+  }, 60_000);
+
+  test("rejects malformed raw WebSocket upgrade targets without disrupting gateway", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        for (const requestTarget of ["//", "///", "//${jndi:ldap://example}.action"]) {
+          const response = await sendRawHttpRequest({
+            host: "127.0.0.1",
+            port: listener.port,
+            requestTarget,
+            headers: [
+              "Host: localhost",
+              "Upgrade: websocket",
+              "Connection: Upgrade",
+              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+              "Sec-WebSocket-Version: 13",
+            ],
+          });
+          expect(response).toMatch(/^HTTP\/1\.1 401 /);
+        }
+
+        const res = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+        expect(res.status).toBe(401);
+      },
+    });
   }, 60_000);
 
   test("denies canvas auth when trusted proxy omits forwarded client headers", async () => {

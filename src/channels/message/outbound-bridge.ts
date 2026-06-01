@@ -5,6 +5,7 @@ import type {
   ChannelMessageReceiveAdapterShape,
   ChannelMessageSendMediaContext,
   ChannelMessageSendPayloadContext,
+  ChannelMessageSendPollContext,
   ChannelMessageSendResult,
   ChannelMessageSendTextContext,
   DurableFinalDeliveryRequirementMap,
@@ -18,11 +19,13 @@ const defaultManualReceiveAdapter = {
   supportedAckPolicies: ["manual"],
 } as const satisfies ChannelMessageReceiveAdapterShape;
 
+/** Send result accepted from legacy outbound bridge methods before receipt normalization. */
 export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
   messageId?: string;
 };
 
+/** Legacy outbound adapter shape bridged into the channel message adapter contract. */
 export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
@@ -36,8 +39,12 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   sendPayload?: (
     ctx: ChannelMessageSendPayloadContext<TConfig>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
+  sendPoll?: (
+    ctx: ChannelMessageSendPollContext<TConfig>,
+  ) => Promise<ChannelMessageOutboundBridgeResult>;
 };
 
+/** Options for building a message adapter from legacy outbound send functions. */
 export type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
   id?: string;
   outbound: ChannelMessageOutboundBridgeAdapter<TConfig>;
@@ -64,18 +71,24 @@ function toMessageSendResult(
   result: ChannelMessageOutboundBridgeResult,
   params: {
     kind: MessageReceiptPartKind;
+    normalizeReceiptKind?: boolean;
     threadId?: string | number | null;
     replyToId?: string | null;
   },
 ): ChannelMessageSendResult {
-  const receipt =
-    result.receipt ??
-    createMessageReceiptFromOutboundResults({
-      results: [result],
-      kind: params.kind,
-      threadId: params.threadId == null ? undefined : String(params.threadId),
-      replyToId: params.replyToId ?? undefined,
-    });
+  const receipt = result.receipt
+    ? params.normalizeReceiptKind
+      ? {
+          ...result.receipt,
+          parts: result.receipt.parts.map((part) => ({ ...part, kind: params.kind })),
+        }
+      : result.receipt
+    : createMessageReceiptFromOutboundResults({
+        results: [result],
+        kind: params.kind,
+        threadId: params.threadId == null ? undefined : String(params.threadId),
+        replyToId: params.replyToId ?? undefined,
+      });
   return {
     receipt,
     ...(resolveResultMessageId({ ...result, receipt })
@@ -107,6 +120,7 @@ function resolvePayloadReceiptKind(
   return "unknown";
 }
 
+/** Converts legacy outbound send methods into a typed channel message adapter. */
 export function createChannelMessageAdapterFromOutbound<TConfig = unknown>(
   params: CreateChannelMessageAdapterFromOutboundParams<TConfig>,
 ): ChannelMessageAdapterShape<TConfig> {
@@ -131,6 +145,15 @@ export function createChannelMessageAdapterFromOutbound<TConfig = unknown>(
     send.payload = async (ctx) =>
       toMessageSendResult(await params.outbound.sendPayload!(ctx), {
         kind: resolvePayloadReceiptKind(ctx as ChannelMessageSendPayloadContext<unknown>),
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+      });
+  }
+  if (params.outbound.sendPoll) {
+    send.poll = async (ctx) =>
+      toMessageSendResult(await params.outbound.sendPoll!(ctx), {
+        kind: "poll",
+        normalizeReceiptKind: true,
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
       });

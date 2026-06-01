@@ -14,6 +14,16 @@ function expectButtonByText(container: Element, text: string): HTMLButtonElement
   return button;
 }
 
+function expectRowByLabel(container: Element, text: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll<HTMLElement>(".qs-row")).find(
+    (candidate) => candidate.querySelector(".qs-row__label")?.textContent?.trim() === text,
+  );
+  if (!(row instanceof HTMLElement)) {
+    throw new Error(`Expected quick settings row "${text}"`);
+  }
+  return row;
+}
+
 function expectFileInput(input: Element | null | undefined): HTMLInputElement {
   if (!(input instanceof HTMLInputElement)) {
     throw new Error("Expected file input");
@@ -54,10 +64,12 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     hasCustomTheme: false,
     customThemeLabel: null,
     borderRadius: 50,
+    textScale: 100,
     setTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
+    setTextScale: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
     configObject: {},
@@ -143,9 +155,9 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const browserInput = Array.from(container.querySelectorAll("input")).find((input) =>
-      input.closest(".qs-row")?.textContent?.includes("Browser enabled"),
-    );
+    const browserRow = expectRowByLabel(container, "Browser enabled");
+    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe("Disabled");
+    const browserInput = browserRow.querySelector("input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect((browserInput as HTMLInputElement).checked).toBe(false);
 
@@ -160,6 +172,22 @@ describe("renderQuickSettings", () => {
       "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
     ]);
+  });
+
+  it("lets operators change text size from Appearance quick settings", () => {
+    const setTextScale = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
+
+    const textSizeRow = expectRowByLabel(container, "Text size");
+    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
+      button.classList.contains("qs-segmented__btn--active"),
+    );
+    expect(active?.textContent?.trim()).toBe("XL");
+
+    expectButtonByText(textSizeRow, "XXL").click();
+    expect(setTextScale).toHaveBeenCalledWith(140);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -228,7 +256,7 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "apple-touch-icon.png",
+      "/apple-touch-icon.png",
     );
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "IDENTITY.md",

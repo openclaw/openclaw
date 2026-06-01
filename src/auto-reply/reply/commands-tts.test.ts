@@ -81,6 +81,15 @@ function expectReply(
   return handled.reply;
 }
 
+function lastMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("handleTtsCommands status fallback reporting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -129,6 +138,13 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(reply.text).toContain(
       `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 73ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 420ms`,
     );
+  });
+
+  it("does not coerce partial TTS limit values", async () => {
+    const result = await handleTtsCommands(buildTtsParams("/tts limit 2000chars"), true);
+
+    expect(expectReply(result).text).toBe("❌ Limit must be between 100 and 4096 characters.");
+    expect(ttsMocks.setTtsMaxLength).not.toHaveBeenCalled();
   });
 
   it("shows attempted provider chain for failed attempts", async () => {
@@ -205,6 +221,22 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
   });
 
+  it("uses the channel-derived audioAsVoice decision for /tts audio", async () => {
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/channel-voice.ogg",
+      provider: PRIMARY_TTS_PROVIDER,
+      voiceCompatible: false,
+      audioAsVoice: true,
+    });
+
+    const result = await handleTtsCommands(buildTtsParams("/tts audio hello channel"), true);
+    const reply = expectReply(result);
+
+    expect(reply.mediaUrl).toBe("/tmp/channel-voice.ogg");
+    expect(reply.audioAsVoice).toBe(true);
+  });
+
   it("treats bare /tts as status", async () => {
     const result = await handleTtsCommands(
       buildTtsParams("/tts", {
@@ -224,10 +256,11 @@ describe("handleTtsCommands status fallback reporting", () => {
     const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
 
     expectHandled(result);
-    const resolveCall = ttsMocks.resolveTtsConfig.mock.calls.at(-1);
-    expect(resolveCall?.[0]).toBe(cfg);
-    expect(resolveCall?.[1]?.agentId).toBe("reader");
-    expect(resolveCall?.[1]?.channelId).toBe("forum");
+    const resolveCall = lastMockCall(ttsMocks.resolveTtsConfig, "resolveTtsConfig");
+    const resolveOptions = resolveCall[1] as { agentId?: string; channelId?: string };
+    expect(resolveCall[0]).toBe(cfg);
+    expect(resolveOptions.agentId).toBe("reader");
+    expect(resolveOptions.channelId).toBe("forum");
   });
 
   it("passes the active agent and account ids to /tts audio synthesis", async () => {
@@ -249,11 +282,16 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
 
     expectHandled(result);
-    const speechCall = ttsMocks.textToSpeech.mock.calls.at(-1)?.[0];
-    expect(speechCall?.text).toBe("hello");
-    expect(speechCall?.cfg).toBe(cfg);
-    expect(speechCall?.agentId).toBe("reader");
-    expect(speechCall?.accountId).toBe("feishu-main");
+    const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
+      accountId?: string;
+      agentId?: string;
+      cfg?: OpenClawConfig;
+      text?: string;
+    };
+    expect(speechCall.text).toBe("hello");
+    expect(speechCall.cfg).toBe(cfg);
+    expect(speechCall.agentId).toBe("reader");
+    expect(speechCall.accountId).toBe("feishu-main");
   });
 
   it("lists and sets configured TTS personas", async () => {
@@ -333,7 +371,10 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(reply.mediaUrl).toBe("/tmp/latest.ogg");
     expect(reply.audioAsVoice).toBe(true);
     expect(reply.spokenText).toBe("latest visible reply");
-    expect(ttsMocks.textToSpeech.mock.calls.at(-1)?.[0]?.text).toBe("latest visible reply");
+    const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
+      text?: string;
+    };
+    expect(speechCall.text).toBe("latest visible reply");
     expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
     expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
   });

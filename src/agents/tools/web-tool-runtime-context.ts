@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
 import type {
   RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
 } from "../../secrets/runtime-web-tools.types.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 
 type WebProviderKind = "fetch" | "search";
 
@@ -46,7 +46,7 @@ function shouldPreferRuntimeProviders(params: {
   return !resolveManifestContractOwnerPluginId({
     contract: resolveWebProviderContract(params.kind),
     value: params.providerSelectionId,
-    origin: "bundled",
+    ...(params.kind === "fetch" ? { origin: "bundled" as const } : {}),
     config: params.config,
   });
 }
@@ -64,7 +64,7 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
     | undefined;
   const config =
     params.lateBindRuntimeConfig === true
-      ? (getActiveSecretsRuntimeSnapshot()?.config ?? params.capturedConfig)
+      ? (getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.capturedConfig)
       : params.capturedConfig;
   const providerSelectionId =
     resolveRuntimeWebProviderId(runtimeMetadata) ||

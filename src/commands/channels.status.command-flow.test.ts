@@ -227,6 +227,16 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     });
   });
 
+  it("rejects malformed timeouts before gateway status requests", async () => {
+    const { runtime } = createCapturingTestRuntime();
+
+    await expect(
+      channelsStatusCommand({ channel: "imsg", timeout: "10s", probe: true }, runtime as never),
+    ).rejects.toThrow('Received: "10s"');
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     mocks.requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
@@ -243,7 +253,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     expect(errors.join("\n")).toContain("Gateway not reachable");
     expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
-    const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls.at(0)?.[0];
+    const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0];
     expect(configResolutionRequest?.commandName).toBe("channels status");
     expect(configResolutionRequest?.mode).toBe("read_only_status");
     expect(

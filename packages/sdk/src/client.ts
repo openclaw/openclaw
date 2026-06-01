@@ -58,12 +58,25 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
       : {};
   const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
   const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
+  const pendingError = record.pendingError === true;
+  const timeoutPhase =
+    typeof record.timeoutPhase === "string" ? record.timeoutPhase.toLowerCase() : undefined;
+  const statusAlreadyTimeoutAttributed = status === "timeout" || status === "timed_out";
+  const hardTimeout =
+    !pendingError &&
+    ((record.providerStarted === true && statusAlreadyTimeoutAttributed) ||
+      timeoutPhase === "preflight" ||
+      timeoutPhase === "provider" ||
+      timeoutPhase === "post_turn");
   const hasTerminalTimeoutMetadata =
     readOptionalTimestamp(record.endedAt) !== undefined ||
-    readOptionalString(record.error) !== undefined ||
+    (!pendingError && readOptionalString(record.error) !== undefined) ||
     stopReason.length > 0 ||
     typeof record.livenessState === "string" ||
     record.yielded === true;
+  if (hardTimeout) {
+    return "timed_out";
+  }
   if (
     status === "aborted" ||
     status === "cancelled" ||
@@ -73,6 +86,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     stopReason === "cancelled" ||
     stopReason === "canceled" ||
     stopReason === "killed" ||
+    stopReason === "auth-revoked" ||
     stopReason === "rpc" ||
     stopReason === "user" ||
     (record.aborted === true && stopReason === "stop")
@@ -240,6 +254,14 @@ function readChatProjectionText(payload: Record<string, unknown>): string | unde
   return text.length > 0 ? text : undefined;
 }
 
+function readChatProjectionDeltaText(payload: Record<string, unknown>): string | undefined {
+  return typeof payload.deltaText === "string" ? payload.deltaText : undefined;
+}
+
+function readChatProjectionReplace(payload: Record<string, unknown>): boolean {
+  return payload.replace === true;
+}
+
 function isAssistantRunEvent(event: OpenClawEvent): boolean {
   return event.type === "assistant.delta" || event.type === "assistant.message";
 }
@@ -259,9 +281,9 @@ function normalizeChatProjectionEvent(
   previousText: string | undefined,
 ): OpenClawEvent {
   const text = readChatProjectionText(projection.payload);
-  const isReplacement = Boolean(
-    previousText && text !== undefined && !text.startsWith(previousText),
-  );
+  const deltaText = readChatProjectionDeltaText(projection.payload);
+  const hasPreviousText = previousText !== undefined;
+  const isReplacement = readChatProjectionReplace(projection.payload);
   return {
     ...event,
     type: projection.state === "delta" ? "assistant.delta" : "run.completed",
@@ -270,7 +292,7 @@ function normalizeChatProjectionEvent(
         ? text !== undefined
           ? {
               text,
-              delta: isReplacement ? text : text.slice(previousText?.length ?? 0),
+              delta: hasPreviousText ? (deltaText ?? text) : text,
               ...(isReplacement ? { replace: true } : {}),
             }
           : event.data
@@ -560,7 +582,7 @@ export class Run {
       },
       { timeoutMs: null },
     );
-    const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    const record = asRecord(raw);
     const status = runStatusFromWaitPayload(raw);
     const error = readOptionalString(record.error)
       ? { message: readOptionalString(record.error) ?? "run failed" }
@@ -596,7 +618,7 @@ export class Session {
     const params: SessionSendParams =
       typeof input === "string" ? { key: this.key, message: input } : { ...input, key: this.key };
     const raw = await this.client.request("sessions.send", params, { expectFinal: true });
-    const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    const record = asRecord(raw);
     const runId = readOptionalString(record.runId);
     if (!runId) {
       throw new Error("sessions.send did not return a runId");
@@ -653,7 +675,7 @@ export class SessionsNamespace {
 
   async create(params: SessionCreateParams = {}): Promise<Session> {
     const raw = await this.client.request("sessions.create", params);
-    const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    const record = asRecord(raw);
     const key =
       readOptionalString(record.key) ?? readOptionalString(record.sessionKey) ?? params.key;
     if (!key) {
@@ -684,7 +706,7 @@ export class RunsNamespace {
       expectFinal: false,
       timeoutMs: params.timeoutMs,
     });
-    const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    const record = asRecord(raw);
     const runId = readOptionalString(record.runId);
     if (!runId) {
       throw new Error("agent did not return a runId");

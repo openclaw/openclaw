@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalRpcRequest as signalRpcRequestImpl,
   detectSignalApiMode,
@@ -35,6 +35,11 @@ beforeEach(() => {
   vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
     mockStreamContainerEvents as any,
   );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function setApiMode(mode: SignalApiMode) {
@@ -83,6 +88,14 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
   }
 }
 
+function requireMockCall(mock: MockCalls, label: string, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected ${label} call ${index}`);
+  }
+  return call;
+}
+
 function expectRpcCall(params: {
   mock: MockCalls;
   method: string;
@@ -90,33 +103,29 @@ function expectRpcCall(params: {
   options?: Record<string, unknown>;
 }) {
   expect(params.mock.mock.calls).toHaveLength(1);
-  const [method, rpcParams, options] = params.mock.mock.calls[0] ?? [];
+  const [method, rpcParams, options] = requireMockCall(params.mock, "rpc");
   expect(method).toBe(params.method);
   if (params.rpcParams) {
     expectFields(requireRecord(rpcParams, "rpc params"), params.rpcParams);
-  } else {
-    if (rpcParams === undefined) {
-      throw new Error("expected rpc params argument");
-    }
+  } else if (rpcParams === undefined) {
+    throw new Error("expected rpc params argument");
   }
   if (params.options) {
     expectFields(requireRecord(options, "rpc options"), params.options);
-  } else {
-    if (options === undefined) {
-      throw new Error("expected rpc options argument");
-    }
+  } else if (options === undefined) {
+    throw new Error("expected rpc options argument");
   }
 }
 
 function expectSingleObjectCall(mock: MockCalls, expected: Record<string, unknown>) {
   expect(mock.mock.calls).toHaveLength(1);
-  const [payload] = mock.mock.calls[0] ?? [];
+  const [payload] = requireMockCall(mock, "single object");
   expectFields(requireRecord(payload, "call payload"), expected);
 }
 
 function expectContainerFetchCall(expected: Record<string, unknown>) {
   expect(mockContainerFetchAttachment.mock.calls).toHaveLength(1);
-  const [attachmentId, options] = mockContainerFetchAttachment.mock.calls[0] ?? [];
+  const [attachmentId, options] = requireMockCall(mockContainerFetchAttachment, "container fetch");
   expect(attachmentId).toBe("attachment-123");
   expectFields(requireRecord(options, "container fetch options"), expected);
 }
@@ -149,6 +158,34 @@ describe("detectSignalApiMode", () => {
 
     const result = await detectSignalApiMode("http://localhost:8080");
     expect(result).toBe("native");
+  });
+
+  it("prefers native even when the container probe resolves first", async () => {
+    mockNativeCheck.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: true, status: 200 }), 1);
+        }),
+    );
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await detectSignalApiMode("http://localhost:8080");
+    expect(result).toBe("native");
+  });
+
+  it("returns container after the native preference grace when native does not respond", async () => {
+    vi.useFakeTimers();
+    try {
+      mockNativeCheck.mockImplementation(() => new Promise(() => {}));
+      mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+      const result = detectSignalApiMode("http://localhost:8080");
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(result).resolves.toBe("container");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throws error when neither endpoint responds", async () => {
@@ -345,6 +382,44 @@ describe("signalCheck", () => {
       error: "Signal API not reachable at http://localhost:8080",
     });
   });
+
+  it("drops cached auto mode when the current clock is not a valid date timestamp", async () => {
+    setApiMode("auto");
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(signalCheck("http://auto-invalid-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+    await expect(signalCheck("http://auto-invalid-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache auto mode when the expiry timestamp would exceed the valid date range", async () => {
+    setApiMode("auto");
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(signalCheck("http://auto-overflow-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+    await expect(signalCheck("http://auto-overflow-clock.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    expect(mockNativeCheck).toHaveBeenCalledTimes(4);
+    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("streamSignalEvents", () => {
@@ -522,6 +597,26 @@ describe("streamSignalEvents", () => {
       "+14259798283",
     );
   });
+
+  it("does not reuse a cached container mode for no-account receive streams", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(signalCheck("http://auto-cache-no-account.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl: "http://auto-cache-no-account.local:8080",
+        onEvent: vi.fn(),
+      }),
+    ).rejects.toThrow("Signal API not reachable at http://auto-cache-no-account.local:8080");
+    expect(mockStreamContainerEvents).not.toHaveBeenCalled();
+    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("fetchAttachment", () => {
@@ -614,7 +709,7 @@ describe("fetchAttachment", () => {
       groupId: "group-123",
     });
 
-    const callParams = mockNativeRpcRequest.mock.calls[0][1];
+    const callParams = requireMockCall(mockNativeRpcRequest, "native RPC")[1];
     expect(callParams).toHaveProperty("groupId", "group-123");
     expect(callParams).not.toHaveProperty("recipient");
   });

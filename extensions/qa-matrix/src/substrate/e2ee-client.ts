@@ -339,8 +339,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(params) {
-      return await client.resetRoomKeyBackup(params);
+    async resetRoomKeyBackup(paramsLocal) {
+      return await client.resetRoomKeyBackup(paramsLocal);
     },
     async restoreRoomKeyBackup(opts) {
       return await client.restoreRoomKeyBackup(opts);
@@ -420,9 +420,10 @@ export async function runMatrixQaE2eeBootstrap(
   }
 }
 
-export const __testing = {
+export const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
   buildMatrixQaE2eeStoragePaths,
   findMatrixQaObservedEventMatch,
   shouldRecordMatrixQaObservedEventUpdate,
 };
+export { testing as __testing };

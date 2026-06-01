@@ -60,6 +60,44 @@ function requireEntry<T extends { id?: string }>(entries: T[], id: string): T {
 }
 
 describe("xai provider plugin", () => {
+  it("exposes OAuth and device-code auth choices", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth", "device-code"]);
+    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+    expect(deviceCode?.kind).toBe("device_code");
+    expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+  });
+
+  it("classifies Grok usage and spending limit errors", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '429 {"code":"Some resource has been exhausted","error":"Rate limit exceeded"}',
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '400 {"code":"Client specified an invalid argument","error":"Incorrect API key provided: xa***en. You can obtain an API key from https://console.x.ai."}',
+      }),
+    ).toBeUndefined();
+  });
+
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
       plugin,
@@ -203,8 +241,8 @@ describe("xai provider plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "xai",
-      modelId: "grok-4-1-fast",
-      model: createProviderModel({ id: "grok-4-1-fast" }),
+      modelId: "grok-4.3",
+      model: createProviderModel({ id: "grok-4.3" }),
     } as never);
     expect(normalized?.thinkingLevelMap).toEqual({
       off: null,
@@ -213,6 +251,19 @@ describe("xai provider plugin", () => {
       medium: "medium",
       high: "high",
       xhigh: "high",
+    });
+    const olderReasoningModel = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "grok-4-1-fast",
+      model: createProviderModel({ id: "grok-4-1-fast" }),
+    } as never);
+    expect(olderReasoningModel?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
     });
     const normalizedCompat = normalized?.compat as
       | {
@@ -224,18 +275,5 @@ describe("xai provider plugin", () => {
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
-
-    const compat = provider.contributeResolvedModelCompat?.({
-      provider: "openrouter",
-      modelId: "x-ai/grok-4-1-fast",
-      model: createProviderModel({
-        id: "x-ai/grok-4-1-fast",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-      }),
-    } as never);
-    expect(compat?.toolSchemaProfile).toBe("xai");
-    expect(compat?.nativeWebSearchTool).toBe(true);
-    expect(compat?.toolCallArgumentsEncoding).toBe("html-entities");
   });
 });

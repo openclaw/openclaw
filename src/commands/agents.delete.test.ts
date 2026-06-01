@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveWorkspaceAttestationPath } from "../agents/workspace.js";
 import { loadSessionStore, resolveStorePath, saveSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -15,8 +16,13 @@ const processMocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
 }));
 
+const fsSafeMocks = vi.hoisted(() => ({
+  movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
+}));
+
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
+  isGatewayCredentialsRequiredError: vi.fn(),
   isGatewayTransportError: vi.fn(),
 }));
 
@@ -28,14 +34,19 @@ vi.mock("../config/config.js", async () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
+  isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
   isGatewayTransportError: gatewayMocks.isGatewayTransportError,
+}));
+
+vi.mock("../infra/fs-safe.js", () => ({
+  movePathToTrash: fsSafeMocks.movePathToTrash,
 }));
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: processMocks.runCommandWithTimeout,
 }));
 
-import { agentsDeleteCommand } from "./agents.js";
+import { agentsDeleteCommand } from "./agents.commands.delete.js";
 
 const runtime = createTestRuntime();
 
@@ -84,10 +95,16 @@ describe("agents delete command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
+    fsSafeMocks.movePathToTrash.mockClear();
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockRejectedValue(
       Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
+    );
+    gatewayMocks.isGatewayCredentialsRequiredError.mockReset();
+    gatewayMocks.isGatewayCredentialsRequiredError.mockImplementation(
+      (error: unknown) =>
+        error instanceof Error && error.name === "GatewayCredentialsRequiredError",
     );
     gatewayMocks.isGatewayTransportError.mockReset();
     gatewayMocks.isGatewayTransportError.mockImplementation(
@@ -128,7 +145,7 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      const gatewayCall = gatewayMocks.callGateway.mock.calls.at(0)?.[0];
+      const gatewayCall = gatewayMocks.callGateway.mock.calls[0]?.[0];
       expect(gatewayCall?.method).toBe("agents.delete");
       expect(gatewayCall?.params).toEqual({ agentId: "ops", deleteFiles: true });
       expect(gatewayCall?.requiredMethods).toEqual(["agents.delete"]);
@@ -138,6 +155,50 @@ describe("agents delete command", () => {
       expect(output?.agentId).toBe("ops");
       expect(output?.removedBindings).toBe(0);
       expect(output?.transport).toBe("gateway");
+    });
+  });
+
+  it("falls back to local deletion when the optional Gateway probe needs credentials", async () => {
+    await withStateDirEnv("openclaw-agents-delete-gateway-auth-", async ({ stateDir }) => {
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-shared") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-shared") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+        },
+      });
+      gatewayMocks.callGateway.mockRejectedValue(
+        Object.assign(
+          new Error("gateway agents.delete requires credentials before opening a websocket"),
+          {
+            name: "GatewayCredentialsRequiredError",
+            method: "agents.delete",
+            configPath: path.join(stateDir, "openclaw.json"),
+          },
+        ),
+      );
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      const output = readJsonLogs()[0];
+      expect(output?.agentId).toBe("ops");
+      expect(output?.workspaceRetained).toBe(true);
+      expect(output?.workspaceRetainedReason).toBe("shared");
+      expect(output?.transport).toBeUndefined();
     });
   });
 
@@ -175,6 +236,40 @@ describe("agents delete command", () => {
       expectSessionStore(storePath, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
+    });
+  });
+
+  it("trashes workspace attestations during local deletion", async () => {
+    await withStateDirEnv("openclaw-agents-delete-attestation-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {},
+      });
+      const attestationPath = resolveWorkspaceAttestationPath(path.join(stateDir, "workspace-ops"));
+      await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+      await fs.writeFile(
+        attestationPath,
+        `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+      );
+      const resolvedAttestationPath = path.join(
+        await fs.realpath(path.dirname(attestationPath)),
+        path.basename(attestationPath),
+      );
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).toContain(resolvedAttestationPath);
     });
   });
 
@@ -250,6 +345,12 @@ describe("agents delete command", () => {
     await withStateDirEnv("openclaw-agents-delete-shared-workspace-", async ({ stateDir }) => {
       const sharedWorkspace = path.join(stateDir, "workspace-shared");
       await fs.mkdir(sharedWorkspace, { recursive: true });
+      const attestationPath = resolveWorkspaceAttestationPath(sharedWorkspace);
+      await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+      await fs.writeFile(
+        attestationPath,
+        `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+      );
 
       const now = Date.now();
       const cfg: OpenClawConfig = {
@@ -282,10 +383,9 @@ describe("agents delete command", () => {
       expect(jsonOutput[0]?.workspaceRetained).toBe(true);
       expect(jsonOutput[0]?.workspaceRetainedReason).toBe("shared");
       expect(jsonOutput[0]?.workspaceSharedWith).toEqual(["main"]);
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", sharedWorkspace],
-        { timeoutMs: 5000 },
-      );
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(sharedWorkspace);
+      expect(trashedPaths).not.toContain(attestationPath);
     });
   });
 
@@ -319,10 +419,8 @@ describe("agents delete command", () => {
       const output = readJsonLogs()[0];
       expect(output?.workspaceRetained).toBe(true);
       expect(output?.workspaceSharedWith).toEqual(["main"]);
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", childWorkspace],
-        { timeoutMs: 5000 },
-      );
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(childWorkspace);
     });
   });
 
@@ -356,10 +454,8 @@ describe("agents delete command", () => {
       const output = readJsonLogs()[0];
       expect(output?.workspaceRetained).toBe(true);
       expect(output?.workspaceSharedWith).toEqual(["main"]);
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", sharedWorkspace],
-        { timeoutMs: 5000 },
-      );
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(sharedWorkspace);
     });
   });
 
@@ -396,10 +492,10 @@ describe("agents delete command", () => {
         const output = readJsonLogs()[0];
         expect(output?.workspaceRetained).toBe(true);
         expect(output?.workspaceSharedWith).toEqual(["main"]);
-        expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-          ["trash", aliasWorkspace],
-          { timeoutMs: 5000 },
+        const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(
+          ([targetPath]) => targetPath,
         );
+        expect(trashedPaths).not.toContain(aliasWorkspace);
       });
     },
   );
@@ -430,12 +526,17 @@ describe("agents delete command", () => {
         },
       });
 
+      const expectedOpsWorkspace = path.join(
+        await fs.realpath(path.dirname(opsWorkspace)),
+        path.basename(opsWorkspace),
+      );
+
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      // trash command should have been called for the workspace
-      expect(processMocks.runCommandWithTimeout).toHaveBeenCalledWith(["trash", opsWorkspace], {
-        timeoutMs: 5000,
+      expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(expectedOpsWorkspace, {
+        allowedRoots: [path.dirname(expectedOpsWorkspace)],
       });
+      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     });
   });
 });
