@@ -2435,6 +2435,9 @@ describe("executeNodeHostCommand", () => {
         durableApprovalSatisfied: false,
       }),
     );
+    expect(requireGatewayCommand("system.run.prepare").params?.params?.env).toEqual({
+      FOO: "bar",
+    });
     expect(requireRunParams(requireGatewayCommand("system.run")).env).toEqual({ FOO: "bar" });
     const evalEnvs = evaluateShellAllowlistMock.mock.calls.map(
       ([raw]) => (raw as ShellAllowlistMockParams).env,

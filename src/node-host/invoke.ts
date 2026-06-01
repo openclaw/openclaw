@@ -23,8 +23,15 @@ import {
   type ExecHostRequest,
   type ExecHostResponse,
 } from "../infra/exec-host.js";
-import { extractShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
-import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import {
+  extractShellWrapperCommand,
+  isShellWrapperInvocation,
+} from "../infra/exec-wrapper-resolution.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeHostExecEnv,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -61,6 +68,71 @@ type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
+
+type SystemRunPrepareParams = {
+  command?: unknown;
+  rawCommand?: unknown;
+  cwd?: unknown;
+  env?: Record<string, string> | null;
+  agentId?: unknown;
+  sessionKey?: unknown;
+  strictInlineEval?: unknown;
+};
+
+type SystemRunPrepareEnv =
+  | {
+      ok: true;
+      env: Record<string, string>;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+function buildEnvOverrideRejectionMessage(params: {
+  rejectedOverrideBlockedKeys: string[];
+  rejectedOverrideInvalidKeys: string[];
+}): string {
+  const details: string[] = [];
+  if (params.rejectedOverrideBlockedKeys.length > 0) {
+    details.push(`blocked override keys: ${params.rejectedOverrideBlockedKeys.join(", ")}`);
+  }
+  if (params.rejectedOverrideInvalidKeys.length > 0) {
+    details.push(
+      `invalid non-portable override keys: ${params.rejectedOverrideInvalidKeys.join(", ")}`,
+    );
+  }
+  return `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`;
+}
+
+function buildSystemRunPrepareCoverageEnv(params: {
+  argv: string[];
+  env?: Record<string, string> | null;
+}): SystemRunPrepareEnv {
+  const diagnostics = inspectHostExecEnvOverrides({
+    overrides: params.env ?? undefined,
+    blockPathOverrides: true,
+  });
+  if (
+    diagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    diagnostics.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    return {
+      ok: false,
+      message: buildEnvOverrideRejectionMessage(diagnostics),
+    };
+  }
+  const envOverrides = sanitizeSystemRunEnvOverrides({
+    overrides: params.env ?? undefined,
+    shellWrapper: isShellWrapperInvocation(params.argv),
+  });
+  return {
+    ok: true,
+    // Prepared coverage is durable approval evidence, so keep this in parity
+    // with the env passed to `system.run` policy and execution.
+    env: sanitizeEnv(envOverrides),
+  };
+}
 
 function buildSystemRunAllowAlwaysCoverage(params: {
   argv: string[];
@@ -492,17 +564,18 @@ export async function handleInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = decodeParams<{
-        command?: unknown;
-        rawCommand?: unknown;
-        cwd?: unknown;
-        agentId?: unknown;
-        sessionKey?: unknown;
-        strictInlineEval?: unknown;
-      }>(frame.paramsJSON);
+      const params = decodeParams<SystemRunPrepareParams>(frame.paramsJSON);
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
+        return;
+      }
+      const prepareEnv = buildSystemRunPrepareCoverageEnv({
+        argv: prepared.plan.argv,
+        env: params.env ?? undefined,
+      });
+      if (!prepareEnv.ok) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", prepareEnv.message);
         return;
       }
       const { getRuntimeConfig } = await import("../config/config.js");
@@ -523,7 +596,7 @@ export async function handleInvoke(
           argv: prepared.plan.argv,
           rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
           cwd: prepared.plan.cwd,
-          env: sanitizeEnv(undefined),
+          env: prepareEnv.env,
           strictInlineEval: params.strictInlineEval === true,
         }),
       });
