@@ -19,6 +19,7 @@ import {
   readSessionMessageCountAsync as readSessionMessageCountAsyncFile,
   readSessionMessages as readSessionMessagesFile,
   readSessionMessagesAsync as readSessionMessagesAsyncFile,
+  readSessionMessagesWithSourceAsync as readSessionMessagesWithSourceAsyncFile,
   readSessionPreviewItemsFromTranscript as readSessionPreviewItemsFromTranscriptFile,
   readSessionTitleFieldsFromTranscript as readSessionTitleFieldsFromTranscriptFile,
   readSessionTitleFieldsFromTranscriptAsync as readSessionTitleFieldsFromTranscriptAsyncFile,
@@ -27,6 +28,7 @@ import {
 } from "./session-utils.fs.js";
 
 export type { ReadRecentSessionMessagesOptions, ReadSessionMessagesAsyncOptions };
+export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
 
 export type SessionTranscriptReadScope = {
   agentId?: string;
@@ -42,7 +44,13 @@ type SessionTitleFields = {
 
 type ReadRecentSessionMessagesResult = {
   messages: unknown[];
+  transcriptPath?: string;
   totalMessages: number;
+};
+
+type ReadSessionMessagesResult = {
+  messages: unknown[];
+  transcriptPath?: string;
 };
 
 type ReadSessionMessageByIdResult = {
@@ -126,6 +134,20 @@ export async function readSessionMessagesAsync(
   );
 }
 
+/** Reads display messages with source metadata through the reader seam. */
+export async function readSessionMessagesWithSourceAsync(
+  scope: SessionTranscriptReadScope,
+  opts: ReadSessionMessagesAsyncOptions,
+): Promise<ReadSessionMessagesResult> {
+  return await readSessionMessagesWithSourceAsyncFile(
+    scope.sessionId,
+    scope.storePath,
+    scope.sessionFile,
+    opts,
+    scope.agentId,
+  );
+}
+
 /** Reads recent display messages asynchronously through the reader seam. */
 export async function readRecentSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
@@ -144,13 +166,14 @@ export async function readRecentSessionMessagesAsync(
 export async function readSessionMessageByIdAsync(
   scope: SessionTranscriptReadScope,
   messageId: string,
+  opts?: { allowResetArchiveFallback?: boolean },
 ): Promise<ReadSessionMessageByIdResult> {
   return await readSessionMessageByIdAsyncFile(
     scope.sessionId,
     scope.storePath,
     scope.sessionFile,
     messageId,
-    { agentId: scope.agentId },
+    { ...opts, agentId: scope.agentId },
   );
 }
 
