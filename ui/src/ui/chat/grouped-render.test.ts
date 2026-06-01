@@ -15,6 +15,9 @@ const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
   vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
 );
+const streamingTextRenderMock = vi.hoisted(() =>
+  vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
+);
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -26,6 +29,7 @@ vi.mock("../../local-storage.ts", () => ({
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: markdownRenderMock,
+  toStreamingPlainTextHtml: streamingTextRenderMock,
 }));
 
 vi.mock("../icons.ts", () => ({
@@ -878,6 +882,28 @@ describe("grouped chat rendering", () => {
     expect(streamingTime?.textContent?.trim()).toBe(display.label);
   });
 
+  it("omits streaming bubble class for completed stream segments", () => {
+    const container = document.createElement("div");
+
+    render(renderStreamingGroup("Completed segment", 1, false), container);
+
+    const bubble = container.querySelector(".chat-bubble");
+    expect(bubble?.classList.contains("streaming")).toBe(false);
+  });
+
+  it("renders streaming text without markdown sanitization", () => {
+    const container = document.createElement("div");
+    markdownRenderMock.mockClear();
+    streamingTextRenderMock.mockClear();
+
+    render(renderStreamingGroup("**live**\nreply", 1), container);
+
+    expect(markdownRenderMock).not.toHaveBeenCalled();
+    expect(streamingTextRenderMock).toHaveBeenCalledWith("**live**\nreply");
+    const text = container.querySelector(".markdown-plain-text-fallback");
+    expect(text?.textContent).toBe("**live**\nreply");
+  });
+
   it("renders configured local user names", () => {
     const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
       const container = document.createElement("div");
@@ -900,6 +926,128 @@ describe("grouped chat rendering", () => {
 
     const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
     expect(avatar?.tagName).toBe("DIV");
+  });
+
+  it("collapses consecutive tool results into an activity group", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "File one",
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "run_command",
+            content: "Command output",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: (id) => (id === "activity:tool-group" ? false : undefined),
+    });
+
+    const activity = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
+    expect(activity.textContent).toContain("Activity: 2 tools");
+    expect(activity.textContent).toContain("read_file");
+    expect(activity.textContent).toContain("run_command");
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("passes the effective default-expanded activity state to the toggle handler", () => {
+    const container = document.createElement("div");
+    const onToggleToolMessageExpanded = vi.fn();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            isError: true,
+            content: JSON.stringify({ error: "Read failed" }),
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "run_command",
+            content: "Command output",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], { onToggleToolMessageExpanded });
+
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeInstanceOf(HTMLElement);
+    expectElement(container, ".chat-activity-group__summary", HTMLButtonElement).click();
+
+    expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", true);
+  });
+
+  it("hides grouped tool activity when tool calls are disabled", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "File one",
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "run_command",
+            content: "Command output",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], { showToolCalls: false });
+
+    expect(container.querySelector(".chat-activity-group")).toBeNull();
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
@@ -2200,5 +2348,89 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
     expect(onOpenSidebar).toHaveBeenCalledTimes(1);
     expect(requireFirstMockArg(onOpenSidebar, "sidebar open").kind).toBe("markdown");
+  });
+
+  it("adds a full-message request when opening a truncated assistant message", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+        __openclaw: { id: "msg-truncated-1", seq: 1 },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toEqual({
+      sessionKey: "global",
+      agentId: "work",
+      messageId: "msg-truncated-1",
+      kind: "assistant_message",
+    });
+  });
+
+  it("does not add a full-message request for non-truncated assistant messages", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "full visible message" }],
+        __openclaw: { id: "msg-visible-1", seq: 1 },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toBeUndefined();
+  });
+
+  it("does not add a full-message request for mirrored message-tool replies", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored text\n...(truncated)..." }],
+        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-1" },
+        __openclaw: { id: "msg-tool-result", seq: 2, truncated: true },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toBeUndefined();
   });
 });

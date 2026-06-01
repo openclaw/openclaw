@@ -12,8 +12,10 @@ import { z } from "zod";
 import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
-import { readStringValue } from "../../dist/shared/string-coerce.js";
+import { readStringValue } from "../../dist/normalization-core/string-coerce.js";
+import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
+import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -49,10 +51,10 @@ const GATEWAY_WS_OPEN_TIMEOUT_MS = 45_000;
 const GATEWAY_RPC_TIMEOUT_MS = 60_000;
 const GATEWAY_REQUEST_TIMEOUT_MS = 45_000;
 const GATEWAY_CONNECT_RETRY_WINDOW_MS = 420_000;
-const MCP_CONNECT_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_MCP_CHANNELS_CONNECT_TIMEOUT_MS,
-  60_000,
-);
+const MCP_CHANNEL_LIMITS = readMcpChannelLimits();
+const MCP_CONNECT_TIMEOUT_MS = MCP_CHANNEL_LIMITS.connectTimeoutMs;
+const GATEWAY_EVENT_RETAIN_LIMIT = MCP_CHANNEL_LIMITS.gatewayEventRetainLimit;
+const MCP_RAW_MESSAGE_RETAIN_LIMIT = MCP_CHANNEL_LIMITS.rawMessageRetainLimit;
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -60,9 +62,11 @@ export function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-function readPositiveInt(raw: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function pushBounded<T>(items: T[], item: T, limit: number): void {
+  items.push(item);
+  if (items.length > limit) {
+    items.splice(0, items.length - limit);
+  }
 }
 
 export function extractTextFromGatewayPayload(
@@ -131,21 +135,7 @@ async function connectGatewayOnce(params: {
   token: string;
 }): Promise<GatewayRpcClient> {
   const ws = new WebSocket(params.url);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error("gateway ws open timeout"));
-    }, GATEWAY_WS_OPEN_TIMEOUT_MS);
-    timeout.unref?.();
-    ws.once("open", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+  await waitForWebSocketOpen(ws, GATEWAY_WS_OPEN_TIMEOUT_MS, "gateway ws open timeout");
 
   const pending = new Map<
     string,
@@ -177,13 +167,17 @@ async function connectGatewayOnce(params: {
       error?: { message?: unknown } | null;
     };
     if (typed.type === "event" && typeof typed.event === "string") {
-      events.push({
-        event: typed.event,
-        payload:
-          typed.payload && typeof typed.payload === "object"
-            ? (typed.payload as Record<string, unknown>)
-            : {},
-      });
+      pushBounded(
+        events,
+        {
+          event: typed.event,
+          payload:
+            typed.payload && typeof typed.payload === "object"
+              ? (typed.payload as Record<string, unknown>)
+              : {},
+        },
+        GATEWAY_EVENT_RETAIN_LIMIT,
+      );
       return;
     }
     if (typed.type !== "res" || typeof typed.id !== "string") {
@@ -306,6 +300,7 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   return (
     message.includes("gateway ws open timeout") ||
     message.includes("gateway connect timeout") ||
+    message.includes("closed before open") ||
     message.includes("gateway closed") ||
     message.includes("econnrefused") ||
     message.includes("socket hang up")
@@ -345,12 +340,9 @@ export async function connectMcpClient(params: {
     process.stderr.write(`[openclaw mcp] ${String(chunk)}`);
   });
   const rawMessages: unknown[] = [];
-  // The MCP stdio transport here exposes a writable onmessage callback at
-  // runtime, not an EventTarget-style addEventListener API.
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener
-  transport.onmessage = (message) => {
-    rawMessages.push(message);
-  };
+  Reflect.set(transport, "onmessage", (message: unknown) => {
+    pushBounded(rawMessages, message, MCP_RAW_MESSAGE_RETAIN_LIMIT);
+  });
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
   await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);

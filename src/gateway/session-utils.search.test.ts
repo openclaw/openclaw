@@ -9,7 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { listSessionsFromStore } from "./session-utils.js";
+import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
 
 function createModelDefaultsConfig(params: {
   primary: string;
@@ -237,6 +237,30 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("keeps derived model search for colon model ids", () => {
+    const now = Date.now();
+    const cfg = createModelDefaultsConfig({
+      primary: "ollama/qwen3:0.6b",
+    });
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:inherited-local-model": {
+          sessionId: "sess-inherited-local-model",
+          updatedAt: now,
+          label: "Inherited local model",
+        } as SessionEntry,
+      },
+      opts: { search: "qwen3:0.6b" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:inherited-local-model",
+    ]);
+    expect(result.totalCount).toBe(1);
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -414,7 +438,7 @@ describe("listSessionsFromStore search", () => {
       agents: { list: [{ id: "main", default: true }] },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [
               {
                 id: "gpt-5.3-codex-spark",
@@ -434,7 +458,7 @@ describe("listSessionsFromStore search", () => {
         "agent:main:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
-          modelProvider: "openai-codex",
+          modelProvider: "openai",
           model: "gpt-5.3-codex-spark",
           inputTokens: 5_107,
           outputTokens: 1_827,
@@ -452,7 +476,7 @@ describe("listSessionsFromStore search", () => {
     withTranscriptStoreFixture({
       prefix: "openclaw-session-utils-zero-cost-",
       transcriptId: "sess-main",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.3-codex-spark",
       input: 5_107,
       output: 1_827,
@@ -466,7 +490,7 @@ describe("listSessionsFromStore search", () => {
           entry: {
             sessionId: "sess-main",
             updatedAt: now,
-            modelProvider: "openai-codex",
+            modelProvider: "openai",
             model: "gpt-5.3-codex-spark",
             totalTokens: 0,
             totalTokensFresh: false,
@@ -517,6 +541,47 @@ describe("listSessionsFromStore search", () => {
         expect(result.sessions[0]?.totalTokensFresh).toBe(true);
         expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
         expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+      },
+    });
+  });
+
+  test("chat history session metadata keeps model-derived contextTokens without transcript usage", () => {
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-info-context-",
+      transcriptId: "sess-main",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        const row = buildGatewaySessionInfo({
+          cfg: {
+            models: {
+              providers: {
+                "local-test": {
+                  models: [{ id: "test-model", contextTokens: 123_456 }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          storePath,
+          key: "agent:main:main",
+          store: {
+            "agent:main:main": {
+              sessionId: "sess-main",
+              updatedAt: now,
+              modelProvider: "local-test",
+              model: "test-model",
+            } as SessionEntry,
+          },
+        });
+
+        expect(row.totalTokens).toBeUndefined();
+        expect(row.totalTokensFresh).toBe(false);
+        expect(row.estimatedCostUsd).toBeUndefined();
+        expect(row.contextTokens).toBe(123_456);
       },
     });
   });

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -48,7 +48,9 @@ const originForPort = (port: number) => `http://127.0.0.1:${port}`;
 const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   return ws;
 };
 

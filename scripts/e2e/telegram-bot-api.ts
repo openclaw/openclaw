@@ -1,26 +1,52 @@
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+
 type JsonObject = Record<string, unknown>;
 
 type TelegramBotApiOptions = {
   baseUrl?: string;
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
   timeoutMs?: number;
 };
 
 const DEFAULT_BASE_URL =
   process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BASE_URL ?? "https://api.telegram.org";
-const DEFAULT_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS,
-  30000,
-);
+export type TelegramBotApiLimits = {
+  bodyMaxBytes: number;
+  timeoutMs: number;
+};
 
-function readPositiveInt(raw: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+export function readTelegramBotApiLimits(
+  env: NodeJS.ProcessEnv = process.env,
+): TelegramBotApiLimits {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES",
+      1024 * 1024,
+      env,
+    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS", 30000, env),
+  };
 }
+
+const DEFAULT_LIMITS = readTelegramBotApiLimits();
 
 function optionalString(source: JsonObject, key: string) {
   const value = source[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function taggedError(message: string, code: string) {
+  return Object.assign(new Error(message), { code });
+}
+
+function parseJsonPayload(rawPayload: string, label: string) {
+  try {
+    return JSON.parse(rawPayload) as JsonObject;
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON`, { cause: error });
+  }
 }
 
 export async function telegramBotApi(
@@ -30,11 +56,10 @@ export async function telegramBotApi(
   options: TelegramBotApiOptions = {},
 ) {
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const timeoutError = Object.assign(
-    new Error(`Telegram Bot API ${method} timed out after ${timeoutMs}ms`),
-    { code: "ETIMEDOUT" },
-  );
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_LIMITS.timeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_LIMITS.bodyMaxBytes);
+  const label = `Telegram Bot API ${method}`;
+  const timeoutError = taggedError(`${label} timed out after ${timeoutMs}ms`, "ETIMEDOUT");
   const controller = new AbortController();
   let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -55,7 +80,13 @@ export async function telegramBotApi(
       }),
       timeoutPromise,
     ]);
-    const payload = (await Promise.race([response.json(), timeoutPromise])) as JsonObject;
+    const rawPayload = await readBoundedResponseText(response, label, maxBodyBytes, {
+      createTooLargeError(message) {
+        return taggedError(message, "ETOOBIG");
+      },
+      timeoutPromise,
+    });
+    const payload = parseJsonPayload(rawPayload, label);
     if (!response.ok || payload.ok !== true) {
       throw new Error(
         optionalString(payload, "description") ?? `${method} failed with HTTP ${response.status}`,

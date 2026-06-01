@@ -353,6 +353,18 @@ describe("gateway-cli coverage", () => {
     }
   });
 
+  it.each([
+    ["--log-lines", "5000x"],
+    ["--log-bytes", "1mb"],
+  ])("rejects partial gateway diagnostics export %s", async (flag, value) => {
+    callGateway.mockClear();
+
+    await expectGatewayExit(["gateway", "diagnostics", "export", flag, value, "--json"]);
+
+    expect(runtimeErrors.join("\n")).toContain(`${flag} must be a positive integer`);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("registers gateway discover and prints json output", async () => {
     discoverGatewayBeacons.mockClear();
     discoverGatewayBeacons.mockResolvedValueOnce([
@@ -401,11 +413,11 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
   });
 
-  it("validates gateway ports and handles force/start errors", async () => {
-    // Invalid port
+  it("validates gateway ports before starting", async () => {
     await expectGatewayExit(["gateway", "--port", "0", "--token", "test-token"]);
+  });
 
-    // Force free failure
+  it("reports force-free port failures", async () => {
     forceFreePortAndWait.mockImplementationOnce(async () => {
       throw new Error("boom");
     });
@@ -418,8 +430,9 @@ describe("gateway-cli coverage", () => {
       "--force",
       "--allow-unconfigured",
     ]);
+  });
 
-    // Start failure (generic)
+  it("reports gateway start failures without leaking signal listeners", async () => {
     startGatewayServer.mockRejectedValueOnce(new Error("nope"));
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));

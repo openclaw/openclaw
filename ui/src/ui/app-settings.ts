@@ -52,8 +52,14 @@ import {
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  loadSkillWorkshopProposals,
+  type SkillWorkshopState,
+} from "./controllers/skill-workshop.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { loadWorkboard } from "./controllers/workboard.ts";
+import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
@@ -64,6 +70,7 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
@@ -98,6 +105,7 @@ type SettingsHost = {
   eventLogBuffer: unknown[];
   basePath: string;
   agentsList?: AgentsListResult | null;
+  selectedAgentId?: string | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   pendingGatewayUrl?: string | null;
@@ -125,6 +133,12 @@ type LocalUserIdentityHost = {
   userAvatar?: string | null;
 };
 
+function resolveDreamingAgentIdForSession(host: SettingsHost): string {
+  return normalizeAgentId(
+    parseAgentSessionKey(host.sessionKey)?.agentId ?? host.agentsList?.defaultId ?? "main",
+  );
+}
+
 type SettingsAppHost = SettingsHost &
   AgentFilesState &
   AgentIdentityState &
@@ -142,6 +156,7 @@ type SettingsAppHost = SettingsHost &
   PresenceState &
   SessionsState &
   SkillsState &
+  SkillWorkshopState &
   ModelAuthStatusState &
   UsageState & {
     overviewLogCursor: number | null;
@@ -382,11 +397,9 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
       return;
     case "cron":
       void loadCron(host);
-      return;
     case "overview":
     case "tools":
     case undefined:
-      return;
   }
 }
 
@@ -412,6 +425,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "communications":
       case "appearance":
       case "automation":
+      case "mcp":
       case "infrastructure":
       case "aiAgents":
         {
@@ -425,6 +439,19 @@ export async function refreshActiveTab(host: SettingsHost) {
         break;
       case "activity":
         break;
+      case "workboard":
+        await Promise.all([
+          loadConfig(app),
+          loadSessions(app),
+          loadAgents(app),
+          loadWorkboard({
+            host,
+            client: app.client,
+            force: true,
+            requestUpdate: host.requestUpdate,
+          }),
+        ]);
+        break;
       case "channels":
         await loadChannelsTab(host);
         break;
@@ -435,13 +462,16 @@ export async function refreshActiveTab(host: SettingsHost) {
         await loadUsage(app);
         break;
       case "sessions":
-        await loadSessions(app);
+        await Promise.all([loadConfig(app), loadSessions(app)]);
         break;
       case "cron":
         await loadCron(host);
         break;
       case "skills":
         await loadSkills(app);
+        break;
+      case "skillWorkshop":
+        await loadSkillWorkshopProposals(app, { force: true });
         break;
       case "agents":
         await refreshAgentsTab(host, app);
@@ -451,6 +481,7 @@ export async function refreshActiveTab(host: SettingsHost) {
         await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
         break;
       case "dreams":
+        host.selectedAgentId = resolveDreamingAgentIdForSession(host);
         await loadConfig(app);
         await Promise.all([
           loadDreamingStatus(app),
@@ -780,6 +811,32 @@ export function hasOperatorReadAccess(
   });
 }
 
+export function hasOperatorWriteAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.write"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorAdminAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.admin"],
+    allowedScopes: auth.scopes,
+  });
+}
+
 export function hasMissingSkillDependencies(
   missing: Record<string, unknown> | null | undefined,
 ): boolean {
@@ -865,7 +922,7 @@ function buildAttentionItems(host: SettingsAppHost) {
   }
 
   const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => j.state?.lastStatus === "error");
+  const failedCron = cronJobs.filter((j) => resolveCronJobLastRunStatus(j) === "error");
   if (failedCron.length > 0) {
     items.push({
       severity: "error",
@@ -942,6 +999,7 @@ export async function loadCron(host: SettingsHost) {
   host.controlUiCronRefreshSeq = cronSeq;
   const isCurrentCronRefresh = () =>
     host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
+  const useTableFilters = host.tab === "cron";
   const runsStartedAtMs = controlUiNowMs();
   const runsRefresh = loadCronRuns(app, activeCronJobId)
     .catch(() => "error" as const)
@@ -961,5 +1019,9 @@ export async function loadCron(host: SettingsHost) {
       );
     });
   void runsRefresh;
-  await Promise.all([loadChannels(app, false), loadCronStatus(app), loadCronJobsPage(app)]);
+  await Promise.all([
+    loadChannels(app, false),
+    loadCronStatus(app),
+    loadCronJobsPage(app, { tableFilters: useTableFilters }),
+  ]);
 }

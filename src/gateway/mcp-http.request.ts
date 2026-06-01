@@ -1,11 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 import { isLoopbackAddress } from "./net.js";
@@ -30,6 +30,9 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
+  currentChannelId: string | undefined;
+  currentThreadTs: string | undefined;
+  currentMessageId: string | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -188,6 +191,9 @@ export function resolveMcpRequestContext(
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
+    currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
+    currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(

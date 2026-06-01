@@ -1,14 +1,21 @@
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const backendModel = process.env.MODEL_REF || "openai/gpt-5.4-mini";
-const timeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS ?? "180",
-  10,
-);
-const maxBodyBytes = Number.parseInt(
-  process.env.OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES ?? "1048576",
-  10,
-);
+
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+const timeoutSeconds = readPositiveIntEnv("OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", 180);
+const maxBodyBytes = readPositiveIntEnv("OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES", 1048576);
 
 if (!port || !token) {
   throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
@@ -116,7 +123,7 @@ if (toolCall?.type !== "function" || toolCall?.function?.name !== "get_weather")
   throw new Error(`unexpected tool call: ${JSON.stringify(toolCall)}`);
 }
 
-let args = {};
+let args;
 try {
   args = JSON.parse(toolCall.function.arguments || "{}");
 } catch {

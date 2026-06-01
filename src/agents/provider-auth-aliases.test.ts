@@ -61,10 +61,10 @@ describe("provider auth aliases", () => {
           origin: "bundled",
           providerAuthChoices: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               method: "oauth",
-              choiceId: "openai-codex",
-              deprecatedChoiceIds: ["codex-cli", "openai-codex-import"],
+              choiceId: "openai",
+              deprecatedChoiceIds: ["codex-cli", "openai-chatgpt-import"],
             },
           ],
         },
@@ -72,9 +72,9 @@ describe("provider auth aliases", () => {
       diagnostics: [],
     });
 
-    expect(resolveProviderIdForAuth("codex-cli")).toBe("openai-codex");
-    expect(resolveProviderIdForAuth("openai-codex-import")).toBe("openai-codex");
-    expect(resolveProviderIdForAuth("openai-codex")).toBe("openai-codex");
+    expect(resolveProviderIdForAuth("codex-cli")).toBe("openai");
+    expect(resolveProviderIdForAuth("openai-chatgpt-import")).toBe("openai");
+    expect(resolveProviderIdForAuth("openai")).toBe("openai");
   });
 
   it("does not reuse aliases across env-resolved plugin roots", () => {
@@ -110,5 +110,63 @@ describe("provider auth aliases", () => {
     expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(
       2,
     );
+  });
+
+  it("uses caller-provided metadata snapshots without loading plugin metadata", () => {
+    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
+    const metadataSnapshot = {
+      plugins: [],
+    } as never;
+
+    expect(
+      resolveProviderIdForAuth("fixture", {
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "http://127.0.0.1:1234/v1",
+                api: "openai-responses",
+                models: [],
+              },
+            },
+          },
+        },
+        env,
+        metadataSnapshot,
+      }),
+    ).toBe("fixture");
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves metadata auth aliases even when the alias is configured as a provider", () => {
+    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
+    const metadataSnapshot = {
+      plugins: [
+        {
+          id: "alias-owner",
+          origin: "global",
+          providerAuthAliases: { fixture: "provider-two" },
+        },
+      ],
+    } as never;
+
+    expect(
+      resolveProviderIdForAuth("fixture", {
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "http://127.0.0.1:1234/v1",
+                api: "openai-responses",
+                models: [],
+              },
+            },
+          },
+        },
+        env,
+        metadataSnapshot,
+      }),
+    ).toBe("provider-two");
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 });

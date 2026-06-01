@@ -122,6 +122,10 @@ jobs:
             echo "publish_openclaw_npm=true requires dispatching this workflow from main, release/YYYY.M.D, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
+            echo "publish_openclaw_npm=true requires plugin_publish_scope=all-publishable so every publishable official plugin is released with OpenClaw." >&2
+            exit 1
+          fi
           if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS}" ]]; then
             echo "plugin_publish_scope=selected requires plugins." >&2
             exit 1
@@ -265,7 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "Full Release Validation"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"], ["status", "completed"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID}: ${run.url}`);'
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "Full Release Validation"], ["event", "workflow_dispatch"], ["status", "completed"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } const allowedBranches = new Set(["main", process.env.EXPECTED_WORKFLOW_BRANCH].filter(Boolean)); if (!allowedBranches.has(run.headBranch)) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have headBranch in ${[...allowedBranches].join(", ")}, got ${run.headBranch ?? "<missing>"}.`); process.exit(1); } console.log(`Using full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID}: ${run.url}`);'
 
           manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
           if [[ ! -f "$manifest" ]]; then
@@ -810,7 +814,7 @@ jobs:
             `- npm package: https://www.npmjs.com/package/openclaw/v/${process.env.RELEASE_VERSION}`,
             `- registry tarball: ${process.env.RELEASE_TARBALL}`,
             `- integrity: \`${process.env.RELEASE_INTEGRITY}\``,
-            `- full release CI report: https://github.com/openclaw/releases-private/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
+            `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
             `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
             `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
             `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`,

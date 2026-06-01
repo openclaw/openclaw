@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {
@@ -9,6 +9,10 @@ type ScheduleOptionInput = {
   exact?: unknown;
   stagger?: unknown;
   tz?: unknown;
+};
+
+type PositionalScheduleInput = {
+  positionalSchedule?: unknown;
 };
 
 type NormalizedScheduleOptions = {
@@ -35,6 +39,30 @@ export function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSch
     throw new Error("Choose exactly one schedule: --at, --every, or --cron");
   }
   return schedule;
+}
+
+export function resolveCronCreateScheduleFromArgs(
+  options: ScheduleOptionInput & PositionalScheduleInput,
+): CronSchedule {
+  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
+  if (!positionalSchedule) {
+    return resolveCronCreateSchedule(options);
+  }
+  const normalized = normalizeScheduleOptions(options);
+  if (countChosenSchedules(normalized) > 0) {
+    throw new Error("Choose a positional schedule or one of --at, --every, or --cron.");
+  }
+  const every = parseEverySchedule(positionalSchedule);
+  return resolveCronCreateSchedule({
+    ...options,
+    at: every
+      ? undefined
+      : looksLikeCronExpression(positionalSchedule)
+        ? undefined
+        : positionalSchedule,
+    cron: looksLikeCronExpression(positionalSchedule) ? positionalSchedule : undefined,
+    every,
+  });
 }
 
 export function resolveCronEditScheduleRequest(
@@ -92,6 +120,16 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
   return [Boolean(options.at), Boolean(options.every), Boolean(options.cronExpr)].filter(Boolean)
     .length;
+}
+
+function parseEverySchedule(value: string): string | undefined {
+  const match = /^every\s+(.+)$/iu.exec(value.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function looksLikeCronExpression(value: string): boolean {
+  const parts = value.trim().split(/\s+/u);
+  return parts.length === 5 || parts.length === 6;
 }
 
 function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule | undefined {

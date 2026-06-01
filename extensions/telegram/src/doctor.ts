@@ -1,11 +1,11 @@
-import {
-  type ChannelDoctorAdapter,
-  type ChannelDoctorEmptyAllowlistAccountContext,
+import type {
+  ChannelDoctorAdapter,
+  ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -147,7 +147,7 @@ export function scanTelegramMalformedGroupsConfig(
 ): TelegramMalformedGroupsHit[] {
   const hits: TelegramMalformedGroupsHit[] = [];
   for (const scope of collectTelegramAccountScopes(cfg)) {
-    if (!Object.prototype.hasOwnProperty.call(scope.account, "groups")) {
+    if (!Object.hasOwn(scope.account, "groups")) {
       continue;
     }
     const groups = scope.account.groups;

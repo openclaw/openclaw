@@ -2,11 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CommandLane } from "../process/lanes.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const sessionStoreMocks = vi.hoisted(() => ({
-  updateSessionStoreEntry: vi.fn(async (params: { update: (entry: unknown) => unknown }) => {
-    await params.update({ sessionId: "session-1" });
-  }),
+  applySessionStoreEntryPatch: vi.fn(),
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
@@ -44,7 +43,7 @@ describe("session suspension", () => {
     cancelLaneAutoResume(CommandLane.Cron);
     cancelLaneAutoResume(CommandLane.CronNested);
     vi.useRealTimers();
-    sessionStoreMocks.updateSessionStoreEntry.mockClear();
+    sessionStoreMocks.applySessionStoreEntryPatch.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
   });
 
@@ -102,6 +101,20 @@ describe("session suspension", () => {
       CommandLane.Cron,
       1,
     );
+  });
+
+  it("clamps oversized suspension TTLs for timers and persisted resume time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await suspendLane(Number.MAX_SAFE_INTEGER, {} as OpenClawConfig, CommandLane.Main);
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    const patch = sessionStoreMocks.applySessionStoreEntryPatch.mock.calls[0]?.[0].patch as {
+      quotaSuspension?: { expectedResumeBy?: number };
+    };
+    expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
   });
 
   it("maps failover reasons to persisted suspension reasons", async () => {

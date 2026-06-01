@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
+  buildFailoverRemediationHint,
+  buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
@@ -8,7 +11,6 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "./failover-error.js";
-import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -77,6 +79,8 @@ describe("failover-error", () => {
       }),
     ).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "+429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "0x1ad" })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
@@ -488,7 +492,7 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
-  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+  it("classifies bare shared model runtime stream wrapper as timeout regardless of provider (#71620)", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "An unknown error occurred",
@@ -1138,7 +1142,7 @@ describe("failover-error", () => {
         status: 500,
         message: OPENAI_SERVER_ERROR_PAYLOAD,
       },
-      { provider: "openai-codex", model: "gpt-5.4" },
+      { provider: "openai", model: "gpt-5.4" },
     );
     expect(err?.reason).toBe("server_error");
     expect(err?.status).toBe(500);
@@ -1236,5 +1240,74 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
     });
+  });
+});
+
+describe("buildFailoverRemediationHint", () => {
+  it("returns a copy-pasteable login command for auth failures", () => {
+    const err = new FailoverError("missing token", {
+      reason: "auth",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+    expect(buildFailoverRemediationHint(err)).toBe(
+      "Re-authenticate with: openclaw models auth login --provider 'anthropic' --force",
+    );
+  });
+
+  it("returns a hint for auth_permanent as well", () => {
+    const err = new FailoverError("revoked", {
+      reason: "auth_permanent",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(buildFailoverRemediationHint(err)).toBe(
+      "Re-authenticate with: openclaw models auth login --provider 'google-gemini-cli' --force",
+    );
+  });
+
+  it("quotes provider ids that contain shell metacharacters", () => {
+    expect(buildProviderReauthCommand("custom;touch /tmp/pwned")).toBe(
+      "openclaw models auth login --provider 'custom;touch /tmp/pwned' --force",
+    );
+    expect(buildProviderReauthCommand("custom'provider")).toBe(
+      "openclaw models auth login --provider 'custom'\\''provider' --force",
+    );
+  });
+
+  it("refuses control characters in rendered provider commands", () => {
+    expect(buildProviderReauthCommand("custom\nprovider")).toBeUndefined();
+  });
+
+  it("wraps rendered provider commands in the standard CLI formatter", () => {
+    expect(buildProviderReauthCommand("anthropic", { OPENCLAW_PROFILE: "work" })).toBe(
+      "openclaw --profile work models auth login --provider 'anthropic' --force",
+    );
+    expect(buildProviderReauthCommand("anthropic", { OPENCLAW_CONTAINER_HINT: "dev" })).toBe(
+      "openclaw --container dev models auth login --provider 'anthropic' --force",
+    );
+  });
+
+  it("returns undefined for non-auth reasons", () => {
+    const err = new FailoverError("429", {
+      reason: "rate_limit",
+      provider: "openai",
+      model: "gpt-5",
+    });
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
+  });
+
+  it("returns undefined when provider is not attributed", () => {
+    const err = new FailoverError("no token", {
+      reason: "auth",
+      model: "claude-opus-4-7",
+    });
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
+  });
+
+  it("returns undefined for non-FailoverError inputs", () => {
+    expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
+    expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
+    expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
   });
 });

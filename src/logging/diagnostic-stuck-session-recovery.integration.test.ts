@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
+import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   testing as embeddedRunTesting,
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,
@@ -21,7 +21,9 @@ import {
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 function delay(ms: number): Promise<"blocked"> {
-  return new Promise((resolve) => setTimeout(() => resolve("blocked"), ms));
+  return new Promise((resolve) => {
+    setTimeout(() => resolve("blocked"), ms);
+  });
 }
 
 describe("stuck session recovery integration", () => {

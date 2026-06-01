@@ -76,6 +76,37 @@ Server globs use the provider-safe MCP server prefix, not necessarily the raw `m
 
 Without that sandbox-layer entry, the MCP server can still load successfully while its tools are filtered before the provider request. Use `openclaw doctor` to catch this shape for OpenClaw-managed servers in `mcp.servers`. MCP servers loaded from bundled plugin manifests or Claude `.mcp.json` use the same sandbox gate, but this diagnostic does not enumerate those sources yet; use the same allowlist entries if their tools disappear in sandboxed turns.
 
+### `tools.codeMode`
+
+`tools.codeMode` enables the generic OpenClaw code-mode surface. When enabled
+for a run with tools, the model sees only `exec` and `wait`; normal OpenClaw
+tools move behind the in-sandbox `tools.*` catalog bridge, and MCP tools are
+available through the generated `MCP` namespace.
+
+```json5
+{
+  tools: {
+    codeMode: {
+      enabled: true,
+    },
+  },
+}
+```
+
+The shorthand is also accepted:
+
+```json5
+{
+  tools: { codeMode: true },
+}
+```
+
+MCP declarations are exposed through the read-only virtual API file surface in
+code mode. Guest code can call `API.list("mcp")` and
+`API.read("mcp/<server>.d.ts")` to inspect TypeScript-style signatures before
+calling `MCP.<server>.<tool>()`. See [Code mode](/reference/code-mode) for the
+runtime contract, limits, and debugging steps.
+
 ### `tools.allow` / `tools.deny`
 
 Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildcards. Applied even when Docker sandbox is off.
@@ -386,12 +417,13 @@ Controls inline attachment support for `sessions_spawn`.
 
 <AccordionGroup>
   <Accordion title="Attachment notes">
-    - Attachments are only supported for `runtime: "subagent"`. ACP runtime rejects them.
-    - Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+    - Attachments require `enabled: true`.
+    - Subagent attachments are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+    - ACP attachments are image-only and forwarded inline to the ACP runtime after the same file count, per-file byte, and total byte limits pass.
     - Attachment content is automatically redacted from transcript persistence.
     - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
-    - File permissions are `0700` for directories and `0600` for files.
-    - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+    - Subagent attachment file permissions are `0700` for directories and `0600` for files.
+    - Subagent cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
   </Accordion>
 </AccordionGroup>
@@ -413,7 +445,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 ```
 
 - `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
-- Default: `false` unless `agents.defaults.embeddedPi.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an OpenAI or OpenAI Codex GPT-5-family run. Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
+- Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an OpenAI or OpenAI Codex GPT-5-family run. Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
 - When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
 
 ### `agents.defaults.subagents`
@@ -445,7 +477,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 
 ## Custom providers and base URLs
 
-OpenClaw uses the built-in model catalog. Add custom providers via `models.providers` in config or `~/.openclaw/agents/<agentId>/agent/models.json`.
+Provider plugins publish their own model catalog rows. Add custom providers via `models.providers` in config or `~/.openclaw/agents/<agentId>/agent/models.json`.
 
 Configuring a custom/local provider `baseUrl` is also the narrow network trust decision for model HTTP requests: OpenClaw allows that exact `scheme://host:port` origin through the guarded fetch path, without adding a separate config option or trusting other private origins.
 
@@ -479,7 +511,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
 <AccordionGroup>
   <Accordion title="Auth and merge precedence">
     - Use `authHeader: true` + `headers` for custom auth needs.
-    - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`, a legacy environment variable alias).
+    - Override agent config root with `OPENCLAW_AGENT_DIR`.
     - Merge precedence for matching provider IDs:
       - Non-empty agent `models.json` `baseUrl` values win.
       - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
@@ -488,7 +520,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
       - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
       - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.
       - Matching model `contextTokens` preserves an explicit runtime cap when present; use it to limit effective context without changing native model metadata.
-      - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
+      - Provider-plugin catalogs are stored as generated plugin-owned catalog shards under the agent's plugin state.
+      - Use `models.mode: "replace"` when you want config to fully rewrite `models.json` and active plugin catalog shards.
       - Marker persistence is source-authoritative: markers are written from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 
   </Accordion>
@@ -535,7 +568,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
     - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
     - `models.providers.*.models.*.compat.strictMessageKeys`: optional compatibility hint for strict OpenAI-compatible chat endpoints. When `true`, OpenClaw strips outgoing Chat Completions message objects to `role` and `content` before sending the request.
-    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM.
+    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM. Configured vLLM Qwen models expose binary `/think` choices (`off`, `on`) for these formats.
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">
@@ -753,7 +786,7 @@ Interactive custom-provider onboarding infers image input for common vision mode
     }
     ```
 
-    Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
+    Set `ZAI_API_KEY`. Model refs use the canonical `zai/*` provider ID. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
 
     - General endpoint: `https://api.z.ai/api/paas/v4`
     - Coding endpoint (default): `https://api.z.ai/api/coding/paas/v4`

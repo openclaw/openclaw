@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -30,14 +30,6 @@ type RunGroupParams = {
   env: Record<string, string | undefined>;
   targets: string[];
 };
-
-function runScript(args: string[], cwd = process.cwd()) {
-  return execFileSync(process.execPath, [scriptPath, ...args], {
-    cwd,
-    encoding: "utf8",
-  });
-}
-
 function runScriptResult(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -475,7 +467,9 @@ describe("scripts/test-extension.mjs", () => {
       extensionIds: [extensionId, "firecrawl"],
     });
 
-    expect(batch.extensionIds).toEqual([extensionId, "firecrawl"].toSorted());
+    expect(batch.extensionIds).toEqual(
+      [extensionId, "firecrawl"].toSorted((left, right) => left.localeCompare(right)),
+    );
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
@@ -582,7 +576,9 @@ describe("scripts/test-extension.mjs", () => {
     await Promise.resolve();
     expect(started).toEqual(["heavy", "middle"]);
     resolvers.shift()?.();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(started).toEqual(["heavy", "middle", "light"]);
     while (resolvers.length > 0) {
       resolvers.shift()?.();
@@ -716,6 +712,13 @@ describe("scripts/test-extension.mjs", () => {
       ]),
     ]).toEqual(["extensions/codex/src/app-server/run-attempt.test.ts"]);
     expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
+  });
+
+  it("accepts pnpm's leading argument separator before extension ids", () => {
+    expect(parseExtensionIds(["--", "telegram,slack", "--run"])).toEqual({
+      extensionIds: ["telegram", "slack"],
+      passthroughArgs: ["--run"],
+    });
   });
 
   it("fails explicitly requested extensions without tests by default", () => {

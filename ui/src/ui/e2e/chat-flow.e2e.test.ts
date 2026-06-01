@@ -3,11 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
+  type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
 
-const chromiumExecutablePath = chromium.executablePath();
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
@@ -29,15 +31,60 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+async function waitForRequests(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  method: string,
+  count: number,
+): Promise<MockGatewayRequest[]> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const requests = await gateway.getRequests(method);
+    if (requests.length >= count) {
+      return requests;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  throw new Error(`Timed out waiting for ${count} ${method} requests`);
+}
+
+function chatSessionListResponse() {
+  return {
+    count: 2,
+    defaults: {
+      contextTokens: null,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    },
+    path: "",
+    sessions: [
+      {
+        key: "agent:main:session-a",
+        kind: "direct",
+        label: "Session A",
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:session-b",
+        kind: "direct",
+        label: "Session B",
+        updatedAt: 1,
+      },
+    ],
+    ts: Date.now(),
+  };
+}
+
 describeControlUiE2e("Control UI mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 
   afterAll(async () => {
@@ -80,6 +127,324 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.emitChatFinal({ runId, text: "Harness verified." });
 
       await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps chat usable while sessions are still loading", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.list"],
+      historyMessages: [
+        {
+          content: [{ text: "History renders before sessions finish.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.getByText("History renders before sessions finish.").waitFor({ timeout: 10_000 });
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+
+      await page.getByRole("button", { name: "Chat session" }).click();
+      const sessionsList = await gateway.waitForRequest("sessions.list");
+      expect(requireRecord(sessionsList.params)).toMatchObject({
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 50,
+      });
+
+      await composer.fill("draft while sessions load");
+      expect(await composer.inputValue()).toBe("draft while sessions load");
+      await composer.fill("");
+
+      await gateway.resolveDeferred("sessions.list");
+      await page.getByRole("option", { name: /Main/ }).waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("sends the first chat turn while agents startup loading is still pending", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["agents.list", "chat.history"],
+      historyMessages: [],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("agents.list");
+
+      const prompt = "send before agents list completes";
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      expect(params.message).toBe(prompt);
+      expect(params.sessionKey).toBe("main");
+
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      await gateway.resolveDeferred("chat.history", {
+        messages: [],
+        sessionId: "control-ui-e2e-session",
+        thinkingLevel: null,
+      });
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
+      await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
+
+      await gateway.resolveDeferred("agents.list");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a delayed chat.send ACK visible as pending until the ACK resolves", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const prompt = "hold this until the ack arrives";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+
+      await page.locator(".chat-queue").getByText("Sending").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-thread").getByText(prompt).count()).toBe(0);
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+
+      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const prompt = "policy should not eat this";
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+
+      await gateway.rejectDeferred("chat.send", {
+        code: "INVALID_REQUEST",
+        message: "send blocked by session policy",
+      });
+
+      await page.locator(".chat-queue").getByText("Failed").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await composer.inputValue()).toBe(prompt);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retries an ACK-lost send after reconnect with the same idempotency key", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const prompt = "retry with the same key";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const firstRequest = await gateway.waitForRequest("chat.send");
+      const firstParams = requireRecord(firstRequest.params);
+      const runId = requireString(firstParams.idempotencyKey, "first idempotency key");
+
+      await gateway.closeLatest(1006, "lost ack");
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      const secondParams = requireRecord(sends[1]?.params);
+      expect(secondParams.idempotencyKey).toBe(runId);
+      expect(secondParams.message).toBe(prompt);
+      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a session model override selected after switching away and back", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+      },
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
+      ],
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const main = page.getByRole("main");
+      const openModelSelect = async () => {
+        const trigger = main.locator('[data-chat-model-select="true"]').first();
+        await trigger.waitFor({ state: "visible", timeout: 10_000 });
+        return trigger;
+      };
+      const selectModel = async (value: string) => {
+        await main.locator('[data-chat-model-select="true"]').click();
+        const option = main.locator(`[data-chat-model-option="${value}"]`);
+        await option.waitFor({ state: "visible", timeout: 10_000 });
+        await option.click();
+      };
+
+      let modelSelect = await openModelSelect();
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+
+      await selectModel("bedrock/claude-opus-4.5");
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key: "agent:main:session-a",
+        model: "bedrock/claude-opus-4.5",
+      });
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
+        "bedrock/claude-opus-4.5",
+      );
+
+      await page
+        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .click();
+      await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
+        timeout: 10_000,
+      });
+      modelSelect = await openModelSelect();
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+
+      await page
+        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .click();
+      await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
+        timeout: 10_000,
+      });
+
+      modelSelect = await openModelSelect();
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
+        "bedrock/claude-opus-4.5",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("refreshes history after a tool-call window disconnects and reconnects", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "use a tool then reconnect";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+
+      await gateway.emitGatewayEvent("agent", {
+        data: {
+          args: { query: "status" },
+          name: "status",
+          phase: "start",
+          toolCallId: "tool-1",
+        },
+        runId,
+        seq: 1,
+        sessionKey: "main",
+        stream: "tool",
+        ts: Date.now(),
+      });
+      await gateway.setHistoryMessages([
+        {
+          content: [{ text: prompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        {
+          content: [{ text: "Recovered from refreshed history.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ]);
+
+      await gateway.closeLatest(1006, "lost during tool call");
+
+      await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
     } finally {
       await context.close();
     }

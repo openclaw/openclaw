@@ -207,7 +207,7 @@ export async function handleIrcInbound(params: {
     providerKey: "irc",
     accountId: account.accountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.channel,
-    log: (message) => runtime.log?.(message),
+    log: (messageLocal) => runtime.log?.(messageLocal),
   });
 
   const groupMatch = resolveIrcGroupMatch({
@@ -396,7 +396,7 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,

@@ -1,8 +1,9 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -40,7 +41,7 @@ import {
 } from "../sync-state.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
-import { resolveMatrixMonitorConfig, type MatrixResolvedAllowlistEntry } from "./config.js";
+import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
@@ -167,31 +168,30 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const allowlistOnly = accountConfig.allowlistOnly === true;
   const accountAllowBots = accountConfig.allowBots;
-  let allowFrom: string[] = (accountConfig.dm?.allowFrom ?? []).map(String);
-  let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
-  let allowFromResolvedEntries: MatrixResolvedAllowlistEntry[] = [];
-  let groupAllowFromResolvedEntries: MatrixResolvedAllowlistEntry[] = [];
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
   let needsRoomAliasesForConfig = false;
+  const initialAllowFrom = (accountConfig.dm?.allowFrom ?? []).map(String);
+  const initialGroupAllowFrom = (accountConfig.groupAllowFrom ?? []).map(String);
   const configuredBotUserIds = resolveConfiguredMatrixBotUserIds({
     cfg,
     accountId: effectiveAccountId,
   });
 
-  ({
+  const {
     allowFrom,
     allowFromResolvedEntries,
     groupAllowFrom,
     groupAllowFromResolvedEntries,
-    roomsConfig,
+    roomsConfig: resolvedRoomsConfig,
   } = await resolveMatrixMonitorConfig({
     cfg,
     accountId: effectiveAccountId,
-    allowFrom,
-    groupAllowFrom,
+    allowFrom: initialAllowFrom,
+    groupAllowFrom: initialGroupAllowFrom,
     roomsConfig,
     runtime,
-  }));
+  });
+  roomsConfig = resolvedRoomsConfig;
   needsRoomAliasesForConfig = Boolean(
     roomsConfig && Object.keys(roomsConfig).some((key) => key.trim().startsWith("#")),
   );
@@ -214,9 +214,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const auth = await resolveMatrixAuth({ cfg, accountId: effectiveAccountId });
   const resolvedInitialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? Math.max(0, Math.floor(opts.initialSyncLimit))
-      : auth.initialSyncLimit;
+    resolveOptionalIntegerOption(opts.initialSyncLimit, { min: 0 }) ?? auth.initialSyncLimit;
   const authWithLimit =
     resolvedInitialSyncLimit === auth.initialSyncLimit
       ? auth
@@ -496,7 +494,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       auth,
       env: process.env,
       abortSignal: opts.abortSignal,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
     });
 

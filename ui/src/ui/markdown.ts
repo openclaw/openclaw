@@ -102,9 +102,9 @@ type MarkdownRenderEnv = {
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
-// biome-ignore lint: readability — regex charset is inherently dense
-const CJK_RE =
-  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
+const CJK_RE = new RegExp(
+  "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
+);
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -349,13 +349,11 @@ md.linkify.add("www", {
           if (c === open) {
             balance[close] = balance[close] === 0 ? 1 : 0;
           }
-        } else {
+        } else if (c === open) {
           // Distinct open/close (e.g., ())
-          if (c === open) {
-            balance[close]++;
-          } else if (c === close) {
-            balance[close]--;
-          }
+          balance[close]++;
+        } else if (c === close) {
+          balance[close]--;
         }
       }
     }
@@ -394,13 +392,11 @@ md.linkify.add("www", {
             len--;
             continue;
           }
-        } else {
+        } else if (balance[ch] < 0) {
           // Distinct pair: strip if more closes than opens
-          if (balance[ch] < 0) {
-            balance[ch]++;
-            len--;
-            continue;
-          }
+          balance[ch]++;
+          len--;
+          continue;
         }
       }
       break;
@@ -614,11 +610,11 @@ md.renderer.rules.code_block = (tokens, idx, _options, env) => {
 };
 
 export function toSanitizedMarkdownHtml(
-  markdown: string,
+  markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
   if (!input) {
     return "";
   }
@@ -638,7 +634,7 @@ export function toSanitizedMarkdownHtml(
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    const html = toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, sanitized);
@@ -661,6 +657,18 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
-function renderEscapedPlainTextHtml(value: string): string {
+export function toEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+export function toStreamingPlainTextHtml(markdownLocal: string): string {
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  if (!input) {
+    return "";
+  }
+  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+  const suffix = truncated.truncated
+    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    : "";
+  return toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
 }

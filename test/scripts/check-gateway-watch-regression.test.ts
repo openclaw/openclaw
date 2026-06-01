@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  appendBoundedWatchLog,
   hasGatewayReadyLog,
+  parseArgs,
   shouldRefreshBuildStampForRestoredArtifacts,
   stopTimedWatchChild,
+  updateWatchBuildDetection,
+  WATCH_LOG_CAPTURE_MAX_CHARS,
   writeBuildAndRuntimePostBuildStamps,
 } from "../../scripts/check-gateway-watch-regression.mjs";
 import {
@@ -15,10 +19,45 @@ import {
 } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 describe("check-gateway-watch-regression", () => {
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--window-ms", "1500", "--skip-build"])).toMatchObject({
+      skipBuild: true,
+      windowMs: 1500,
+    });
+  });
+
   it("recognizes current and legacy gateway ready logs", () => {
     expect(hasGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)")).toBe(true);
     expect(hasGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(true);
     expect(hasGatewayReadyLog("[gateway] starting HTTP server...")).toBe(false);
+  });
+
+  it("bounds in-memory watch output capture while keeping the newest logs", () => {
+    const first = appendBoundedWatchLog("abc", "def", 8);
+    expect(first).toEqual({ text: "abcdef", truncated: false });
+
+    const second = appendBoundedWatchLog(first.text, "ghijkl", 8);
+    expect(second).toEqual({ text: "efghijkl", truncated: true });
+    expect(second.text).toHaveLength(8);
+    expect(WATCH_LOG_CAPTURE_MAX_CHARS).toBeGreaterThan(1024);
+  });
+
+  it("keeps build-regression detection after diagnostic logs truncate", () => {
+    const detected = updateWatchBuildDetection(
+      { buffer: "", triggered: false, reason: null },
+      "Building TypeScript (dist is stale: source_mtime_newer)\n",
+    );
+    const afterNoise = updateWatchBuildDetection(detected, "x".repeat(10_000));
+
+    expect(afterNoise.triggered).toBe(true);
+    expect(afterNoise.reason).toBe("source_mtime_newer");
+
+    const coalesced = updateWatchBuildDetection(
+      { buffer: "", triggered: false, reason: null },
+      `Building TypeScript (dist is stale: config_newer)\n${"x".repeat(10_000)}`,
+    );
+    expect(coalesced.triggered).toBe(true);
+    expect(coalesced.reason).toBe("config_newer");
   });
 
   it("refreshes restored build stamps only for skip-build config mtime drift", () => {

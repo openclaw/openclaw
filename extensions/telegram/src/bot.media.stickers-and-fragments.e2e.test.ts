@@ -83,20 +83,6 @@ function resolveActiveScheduledTimersForDelay(
 describe("telegram stickers", () => {
   // Parallel Testbox shards can make these media-path e2e tests slower than standalone local runs.
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
-
-  async function createStaticStickerHarness() {
-    const proxyFetch = vi.fn().mockResolvedValue(
-      new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
-        status: 200,
-        headers: { "content-type": "image/webp" },
-      }),
-    );
-    const handlerContext = await createBotHandlerWithOptions({
-      proxyFetch: proxyFetch as unknown as typeof fetch,
-    });
-    return { proxyFetch, ...handlerContext };
-  }
-
   beforeEach(() => {
     cacheStickerSpy.mockClear();
     getCachedStickerSpy.mockClear();

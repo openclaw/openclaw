@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import fs, { readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
@@ -74,13 +74,13 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
       "src/gateway/gateway-acp-bind.live.test.ts",
       "src/gateway/gateway-cli-backend.live.test.ts",
-      "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts",
       "src/gateway/gateway-codex-bind.live.test.ts",
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
       "src/crestodian/rescue-channel.live.test.ts",
       "src/gateway/android-node.capabilities.live.test.ts",
+      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([

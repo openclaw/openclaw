@@ -1,10 +1,15 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -80,12 +85,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-
-function requireArray(value: unknown, label: string): Array<unknown> {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as Array<unknown>;
-}
-
 function callArg(
   mock: { mock: { calls: Array<Array<unknown>> } },
   callIndex: number,
@@ -293,18 +292,33 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("quarantines dynamic tools with unsupported input schemas", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
     const badExecute = vi.fn();
-    const bridge = createCodexDynamicToolBridge({
-      tools: [
-        createTool({ name: "message" }),
-        createTool({
-          name: "dofbot_move_angles",
-          parameters: { type: "array", items: { type: "number" } },
-          execute: badExecute,
-        }),
-      ],
-      signal: new AbortController().signal,
-    });
+    let bridge!: ReturnType<typeof createCodexDynamicToolBridge>;
+    try {
+      bridge = createCodexDynamicToolBridge({
+        tools: [
+          createTool({ name: "message" }),
+          createTool({
+            name: "dofbot_move_angles",
+            parameters: { type: "array", items: { type: "number" } },
+            execute: badExecute,
+          }),
+        ],
+        signal: new AbortController().signal,
+        hookContext: {
+          runId: "run-1",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+        },
+      });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribeDiagnostics();
+    }
 
     expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
     expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
@@ -323,6 +337,21 @@ describe("createCodexDynamicToolBridge", () => {
             violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
           },
         ],
+      }),
+    );
+    const blockedEvents = diagnosticEvents.filter(
+      (event): event is Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }> =>
+        event.type === "tool.execution.blocked",
+    );
+    expect(blockedEvents).toContainEqual(
+      expect.objectContaining({
+        type: "tool.execution.blocked",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        toolName: "dofbot_move_angles",
+        deniedReason: "unsupported_tool_schema",
+        reason: 'dofbot_move_angles.inputSchema.type must be "object"',
       }),
     );
 
@@ -852,7 +881,7 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("passes raw tool failure state into agent tool result middleware", async () => {
     const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (eventValue: { isError?: boolean }) => undefined);
+    const handler = vi.fn(async (_eventValue: { isError?: boolean }) => undefined);
     registry.agentToolResultMiddlewares.push({
       pluginId: "tokenjuice",
       pluginName: "Tokenjuice",

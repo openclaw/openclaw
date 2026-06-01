@@ -884,7 +884,7 @@ describe("memory-core dreaming phases", () => {
     );
 
     const readSpy = vi.spyOn(fs, "readFile");
-    let transcriptReadCount = 0;
+    let transcriptReadCount;
     try {
       await withDreamingTestClock(async () => {
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);

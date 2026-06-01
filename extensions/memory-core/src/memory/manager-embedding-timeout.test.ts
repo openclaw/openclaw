@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
@@ -39,6 +40,30 @@ describe("memory embedding timeout resolution", () => {
         configuredBatchTimeoutSeconds: 45,
       }),
     ).toBe(45_000);
+  });
+
+  it("caps configured and runtime embedding timeouts to timer-safe values", () => {
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: "openai",
+        configuredBatchTimeoutSeconds: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "query",
+        providerId: "openai",
+        providerRuntime: { inlineQueryTimeoutMs: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(
+      resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: "openai",
+        providerRuntime: { inlineBatchTimeoutMs: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 });
 
@@ -81,7 +106,11 @@ describe("memory embedding timeout abort", () => {
         run: async (signal) => {
           signalSeen = signal;
           return await new Promise<number[]>((resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+              { once: true },
+            );
           });
         },
       }),
@@ -103,6 +132,23 @@ describe("memory embedding timeout abort", () => {
           }),
       }),
     ).rejects.toThrow("memory embeddings batch timed out after 0s");
+  });
+
+  it("caps operation watchdog timers before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+
+    try {
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        message: "memory embeddings query timed out",
+        run: async () => [1, 2, 3],
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });
 
@@ -156,3 +202,17 @@ describe("memory index concurrency resolution", () => {
     ).toBe(3);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

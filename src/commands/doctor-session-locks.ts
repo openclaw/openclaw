@@ -1,3 +1,4 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import {
   cleanStaleLockFiles,
@@ -7,7 +8,6 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 function formatAge(ageMs: number | null): string {
@@ -48,7 +48,7 @@ export async function noteSessionLockHealth(params?: {
 }) {
   const shouldRepair = params?.shouldRepair === true;
   const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
-  let sessionDirs: string[] = [];
+  let sessionDirs: string[];
   try {
     sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {

@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -489,7 +489,7 @@ describe("Discord native plugin command dispatch", () => {
     const interaction = createInteraction();
     runtimeModuleMocks.getSessionEntry.mockReturnValue({
       sessionId: "discord-session",
-      authProfileOverride: "openai-codex:owner@example.com",
+      authProfileOverride: "openai:owner@example.com",
       updatedAt: Date.now(),
     });
 
@@ -516,7 +516,7 @@ describe("Discord native plugin command dispatch", () => {
       mock: executeSpy,
       commandName: "pair",
       expected: {
-        authProfileId: "openai-codex:owner@example.com",
+        authProfileId: "openai:owner@example.com",
       },
     });
   });
@@ -541,7 +541,7 @@ describe("Discord native plugin command dispatch", () => {
     }));
     runtimeModuleMocks.getSessionEntry.mockReturnValue({
       sessionId: "codex-session",
-      authProfileOverride: "openai-codex:owner@example.com",
+      authProfileOverride: "openai:owner@example.com",
       updatedAt: Date.now(),
     });
 
@@ -570,7 +570,7 @@ describe("Discord native plugin command dispatch", () => {
       expected: {
         agentId: "codex",
         sessionKey: pluginSessionKey,
-        authProfileId: "openai-codex:owner@example.com",
+        authProfileId: "openai:owner@example.com",
       },
     });
     expect(runtimeModuleMocks.getSessionEntry).toHaveBeenCalledWith({

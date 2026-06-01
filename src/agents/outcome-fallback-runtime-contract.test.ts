@@ -3,8 +3,8 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { runWithModelFallback } from "./model-fallback.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 
 vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,
@@ -14,7 +14,7 @@ const contractFallbackOverride = [
   `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
 ];
 
-describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
+describe("Outcome/fallback runtime contract - embedded runtime fallback classifier", () => {
   beforeAll(async () => {
     await runWithModelFallback({
       cfg: undefined,
@@ -35,7 +35,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it.each(fallbackClassificationCases)(
     "maps harness classification %s to a format fallback code",
     (classification, code) => {
-      const fallback = classifyEmbeddedPiRunResultForModelFallback({
+      const fallback = classifyEmbeddedAgentRunResultForModelFallback({
         provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
         model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
         result: createContractRunResult({
@@ -72,11 +72,11 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       fallbacksOverride: contractFallbackOverride,
       run,
-      classifyResult: ({ provider, model, result }) =>
-        classifyEmbeddedPiRunResultForModelFallback({
+      classifyResult: ({ provider, model, result: resultValue }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider,
           model,
-          result,
+          result: resultValue,
         }),
       skipAuthProfileRuntime: true,
     });
@@ -166,7 +166,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it("does not classify terminal results with visible output or side effects as fallbacks", () => {
     for (const contractCase of nonFallbackCases) {
       expect(
-        classifyEmbeddedPiRunResultForModelFallback({
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
           model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
           result: contractCase.result,
@@ -186,11 +186,11 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       fallbacksOverride: contractFallbackOverride,
       run,
-      classifyResult: ({ provider, model, result }) =>
-        classifyEmbeddedPiRunResultForModelFallback({
+      classifyResult: ({ provider, model, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider,
           model,
-          result,
+          result: resultLocal,
           hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
           hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),

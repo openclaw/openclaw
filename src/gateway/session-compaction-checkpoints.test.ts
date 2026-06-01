@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -130,7 +130,7 @@ describe("session-compaction-checkpoints", () => {
 
     const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-    let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
+    let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> | undefined;
     try {
       expect(await readSessionLeafIdFromTranscriptAsync(sessionFile)).toBe(leafId);
       snapshot = await captureCompactionCheckpointSnapshotAsync({
@@ -216,7 +216,7 @@ describe("session-compaction-checkpoints", () => {
 
     const openSpy = vi.spyOn(SessionManager, "open");
     const forkSpy = vi.spyOn(SessionManager, "forkFrom");
-    let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>> = null;
+    let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>>;
     try {
       forked = await forkCompactionCheckpointTranscriptAsync({
         sourceFile: sessionFile,

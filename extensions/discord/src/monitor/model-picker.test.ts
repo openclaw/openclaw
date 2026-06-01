@@ -160,6 +160,34 @@ describe("Discord model picker custom_id", () => {
     });
   });
 
+  it("parses plus-signed compact numeric fields", () => {
+    const parsed = parseDiscordModelPickerData({
+      c: "models",
+      a: "submit",
+      v: "recents",
+      u: "42",
+      p: "openai",
+      g: "+03",
+      pp: "+02",
+      mi: "+07",
+      ri: "+04",
+      rs: "+01",
+    });
+
+    expect(parsed).toEqual({
+      command: "models",
+      action: "submit",
+      view: "recents",
+      userId: "42",
+      provider: "openai",
+      page: 3,
+      providerPage: 2,
+      modelIndex: 7,
+      runtimeIndex: 4,
+      recentSlot: 1,
+    });
+  });
+
   it("parses optional submit model index", () => {
     const parsed = parseDiscordModelPickerData({
       cmd: "models",
@@ -181,6 +209,27 @@ describe("Discord model picker custom_id", () => {
       runtime: "codex",
       page: 1,
       modelIndex: 7,
+    });
+  });
+
+  it("does not coerce partial numeric custom_id fields", () => {
+    expect(
+      parseDiscordModelPickerData({
+        cmd: "models",
+        act: "submit",
+        view: "models",
+        u: "42",
+        p: "openai",
+        pg: "3next",
+        mi: "7model",
+      }),
+    ).toEqual({
+      command: "models",
+      action: "submit",
+      view: "models",
+      userId: "42",
+      provider: "openai",
+      page: 1,
     });
   });
 
@@ -613,9 +662,9 @@ describe("Discord model picker rendering", () => {
               "Use the Google Gemini CLI runtime selected by the effective harness policy.",
           },
           {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
+            id: "openclaw",
+            label: "OpenClaw Default",
+            description: "Use the built-in OpenClaw runtime.",
           },
         ],
       ],
@@ -666,9 +715,9 @@ describe("Discord model picker rendering", () => {
               "Use the Google Gemini CLI runtime selected by the effective harness policy.",
           },
           {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
+            id: "openclaw",
+            label: "OpenClaw Default",
+            description: "Use the built-in OpenClaw runtime.",
           },
         ],
       ],
@@ -1001,9 +1050,9 @@ describe("Discord model picker rendering", () => {
             description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
           },
           {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
+            id: "openclaw",
+            label: "OpenClaw Default",
+            description: "Use the built-in OpenClaw runtime.",
           },
         ],
       ],
@@ -1029,7 +1078,9 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a runtime select");
     }
     expect(runtimeSelect.options?.find((option) => option.value === "codex")?.default).toBe(true);
-    expect(runtimeSelect.options?.find((option) => option.value === "pi")?.default).toBe(false);
+    expect(runtimeSelect.options?.find((option) => option.value === "openclaw")?.default).toBe(
+      false,
+    );
 
     const modelSelect = rows[2]?.components?.find(
       (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
@@ -1058,9 +1109,9 @@ describe("Discord model picker rendering", () => {
             description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
           },
           {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
+            id: "openclaw",
+            label: "OpenClaw Default",
+            description: "Use the built-in OpenClaw runtime.",
           },
         ],
       ],
@@ -1074,7 +1125,7 @@ describe("Discord model picker rendering", () => {
       currentModel: "openai/gpt-4.1",
       pendingModel: "openai/gpt-4o",
       pendingModelIndex: 2,
-      pendingRuntime: "pi",
+      pendingRuntime: "openclaw",
     });
 
     const modelSelect = rows[2]?.components?.find(

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -775,7 +775,7 @@ describe("session history HTTP endpoints", () => {
     await seedSession({ text: "scope-guarded history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");
-    const { server, ws, port, envSnapshot } = started;
+    const { server, ws, port: _port, envSnapshot } = started;
     try {
       const connect = await connectReq(ws, {
         token: "test-gateway-token-1234567890",

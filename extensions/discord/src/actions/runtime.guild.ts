@@ -1,11 +1,11 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
   type ActionGate,
   jsonResult,
-  readNumberParam,
+  readNonNegativeIntegerParam,
   readStringArrayParam,
   readStringParam,
   type DiscordActionConfig,
@@ -624,7 +624,7 @@ export async function handleDiscordGuildAction(
       }
       const guildId = readStringParam(params, "guildId", { required: true });
       const name = readStringParam(params, "name", { required: true });
-      const position = readNumberParam(params, "position", { integer: true });
+      const position = readNonNegativeIntegerParam(params, "position");
       const channel = await discordGuildActionRuntime.createChannelDiscord(
         {
           guildId,
@@ -644,7 +644,7 @@ export async function handleDiscordGuildAction(
         required: true,
       });
       const name = readStringParam(params, "name");
-      const position = readNumberParam(params, "position", { integer: true });
+      const position = readNonNegativeIntegerParam(params, "position");
       const channel = await discordGuildActionRuntime.editChannelDiscord(
         {
           channelId: categoryId,

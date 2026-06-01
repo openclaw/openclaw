@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
@@ -5,13 +6,30 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
+import {
+  canonicalizeCronToolObject,
+  hasCronCreateSignal,
+  isEmptyRecoveredCronPatch,
+  recoverCronObjectFromFlatParams,
+} from "./cron-tool-canonicalize.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -35,47 +53,6 @@ const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
-const CRON_FLAT_PAYLOAD_KEYS = [
-  "message",
-  "text",
-  "model",
-  "fallbacks",
-  "toolsAllow",
-  "thinking",
-  "timeoutSeconds",
-  "lightContext",
-  "allowUnsafeExternalContent",
-] as const;
-const CRON_FLAT_SCHEDULE_KEYS = [
-  "kind",
-  "at",
-  "atMs",
-  "every",
-  "everyMs",
-  "anchorMs",
-  "cron",
-  "expr",
-  "tz",
-  "stagger",
-  "staggerMs",
-  "exact",
-] as const;
-const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
-  "name",
-  "schedule",
-  "sessionTarget",
-  "wakeMode",
-  "payload",
-  "delivery",
-  "enabled",
-  "description",
-  "deleteAfterRun",
-  "agentId",
-  "sessionKey",
-  "failureAlert",
-  ...CRON_FLAT_PAYLOAD_KEYS,
-  ...CRON_FLAT_SCHEDULE_KEYS,
-]);
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
@@ -84,47 +61,6 @@ const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 function isMissingOrEmptyObject(value: unknown): boolean {
   return !value || (isRecord(value) && Object.keys(value).length === 0);
-}
-
-function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
-  found: boolean;
-  value: Record<string, unknown>;
-} {
-  const value: Record<string, unknown> = {};
-  let found = false;
-  for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-      value[key] = params[key];
-      found = true;
-    }
-  }
-  if (value.everyMs === undefined && value.every !== undefined) {
-    value.everyMs = value.every;
-  }
-  if (value.staggerMs === undefined && value.stagger !== undefined) {
-    value.staggerMs = value.stagger;
-  }
-  if (value.exact === true && value.staggerMs === undefined) {
-    value.staggerMs = 0;
-  }
-  delete value.every;
-  delete value.stagger;
-  delete value.exact;
-  return { found, value };
-}
-
-function hasCronCreateSignal(value: Record<string, unknown>): boolean {
-  return (
-    value.schedule !== undefined ||
-    value.at !== undefined ||
-    value.atMs !== undefined ||
-    value.everyMs !== undefined ||
-    value.cron !== undefined ||
-    value.expr !== undefined ||
-    value.payload !== undefined ||
-    value.message !== undefined ||
-    value.text !== undefined
-  );
 }
 
 function nullableStringSchema(description: string) {
@@ -143,7 +79,7 @@ function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
       model: Type.Optional(Type.String({ description: "Model override" })),
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
-      timeoutSeconds: Type.Optional(Type.Number()),
+      timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
@@ -158,8 +94,10 @@ const CronScheduleSchema = Type.Optional(
     {
       kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule kind" }),
       at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
-      everyMs: Type.Optional(Type.Number({ description: "Interval ms (kind=every)" })),
-      anchorMs: Type.Optional(Type.Number({ description: "Start anchor ms (kind=every)" })),
+      everyMs: optionalPositiveIntegerSchema({ description: "Interval ms (kind=every)" }),
+      anchorMs: optionalNonNegativeIntegerSchema({
+        description: "Start anchor ms (kind=every)",
+      }),
       expr: Type.Optional(
         Type.String({
           description:
@@ -172,7 +110,7 @@ const CronScheduleSchema = Type.Optional(
             'IANA timezone for cron wall-clock fields, e.g. "Asia/Shanghai"; omitted => Gateway host local timezone.',
         }),
       ),
-      staggerMs: Type.Optional(Type.Number({ description: "Jitter ms (kind=cron)" })),
+      staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
     },
     { additionalProperties: true },
   ),
@@ -222,10 +160,10 @@ const CronFailureAlertSchema = Type.Optional(
   Type.Unsafe<Record<string, unknown> | false>({
     type: "object",
     properties: {
-      after: Type.Optional(Type.Number({ description: "Failures before alert" })),
+      after: optionalPositiveIntegerSchema({ description: "Failures before alert" }),
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
       to: Type.Optional(Type.String({ description: "Alert target" })),
-      cooldownMs: Type.Optional(Type.Number({ description: "Alert cooldown ms" })),
+      cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
       includeSkipped: Type.Optional(
         Type.Boolean({ description: "Skipped runs count toward alert" }),
       ),
@@ -289,9 +227,7 @@ const CronPatchObjectSchema = Type.Optional(
 export const CronToolSchema = Type.Object(
   {
     action: stringEnum(CRON_ACTIONS),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
+    ...gatewayCallOptionSchemaProperties(),
     includeDisabled: Type.Optional(Type.Boolean()),
     job: CronJobObjectSchema,
     jobId: Type.Optional(Type.String()),
@@ -301,7 +237,7 @@ export const CronToolSchema = Type.Object(
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
     contextMessages: Type.Optional(
-      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+      Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
     agentId: Type.Optional(Type.String({ description: "List filter: agent id" })),
   },
@@ -574,12 +510,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
+      const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
-        ...readGatewayCallOptions(params),
-        timeoutMs:
-          typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-            ? params.timeoutMs
-            : 60_000,
+        ...parsedGatewayOpts,
+        timeoutMs: parsedGatewayOpts.timeoutMs ?? 60_000,
       };
 
       switch (action) {
@@ -652,10 +586,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
+          const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
           const job =
-            normalizeCronJobCreate(params.job, {
+            normalizeCronJobCreate(canonicalJob, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
-            }) ?? params.job;
+            }) ?? canonicalJob;
           const cfg = getRuntimeConfig();
           if (job && typeof job === "object") {
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -723,10 +658,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             }
           }
 
-          const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
-              ? params.contextMessages
-              : 0;
+          const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
           if (
             job &&
             typeof job === "object" &&
@@ -768,13 +700,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
-          const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
-          if (
-            recoveredFlatPatch &&
-            typeof patch === "object" &&
-            patch !== null &&
-            Object.keys(patch as Record<string, unknown>).length === 0
-          ) {
+          const canonicalPatch = canonicalizeCronToolObject(
+            params.patch as Record<string, unknown>,
+          );
+          const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+          if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");
           }
           return jsonResult(
