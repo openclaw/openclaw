@@ -1044,7 +1044,12 @@ async function getExistingSession(
   profileName: string,
   timeoutMs?: number,
   signal?: AbortSignal,
+  includePending = true,
 ): Promise<ChromeMcpSession | null> {
+  if (!includePending && pendingSessions.has(cacheKey)) {
+    return null;
+  }
+
   let session = sessions.get(cacheKey);
   if (session && session.transport.pid === null) {
     sessions.delete(cacheKey);
@@ -1052,7 +1057,7 @@ async function getExistingSession(
   }
 
   const pending = pendingSessions.get(cacheKey);
-  if (pending) {
+  if (includePending && pending) {
     const pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
     let pendingLeaseReleased = false;
     session = pendingLease.session;
@@ -1144,6 +1149,7 @@ async function leaseSession(
     profileName,
     options.timeoutMs,
     options.signal,
+    false,
   );
   if (existingSession) {
     return {

@@ -1066,6 +1066,59 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
   });
 
+  it("does not let ephemeral probes persist canceled pending attaches", async () => {
+    let factoryCalls = 0;
+    let releaseFirstReady: (() => void) | undefined;
+    const firstReadyGate = new Promise<void>((resolve) => {
+      releaseFirstReady = resolve;
+    });
+    const firstReadyThen = vi.spyOn(firstReadyGate, "then");
+    if (!releaseFirstReady) {
+      throw new Error("Expected Chrome MCP ready release callback to be initialized");
+    }
+
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      closeMocks.push(closeMock);
+      session.client.close = closeMock as typeof session.client.close;
+      if (factoryCalls === 1) {
+        session.ready = firstReadyGate;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const firstAvailablePromise = ensureChromeMcpAvailable("chrome-live", undefined, {
+      signal: ctrl.signal,
+    });
+    const firstAvailableExpectation =
+      expect(firstAvailablePromise).rejects.toThrow(/first waiter cancelled/);
+
+    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
+
+    await expect(
+      ensureChromeMcpAvailable("chrome-live", undefined, {
+        ephemeral: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(factoryCalls).toBe(2);
+    expect(firstReadyThen).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
+
+    ctrl.abort(new Error("first waiter cancelled"));
+    releaseFirstReady();
+    await firstAvailableExpectation;
+    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+
+    await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
+    expect(factoryCalls).toBe(3);
+  });
+
   it("keeps a shared session after a readiness timeout while another waiter remains", async () => {
     let factoryCalls = 0;
     let releaseFirstReady: (() => void) | undefined;
