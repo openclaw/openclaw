@@ -3525,20 +3525,25 @@ describe("openai transport stream", () => {
       ],
     };
 
-    const stripped = testing.stripResponsesRequestEncryptedContent(
-      params as never,
-    ) as { input: Array<Record<string, unknown>> };
+    const stripped = testing.stripResponsesRequestEncryptedContent(params as never);
     const input = stripped.input;
+    expect(Array.isArray(input)).toBe(true);
+    if (!Array.isArray(input)) {
+      throw new Error("expected sanitized Responses input array");
+    }
 
     expect(stripped).not.toBe(params);
-    expect(input.some((item) => item.type === "reasoning")).toBe(false);
+    const hasReasoningItem = input.some(
+      (item) => item && typeof item === "object" && "type" in item && item.type === "reasoning",
+    );
+    expect(hasReasoningItem).toBe(false);
     expect(input).toHaveLength(3);
     expect(input[0]).toMatchObject({
       type: "message",
       role: "assistant",
       nested: { keep: "value" },
     });
-    expect(input[0]?.nested).not.toHaveProperty("encrypted_content");
+    expect(input[0]).not.toHaveProperty("nested.encrypted_content");
     expect(input[1]).toEqual(params.input[2]);
     expect(input[2]).toEqual(params.input[3]);
   });
