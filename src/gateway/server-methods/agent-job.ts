@@ -469,7 +469,12 @@ export async function waitForAgentJob(params: {
 
     const timer = setSafeTimeout(() => {
       const pendingError = getPendingAgentRunError(runId);
-      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+      if (pendingError) {
+        finish(createPendingErrorTimeoutSnapshot(pendingError.snapshot));
+        return;
+      }
+      const pendingTimeout = getPendingAgentRunTimeout(runId);
+      finish(pendingTimeout ? pendingTimeout.snapshot : null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
