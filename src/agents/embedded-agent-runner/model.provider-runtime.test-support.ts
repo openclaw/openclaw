@@ -276,6 +276,7 @@ function buildDynamicModel(
     }
     case "openai": {
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
+      const isSparkModel = lower === "gpt-5.3-codex-spark";
       const exactModel = params.modelRegistry.find("openai", modelId) as ResolvedModelLike | null;
       const providerConfigSelectsChatGpt =
         params.providerConfig?.api === "openai-chatgpt-responses" ||
@@ -325,11 +326,12 @@ function buildDynamicModel(
             : lower === "gpt-5.3-codex-spark"
               ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
               : findTemplate(params, "openai", ["gpt-5.4"]);
+      const templateSelectsChatGpt = !isSparkModel && isOpenAIChatGptModelTemplate(codexTemplate);
       if (
         isLegacyGpt54Alias ||
-        lower.includes("-codex") ||
+        (lower.includes("-codex") && !isSparkModel) ||
         providerConfigSelectsChatGpt ||
-        isOpenAIChatGptModelTemplate(codexTemplate)
+        templateSelectsChatGpt
       ) {
         const templateBaseUrl =
           typeof codexTemplate?.baseUrl === "string" ? codexTemplate.baseUrl : undefined;
@@ -697,7 +699,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       context: { modelId: string };
     }) =>
       params.provider === "openai" &&
-      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"].includes(
+      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),
     prepareProviderDynamicModel: async (params: {

@@ -34,6 +34,7 @@ const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
+const OPENAI_GPT_53_CODEX_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_GPT_55_CONTEXT_WINDOW = 1_000_000;
 const OPENAI_GPT_55_CONTEXT_TOKENS = 272_000;
 const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
@@ -82,6 +83,7 @@ const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_54_PRO_MODEL_ID,
   OPENAI_GPT_54_MINI_MODEL_ID,
   OPENAI_GPT_54_NANO_MODEL_ID,
+  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
 ] as const;
 
 function shouldUseOpenAIResponsesTransport(params: {
@@ -191,6 +193,14 @@ function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelC
     return false;
   }
   return resolveConfiguredAuthTransport(ctx) === "codex";
+}
+
+function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  if (normalized !== OPENAI_GPT_53_CODEX_SPARK_MODEL_ID) {
+    return undefined;
+  }
+  return "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.";
 }
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
@@ -389,6 +399,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
     refreshOAuth: codexHooks.refreshOAuth,
+    buildUnknownModelHint: ({ modelId }) => buildOpenAIUnknownModelHint(modelId),
     buildMissingAuthMessage: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;
