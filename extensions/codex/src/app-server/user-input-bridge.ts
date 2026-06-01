@@ -2,13 +2,20 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { formatCodexDisplayText } from "../command-formatters.js";
+import { createCodexUserInputPrompt } from "../conversation-chat-controls.js";
 import {
   isJsonObject,
   type CodexServerNotification,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import {
+  buildUserInputResponse,
+  emptyUserInputResponse,
+  formatUserInputPrompt,
+  type UserInputOption,
+  type UserInputQuestion,
+} from "./user-input-shared.js";
 
 type PendingUserInput = {
   requestId: number | string;
@@ -18,20 +25,6 @@ type PendingUserInput = {
   questions: UserInputQuestion[];
   resolve: (value: JsonValue) => void;
   cleanup: () => void;
-};
-
-export type UserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  isOther: boolean;
-  isSecret: boolean;
-  options: UserInputOption[] | null;
-};
-
-export type UserInputOption = {
-  label: string;
-  description: string;
 };
 
 type CodexUserInputBridge = {
@@ -94,11 +87,14 @@ export function createCodexUserInputBridge(params: {
           resolvePending(emptyUserInputResponse());
           return;
         }
-        void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch(
-          (error: unknown) => {
-            embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
-          },
-        );
+        void deliverUserInputPrompt(
+          params.paramsForRun,
+          requestParams.questions,
+          params.threadId,
+          (text) => resolvePending(buildUserInputResponse(requestParams.questions, text)),
+        ).catch((error) => {
+          embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
+        });
       });
     },
     handleQueuedMessage(text) {
@@ -198,116 +194,29 @@ function readOption(value: JsonValue): UserInputOption | undefined {
 async function deliverUserInputPrompt(
   params: EmbeddedRunAttemptParams,
   questions: UserInputQuestion[],
+  threadId: string,
+  resolveText: (text: string) => void,
 ): Promise<void> {
-  const text = formatUserInputPrompt(questions);
   if (params.onBlockReply) {
-    await params.onBlockReply({ text });
+    await params.onBlockReply(
+      createCodexUserInputPrompt({
+        questions,
+        resolveText,
+        scope: {
+          sessionFile: params.sessionFile,
+          threadId,
+          channel: params.messageChannel ?? params.messageProvider,
+          senderId: params.senderId ?? undefined,
+          accountId: params.agentAccountId,
+          sessionKey: params.sessionKey,
+          messageThreadId: params.messageThreadId ?? params.currentThreadTs,
+        },
+      }),
+    );
     return;
   }
+  const text = formatUserInputPrompt(questions);
   await params.onPartialReply?.({ text });
-}
-
-export function formatUserInputPrompt(questions: UserInputQuestion[]): string {
-  const lines = ["Codex needs input:"];
-  questions.forEach((question, index) => {
-    if (questions.length > 1) {
-      lines.push(
-        "",
-        `${index + 1}. ${formatCodexDisplayText(question.header)}`,
-        formatCodexDisplayText(question.question),
-      );
-    } else {
-      lines.push(
-        "",
-        formatCodexDisplayText(question.header),
-        formatCodexDisplayText(question.question),
-      );
-    }
-    if (question.isSecret) {
-      lines.push("This channel may show your reply to other participants.");
-    }
-    question.options?.forEach((option, optionIndex) => {
-      lines.push(
-        `${optionIndex + 1}. ${formatCodexDisplayText(option.label)}${
-          option.description ? ` - ${formatCodexDisplayText(option.description)}` : ""
-        }`,
-      );
-    });
-    if (question.isOther) {
-      lines.push("Other: reply with your own answer.");
-    }
-  });
-  return lines.join("\n");
-}
-
-export function buildUserInputResponse(
-  questions: UserInputQuestion[],
-  inputText: string,
-): JsonObject {
-  const answers: JsonObject = {};
-  if (questions.length === 1) {
-    const question = questions[0];
-    if (question) {
-      const answer = normalizeAnswer(inputText, question);
-      answers[question.id] = { answers: answer ? [answer] : [] };
-    }
-    return { answers };
-  }
-
-  const keyed = parseKeyedAnswers(inputText);
-  const fallbackLines = inputText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  questions.forEach((question, index) => {
-    const key =
-      keyed.get(question.id.toLowerCase()) ??
-      keyed.get(question.header.toLowerCase()) ??
-      keyed.get(question.question.toLowerCase()) ??
-      keyed.get(String(index + 1));
-    const answer = key ?? fallbackLines[index] ?? "";
-    const normalized = answer ? normalizeAnswer(answer, question) : undefined;
-    answers[question.id] = { answers: normalized ? [normalized] : [] };
-  });
-  return { answers };
-}
-
-function normalizeAnswer(answer: string, question: UserInputQuestion): string | undefined {
-  const trimmed = answer.trim();
-  const options = question.options ?? [];
-  const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
-  const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
-  if (indexed) {
-    return indexed.label;
-  }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  if (options.length > 0 && !question.isOther) {
-    return undefined;
-  }
-  return trimmed || undefined;
-}
-
-function parseKeyedAnswers(inputText: string): Map<string, string> {
-  const answers = new Map<string, string>();
-  for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
-    if (!match) {
-      continue;
-    }
-    const key = match[1]?.trim().toLowerCase();
-    const value = match[2]?.trim();
-    if (key && value) {
-      answers.set(key, value);
-    }
-  }
-  return answers;
-}
-
-export function emptyUserInputResponse(): JsonObject {
-  return { answers: {} };
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   buildUserInputResponse,
   formatUserInputPrompt,
   type UserInputQuestion,
-} from "./app-server/user-input-bridge.js";
+} from "./app-server/user-input-shared.js";
 
 const PENDING_CONTROL_TTL_MS = 10 * 60_000;
 const MAX_PENDING_CONTROLS = 200;
@@ -60,24 +61,24 @@ export function buildCodexPlanDecisionReply(params: {
   });
   return {
     text: params.text,
-    interactive: {
+    presentation: {
       blocks: [
         {
           type: "buttons",
           buttons: [
             {
               label: "Approve and execute",
-              value: `/codex plan approve ${token}`,
+              action: { type: "command", command: `/codex plan approve ${token}` },
               style: "success",
             },
             {
               label: "Approve and execute with clean context",
-              value: `/codex plan approve-clean ${token}`,
+              action: { type: "command", command: `/codex plan approve-clean ${token}` },
               style: "primary",
             },
             {
               label: "Stay in plan mode",
-              value: `/codex plan stay ${token}`,
+              action: { type: "command", command: `/codex plan stay ${token}` },
               style: "secondary",
             },
           ],
@@ -123,10 +124,10 @@ export function createCodexUserInputPrompt(params: {
   resolveText: (text: string) => void;
 }): ReplyPayload {
   const token = createPendingUserInput(params);
-  const interactive = buildUserInputInteractive(params.questions, token);
+  const presentation = buildUserInputInteractive(params.questions, token);
   return {
     text: formatUserInputPrompt(params.questions),
-    ...(interactive ? { interactive } : {}),
+    ...(presentation ? { presentation } : {}),
   };
 }
 
@@ -200,14 +201,14 @@ function createPendingUserInput(params: {
 function buildUserInputInteractive(
   questions: UserInputQuestion[],
   token: string,
-): ReplyPayload["interactive"] | undefined {
+): MessagePresentation | undefined {
   const question = questions.length === 1 ? questions[0] : undefined;
   if (!question || question.isSecret || question.isOther || !question.options?.length) {
     return undefined;
   }
   const buttons = question.options.slice(0, 8).map((option, index) => ({
     label: option.label,
-    value: `/codex input ${token} ${index + 1}`,
+    action: { type: "command" as const, command: `/codex input ${token} ${index + 1}` },
     style: index === 0 ? ("primary" as const) : ("secondary" as const),
   }));
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;

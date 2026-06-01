@@ -279,7 +279,7 @@ describe("codex conversation turn collector", () => {
         params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
 
-      await expect(completion).resolves.toEqual({ replyText: "" });
+      await expect(completion).resolves.toEqual({ replyText: "", planText: "" });
     } finally {
       vi.restoreAllMocks();
       vi.clearAllTimers();

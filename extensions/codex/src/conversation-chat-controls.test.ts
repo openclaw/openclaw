@@ -10,7 +10,7 @@ import {
 
 type TestButton = {
   label: string;
-  value: string;
+  action?: { type: string; command?: string };
 };
 
 const scope = {
@@ -51,13 +51,11 @@ describe("codex conversation chat controls", () => {
       "Approve and execute with clean context",
       "Stay in plan mode",
     ]);
-    expect(buttons.map((button) => button.value.split(" ").slice(0, 3).join(" "))).toEqual([
-      "/codex plan approve",
-      "/codex plan approve-clean",
-      "/codex plan stay",
-    ]);
+    expect(
+      buttons.map((button) => button.action?.command?.split(" ").slice(0, 3).join(" ")),
+    ).toEqual(["/codex plan approve", "/codex plan approve-clean", "/codex plan stay"]);
 
-    const token = buttons[0]?.value.split(" ").at(-1) ?? "";
+    const token = buttons[0]?.action?.command?.split(" ").at(-1) ?? "";
     expect(consumeCodexPlanDecision({ token, ctx, sessionFile: scope.sessionFile })).toEqual({
       ok: true,
       sessionFile: scope.sessionFile,
@@ -75,7 +73,7 @@ describe("codex conversation chat controls", () => {
       text: "<proposed_plan>do this</proposed_plan>",
       scope,
     });
-    const token = readButtons(reply)[0]?.value.split(" ").at(-1) ?? "";
+    const token = readButtons(reply)[0]?.action?.command?.split(" ").at(-1) ?? "";
 
     expect(
       consumeCodexPlanDecision({
@@ -113,9 +111,9 @@ describe("codex conversation chat controls", () => {
     });
     const buttons = readButtons(reply);
     expect(buttons.map((button) => button.label)).toEqual(["Execute", "Plan"]);
-    expect(buttons.map((button) => button.value.split(" ").at(-1))).toEqual(["1", "2"]);
+    expect(buttons.map((button) => button.action?.command?.split(" ").at(-1))).toEqual(["1", "2"]);
 
-    const [token, answer] = buttons[1]?.value.split(" ").slice(2) ?? [];
+    const [token, answer] = buttons[1]?.action?.command?.split(" ").slice(2) ?? [];
     expect(answerCodexUserInput({ token: token ?? "", answerText: answer ?? "", ctx })).toBe(
       "Sent answer to Codex.",
     );
@@ -174,14 +172,14 @@ describe("codex conversation chat controls", () => {
       ],
     });
 
-    expect(secret.interactive).toBeUndefined();
-    expect(freeform.interactive).toBeUndefined();
-    expect(multi.interactive).toBeUndefined();
+    expect(secret.presentation).toBeUndefined();
+    expect(freeform.presentation).toBeUndefined();
+    expect(multi.presentation).toBeUndefined();
   });
 });
 
-function readButtons(reply: { interactive?: { blocks?: unknown[] } }): TestButton[] {
-  const block = reply.interactive?.blocks?.find((entry): entry is { buttons: TestButton[] } => {
+function readButtons(reply: { presentation?: { blocks?: unknown[] } }): TestButton[] {
+  const block = reply.presentation?.blocks?.find((entry): entry is { buttons: TestButton[] } => {
     return (
       Boolean(entry) &&
       typeof entry === "object" &&

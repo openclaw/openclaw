@@ -1,11 +1,20 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  answerCodexUserInput,
+  resetCodexConversationChatControlsForTests,
+} from "../conversation-chat-controls.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 function createParams(): EmbeddedRunAttemptParams {
   return {
     sessionId: "session-1",
+    sessionFile: "/tmp/session.jsonl",
     sessionKey: "agent:main:session-1",
+    messageChannel: "discord",
+    agentAccountId: "default",
+    senderId: "user-1",
+    messageThreadId: "channel-1",
     onBlockReply: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;
 }
@@ -22,7 +31,24 @@ function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
   return payload.text;
 }
 
+function expectFirstBlockReplyCommands(params: EmbeddedRunAttemptParams): string[] {
+  const onBlockReply = params.onBlockReply;
+  if (onBlockReply === undefined) {
+    throw new Error("Expected onBlockReply callback");
+  }
+  const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
+  const block = payload?.presentation?.blocks.find(
+    (entry): entry is { buttons: Array<{ action?: { command?: string } }> } =>
+      entry.type === "buttons",
+  );
+  return block?.buttons.map((button) => button.action?.command ?? "") ?? [];
+}
+
 describe("Codex app-server user input bridge", () => {
+  afterEach(() => {
+    resetCodexConversationChatControlsForTests();
+  });
+
   it("prompts the originating chat and resolves request_user_input from the next queued message", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
@@ -55,7 +81,23 @@ describe("Codex app-server user input bridge", () => {
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
     expect(expectFirstBlockReplyText(params)).toContain("Pick a mode");
-    expect(bridge.handleQueuedMessage("2")).toBe(true);
+    const commands = expectFirstBlockReplyCommands(params);
+    expect(commands.map((command) => command.split(" ").at(-1))).toEqual(["1", "2"]);
+    const [token, answer] = commands[1]?.split(" ").slice(2) ?? [];
+    expect(
+      answerCodexUserInput({
+        token: token ?? "",
+        answerText: answer ?? "",
+        ctx: {
+          channel: "discord",
+          senderId: "user-1",
+          accountId: "default",
+          sessionKey: "agent:main:session-1",
+          messageThreadId: "channel-1",
+        },
+        sessionFile: "/tmp/session.jsonl",
+      }),
+    ).toBe("Sent answer to Codex.");
 
     await expect(response).resolves.toEqual({
       answers: { choice: { answers: ["Deep"] } },

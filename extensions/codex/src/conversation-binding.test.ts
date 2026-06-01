@@ -89,10 +89,10 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 }
 
 function readReplyButtons(reply: {
-  interactive?: { blocks?: unknown[] };
-}): Array<{ label: string; value: string }> {
-  const block = reply.interactive?.blocks?.find(
-    (entry): entry is { buttons: Array<{ label: string; value: string }> } =>
+  presentation?: { blocks?: unknown[] };
+}): Array<{ label: string; action?: { command?: string } }> {
+  const block = reply.presentation?.blocks?.find(
+    (entry): entry is { buttons: Array<{ label: string; action?: { command?: string } }> } =>
       Boolean(entry) &&
       typeof entry === "object" &&
       Array.isArray((entry as { buttons?: unknown }).buttons),
@@ -1385,8 +1385,12 @@ describe("codex conversation binding", () => {
       | undefined;
     let userInputResponse: unknown;
     const sendProgressReply = vi.fn(async ({ payload }) => {
-      const buttonValue = payload.interactive?.blocks[0]?.buttons?.[1]?.value ?? "";
-      const [token, answer] = buttonValue.split(" ").slice(2);
+      const block = payload.presentation?.blocks.find(
+        (entry): entry is { buttons: Array<{ action?: { command?: string } }> } =>
+          entry.type === "buttons",
+      );
+      const command = block?.buttons[1]?.action?.command ?? "";
+      const [token, answer] = command.split(" ").slice(2);
       answerCodexUserInput({
         token: token ?? "",
         answerText: answer ?? "",

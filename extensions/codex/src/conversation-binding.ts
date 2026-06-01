@@ -57,11 +57,8 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveReasoningEffort,
 } from "./app-server/thread-lifecycle.js";
-import {
-  buildUserInputResponse,
-  emptyUserInputResponse,
-  readUserInputParams,
-} from "./app-server/user-input-bridge.js";
+import { readUserInputParams } from "./app-server/user-input-bridge.js";
+import { buildUserInputResponse, emptyUserInputResponse } from "./app-server/user-input-shared.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
