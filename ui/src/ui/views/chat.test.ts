@@ -845,11 +845,8 @@ describe("chat voice controls", () => {
     const model = container.querySelector<HTMLInputElement>(
       '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
-    const sensitivity = requireElement(
-      container,
-      '[data-talk-select="sensitivity"]',
-      "Talk sensitivity select",
-    ) as HTMLElement;
+    const voice = container.querySelector<HTMLElement>('[data-talk-select="voice"]');
+    const sensitivity = container.querySelector<HTMLElement>('[data-talk-select="sensitivity"]');
     const voiceOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
         '[data-talk-select="voice"] [data-talk-select-option]',
@@ -861,6 +858,12 @@ describe("chat voice controls", () => {
       ),
     ).map((option) => option.dataset.talkSelectOption ?? "");
 
+    if (voice === null) {
+      throw new Error("expected Talk voice select");
+    }
+    if (sensitivity === null) {
+      throw new Error("expected Talk sensitivity select");
+    }
     expect(voiceOptions).toEqual([
       "",
       "alloy",
