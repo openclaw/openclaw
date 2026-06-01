@@ -338,6 +338,60 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.messages.at(-1)?.["__openclaw"]?.seq).toBe(3);
   });
 
+  test("projects sessions_yield results separated from their call by visible assistant text", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "spawn a child" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-yield",
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I started the child session." }],
+          __openclaw: { seq: 3 },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-yield",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+            },
+          ],
+          details: { status: "yielded", message: yieldMessage },
+          __openclaw: { seq: 4 },
+        },
+      ],
+    });
+
+    expect(
+      snapshot.history.messages.flatMap(
+        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+      ),
+    ).toEqual(["spawn a child", "I started the child session.", yieldMessage]);
+    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+    });
+    expect(snapshot.history.messages.at(-1)?.["__openclaw"]?.seq).toBe(4);
+  });
+
   test("does not mirror a single sessions_yield tool result without prior assistant context", () => {
     const projected = projectChatDisplayMessage({
       role: "toolResult",
