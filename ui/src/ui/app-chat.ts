@@ -524,7 +524,7 @@ function cancelPendingSendBeforeRequest(
     queued.id,
     queued.sessionKey,
   );
-  const restoreComposer = opts.restoreComposer !== false;
+  const restoreComposer = opts.restoreComposer !== false && removed != null;
   const willRestoreDraft =
     restoreComposer && opts.previousDraft != null && !host.chatMessage.trim();
   const willRestoreAttachments = Boolean(
