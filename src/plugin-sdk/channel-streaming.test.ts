@@ -347,6 +347,22 @@ describe("channel-streaming", () => {
     ).toBe(`Shelling\n\n• \`${"x".repeat(119)}…\``);
   });
 
+  it("does not leak unmatched leading italics when commentary is truncated", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 64 } } },
+        lines: [
+          {
+            kind: "item",
+            text: "_Checking whether the Discord progress draft keeps markdown balanced after truncation._",
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe("Checking whether the Discord progress draft keeps markdown…");
+  });
+
   it("honors configured progress draft line length and cuts prose on word boundaries", () => {
     expect(
       formatChannelProgressDraftText({
