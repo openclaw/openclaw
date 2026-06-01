@@ -74,6 +74,7 @@ function bindCronRunLogRow(params: {
   };
 }
 
+/** Rehydrates a cron run-log row, preferring indexed SQLite columns over JSON payload values. */
 export function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | null {
   let rawEntry: unknown;
   try {
@@ -106,6 +107,7 @@ export function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | nu
   };
 }
 
+/** Reads run-log rows for one store, optionally scoped to one job, in chronological order. */
 export function readCronRunLogRows(
   db: DatabaseSync,
   storeKey: string,
@@ -136,6 +138,8 @@ function applyRunLogFilters<Output>(
     next = next.where((eb) =>
       eb.or(
         params.deliveryStatuses!.map((status) =>
+          // Older rows stored an omitted delivery status as SQL NULL; keep
+          // not-requested filters compatible with both representations.
           status === "not-requested"
             ? eb.or([eb("delivery_status", "is", null), eb("delivery_status", "=", status)])
             : eb("delivery_status", "=", status),
@@ -150,6 +154,7 @@ function applyRunLogFilters<Output>(
   return next;
 }
 
+/** Counts run-log rows after applying the same filters used by paged reads. */
 export function countCronRunLogRows(params: {
   db: DatabaseSync;
   storeKey: string;
@@ -170,6 +175,7 @@ export function countCronRunLogRows(params: {
   return normalizeNumber(row?.count ?? null) ?? 0;
 }
 
+/** Reads a sorted, filtered page of cron run-log rows. */
 export function readCronRunLogRowsPage(params: {
   db: DatabaseSync;
   storeKey: string;
@@ -205,6 +211,7 @@ function nextCronRunLogSeq(db: DatabaseSync, storeKey: string, jobId: string): n
   return (normalizeNumber(row?.seq ?? null) ?? 0) + 1;
 }
 
+/** Appends a cron run-log entry with a per-job monotonic sequence number. */
 export function insertCronRunLogEntry(
   db: DatabaseSync,
   storeKey: string,
@@ -219,6 +226,7 @@ export function insertCronRunLogEntry(
   );
 }
 
+/** Prunes old cron run-log rows for one job, retaining the newest keepLines rows. */
 export function pruneCronRunLogRows(
   db: DatabaseSync,
   storeKey: string,

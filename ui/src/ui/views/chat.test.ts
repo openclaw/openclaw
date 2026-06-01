@@ -2543,6 +2543,67 @@ describe("chat session controls", () => {
     });
   });
 
+  it("scopes composer model changes for a selected global-session agent", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionKey = "global";
+    state.settings.sessionKey = "global";
+    state.assistantAgentId = "beta";
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "global",
+        kind: "global",
+        modelProvider: "minimax",
+        model: "MiniMax-M2.7",
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    clickChatModelOption(container, "openai/gpt-5-mini");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "beta",
+      model: "openai/gpt-5-mini",
+    });
+  });
+
+  it("scopes composer thinking changes for a selected global-session agent", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionKey = "global";
+    state.settings.sessionKey = "global";
+    state.assistantAgentId = "beta";
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "global",
+        kind: "global",
+        modelProvider: "openai",
+        model: "gpt-5",
+        thinkingLevel: "off",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "adaptive", label: "adaptive" },
+        ],
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const adaptive = getThinkingOptions(container).find(
+      (option) => option.dataset.chatThinkingOption === "adaptive",
+    );
+    expect(adaptive).toBeInstanceOf(HTMLButtonElement);
+    adaptive?.click();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "beta",
+      thinkingLevel: "adaptive",
+    });
+  });
+
   it("shows existing speed overrides for providers outside the fast-mode allowlist", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionsResult = createSessionsResultFromRows([

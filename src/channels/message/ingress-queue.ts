@@ -15,6 +15,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 
+/** Pending or retryable inbound channel event stored in the durable ingress queue. */
 export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
   id: string;
   channelId: string;
@@ -30,6 +31,7 @@ export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
   lastError?: string;
 };
 
+/** Pending ingress event currently claimed by a worker. */
 export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
   TPayload,
   TMetadata
@@ -41,6 +43,7 @@ export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIng
   };
 };
 
+/** Minimal claim reference used to guard completion/release/failure with a claim token. */
 export type ChannelIngressQueueClaimRef = {
   id: string;
   claim: {
@@ -48,6 +51,7 @@ export type ChannelIngressQueueClaimRef = {
   };
 };
 
+/** Completed ingress event tombstone retained for duplicate detection. */
 export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
   id: string;
   channelId: string;
@@ -57,6 +61,7 @@ export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
   metadata?: TCompletedMetadata;
 };
 
+/** Failed ingress event tombstone retained for duplicate detection and diagnostics. */
 export type ChannelIngressQueueFailedRecord = {
   id: string;
   channelId: string;
@@ -67,6 +72,7 @@ export type ChannelIngressQueueFailedRecord = {
   message?: string;
 };
 
+/** Retention options for pending, completed, and failed ingress queue rows. */
 export type ChannelIngressQueuePruneOptions = {
   pendingTtlMs?: number;
   completedTtlMs?: number;
@@ -78,6 +84,7 @@ export type ChannelIngressQueuePruneOptions = {
   now?: number;
 };
 
+/** Result of enqueueing a possibly duplicate ingress event id. */
 export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -105,6 +112,7 @@ export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMeta
       record: ChannelIngressQueueFailedRecord;
     };
 
+/** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
   enqueue(
     id: string,
@@ -157,6 +165,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
 };
 
+/** Construction options for a channel/account-scoped ingress queue. */
 export type CreateChannelIngressQueueOptions = {
   channelId: string;
   accountId?: string;
@@ -303,9 +312,11 @@ function normalizedProtectedIds(ids: Iterable<string> | undefined): string[] {
 }
 
 function queueNameForParts(channelId: string, accountId: string): string {
+  // JSON tuple encoding keeps channel/account scopes unambiguous even when ids contain separators.
   return JSON.stringify([channelId, accountId]);
 }
 
+/** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,
   TMetadata = unknown,

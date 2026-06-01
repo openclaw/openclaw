@@ -1378,6 +1378,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     try {
       await client.request("sessions.patch", {
         key: targetSessionKey,
+        ...scopedAgentParamsForSession(state, targetSessionKey),
         model: nextModel || null,
       });
       void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
@@ -1439,6 +1440,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
   try {
     await state.client.request("sessions.patch", {
       key: targetSessionKey,
+      ...scopedAgentParamsForSession(state, targetSessionKey),
       thinkingLevel: normalizedNext ?? null,
     });
     await refreshSessionOptions(state);

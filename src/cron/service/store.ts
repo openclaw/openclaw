@@ -81,6 +81,7 @@ async function flushPendingQuarantine(
   }
 }
 
+/** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
 export async function ensureLoaded(
   state: CronServiceState,
   opts?: {
@@ -109,6 +110,8 @@ export async function ensureLoaded(
     const raw = decodedRaw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
+    // Accept old `jobId` rows at the raw boundary only; the in-memory store
+    // uses canonical `id` before validation and scheduling.
     normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
     try {
@@ -136,6 +139,8 @@ export async function ensureLoaded(
       };
       const runtimeState = runtimeEntry?.state ?? raw.state;
       if (runtimeState && typeof runtimeState === "object" && !Array.isArray(runtimeState)) {
+        // Preserve runtime state with the quarantined config so doctor can
+        // repair shape without losing last/next run information.
         quarantineEntry.state = structuredClone(runtimeState as Record<string, unknown>);
       }
       const updatedAtMs = runtimeEntry?.updatedAtMs ?? raw.updatedAtMs;
@@ -189,6 +194,7 @@ export async function ensureLoaded(
   }
 }
 
+/** Emits the cron-disabled warning once per service state. */
 export function warnIfDisabled(state: CronServiceState, action: string) {
   if (state.deps.cronEnabled) {
     return;
@@ -203,6 +209,7 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
+/** Persists the in-memory cron store, flushing pending quarantine records first. */
 export async function persist(state: CronServiceState, opts?: { stateOnly?: boolean }) {
   if (!state.store) {
     return;

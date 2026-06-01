@@ -132,6 +132,58 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "stream markdown through the GUI";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      const streamingText = "## Streaming heading\n\nworking **tail";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: streamingText,
+        message: {
+          content: [{ text: streamingText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+
+      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
+        timeout: 10_000,
+      });
+      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+        timeout: 10_000,
+      });
+      expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+
+      await gateway.emitChatFinal({
+        runId,
+        text: "## Streaming heading\n\nworking **tail**",
+      });
+
+      await page.locator(".chat-thread strong").getByText("tail").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps chat usable while sessions are still loading", async () => {
     const context = await browser.newContext({
       locale: "en-US",

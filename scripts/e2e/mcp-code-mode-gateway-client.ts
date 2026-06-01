@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { countSessionLogMentions } from "./lib/session-log-mentions.ts";
 
 type FetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -113,43 +113,19 @@ function outputText(response: unknown): string {
     .join("\n");
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) {
-    return 0;
-  }
-  let count = 0;
-  let offset = 0;
-  while (true) {
-    const next = haystack.indexOf(needle, offset);
-    if (next < 0) {
-      return count;
-    }
-    count += 1;
-    offset = next + needle.length;
-  }
-}
-
 async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-  const mentions = {
-    apiCall: 0,
-    apiFileList: 0,
-    apiFileRead: 0,
-    mcpNamespace: 0,
-    mcpTool: 0,
-    toolSearchPollution: 0,
-  };
-  const files = await fs.readdir(sessionsDir).catch(() => []);
-  for (const file of files.filter((candidate) => candidate.endsWith(".jsonl"))) {
-    const raw = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
-    mentions.apiCall += countOccurrences(raw, "MCP.$api");
-    mentions.apiFileList += countOccurrences(raw, "API.list");
-    mentions.apiFileRead += countOccurrences(raw, "API.read");
-    mentions.mcpNamespace += countOccurrences(raw, "MCP.fixture");
-    mentions.mcpTool += countOccurrences(raw, "fixture__lookup_note");
-    mentions.toolSearchPollution += countOccurrences(raw, 'tools.search("lookup note"');
-  }
-  return mentions;
+  return await countSessionLogMentions({
+    sessionsDir,
+    needles: {
+      apiCall: "MCP.$api",
+      apiFileList: "API.list",
+      apiFileRead: "API.read",
+      mcpNamespace: "MCP.fixture",
+      mcpTool: "fixture__lookup_note",
+      toolSearchPollution: 'tools.search("lookup note"',
+    },
+  });
 }
 
 async function main() {

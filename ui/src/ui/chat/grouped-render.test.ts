@@ -18,6 +18,9 @@ const markdownRenderMock = vi.hoisted(() =>
 const streamingTextRenderMock = vi.hoisted(() =>
   vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
 );
+const streamingMarkdownRenderMock = vi.hoisted(() =>
+  vi.fn((value: string) => `<div class="streaming-markdown">${value}</div>`),
+);
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -29,6 +32,7 @@ vi.mock("../../local-storage.ts", () => ({
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: markdownRenderMock,
+  toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   toStreamingPlainTextHtml: streamingTextRenderMock,
 }));
 
@@ -891,16 +895,18 @@ describe("grouped chat rendering", () => {
     expect(bubble?.classList.contains("streaming")).toBe(false);
   });
 
-  it("renders streaming text without markdown sanitization", () => {
+  it("renders streaming text through the streaming markdown renderer", () => {
     const container = document.createElement("div");
     markdownRenderMock.mockClear();
+    streamingMarkdownRenderMock.mockClear();
     streamingTextRenderMock.mockClear();
 
     render(renderStreamingGroup("**live**\nreply", 1), container);
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
-    expect(streamingTextRenderMock).toHaveBeenCalledWith("**live**\nreply");
-    const text = container.querySelector(".markdown-plain-text-fallback");
+    expect(streamingTextRenderMock).not.toHaveBeenCalled();
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
+    const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });
 

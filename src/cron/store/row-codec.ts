@@ -100,6 +100,8 @@ function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronJob 
     return null;
   }
   if (!hadDeleteAfterRun) {
+    // Legacy rows omitted deleteAfterRun entirely; avoid writing the default
+    // back into job_json so config round-trips stay byte-light.
     delete normalized.deleteAfterRun;
   }
   const createdAtMs =
@@ -122,6 +124,7 @@ function countUnpersistableCronJobs(store: CronStoreFile): number {
   return store.jobs.reduce((count, job) => count + (normalizeCronJobForSqlite(job) ? 0 : 1), 0);
 }
 
+/** Fails before replacing SQLite rows when any config job cannot round-trip. */
 export function assertCronStoreCanPersist(store: CronStoreFile): void {
   const invalidJobs = countUnpersistableCronJobs(store);
   if (invalidJobs > 0) {
@@ -183,6 +186,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   };
 }
 
+/** Loads cron rows in config order with deterministic fallbacks for old rows. */
 export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   return executeSqliteQuerySync(
     db,
@@ -196,6 +200,7 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
+/** Replaces all persisted cron rows for one store key from the config store snapshot. */
 export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
   executeSqliteQuerySync(
     db,
@@ -215,6 +220,7 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
   }
 }
 
+/** Updates only mutable runtime columns without rewriting full job config JSON. */
 export function updateCronRuntimeRows(
   db: DatabaseSync,
   storeKey: string,
@@ -237,6 +243,7 @@ export function updateCronRuntimeRows(
   }
 }
 
+/** Reconstructs loaded cron store data and config-runtime sidecars from SQLite rows. */
 export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   const parsedJobs = rows.map(rowToCronJob);
   const jobs = parsedJobs.filter((job): job is CronJob => job !== null);
