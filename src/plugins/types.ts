@@ -2400,6 +2400,7 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
+/** Lifecycle state for a migration item as it moves from plan preview to apply result. */
 export type MigrationItemStatus =
   | "planned"
   | "migrated"
@@ -2407,6 +2408,7 @@ export type MigrationItemStatus =
   | "warning"
   | "conflict"
   | "error";
+/** Broad item category used for grouping, filtering, and CLI display. */
 export type MigrationItemKind =
   | "auth"
   | "config"
@@ -2418,6 +2420,7 @@ export type MigrationItemKind =
   | "file"
   | "archive"
   | "manual";
+/** Operation a migration provider intends to perform for an item. */
 export type MigrationItemAction =
   | "copy"
   | "create"
@@ -2429,18 +2432,26 @@ export type MigrationItemAction =
   | "manual";
 
 export type MigrationItem = {
+  /** Stable id used by CLI selection, reports, and provider apply lookups. */
   id: string;
   kind: MigrationItemKind | (string & {});
   action: MigrationItemAction | (string & {});
   status: MigrationItemStatus;
+  /** Provider-owned source path or logical source label. */
   source?: string;
+  /** Destination path or logical OpenClaw target. */
   target?: string;
+  /** Human-facing explanation shown in previews, reports, and errors. */
   message?: string;
+  /** Machine-readable or human-readable status reason. */
   reason?: string;
+  /** Marks items whose details may contain secrets and need extra display care. */
   sensitive?: boolean;
+  /** Provider-specific JSON-safe payload used by apply/report helpers. */
   details?: Record<string, unknown>;
 };
 
+/** Aggregate counts derived from migration items for preview/result gates. */
 export type MigrationSummary = {
   total: number;
   planned: number;
@@ -2451,6 +2462,7 @@ export type MigrationSummary = {
   sensitive: number;
 };
 
+/** Lightweight probe result used by provider discovery before a full plan. */
 export type MigrationDetection = {
   found: boolean;
   source?: string;
@@ -2459,6 +2471,7 @@ export type MigrationDetection = {
   message?: string;
 };
 
+/** Provider-produced migration preview or apply result body. */
 export type MigrationPlan = {
   providerId: string;
   source: string;
@@ -2470,15 +2483,18 @@ export type MigrationPlan = {
   metadata?: Record<string, unknown>;
 };
 
+/** Apply result with command-level backup/report locations attached. */
 export type MigrationApplyResult = MigrationPlan & {
   backupPath?: string;
   reportDir?: string;
 };
 
+/** Disposable preparation state created immediately before apply. */
 export type MigrationProviderPreparation = {
   dispose?: () => void | Promise<void>;
 };
 
+/** Runtime context passed to migration providers for plan and apply phases. */
 export type MigrationProviderContext = {
   config: OpenClawConfig;
   runtime?: PluginRuntime;
@@ -2498,11 +2514,15 @@ export type MigrationProviderPlugin = {
   id: string;
   label: string;
   description?: string;
+  /** Optional cheap probe for list/detect flows; should avoid filesystem writes. */
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
+  /** Optional apply-only setup whose disposer runs after apply orchestration. */
   prepareApply?: (
     ctx: MigrationProviderContext,
   ) => MigrationProviderPreparation | Promise<MigrationProviderPreparation | undefined> | undefined;
+  /** Builds a dry migration plan; command code may pass the same plan back into apply. */
   plan: (ctx: MigrationProviderContext) => MigrationPlan | Promise<MigrationPlan>;
+  /** Applies either a supplied preflight plan or a provider-created plan. */
   apply: (
     ctx: MigrationProviderContext,
     plan?: MigrationPlan,
