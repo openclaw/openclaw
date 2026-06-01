@@ -232,6 +232,48 @@ describe("session accessor file-backed seam", () => {
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
   });
 
+  it("loads transcript events without a session key when the read target is explicit", async () => {
+    const scope = {
+      sessionFile: transcriptPath,
+      sessionId: "session-1",
+    };
+    const event = {
+      id: "msg-1",
+      message: { role: "user", content: "hello" },
+      parentId: null,
+      type: "message",
+    };
+
+    await appendTranscriptEvent(
+      {
+        ...scope,
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      event,
+    );
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([event]);
+  });
+
+  it("loads transcript events from a generated read target without a session key", async () => {
+    const event = {
+      id: "msg-1",
+      message: { role: "user", content: "hello" },
+      parentId: null,
+      type: "message",
+    };
+
+    fs.writeFileSync(path.join(tempDir, "session-1.jsonl"), `${JSON.stringify(event)}\n`, "utf-8");
+
+    await expect(
+      loadTranscriptEvents({
+        sessionId: "session-1",
+        storePath,
+      }),
+    ).resolves.toEqual([event]);
+  });
+
   it("appends messages and publishes updates through a session scope", async () => {
     const scope = {
       agentId: "main",

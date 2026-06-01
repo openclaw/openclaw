@@ -5,7 +5,11 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveSessionTranscriptPathInDir, resolveStorePath } from "./paths.js";
+import {
+  resolveSessionTranscriptPath,
+  resolveSessionTranscriptPathInDir,
+  resolveStorePath,
+} from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import {
   getSessionEntry,
@@ -34,10 +38,15 @@ export type SessionAccessScope = {
   storePath?: string;
 };
 
-export type SessionTranscriptAccessScope = SessionAccessScope & {
+export type SessionTranscriptReadScope = Omit<SessionAccessScope, "sessionKey"> & {
   sessionFile?: string;
   sessionId: string;
+  sessionKey?: string;
   threadId?: string | number;
+};
+
+export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
+  sessionKey: string;
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
@@ -182,9 +191,9 @@ export async function updateSessionEntry(
 
 /** Loads raw transcript events through the storage-neutral accessor seam. */
 export async function loadTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
+  scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
-  const transcript = await resolveTranscriptAccess(scope);
+  const transcript = await resolveTranscriptReadAccess(scope);
   const events: TranscriptEvent[] = [];
   for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
     events.push(JSON.parse(line) as TranscriptEvent);
@@ -267,6 +276,32 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
     agentId,
     env: scope.env,
   });
+}
+
+async function resolveTranscriptReadAccess(scope: SessionTranscriptReadScope): Promise<{
+  sessionFile: string;
+}> {
+  if (scope.sessionFile?.trim()) {
+    return { sessionFile: scope.sessionFile };
+  }
+  if (scope.sessionKey) {
+    return await resolveTranscriptAccess({ ...scope, sessionKey: scope.sessionKey });
+  }
+  if (scope.storePath) {
+    return {
+      sessionFile: resolveSessionTranscriptPathInDir(
+        scope.sessionId,
+        path.dirname(path.resolve(scope.storePath)),
+        scope.threadId,
+      ),
+    };
+  }
+  if (scope.agentId) {
+    return {
+      sessionFile: resolveSessionTranscriptPath(scope.sessionId, scope.agentId, scope.threadId),
+    };
+  }
+  throw new Error(`Cannot resolve transcript read scope without a session target`);
 }
 
 async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{
