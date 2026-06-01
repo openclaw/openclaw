@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
-import { BUNDLED_CHAT_CHANNEL_IDS } from "./chat-channel-ids.js";
+import {
+  BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES,
+  BUNDLED_CHAT_CHANNEL_IDS,
+} from "./chat-channel-ids.js";
 
 describe("plugin-sdk chat-channel-ids", () => {
   it("covers every bundled and official channel catalog id", () => {
@@ -10,5 +13,18 @@ describe("plugin-sdk chat-channel-ids", () => {
       .filter((id) => !exported.has(id));
 
     expect(missing).toEqual([]);
+  });
+
+  it("covers channel labels and aliases used by envelope formatters", () => {
+    expect(BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES).toEqual(
+      expect.arrayContaining([
+        "googlechat",
+        "Google Chat",
+        "nextcloud-talk",
+        "Nextcloud Talk",
+        "msteams",
+        "teams",
+      ]),
+    );
   });
 });

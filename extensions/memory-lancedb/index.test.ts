@@ -3040,6 +3040,9 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("[slack #general user] message")).toBe(true);
     expect(looksLikeEnvelopeSludge("[imessage Bob] hello")).toBe(true);
     expect(looksLikeEnvelopeSludge("[whatsapp +15551234567] hi")).toBe(true);
+    expect(looksLikeEnvelopeSludge("[Google Chat Room] I prefer dark mode")).toBe(true);
+    expect(looksLikeEnvelopeSludge("[Nextcloud Talk Board] I prefer dark mode")).toBe(true);
+    expect(looksLikeEnvelopeSludge("[Teams General] I prefer dark mode")).toBe(true);
     // Multi-line body still gets filtered when the envelope leads the first line.
     expect(looksLikeEnvelopeSludge("[telegram alice] hello\nsecond line\nthird")).toBe(true);
   });
@@ -3074,6 +3077,15 @@ describe("memory plugin e2e", () => {
       "I prefer dark mode",
     );
     expect(sanitizeForMemoryCapture("[discord user] ping")).toBe("ping");
+    expect(sanitizeForMemoryCapture("[Google Chat Room] I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+    expect(sanitizeForMemoryCapture("[Nextcloud Talk Board] I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+    expect(sanitizeForMemoryCapture("[Teams General] I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
     // Group-chat sender-prefix on the body is also stripped when the bracket is
     // recognized as an envelope.
     expect(sanitizeForMemoryCapture("[slack #general user] user: hello")).toBe("hello");

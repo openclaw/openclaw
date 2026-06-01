@@ -14,7 +14,37 @@
  */
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 
+const BUNDLED_CHAT_CHANNEL_ENTRIES = listBundledChannelCatalogEntries();
+
+function pushUniquePrefix(target: string[], seen: Set<string>, raw: string | undefined): void {
+  const value = raw?.trim();
+  if (!value) {
+    return;
+  }
+  const key = value.toLocaleLowerCase("en-US");
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  target.push(value);
+}
+
 export const BUNDLED_CHAT_CHANNEL_IDS = Object.freeze(
-  listBundledChannelCatalogEntries().map((entry) => entry.id),
+  BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id),
+);
+
+export const BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES = Object.freeze(
+  (() => {
+    const seen = new Set<string>();
+    const prefixes: string[] = [];
+    for (const entry of BUNDLED_CHAT_CHANNEL_ENTRIES) {
+      pushUniquePrefix(prefixes, seen, entry.id);
+      pushUniquePrefix(prefixes, seen, entry.channel.label);
+      for (const alias of entry.aliases) {
+        pushUniquePrefix(prefixes, seen, alias);
+      }
+    }
+    return prefixes;
+  })(),
 );
 export type { ChatChannelId } from "../channels/ids.js";

@@ -14,7 +14,7 @@ import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
-import { BUNDLED_CHAT_CHANNEL_IDS } from "openclaw/plugin-sdk/chat-channel-ids";
+import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -747,12 +747,11 @@ const INBOUND_ENVELOPE_PREFIX_RE =
  * which is indistinguishable from arbitrary user `[label ...]` prose without a
  * channel-id anchor.
  *
- * Anchoring on a known bundled channel id from `BUNDLED_CHAT_CHANNEL_IDS`
- * (canonical source: src/channels/ids.ts via openclaw/plugin-sdk/chat-channel-ids)
- * keeps the detector and the formatter in sync: any channel registered in
- * bundled metadata becomes a recognized envelope prefix automatically. Case
- * insensitive because the formatter does not lowercase `params.channel` itself;
- * production paths feed lowercase ids but human-typed examples may capitalize.
+ * Anchoring on a known bundled/official channel prefix from
+ * `BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES` keeps the detector and formatter in
+ * sync across callers that pass either ids or display labels like `Google Chat`.
+ * Case insensitive because the formatter does not lowercase `params.channel`
+ * itself; production paths feed mixed ids and labels.
  *
  * From-label must be at least one non-whitespace token so user prose like
  * `[note]` or `[telegram] ...` (no following label) is not mistaken for an
@@ -761,14 +760,14 @@ const INBOUND_ENVELOPE_PREFIX_RE =
  * `sanitizeForMemoryCapture`. Header part length is capped at 300 chars to
  * match the marker-aware regex above and avoid catastrophic backtracking.
  *
- * Guarded against an empty `BUNDLED_CHAT_CHANNEL_IDS` so the alternation never
- * degenerates into `(?:)` (which would match the empty string and flag every
- * `[...]` prefix as an envelope). When the bundled list is empty the
+ * Guarded against an empty `BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES` so the
+ * alternation never degenerates into `(?:)` (which would match the empty string
+ * and flag every `[...]` prefix as an envelope). When the bundled list is empty the
  * known-channel detector is disabled and only the marker-aware regex above
  * applies.
  */
-const ENVELOPE_KNOWN_CHANNEL_PATTERN = BUNDLED_CHAT_CHANNEL_IDS.map((id) =>
-  id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+const ENVELOPE_KNOWN_CHANNEL_PATTERN = BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES.map((prefix) =>
+  prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
 ).join("|");
 const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE: RegExp | null = ENVELOPE_KNOWN_CHANNEL_PATTERN
   ? new RegExp(
