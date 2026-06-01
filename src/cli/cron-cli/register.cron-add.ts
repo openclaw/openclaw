@@ -161,6 +161,12 @@ export function registerCronAddCommand(cron: Command) {
                 ? (name: string) => cmd.getOptionValueSource(name)
                 : () => undefined;
 
+            const timeoutSecondsRaw = opts.timeoutSeconds;
+            const timeoutSecondsCli = parsePositiveIntOrUndefined(timeoutSecondsRaw);
+            if (optionSource("timeoutSeconds") === "cli" && timeoutSecondsCli === undefined) {
+              throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+            }
+
             const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
             const hasNoDeliver = opts.deliver === false;
             const webhookUrl = normalizeOptionalString(opts.webhook);

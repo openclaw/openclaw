@@ -7,6 +7,7 @@ import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
+import { parsePositiveIntOrUndefined } from "./program/helpers.js";
 export type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 type GatewayRpcRuntimeModule = typeof import("./gateway-rpc.runtime.js");
@@ -27,6 +28,22 @@ export function addGatewayClientOptions(cmd: Command) {
     .option("--expect-final", "Wait for final response (agent)", false);
 }
 
+const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 30_000;
+
+function resolveGatewayRpcTimeoutMs(timeout: unknown): number {
+  if (timeout === undefined || timeout === null) {
+    return DEFAULT_GATEWAY_RPC_TIMEOUT_MS;
+  }
+  if (typeof timeout === "string" && timeout.trim() === "") {
+    throw new Error("--timeout must be a positive integer (milliseconds)");
+  }
+  const parsed = parsePositiveIntOrUndefined(timeout);
+  if (parsed === undefined) {
+    throw new Error("--timeout must be a positive integer (milliseconds)");
+  }
+  return parsed;
+}
+
 export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
@@ -40,6 +57,8 @@ export async function callGatewayFromCli(
     scopes?: OperatorScope[];
   },
 ) {
+  const timeoutMs = resolveGatewayRpcTimeoutMs(opts.timeout);
+  opts.timeout = String(timeoutMs);
   const runtime = await loadGatewayRpcRuntime();
   return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);
 }
