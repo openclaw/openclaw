@@ -835,8 +835,8 @@ function stripResponsesRequestEncryptedContent(
   let changed = false;
   const sanitizedInput: ResponseInput = [];
   for (const item of input) {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const record = item as Record<string, unknown>;
+    if (isRecord(item)) {
+      const record = item;
       if (record.type === "reasoning" && "encrypted_content" in record) {
         changed = true;
         continue;
@@ -3876,6 +3876,7 @@ export const testing = {
   processOpenAICompletionsStream,
   processResponsesStream,
   formatModelTransportDebugBaseUrl,
+  isInvalidEncryptedContentError,
   buildResponsesFailedNoDetailsObservation,
   buildOpenAIResponsesReasoningReplayMetadata,
   normalizeResponsesFailedEvent,

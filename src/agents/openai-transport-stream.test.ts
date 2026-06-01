@@ -3466,7 +3466,35 @@ describe("openai transport stream", () => {
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
   });
 
-  it("strips nested encrypted reasoning content from retry payloads without changing ids", () => {
+  it("recognizes stale encrypted reasoning replay errors", () => {
+    expect(testing.isInvalidEncryptedContentError({ code: "thinking_signature_invalid" })).toBe(
+      true,
+    );
+    expect(testing.isInvalidEncryptedContentError({ type: "thinking_signature_invalid" })).toBe(
+      true,
+    );
+    expect(
+      testing.isInvalidEncryptedContentError({
+        message:
+          "The encrypted content for item rs_bad could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+      }),
+    ).toBe(true);
+    expect(
+      testing.isInvalidEncryptedContentError({
+        message: "encrypted content could not be decrypted or parsed",
+      }),
+    ).toBe(true);
+    expect(testing.isInvalidEncryptedContentError({ code: "invalid_encrypted_content" })).toBe(
+      true,
+    );
+    expect(
+      testing.isInvalidEncryptedContentError({
+        message: "unrelated provider failure",
+      }),
+    ).toBe(false);
+  });
+
+  it("drops top-level encrypted reasoning items from retry payloads", () => {
     const params = {
       model: "gpt-5.5",
       stream: true,
@@ -3476,6 +3504,10 @@ describe("openai transport stream", () => {
           id: "rs_prior",
           encrypted_content: "ciphertext",
           summary: [{ type: "summary_text", text: "checked" }],
+        },
+        {
+          type: "message",
+          role: "assistant",
           nested: { encrypted_content: "nested-ciphertext", keep: "value" },
         },
         {
@@ -3485,23 +3517,30 @@ describe("openai transport stream", () => {
           name: "price_lookup",
           arguments: "{}",
         },
+        {
+          type: "function_call_output",
+          call_id: "call_abc",
+          output: "ok",
+        },
       ],
     };
 
     const stripped = testing.stripResponsesRequestEncryptedContent(
       params as never,
-    ) as typeof params;
+    ) as { input: Array<Record<string, unknown>> };
+    const input = stripped.input;
 
     expect(stripped).not.toBe(params);
-    expect(stripped.input[0]).toMatchObject({
-      type: "reasoning",
-      id: "rs_prior",
-      summary: [{ type: "summary_text", text: "checked" }],
+    expect(input.some((item) => item.type === "reasoning")).toBe(false);
+    expect(input).toHaveLength(3);
+    expect(input[0]).toMatchObject({
+      type: "message",
+      role: "assistant",
       nested: { keep: "value" },
     });
-    expect(stripped.input[0]).not.toHaveProperty("encrypted_content");
-    expect(stripped.input[0].nested).not.toHaveProperty("encrypted_content");
-    expect(stripped.input[1]).toEqual(params.input[1]);
+    expect(input[0]?.nested).not.toHaveProperty("encrypted_content");
+    expect(input[1]).toEqual(params.input[2]);
+    expect(input[2]).toEqual(params.input[3]);
   });
 
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
