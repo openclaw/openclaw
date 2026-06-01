@@ -32,7 +32,7 @@ import {
 } from "./dynamic-tool-diagnostics.js";
 import {
   filterCodexDynamicTools,
-  resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -599,7 +599,7 @@ async function createCodexSideToolBridge(input: {
   return createCodexDynamicToolBridge({
     tools,
     signal: input.signal,
-    loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
+    loading: resolveCodexDynamicToolsLoadingForModel(input.pluginConfig, input.params.model),
     hookContext: {
       agentId: input.sessionAgentId,
       config: input.params.cfg,
