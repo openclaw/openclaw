@@ -1817,8 +1817,19 @@ export abstract class MemoryManagerSyncOps {
       } catch {}
     }
     this.ensureSchema();
-    this.dropVectorTable();
-    this.vector.dims = undefined;
+    if (this.vector.enabled && this.vector.available) {
+      try {
+        this.db.exec(`DELETE FROM ${VECTOR_TABLE}`);
+      } catch {
+        this.dropVectorTable();
+        this.vector.dims = undefined;
+        this.vector.available = null;
+        this.vectorReady = null;
+      }
+    } else {
+      this.dropVectorTable();
+      this.vector.dims = undefined;
+    }
     this.sessionsDirtyFiles.clear();
   }
 

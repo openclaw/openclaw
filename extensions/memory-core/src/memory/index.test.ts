@@ -345,6 +345,27 @@ describe("memory index", () => {
     }
   }
 
+  it("does not prepare vector deletes after unsafe reset drops a missing vector table", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-missing-table.sqlite"),
+      vectorEnabled: true,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    managersForCleanup.add(manager);
+    type VectorState = { available: boolean | null; dims?: number };
+    const vector = Reflect.get(manager, "vector") as VectorState;
+    vector.available = true;
+    vector.dims = 4;
+    Reflect.set(manager, "vectorReady", Promise.resolve(true));
+
+    await expect(
+      Reflect.apply(Reflect.get(manager, "runUnsafeReindex"), manager, [
+        { reason: "test", force: true },
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
   async function getFtsSessionManager(params: {
     stateDirName: string;
     storeFileName: string;
