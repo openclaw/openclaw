@@ -389,6 +389,8 @@ function enqueuePendingSendMessage(
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   submittedAtMs = controlUiNowMs(),
+  sendState: ChatQueueItem["sendState"] =
+    host.connected && host.client ? "sending" : "waiting-reconnect",
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -403,7 +405,7 @@ function enqueuePendingSendMessage(
     refreshSessions,
     sendAttempts: 0,
     sendRunId: generateUUID(),
-    sendState: host.connected && host.client ? "sending" : "waiting-reconnect",
+    sendState,
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
@@ -541,6 +543,7 @@ type ChatSendTimingPhase =
   | "request-start"
   | "ack"
   | "queued-busy"
+  | "waiting-model"
   | "waiting-reconnect"
   | "failed";
 
@@ -1360,18 +1363,20 @@ export async function handleSendChat(
       recordNonTranscriptInputHistory(host, message);
     }
 
+    const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
+    const waitingForModel = modelSwitchReady !== true;
     const queued = enqueuePendingSendMessage(
       host,
       message,
       hasAttachments ? attachmentsToSend : undefined,
       refreshSessions,
       submittedAtMs,
+      waitingForModel ? "waiting-model" : undefined,
     );
     if (!queued) {
       return;
     }
 
-    const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
     if (modelSwitchReady !== true && !(await modelSwitchReady)) {
       cancelPendingSendBeforeRequest(host, queued, {
         previousDraft: cleared.previousDraft,

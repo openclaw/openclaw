@@ -477,7 +477,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 
-      await page.locator(".chat-queue").getByText("Sending").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-queue").getByText("Waiting for model").waitFor({
+        timeout: 10_000,
+      });
       await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 

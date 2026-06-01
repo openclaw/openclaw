@@ -1243,7 +1243,7 @@ describe("handleSendChat", () => {
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("");
     expect(host.chatQueue[0]).toMatchObject({
-      sendState: "sending",
+      sendState: "waiting-model",
       text: "use the newly selected model",
     });
 

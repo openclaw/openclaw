@@ -190,6 +190,34 @@ describe("chat composer persistence", () => {
     ).toBeNull();
   });
 
+  it("restores pre-request model-wait sends as queued messages", () => {
+    persistChatComposerState(
+      createState({
+        chatQueue: [
+          {
+            id: "waiting-model-1",
+            text: "not sent yet",
+            createdAt: 1,
+            sendRunId: "run-waiting-model",
+            sendState: "waiting-model",
+          },
+        ],
+      }),
+    );
+
+    const restored = createState();
+    expect(restoreChatComposerState(restored)).toBe(true);
+
+    expect(restored.chatQueue).toEqual([
+      {
+        id: "waiting-model-1",
+        text: "not sent yet",
+        createdAt: 1,
+        sendRunId: "run-waiting-model",
+      },
+    ]);
+  });
+
   it("does not restore steered messages tied to a previous active run", () => {
     persistChatComposerState(
       createState({

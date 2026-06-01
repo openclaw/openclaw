@@ -182,7 +182,9 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     return null;
   }
   const sendState =
-    item.sendState === "failed" || item.sendState === "waiting-reconnect"
+    item.sendState === "failed" ||
+    item.sendState === "waiting-reconnect" ||
+    item.sendState === "waiting-model"
       ? item.sendState
       : undefined;
   return {
@@ -240,6 +242,8 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   }
   if (entry.sendState === "failed" || entry.sendState === "waiting-reconnect") {
     item.sendState = entry.sendState;
+  } else if (entry.sendState === "waiting-model") {
+    item.sendState = undefined;
   }
   const sendError = normalizeOptionalString(entry.sendError);
   if (sendError) {
