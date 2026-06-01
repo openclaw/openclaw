@@ -84,13 +84,22 @@ function isIMessageConversationAllowTarget(entry: string | number): boolean {
   );
 }
 
-function resolveIMessageOutboundGroupAllowFrom(
+function resolveIMessageOutboundGroupTargetAllowFrom(
   account: ResolvedIMessageAccount,
 ): Array<string | number> {
   if (account.config.groupAllowFrom !== undefined) {
     return [...account.config.groupAllowFrom];
   }
   return (account.config.allowFrom ?? []).filter(isIMessageConversationAllowTarget);
+}
+
+function resolveIMessageOutboundGroupReplyAllowFrom(
+  account: ResolvedIMessageAccount,
+): Array<string | number> {
+  if (account.config.groupAllowFrom !== undefined) {
+    return [...account.config.groupAllowFrom];
+  }
+  return [...(account.config.allowFrom ?? [])];
 }
 
 function getIMessageConversationFacts(
@@ -192,12 +201,12 @@ export async function assertIMessageOutboundAllowed(params: {
       return;
     }
     const normalizedTarget = normalizeIMessageOutboundTarget(target);
-    const configuredGroupAllowFrom = resolveIMessageOutboundGroupAllowFrom(account);
+    const configuredGroupTargetAllowFrom = resolveIMessageOutboundGroupTargetAllowFrom(account);
     const allowFrom = await expandIMessageOutboundAllowFrom({
       cfg,
       account,
       target,
-      allowFrom: configuredGroupAllowFrom,
+      allowFrom: configuredGroupTargetAllowFrom,
     });
     const targetAllowed = isIMessageOutboundAllowlisted({
       allowFrom,
@@ -207,7 +216,7 @@ export async function assertIMessageOutboundAllowed(params: {
       cfg,
       account,
       target,
-      allowFrom: configuredGroupAllowFrom,
+      allowFrom: resolveIMessageOutboundGroupReplyAllowFrom(account),
       replyRequesterSender: params.replyRequesterSender,
     });
     if (allowFrom.length === 0 && !replyRequesterAllowed) {
