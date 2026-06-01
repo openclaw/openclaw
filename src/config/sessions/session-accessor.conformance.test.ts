@@ -9,6 +9,7 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntries,
+  loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
@@ -17,6 +18,7 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
   upsertSessionEntry,
+  type ExactSessionEntry,
   type SessionAccessScope,
   type SessionEntrySummary,
   type SessionTranscriptAccessScope,
@@ -31,6 +33,7 @@ import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
   listSqliteSessionEntries,
+  loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
@@ -48,6 +51,7 @@ type AccessorAdapter = {
   entryScope(paths: TestPaths): SessionAccessScope;
   transcriptReadScope(paths: TestPaths, id?: string): SessionTranscriptReadScope;
   transcriptScope(paths: TestPaths, id?: string): SessionTranscriptAccessScope;
+  loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined;
   loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined;
   listSessionEntries(scope: Partial<Omit<SessionAccessScope, "sessionKey">>): SessionEntrySummary[];
   readSessionUpdatedAt(scope: SessionAccessScope): number | undefined;
@@ -106,6 +110,7 @@ const fileBackedAdapter: AccessorAdapter = {
     storePath: paths.storePath,
   }),
   loadSessionEntry,
+  loadExactSessionEntry,
   listSessionEntries,
   readSessionUpdatedAt,
   upsertSessionEntry,
@@ -140,6 +145,7 @@ const sqliteAdapter: AccessorAdapter = {
     storePath: paths.sqlitePath,
   }),
   loadSessionEntry: loadSqliteSessionEntry,
+  loadExactSessionEntry: loadExactSqliteSessionEntry,
   listSessionEntries: listSqliteSessionEntries,
   readSessionUpdatedAt: readSqliteSessionUpdatedAt,
   upsertSessionEntry: upsertSqliteSessionEntry,
@@ -252,6 +258,30 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
         providerOverride: "anthropic",
         sessionId: "session-1",
         updatedAt: beforePreservePatch?.updatedAt,
+      });
+    });
+
+    it("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
+      const scope = adapter.entryScope(paths);
+      const mixedCaseScope = { ...scope, sessionKey: "AGENT:MAIN:MAIN" };
+
+      await adapter.upsertSessionEntry(scope, {
+        model: "gpt-5.5",
+        sessionId: "exact-session",
+        updatedAt: 10,
+      });
+
+      expect(adapter.loadSessionEntry(mixedCaseScope)).toMatchObject({
+        model: "gpt-5.5",
+        sessionId: "exact-session",
+      });
+      expect(adapter.loadExactSessionEntry(mixedCaseScope)).toBeUndefined();
+      expect(adapter.loadExactSessionEntry(scope)).toEqual({
+        sessionKey: "agent:main:main",
+        entry: expect.objectContaining({
+          model: "gpt-5.5",
+          sessionId: "exact-session",
+        }),
       });
     });
 
