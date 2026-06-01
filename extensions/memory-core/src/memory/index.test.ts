@@ -451,6 +451,31 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps split chunks from oversized files in one source-wide batch", async () => {
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      `# Log\n${"Long split memory line. ".repeat(1200)}`,
+    );
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nBeta memory line.");
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-split-chunks-cross-file-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(combinedBatch.length).toBeGreaterThan(3);
+      expect(combinedBatch.join("\n")).toContain("Long split memory line.");
+      expect(combinedBatch).toContain("# Log\nBeta memory line.");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("keeps custom batch runtimes per file without source-wide opt in", async () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
     await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");

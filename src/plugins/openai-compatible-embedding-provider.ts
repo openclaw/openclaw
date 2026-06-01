@@ -80,6 +80,7 @@ type OpenAICompatibleEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
 
 const OPENAI_COMPATIBLE_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_COMPATIBLE_BATCH_MAX_REQUESTS = 50000;
+const OPENAI_COMPATIBLE_BATCH_MAX_POLL_BACKOFF_MS = 5 * 60_000;
 
 type ConfiguredEmbeddingProvider = {
   api?: string;
@@ -447,6 +448,24 @@ async function readOpenAICompatibleBatchError(params: {
   }
 }
 
+function createOpenAICompatibleBatchPollBackoff(params: {
+  pollIntervalMs: number;
+  timeoutMs: number;
+}): { nextDelayMs: () => number } {
+  const maxDelayMs = Math.max(
+    params.pollIntervalMs,
+    Math.min(params.timeoutMs, OPENAI_COMPATIBLE_BATCH_MAX_POLL_BACKOFF_MS),
+  );
+  let delayMs = params.pollIntervalMs;
+  return {
+    nextDelayMs: () => {
+      const current = delayMs;
+      delayMs = Math.min(maxDelayMs, current * 2);
+      return current;
+    },
+  };
+}
+
 async function waitForOpenAICompatibleBatch(params: {
   client: OpenAICompatibleEmbeddingClient;
   batchId: string;
@@ -457,6 +476,7 @@ async function waitForOpenAICompatibleBatch(params: {
   initial?: OpenAICompatibleBatchStatus;
 }): Promise<BatchCompletionResult> {
   const start = Date.now();
+  const pollBackoff = createOpenAICompatibleBatchPollBackoff(params);
   let current: OpenAICompatibleBatchStatus | undefined = params.initial;
   while (true) {
     const status =
@@ -490,10 +510,9 @@ async function waitForOpenAICompatibleBatch(params: {
         `openai-compatible batch ${params.batchId} timed out after ${params.timeoutMs}ms`,
       );
     }
-    params.debug?.(
-      `openai-compatible batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    const delayMs = pollBackoff.nextDelayMs();
+    params.debug?.(`openai-compatible batch ${params.batchId} ${state}; waiting ${delayMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     current = undefined;
   }
 }

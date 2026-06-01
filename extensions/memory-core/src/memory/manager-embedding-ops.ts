@@ -56,7 +56,7 @@ const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
-const SOURCE_WIDE_BATCH_MAX_CHUNKS = 4096;
+const SOURCE_WIDE_BATCH_MAX_REQUESTS = 50000;
 
 const log = createSubsystemLogger("memory");
 
@@ -828,19 +828,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     log.debug(
       `memory embeddings: source-wide batch prepare files=${items.length} sources=${formatBatchSourceCounts(
         itemSourceCounts,
-      )} maxFiles=${SOURCE_WIDE_BATCH_MAX_FILES} maxChunks=${SOURCE_WIDE_BATCH_MAX_CHUNKS}`,
+      )} maxFiles=${SOURCE_WIDE_BATCH_MAX_FILES} maxRequests=${SOURCE_WIDE_BATCH_MAX_REQUESTS}`,
       {
         files: items.length,
         sources: itemSourceCounts,
         maxFiles: SOURCE_WIDE_BATCH_MAX_FILES,
-        maxChunks: SOURCE_WIDE_BATCH_MAX_CHUNKS,
+        maxRequests: SOURCE_WIDE_BATCH_MAX_REQUESTS,
       },
     );
 
     let prepared: PreparedMemoryIndexEntry[] = [];
-    let preparedChunkCount = 0;
+    let preparedRequestCount = 0;
     let sourceWideBatchGroup = 0;
-    const flushPrepared = async (reason: "max-files" | "max-chunks" | "end") => {
+    const flushPrepared = async (reason: "max-files" | "max-requests" | "end") => {
       const firstEntry = prepared[0]?.entry;
       if (!firstEntry) {
         return;
@@ -862,7 +862,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           group: sourceWideBatchGroup,
           reason,
           maxFiles: SOURCE_WIDE_BATCH_MAX_FILES,
-          maxChunks: SOURCE_WIDE_BATCH_MAX_CHUNKS,
+          maxRequests: SOURCE_WIDE_BATCH_MAX_REQUESTS,
         },
       );
       const embeddings = await this.embedChunksWithBatch(chunks, firstEntry, source, {
@@ -886,7 +886,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
       }
       prepared = [];
-      preparedChunkCount = 0;
+      preparedRequestCount = 0;
     };
 
     for (const item of items) {
@@ -899,19 +899,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         continue;
       }
       const nextWouldExceedFiles = prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES;
-      const nextWouldExceedChunks =
-        preparedChunkCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_CHUNKS;
-      if (prepared.length > 0 && (nextWouldExceedFiles || nextWouldExceedChunks)) {
-        await flushPrepared(nextWouldExceedFiles ? "max-files" : "max-chunks");
+      const nextWouldExceedRequests =
+        preparedRequestCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_REQUESTS;
+      if (prepared.length > 0 && (nextWouldExceedFiles || nextWouldExceedRequests)) {
+        await flushPrepared(nextWouldExceedFiles ? "max-files" : "max-requests");
       }
       prepared.push(preparedEntry);
-      preparedChunkCount += preparedEntry.chunks.length;
+      preparedRequestCount += preparedEntry.chunks.length;
       if (
         prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ||
-        preparedChunkCount >= SOURCE_WIDE_BATCH_MAX_CHUNKS
+        preparedRequestCount >= SOURCE_WIDE_BATCH_MAX_REQUESTS
       ) {
         await flushPrepared(
-          prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ? "max-files" : "max-chunks",
+          prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ? "max-files" : "max-requests",
         );
       }
     }

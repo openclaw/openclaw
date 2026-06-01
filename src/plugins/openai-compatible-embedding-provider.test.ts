@@ -347,6 +347,53 @@ describe("openai-compatible generic embedding provider", () => {
     expect(debugMessages).toContain("openai-compatible batch batch-1 in_progress; waiting 1ms");
   });
 
+  it("backs off OpenAI-compatible batch polling while waiting", async () => {
+    const server = await startBatchServer({
+      createStatus: { id: "batch-1", status: "in_progress" },
+      statusResponses: [
+        { id: "batch-1", status: "in_progress" },
+        { id: "batch-1", status: "in_progress" },
+        { id: "batch-1", status: "completed", output_file_id: "file-output" },
+      ],
+    });
+    const debugMessages: string[] = [];
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(
+      createOptions({
+        model: "mistral/mistral-embed",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+    const runtime = result.runtime as OpenAICompatibleBatchRuntime | undefined;
+
+    await expect(
+      runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "alpha" }, { text: "beta" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 0,
+        timeoutMs: 1000,
+        debug: (message) => debugMessages.push(message),
+      }),
+    ).resolves.toEqual([
+      [1, 0],
+      [2, 1],
+    ]);
+
+    expect(server.statusPolls).toEqual([
+      "/v1/batches/batch-1",
+      "/v1/batches/batch-1",
+      "/v1/batches/batch-1",
+    ]);
+    expect(debugMessages).toEqual(
+      expect.arrayContaining([
+        "openai-compatible batch batch-1 in_progress; waiting 1ms",
+        "openai-compatible batch batch-1 in_progress; waiting 2ms",
+        "openai-compatible batch batch-1 in_progress; waiting 4ms",
+      ]),
+    );
+  });
+
   it("posts OpenAI-compatible embedding requests without warming up during create", async () => {
     const token = "local-test-token";
     const server = await startEmbeddingServer({
