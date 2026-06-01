@@ -79,6 +79,9 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
   );
+  const githubCopilotReplay = await vi.importActual<
+    typeof import("../../extensions/github-copilot/replay-policy.js")
+  >("../../extensions/github-copilot/replay-policy.js");
   return {
     ...actual,
     sanitizeProviderReplayHistoryWithPlugin: vi.fn(
@@ -107,6 +110,9 @@ vi.mock("../plugins/provider-runtime.js", async () => {
             { role: "user", content: "(session bootstrap)" } as AgentMessage,
             ...context.messages,
           ];
+        }
+        if (provider === "github-copilot") {
+          return githubCopilotReplay.sanitizeGithubCopilotReplayHistory(context as never);
         }
         return context.messages;
       },
@@ -2364,7 +2370,7 @@ describe("sanitizeSessionHistory", () => {
     expect((thinkingBlocks[0] as { thinking?: string }).thinking).toBe("unsigned kimi reasoning");
   });
 
-  it("preserves unsigned thinking blocks for github copilot claude with anthropic-messages transport", async () => {
+  it("lets github-copilot own final Claude thinking replay sanitization", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -2375,8 +2381,8 @@ describe("sanitizeSessionHistory", () => {
       ]),
     ]);
 
-    // GitHub Copilot Claude uses anthropic-messages transport but does not
-    // require signed thinking. Its provider-level preserveSignatures is false.
+    // GitHub Copilot Claude uses the provider sanitize hook for final replay
+    // cleanup, so the provider still removes thinking after generic policy work.
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "anthropic-messages",
@@ -2402,11 +2408,7 @@ describe("sanitizeSessionHistory", () => {
     });
 
     const assistant = getAssistantMessage(result);
-    const thinkingBlocks = assistant.content.filter((b: { type: string }) => b.type === "thinking");
-    expect(thinkingBlocks).toHaveLength(1);
-    expect((thinkingBlocks[0] as { thinking?: string }).thinking).toBe(
-      "unsigned copilot reasoning",
-    );
+    expect(assistant.content).toEqual([{ type: "text", text: "result" }]);
   });
 
   it("strips unsigned thinking for bedrock-converse-stream even when preserveSignatures is false", async () => {

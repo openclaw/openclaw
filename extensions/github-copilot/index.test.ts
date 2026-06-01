@@ -133,6 +133,33 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
+  it("registers Claude replay sanitization on the provider hook", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    expect(provider.buildReplayPolicy?.({ modelId: "claude-opus-4.6" } as never)).toEqual({
+      dropThinkingBlocks: true,
+    });
+    expect(
+      provider.sanitizeReplayHistory?.({
+        modelId: "claude-opus-4.6",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "private" },
+              { type: "text", text: "visible" },
+            ],
+          },
+        ],
+      } as never),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+      },
+    ]);
+  });
+
   it("registers embedding provider", () => {
     const registerMemoryEmbeddingProviderMock =
       vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();

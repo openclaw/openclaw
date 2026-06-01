@@ -28,7 +28,10 @@ import {
   fetchCopilotModelCatalog,
   resolveCopilotForwardCompatModel,
 } from "./models.js";
-import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
+import {
+  buildGithubCopilotReplayPolicy,
+  sanitizeGithubCopilotReplayHistory,
+} from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
@@ -461,6 +464,7 @@ export default definePluginEntry({
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
+      sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
       resolveThinkingProfile: ({ modelId, compat }) => {
         const modelSupportsXHigh =
           COPILOT_XHIGH_MODEL_IDS.includes(

@@ -1,4 +1,3 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -747,7 +746,7 @@ export async function sanitizeSessionHistory(params: {
     : validatedThinkingSignatures;
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(droppedReasoning, {
-        preserveLatestAssistant: normalizeProviderId(params.provider ?? "") !== "github-copilot",
+        preserveLatestAssistant: preserveLatestAssistantThinking,
       })
     : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
