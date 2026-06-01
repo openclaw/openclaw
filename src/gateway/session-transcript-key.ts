@@ -53,10 +53,12 @@ function sessionKeyMatchesTranscriptPath(params: {
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }
 
+/** Clear transcript-path lookup memoization between tests. */
 export function clearSessionTranscriptKeyCacheForTests(): void {
   TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
+/** Resolve a transcript file path back to the canonical Gateway session key that owns it. */
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
   const targetPath = resolveTranscriptPathForComparison(sessionFile);
   if (!targetPath) {
@@ -96,6 +98,8 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
   }
 
   if (matchingEntries.length > 0) {
+    // The same transcript can be reachable through legacy and canonical keys.
+    // Collapse each sessionId first, then choose the freshest distinct session.
     const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
     for (const entry of matchingEntries) {
       const sessionId = entry[1].sessionId;
