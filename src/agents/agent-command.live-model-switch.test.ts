@@ -529,24 +529,46 @@ vi.mock("./model-selection.js", () => {
     resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
     normalizeProviderId: (provider: string): string => {
       const normalized = (provider ?? "").trim().toLowerCase();
-      if (normalized === "modelstudio" || normalized === "qwencloud") return "qwen";
-      if (normalized === "z.ai" || normalized === "z-ai") return "zai";
-      if (normalized === "opencode-zen") return "opencode";
-      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding")
+      if (normalized === "modelstudio" || normalized === "qwencloud") {
+        return "qwen";
+      }
+      if (normalized === "z.ai" || normalized === "z-ai") {
+        return "zai";
+      }
+      if (normalized === "opencode-zen") {
+        return "opencode";
+      }
+      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
         return "kimi";
-      if (normalized === "moonshotai" || normalized === "moonshot-ai") return "moonshot";
-      if (normalized === "bedrock" || normalized === "aws-bedrock") return "amazon-bedrock";
+      }
+      if (normalized === "moonshotai" || normalized === "moonshot-ai") {
+        return "moonshot";
+      }
+      if (normalized === "bedrock" || normalized === "aws-bedrock") {
+        return "amazon-bedrock";
+      }
       return normalized;
     },
     normalizeProviderIdForAuth: (provider: string): string => {
       const normalized = (provider ?? "").trim().toLowerCase();
-      if (normalized === "modelstudio" || normalized === "qwencloud") return "qwen";
-      if (normalized === "z.ai" || normalized === "z-ai") return "zai";
-      if (normalized === "opencode-zen") return "opencode";
-      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding")
+      if (normalized === "modelstudio" || normalized === "qwencloud") {
+        return "qwen";
+      }
+      if (normalized === "z.ai" || normalized === "z-ai") {
+        return "zai";
+      }
+      if (normalized === "opencode-zen") {
+        return "opencode";
+      }
+      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
         return "kimi";
-      if (normalized === "moonshotai" || normalized === "moonshot-ai") return "moonshot";
-      if (normalized === "bedrock" || normalized === "aws-bedrock") return "amazon-bedrock";
+      }
+      if (normalized === "moonshotai" || normalized === "moonshot-ai") {
+        return "moonshot";
+      }
+      if (normalized === "bedrock" || normalized === "aws-bedrock") {
+        return "amazon-bedrock";
+      }
       return normalized;
     },
   };
