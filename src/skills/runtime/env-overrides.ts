@@ -74,7 +74,7 @@ function releaseActiveSkillEnvKey(key: string) {
   }
 }
 
-type SanitizedSkillEnvOverrides = {
+export type SanitizedSkillEnvOverrides = {
   allowed: Record<string, string>;
   blocked: string[];
   warnings: string[];
@@ -139,26 +139,12 @@ function sanitizeSkillEnvOverrides(params: {
   return { allowed, blocked: [...blocked], warnings };
 }
 
-function applySkillConfigEnvOverrides(params: {
-  updates: EnvUpdate[];
+function collectSkillConfigEnvOverrides(params: {
   skillConfig: SkillConfig;
   primaryEnv?: string | null;
-  requiredEnv?: string[] | null;
   skillKey: string;
-}) {
-  const { updates, skillConfig, primaryEnv, requiredEnv, skillKey } = params;
-  const allowedSensitiveKeys = new Set<string>();
-  const normalizedPrimaryEnv = primaryEnv?.trim();
-  if (normalizedPrimaryEnv) {
-    allowedSensitiveKeys.add(normalizedPrimaryEnv);
-  }
-  for (const envName of requiredEnv ?? []) {
-    const trimmedEnv = envName.trim();
-    if (trimmedEnv) {
-      allowedSensitiveKeys.add(trimmedEnv);
-    }
-  }
-
+}): Record<string, string> {
+  const { skillConfig, primaryEnv, skillKey } = params;
   const pendingOverrides: Record<string, string> = {};
   if (skillConfig.env) {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
@@ -172,6 +158,7 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
+  const normalizedPrimaryEnv = primaryEnv?.trim();
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
     (process.env[normalizedPrimaryEnv] === undefined ||
@@ -186,11 +173,62 @@ function applySkillConfigEnvOverrides(params: {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
   }
+  return pendingOverrides;
+}
 
-  const sanitized = sanitizeSkillEnvOverrides({
-    overrides: pendingOverrides,
+function resolveSkillConfigEnvOverrides(params: {
+  skillConfig: SkillConfig;
+  primaryEnv?: string | null;
+  requiredEnv?: string[] | null;
+  skillKey: string;
+}): SanitizedSkillEnvOverrides {
+  const { skillConfig, primaryEnv, requiredEnv, skillKey } = params;
+  const allowedSensitiveKeys = new Set<string>();
+  const normalizedPrimaryEnv = primaryEnv?.trim();
+  if (normalizedPrimaryEnv) {
+    allowedSensitiveKeys.add(normalizedPrimaryEnv);
+  }
+  for (const envName of requiredEnv ?? []) {
+    const trimmedEnv = envName.trim();
+    if (trimmedEnv) {
+      allowedSensitiveKeys.add(trimmedEnv);
+    }
+  }
+
+  return sanitizeSkillEnvOverrides({
+    overrides: collectSkillConfigEnvOverrides({ skillConfig, primaryEnv, skillKey }),
     allowedSensitiveKeys,
   });
+}
+
+export function resolveConfiguredSkillEnvOverrides(params: {
+  config?: OpenClawConfig;
+  skillKey: string;
+  primaryEnv?: string | null;
+  requiredEnv?: string[] | null;
+}): SanitizedSkillEnvOverrides {
+  const config = resolveSkillRuntimeConfig(params.config);
+  const skillConfig = resolveSkillConfig(config, params.skillKey);
+  if (!skillConfig || !shouldApplySkillConfigEnvOverrides(skillConfig)) {
+    return { allowed: {}, blocked: [], warnings: [] };
+  }
+  return resolveSkillConfigEnvOverrides({
+    skillConfig,
+    primaryEnv: params.primaryEnv,
+    requiredEnv: params.requiredEnv,
+    skillKey: params.skillKey,
+  });
+}
+
+function applySkillConfigEnvOverrides(params: {
+  updates: EnvUpdate[];
+  skillConfig: SkillConfig;
+  primaryEnv?: string | null;
+  requiredEnv?: string[] | null;
+  skillKey: string;
+}) {
+  const { updates, skillKey } = params;
+  const sanitized = resolveSkillConfigEnvOverrides(params);
 
   if (sanitized.blocked.length > 0) {
     log.warn(`Blocked skill env overrides for ${skillKey}: ${sanitized.blocked.join(", ")}`);

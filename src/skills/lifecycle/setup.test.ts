@@ -48,11 +48,12 @@ function setupSkillMd(script: string, timeoutMs?: number): string {
   ].join("\n");
 }
 
-function setupSkillMdWithEnv(script: string, envVars: string[]): string {
+function setupSkillMdWithEnv(script: string, envVars: string[], primaryEnv?: string): string {
   const metadata = JSON.stringify({
     openclaw: {
       setup: { script },
       requires: { env: envVars },
+      ...(primaryEnv ? { primaryEnv } : {}),
     },
   });
   return [
@@ -141,6 +142,74 @@ describe("runSkillSetupHook", () => {
 
     await withEnvAsync({ MY_TOKEN: "test-token-value", MY_KEY: "test-key-value" }, async () => {
       const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
+      expect(result).toEqual({ ok: true });
+    });
+  });
+
+  it("passes configured skill env and apiKey to setup hooks", async () => {
+    const dir = await tempDirs.make("openclaw-setup-config-env-");
+    writeSkillMd(
+      dir,
+      setupSkillMdWithEnv(
+        "scripts/check-config-env.sh",
+        ["MY_TOKEN", "PRIMARY_TOKEN"],
+        "PRIMARY_TOKEN",
+      ),
+    );
+    writeScript(
+      dir,
+      "scripts/check-config-env.sh",
+      [
+        "#!/bin/sh",
+        'test "$MY_TOKEN" = "configured-token-value" || exit 1',
+        'test "$PRIMARY_TOKEN" = "configured-primary-value" || exit 2',
+      ].join("\n"),
+    );
+
+    await withEnvAsync({ MY_TOKEN: undefined, PRIMARY_TOKEN: undefined }, async () => {
+      const result = await runSkillSetupHook({
+        targetDir: dir,
+        mode: "install",
+        skillKey: "configured-skill",
+        config: {
+          skills: {
+            entries: {
+              "configured-skill": {
+                env: { MY_TOKEN: "configured-token-value" },
+                apiKey: "configured-primary-value",
+              },
+            },
+          },
+        },
+      });
+      expect(result).toEqual({ ok: true });
+    });
+  });
+
+  it("keeps process env ahead of configured skill env", async () => {
+    const dir = await tempDirs.make("openclaw-setup-process-env-");
+    writeSkillMd(dir, setupSkillMdWithEnv("scripts/check-process-env.sh", ["MY_TOKEN"]));
+    writeScript(
+      dir,
+      "scripts/check-process-env.sh",
+      ["#!/bin/sh", 'test "$MY_TOKEN" = "process-token-value" || exit 1'].join("\n"),
+    );
+
+    await withEnvAsync({ MY_TOKEN: "process-token-value" }, async () => {
+      const result = await runSkillSetupHook({
+        targetDir: dir,
+        mode: "install",
+        skillKey: "configured-skill",
+        config: {
+          skills: {
+            entries: {
+              "configured-skill": {
+                env: { MY_TOKEN: "configured-token-value" },
+              },
+            },
+          },
+        },
+      });
       expect(result).toEqual({ ok: true });
     });
   });

@@ -200,9 +200,9 @@ async function installLocalSkillDir(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
-  config?: OpenClawConfig;
   git?: SkillSourceOrigin["git"];
 }): Promise<SkillSourceInstallResult> {
   const slug = await resolveSkillInstallSlug({
@@ -237,6 +237,8 @@ async function installLocalSkillDir(params: {
           : { kind: "local-path", authority: "user", mutable: true, network: false },
       requestedSpecifier: params.sourceSpec,
     },
+    config: params.config,
+    skillKey: slug,
     allowSetupHooks: params.allowSetupHooks,
   });
   if (!install.ok) {
@@ -269,9 +271,9 @@ async function installGitSkill(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
-  config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
   if (!parsed) {
@@ -350,9 +352,9 @@ async function installGitSkill(params: {
       slug: params.slug,
       force: params.force,
       timeoutMs: params.timeoutMs,
+      config: params.config,
       allowSetupHooks: params.allowSetupHooks,
       logger: params.logger,
-      config: params.config,
       git,
     });
   });
@@ -364,9 +366,9 @@ async function installPathSkill(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
-  config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
   const sourceDir = resolveUserPath(params.spec);
   let stat;
@@ -387,6 +389,7 @@ async function installPathSkill(params: {
     slug: params.slug,
     force: params.force,
     timeoutMs: params.timeoutMs,
+    config: params.config,
     allowSetupHooks: params.allowSetupHooks,
     logger: params.logger,
     config: params.config,
@@ -410,9 +413,9 @@ export async function installSkillFromSource(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
-  config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
   const spec = params.spec.trim();
   if (spec.toLowerCase().startsWith("git:")) {

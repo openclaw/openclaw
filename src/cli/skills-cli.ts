@@ -303,6 +303,7 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
+          const config = getRuntimeConfig();
           const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
           if (!workspaceDir) {
             return;
@@ -318,6 +319,7 @@ export function registerSkillsCli(program: Command) {
               spec: slug,
               slug: opts.as,
               force: Boolean(opts.force),
+              config,
               allowSetupHooks: opts.allowSetupHooks === true,
               logger: {
                 info: (message) => defaultRuntime.log(message),
@@ -346,6 +348,7 @@ export function registerSkillsCli(program: Command) {
             slug,
             version: opts.version,
             force: Boolean(opts.force),
+            config,
             allowSetupHooks: opts.allowSetupHooks === true,
             logger: {
               info: (message) => defaultRuntime.log(message),
@@ -389,6 +392,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
+          const config = getRuntimeConfig();
           const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
           if (!workspaceDir) {
             return;
@@ -401,6 +405,7 @@ export function registerSkillsCli(program: Command) {
           const results = await updateSkillsFromClawHub({
             workspaceDir,
             slug,
+            config,
             allowSetupHooks: opts.allowSetupHooks === true,
             logger: {
               info: (message) => defaultRuntime.log(message),

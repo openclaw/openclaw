@@ -247,6 +247,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      config: {},
       allowSetupHooks: false,
       config: {},
     });
@@ -280,6 +281,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: undefined,
       force: false,
+      config: {},
       allowSetupHooks: true,
       config: {},
     });
@@ -361,6 +363,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      config: {},
       allowSetupHooks: false,
       config: {},
     });
@@ -397,6 +400,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: undefined,
+      config: {},
       allowSetupHooks: true,
       config: {},
     });

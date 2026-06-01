@@ -137,6 +137,8 @@ export async function installExtractedSkillRoot(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   rootMarkers?: readonly string[];
+  config?: OpenClawConfig;
+  skillKey?: string;
   /** Explicitly allow skill-defined setup hooks. Default false for safety. */
   allowSetupHooks?: boolean;
 }): Promise<SkillArchiveInstallResult> {
@@ -198,6 +200,8 @@ export async function installExtractedSkillRoot(params: {
             const setupResult = await runSkillSetupHook({
               targetDir: installedDir,
               mode: params.mode,
+              config: params.config,
+              skillKey: params.skillKey ?? params.slug,
               logger: params.logger,
             });
             if (!setupResult.ok) {
@@ -224,6 +228,8 @@ export async function installSkillArchiveFromPath(params: {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
+  config?: OpenClawConfig;
+  skillKey?: string;
   allowSetupHooks?: boolean;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
@@ -241,6 +247,8 @@ export async function installSkillArchiveFromPath(params: {
         timeoutMs: params.timeoutMs,
         logger: params.logger,
         policy: params.policy,
+        config: params.config,
+        skillKey: params.skillKey ?? params.slug,
         allowSetupHooks: params.allowSetupHooks,
       }),
   });

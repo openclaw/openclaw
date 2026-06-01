@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "../loading/frontmatter.js";
+import { resolveConfiguredSkillEnvOverrides } from "../runtime/env-overrides.js";
 
 const SKILL_MD_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as const;
 
@@ -63,6 +65,8 @@ export type SkillSetupResult =
 export type SkillSetupParams = {
   targetDir: string;
   mode: "install" | "update";
+  config?: OpenClawConfig;
+  skillKey?: string;
   logger?: {
     info?: (message: string) => void;
   };
@@ -110,6 +114,8 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
   }
 
   const resolvedTargetDir = fs.realpathSync(params.targetDir);
+  const skillKey =
+    params.skillKey ?? metadata?.skillKey ?? frontmatter.name ?? path.basename(resolvedTargetDir);
   const rawScriptPath = path.resolve(resolvedTargetDir, setup.script);
   if (!rawScriptPath.startsWith(resolvedTargetDir + path.sep)) {
     return {
@@ -152,14 +158,22 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     SKILL_DIR: resolvedTargetDir,
     OPENCLAW_HOOK_KIND: params.mode,
   };
+  const requiredEnv = metadata?.requires?.env ?? [];
   const requiredSetupEnv = buildRequiredSetupEnv({
     hookEnv,
-    requiredEnv: metadata?.requires?.env ?? [],
+    requiredEnv,
   });
+  const configuredSetupEnv = resolveConfiguredSkillEnvOverrides({
+    config: params.config,
+    skillKey,
+    primaryEnv: metadata?.primaryEnv,
+    requiredEnv,
+  }).allowed;
   const scriptEnv = sanitizeHostExecEnv({
     baseEnv: {},
     overrides: {
       ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+      ...configuredSetupEnv,
       ...requiredSetupEnv,
       ...hookEnv,
     },

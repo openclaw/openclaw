@@ -131,6 +131,7 @@ type ClawHubInstallParams = {
   version?: string;
   baseUrl?: string;
   force?: boolean;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
@@ -812,6 +813,8 @@ async function performClawHubSkillInstall(
               requestedSpecifier: `clawhub:${params.slug}@${version}`,
             },
             rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+            config: params.config,
+            skillKey: params.slug,
             allowSetupHooks: params.allowSetupHooks,
           }),
       });
@@ -914,6 +917,7 @@ export async function installSkillFromClawHub(params: {
   version?: string;
   baseUrl?: string;
   force?: boolean;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
@@ -925,6 +929,7 @@ export async function updateSkillsFromClawHub(params: {
   workspaceDir: string;
   slug?: string;
   baseUrl?: string;
+  config?: OpenClawConfig;
   allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
@@ -959,6 +964,7 @@ export async function updateSkillsFromClawHub(params: {
       slug: tracked.slug,
       baseUrl: tracked.baseUrl,
       force: true,
+      config: params.config,
       allowSetupHooks: params.allowSetupHooks,
       logger: params.logger,
       config: params.config,
