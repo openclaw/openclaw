@@ -1202,12 +1202,7 @@ export async function dispatchReplyFromConfig(
     ctx,
     sessionKey: acpDispatchSessionKey,
   });
-  // sessions_send inherited routes carry the persisted delivery thread; ordinary turns keep
-  // using active-turn context so normalized stale origin threads stay suppressed.
-  const routeReplyThreadId =
-    replyRoute.inheritedExternalRoute === true
-      ? (replyRoute.threadId ?? routeThreadId)
-      : routeThreadId;
+  const routeReplyThreadId = routeThreadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
