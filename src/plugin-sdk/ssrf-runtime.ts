@@ -12,6 +12,7 @@ export {
   resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
