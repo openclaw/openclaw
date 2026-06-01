@@ -261,7 +261,12 @@ function mapProvider(
     provider: prov.provider,
     displayName: providerDisplayName(prov.provider),
     status: rollup.status,
-    expiry: buildExpiry(rollup.remainingMs, rollup.expiresAt),
+    expiry: buildExpiry(rollup.remainingMs, rollup.expiresAt!),
+    profiles: prov.profiles.map((prof) => ({
+      profileId: prof.profileId,
+      type: prof.type,
+      status: prof.status,
+      expiry: buildExpiry(prof.remainingMs, prof.expiresAt!),
     profiles: prov.profiles.map((prof) => ({
       profileId: prof.profileId,
       type: prof.type,

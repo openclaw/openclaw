@@ -326,7 +326,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         allowKeychainPrompt: false,
       });
       const mainCred = mainStore.profiles[params.profileId];
-      if (mainCred?.type !== "oauth") {
+      if (mainCred?.type !== "oauth" || mainCred.type === "api_key") {
         return null;
       }
       const mainExpires = asDateTimestampMs(mainCred.expires);
