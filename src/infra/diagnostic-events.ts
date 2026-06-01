@@ -1101,6 +1101,10 @@ export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false, { internal: true });
 }
 
+export function getInternalDiagnosticEventSequence(): number {
+  return getDiagnosticEventsState().seq;
+}
+
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
 }

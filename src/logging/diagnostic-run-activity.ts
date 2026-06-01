@@ -10,6 +10,7 @@ type SessionActivity = {
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Map<string, ActiveModelCall>;
+  recoveredOwnerStartEventCutoffs: Map<string, number>;
   lastProgressAt: number;
   lastProgressReason?: string;
 };
@@ -39,12 +40,12 @@ type ActiveModelCall = {
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
->;
+> & { seq?: number };
 
 type DiagnosticModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
   "runId" | "sessionId" | "sessionKey" | "provider" | "model"
->;
+> & { seq?: number };
 
 type DiagnosticRunProgressActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
@@ -117,6 +118,12 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   for (const [key, modelCall] of source.activeModelCalls) {
     target.activeModelCalls.set(key, modelCall);
   }
+  for (const [ownerRef, cutoff] of source.recoveredOwnerStartEventCutoffs) {
+    target.recoveredOwnerStartEventCutoffs.set(
+      ownerRef,
+      Math.max(cutoff, target.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0),
+    );
+  }
   if (source.lastProgressAt > target.lastProgressAt) {
     target.lastProgressAt = source.lastProgressAt;
     target.lastProgressReason = source.lastProgressReason;
@@ -165,6 +172,7 @@ function resolveSessionActivity(params: {
     activeEmbeddedRuns: new Map(),
     activeTools: new Map(),
     activeModelCalls: new Map(),
+    recoveredOwnerStartEventCutoffs: new Map(),
     lastProgressAt: Date.now(),
   };
   registerSessionActivityRefs(created, params);
@@ -197,6 +205,9 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   if (!activity) {
     return;
   }
+  if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
+    return;
+  }
   const now = Date.now();
   activity.activeTools.set(toolKey(event), {
     runId: event.runId,
@@ -227,6 +238,9 @@ function recordToolEnded(
 function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
+    return;
+  }
+  if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
   activity.activeModelCalls.set(modelCallKey(event), {
@@ -323,6 +337,12 @@ function ownerRefsForRecovery(params: {
   return new Set(refs);
 }
 
+function ownerRefsForStartedEvent(event: { runId?: string; sessionId?: string }): string[] {
+  return [event.runId?.trim(), event.sessionId?.trim()].filter((ref): ref is string =>
+    Boolean(ref),
+  );
+}
+
 function markerBelongsToRecoveredOwner(
   marker: { runId?: string; sessionId?: string },
   ownerRefs: Set<string>,
@@ -390,6 +410,43 @@ function clearRecoveredOwnerMarkers(activity: SessionActivity, ownerRefs: Set<st
   }
 }
 
+function rememberRecoveredOwnerStartEventCutoffs(
+  activity: SessionActivity,
+  ownerRefs: Set<string>,
+  recoveryStartedAfterSequence: number | undefined,
+): void {
+  if (recoveryStartedAfterSequence === undefined) {
+    return;
+  }
+  for (const ownerRef of ownerRefs) {
+    // Recovery can clear a session before the async diagnostic queue drains.
+    // Remember the queue watermark so older start events cannot recreate stale activity.
+    activity.recoveredOwnerStartEventCutoffs.set(
+      ownerRef,
+      Math.max(
+        recoveryStartedAfterSequence,
+        activity.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0,
+      ),
+    );
+  }
+}
+
+function shouldIgnoreRecoveredOwnerStartEvent(
+  activity: SessionActivity,
+  event: { runId?: string; sessionId?: string; seq?: number },
+): boolean {
+  if (event.seq === undefined) {
+    return false;
+  }
+  for (const ownerRef of ownerRefsForStartedEvent(event)) {
+    const cutoff = activity.recoveredOwnerStartEventCutoffs.get(ownerRef);
+    if (cutoff !== undefined && event.seq <= cutoff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Reconciles a session's terminal embedded-run activity at once. Used when an
 // authority (stuck-session recovery) declares the lane idle and the per-run
 // markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
@@ -401,6 +458,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   sessionKey?: string;
   activeSessionId?: string;
   recoveryStartedAfterEmbeddedRunSequence?: number;
+  recoveryStartedAfterDiagnosticEventSequence?: number;
 }): { cleared: boolean; blockedByActiveEmbeddedRun: boolean } {
   const activity = resolveSessionActivity(params);
   if (!activity) {
@@ -414,6 +472,11 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
   const ownerRefs = ownerRefsForRecovery(params);
+  rememberRecoveredOwnerStartEventCutoffs(
+    activity,
+    ownerRefs,
+    params.recoveryStartedAfterDiagnosticEventSequence,
+  );
   clearRecoveredOwnerEmbeddedRuns(
     activity,
     ownerRefs,

@@ -1,4 +1,7 @@
-import { emitInternalDiagnosticEvent as emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
+} from "../infra/diagnostic-events.js";
 import {
   clearDiagnosticEmbeddedRunActivityForSession,
   getDiagnosticEmbeddedRunActivitySequence,
@@ -85,6 +88,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   request: StuckSessionRecoveryRequest;
   outcome: StuckSessionRecoveryOutcome | undefined;
   recoveryStartedAfterEmbeddedRunSequence?: number;
+  recoveryStartedAfterDiagnosticEventSequence?: number;
 }): void {
   if (!params.outcome) {
     return;
@@ -126,6 +130,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     sessionKey: state.sessionKey,
     activeSessionId: params.outcome.activeSessionId,
     recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
+    recoveryStartedAfterDiagnosticEventSequence: params.recoveryStartedAfterDiagnosticEventSequence,
   });
   if (activityClear.blockedByActiveEmbeddedRun) {
     emitSessionRecoveryCompleted({
@@ -189,6 +194,7 @@ export function requestStuckSessionRecovery(params: {
     classification: params.classification,
   });
   const recoveryStartedAfterEmbeddedRunSequence = getDiagnosticEmbeddedRunActivitySequence();
+  const recoveryStartedAfterDiagnosticEventSequence = getInternalDiagnosticEventSequence();
   const clearInFlight = () => {
     if (inFlightKey) {
       recoveryRequestsInFlight.delete(inFlightKey);
@@ -206,6 +212,7 @@ export function requestStuckSessionRecovery(params: {
         error: String(err),
       },
       recoveryStartedAfterEmbeddedRunSequence,
+      recoveryStartedAfterDiagnosticEventSequence,
     });
   };
   try {
@@ -217,6 +224,7 @@ export function requestStuckSessionRecovery(params: {
             request: params.request,
             outcome: outcome ?? undefined,
             recoveryStartedAfterEmbeddedRunSequence,
+            recoveryStartedAfterDiagnosticEventSequence,
           });
         })
         .catch(failRecovery)
@@ -227,6 +235,7 @@ export function requestStuckSessionRecovery(params: {
       request: params.request,
       outcome: result ?? undefined,
       recoveryStartedAfterEmbeddedRunSequence,
+      recoveryStartedAfterDiagnosticEventSequence,
     });
     clearInFlight();
   } catch (err) {
