@@ -282,7 +282,11 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.channel).toBe("alpha");
     expect(result.to).toBe("room-allowed");
-    expect(readSessionEntry).toHaveBeenCalledWith("/tmp/test-store.json", "agent:test:main");
+    expect(readSessionEntry).toHaveBeenCalledWith(
+      "/tmp/test-store.json",
+      "agent:test:main",
+      expect.any(Object),
+    );
     expect(loadSessionStore).not.toHaveBeenCalled();
   });
 

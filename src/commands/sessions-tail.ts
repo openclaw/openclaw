@@ -8,8 +8,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -537,13 +537,15 @@ export async function sessionsTailCommand(
 
   const selections: TailSelection[] = [];
   for (const target of targets) {
-    const store = loadSessionStore(target.storePath);
-    for (const [key, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    })) {
       selections.push(
         await buildTailSelection({
           agentId: target.agentId,
           entry,
-          key,
+          key: sessionKey,
           storePath: target.storePath,
         }),
       );
