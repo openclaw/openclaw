@@ -142,6 +142,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
           } as OpenClawConfig,
           rawTarget: "t.me/mychannel",
           resolvedChatId: "-100123",
+          gatewayClientScopes: undefined,
         });
 
         expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
@@ -214,6 +215,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         } as OpenClawConfig,
         rawTarget: "t.me/mychannel",
         resolvedChatId: "-100123",
+        gatewayClientScopes: undefined,
         targetWritebackAuthority: "internal",
       });
 
@@ -250,6 +252,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         cfg: {} as OpenClawConfig,
         rawTarget: "t.me/mychannel:topic:9",
         resolvedChatId: "-100123",
+        gatewayClientScopes: undefined,
         targetWritebackAuthority: "internal",
       });
 
@@ -281,6 +284,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         cfg: {} as OpenClawConfig,
         rawTarget: "@MyChannel",
         resolvedChatId: "-100123",
+        gatewayClientScopes: undefined,
         targetWritebackAuthority: "internal",
       });
 
