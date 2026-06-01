@@ -1092,13 +1092,7 @@ function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>)
     return false;
   }
   const provenance = normalizeInputProvenance(message.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") {
-    return true;
-  }
-  const text = extractProjectedText(message.content ?? message.text);
-  return (
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=sessions_send")
-  );
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
 }
 
 function isProjectedSessionsSendForwardedMessage(message: Record<string, unknown>): boolean {
