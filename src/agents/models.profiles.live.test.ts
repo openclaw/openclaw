@@ -382,7 +382,10 @@ function resolveLiveOllamaProviderApiKey(params: {
     : OLLAMA_REMOTE_API_KEY_ENV;
 }
 
-function isOllamaRemoteApiKeyReference(value: SecretInput): boolean {
+function isOllamaRemoteApiKeyReference(value: SecretInput | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
   if (typeof value === "string") {
     if (value.trim() === OLLAMA_REMOTE_API_KEY_ENV) {
       return true;
@@ -436,16 +439,53 @@ function isLiveLocalOllamaModel(
   );
 }
 
+function canReuseConfiguredLocalOllamaApiKey(
+  model: Pick<Model, "baseUrl">,
+  config?: OpenClawConfig,
+): boolean {
+  const providerConfig = config?.models?.providers?.ollama;
+  if (isOllamaRemoteApiKeyReference(providerConfig?.apiKey)) {
+    return false;
+  }
+  const modelBaseUrl = readStringProperty(model, "baseUrl");
+  if (!modelBaseUrl) {
+    return true;
+  }
+  const providerBaseUrl = readConfiguredOllamaBaseUrl(providerConfig) || OLLAMA_DEFAULT_BASE_URL;
+  return (
+    canonicalOllamaCredentialBaseUrl(providerBaseUrl) ===
+    canonicalOllamaCredentialBaseUrl(modelBaseUrl)
+  );
+}
+
+function canonicalOllamaCredentialBaseUrl(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    let pathname = parsed.pathname.replace(/\/+$/, "");
+    if (pathname === "/v1") {
+      pathname = "";
+    }
+    parsed.pathname = pathname || "/";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return baseUrl.trim().replace(/\/+$/, "");
+  }
+}
+
 async function resolveLiveModelApiKeyInfo(params: {
   model: Model;
   cfg: OpenClawConfig;
   requireProfileKeys: boolean;
 }): Promise<Awaited<ReturnType<typeof getApiKeyForModel>>> {
   if (isLiveLocalOllamaModel(params.model, params.cfg)) {
-    const configuredKey = resolveUsableCustomProviderApiKey({
-      cfg: params.cfg,
-      provider: "ollama",
-    });
+    const configuredKey = canReuseConfiguredLocalOllamaApiKey(params.model, params.cfg)
+      ? resolveUsableCustomProviderApiKey({
+          cfg: params.cfg,
+          provider: "ollama",
+        })
+      : null;
     if (configuredKey && configuredKey.apiKey !== OLLAMA_LOCAL_API_KEY_MARKER) {
       return {
         apiKey: configuredKey.apiKey,
@@ -1061,6 +1101,47 @@ describe("explicit live model discovery scope", () => {
     });
   });
 
+  it("does not reuse cloud Ollama auth for model-level local endpoint overrides", async () => {
+    const oldEnv = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "real-cloud-key";
+    try {
+      const cfg = applyLiveProviderDiscoveryPluginCompat({
+        config: {
+          plugins: {
+            bundledDiscovery: "compat",
+          },
+        },
+        providers: ["ollama"],
+        env: {
+          OPENCLAW_LIVE_OLLAMA_BASE_URL: "https://ollama.com",
+        },
+      });
+
+      await expect(
+        resolveLiveModelApiKeyInfo({
+          model: {
+            provider: "ollama",
+            id: "gemma3:4b",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+          } as Model,
+          cfg,
+          requireProfileKeys: false,
+        }),
+      ).resolves.toEqual({
+        apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+        source: "live Ollama local marker",
+        mode: "api-key",
+      });
+    } finally {
+      if (oldEnv === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = oldEnv;
+      }
+    }
+  });
+
   it("honors configured local Ollama credentials before the live local marker", async () => {
     const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
     process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
@@ -1075,6 +1156,55 @@ describe("explicit live model discovery scope", () => {
               ollama: {
                 api: "ollama",
                 baseUrl: "http://127.0.0.1:11434",
+                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        providers: ["ollama"],
+        env: {},
+      });
+
+      await expect(
+        resolveLiveModelApiKeyInfo({
+          model: {
+            provider: "ollama",
+            id: "gemma3:4b",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+          } as Model,
+          cfg,
+          requireProfileKeys: false,
+        }),
+      ).resolves.toEqual({
+        apiKey: "secured-local-key",
+        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
+        mode: "api-key",
+      });
+    } finally {
+      if (oldEnv === undefined) {
+        delete process.env.LOCAL_OLLAMA_API_KEY;
+      } else {
+        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
+      }
+    }
+  });
+
+  it("reuses configured local Ollama credentials across canonical base URL forms", async () => {
+    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
+    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
+    try {
+      const cfg = applyLiveProviderDiscoveryPluginCompat({
+        config: {
+          plugins: {
+            bundledDiscovery: "compat",
+          },
+          models: {
+            providers: {
+              ollama: {
+                api: "ollama",
+                baseUrl: "http://127.0.0.1:11434/v1",
                 apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
                 models: [],
               },
