@@ -85,7 +85,6 @@ vi.mock("../agents/model-selection.js", () => {
     provider: provider.trim().toLowerCase(),
     model: model.trim(),
   });
-  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const modelKey = (provider: string, model: string) =>
     `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
@@ -185,8 +184,6 @@ vi.mock("../agents/model-selection.js", () => {
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
-    normalizeProviderId,
-    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
     normalizeProviderId: (provider: string): string => {
       const normalized = (provider ?? "").trim().toLowerCase();

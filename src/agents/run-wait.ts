@@ -49,6 +49,12 @@ export type AssistantReplySnapshot = {
   fingerprint?: string;
 };
 
+export type AgentWaitUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+};
+
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
   error?: string;
@@ -60,12 +66,33 @@ export type AgentWaitResult = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Cost telemetry surfaced from the completed agent run. */
+  usage?: AgentWaitUsage;
+  /** Estimated USD cost for the completed run. */
+  costUsd?: number;
+  /** Provider that serviced the run. */
+  provider?: string;
+  /** Model that serviced the run. */
+  model?: string;
 };
 
 export type AgentRunsDrainResult = {
   timedOut: boolean;
   pendingRunIds: string[];
   deadlineAtMs: number;
+};
+
+type RawAgentWaitMeta = {
+  agentMeta?: {
+    usage?: {
+      inputTokens?: unknown;
+      outputTokens?: unknown;
+      cachedInputTokens?: unknown;
+    };
+    costUsd?: unknown;
+    provider?: unknown;
+    model?: unknown;
+  };
 };
 
 type RawAgentWaitResponse = {
@@ -79,7 +106,22 @@ type RawAgentWaitResponse = {
   pendingError?: unknown;
   timeoutPhase?: unknown;
   providerStarted?: unknown;
+  meta?: RawAgentWaitMeta;
 };
+
+function normalizeAgentWaitUsage(raw: RawAgentWaitMeta["agentMeta"]): AgentWaitUsage | undefined {
+  const u = raw?.usage;
+  if (u == null) {
+    return undefined;
+  }
+  const inputTokens = typeof u.inputTokens === "number" ? u.inputTokens : 0;
+  const outputTokens = typeof u.outputTokens === "number" ? u.outputTokens : 0;
+  const cachedInputTokens = typeof u.cachedInputTokens === "number" ? u.cachedInputTokens : 0;
+  if (inputTokens === 0 && outputTokens === 0 && cachedInputTokens === 0) {
+    return undefined;
+  }
+  return { inputTokens, outputTokens, cachedInputTokens };
+}
 
 function normalizeAgentWaitResult(
   status: AgentWaitResult["status"],
@@ -88,6 +130,8 @@ function normalizeAgentWaitResult(
   const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
   const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult({ ...wait, status });
   const normalized = normalizeTerminalOutcomeForWait(terminalOutcome, status, wait?.livenessState);
+  const agentMeta = wait?.meta?.agentMeta;
+  const usage = normalizeAgentWaitUsage(agentMeta);
   return {
     status: normalized.status,
     error: normalized.error,
@@ -99,6 +143,12 @@ function normalizeAgentWaitResult(
     pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
+    ...(usage !== undefined ? { usage } : {}),
+    ...(typeof agentMeta?.costUsd === "number" ? { costUsd: agentMeta.costUsd } : {}),
+    ...(typeof agentMeta?.provider === "string" && agentMeta.provider
+      ? { provider: agentMeta.provider }
+      : {}),
+    ...(typeof agentMeta?.model === "string" && agentMeta.model ? { model: agentMeta.model } : {}),
   };
 }
 

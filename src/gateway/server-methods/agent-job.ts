@@ -219,9 +219,8 @@ function extractAgentMetaFromLifecyclePayload(
     : undefined;
   const costUsd =
     typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd) ? raw.costUsd : undefined;
-  const provider =
-    typeof raw.provider === "string" && raw.provider.trim() ? raw.provider : undefined;
-  const model = typeof raw.model === "string" && raw.model.trim() ? raw.model : undefined;
+  const provider = asNonEmptyString(raw.provider);
+  const model = asNonEmptyString(raw.model);
   if (
     usage === undefined &&
     costUsd === undefined &&
