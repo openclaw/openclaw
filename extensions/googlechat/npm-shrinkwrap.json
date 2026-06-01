@@ -1,19 +1,19 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.5.31-beta.4",
+  "version": "2026.5.31-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/googlechat",
-      "version": "2026.5.31-beta.4",
+      "version": "2026.5.31-beta.5",
       "dependencies": {
         "gaxios": "7.1.4",
         "google-auth-library": "10.6.2",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.31-beta.4"
+        "openclaw": ">=2026.5.31-beta.5"
       },
       "peerDependenciesMeta": {
         "openclaw": {

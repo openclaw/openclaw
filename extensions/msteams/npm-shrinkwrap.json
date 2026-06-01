@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.5.31-beta.4",
+  "version": "2026.5.31-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/msteams",
-      "version": "2026.5.31-beta.4",
+      "version": "2026.5.31-beta.5",
       "dependencies": {
         "@azure/identity": "4.13.1",
         "@microsoft/teams.api": "2.0.12",
@@ -15,7 +15,7 @@
         "typebox": "1.1.39"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.31-beta.4"
+        "openclaw": ">=2026.5.31-beta.5"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -178,6 +178,15 @@
       },
       "engines": {
         "node": ">=20"
+      }
+    },
+    "node_modules/@azure/msal-node/node_modules/@azure/msal-common": {
+      "version": "15.17.0",
+      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-15.17.0.tgz",
+      "integrity": "sha512-VQ5/gTLFADkwue+FohVuCqlzFPUq4xSrX8jeZe+iwZuY6moliNC8xt86qPVNYdtbQfELDf2Nu6LI+demFPHGgw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.8.0"
       }
     },
     "node_modules/@microsoft/teams.api": {
