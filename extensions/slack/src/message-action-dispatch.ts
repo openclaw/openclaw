@@ -6,6 +6,7 @@ import {
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
@@ -196,7 +197,13 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "member-info") {
-    const userId = readStringParam(actionParams, "userId", { required: true });
+    const userId =
+      readStringParam(actionParams, "userId") ?? normalizeOptionalString(ctx.requesterSenderId);
+    if (!userId) {
+      throw new Error(
+        "member-info requires a userId. Provide one, or call it in a channel where the inbound sender can be defaulted.",
+      );
+    }
     return await invoke({ action: "memberInfo", userId, accountId }, cfg);
   }
 

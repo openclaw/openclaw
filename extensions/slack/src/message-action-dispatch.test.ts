@@ -546,4 +546,58 @@ describe("handleSlackMessageAction", () => {
       }),
     ).rejects.toThrow(/fileId/i);
   });
+
+  it("defaults member-info userId to the inbound sender when omitted", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: {},
+        params: {},
+        requesterSenderId: "U123",
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U123" }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects member-info with an actionable error when no userId and no inbound sender", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "member-info",
+          cfg: {},
+          params: {},
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/member-info requires a userId/i);
+  });
+
+  it("prefers an explicit member-info userId over the inbound sender", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "member-info",
+        cfg: {},
+        params: { userId: "U999" },
+        requesterSenderId: "U123",
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "memberInfo", userId: "U999" }),
+      expect.any(Object),
+    );
+  });
 });
