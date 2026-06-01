@@ -72,34 +72,46 @@ describe("resolveBootstrapTier", () => {
 });
 
 describe("filterBootstrapFilesForSession", () => {
-  it("returns only recognized files for main session (standard tier)", () => {
-    const result = filterBootstrapFilesForSession(ALL_FILES);
-    expect(result).toHaveLength(STANDARD_FILES.length);
-    expect(result.map((f) => f.name)).not.toContain("PROJECT.md");
-    expect(result.map((f) => f.name)).not.toContain("CONVENTIONS.md");
+  // No-override defaults — preserves upstream's session-type heuristic so this
+  // PR stays backward-compatible with callers that haven't opted into the tier
+  // system via `agents.defaults.bootstrapTier`.
+  it("returns every loaded file for a main session by default (upstream parity)", () => {
+    const result = filterBootstrapFilesForSession(ALL_FILES, MAIN_KEY);
+    expect(result).toHaveLength(ALL_FILES.length);
+    expect(result.map((f) => f.name)).toContain("PROJECT.md");
   });
 
-  it("returns minimal files for subagent session", () => {
+  it("returns the legacy two-file subagent allowlist by default (upstream parity)", () => {
     const result = filterBootstrapFilesForSession(ALL_FILES, SUBAGENT_KEY);
+    expect(result.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+  });
+
+  it("returns the legacy five-file cron allowlist by default (upstream parity)", () => {
+    const result = filterBootstrapFilesForSession(ALL_FILES, CRON_KEY);
+    expect(result.map((f) => f.name).toSorted()).toEqual([
+      "AGENTS.md",
+      "IDENTITY.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "USER.md",
+    ]);
+  });
+
+  // Explicit tier-override path — new behavior added by this PR.
+  it("returns standard tier files when bootstrapTier=standard for a subagent session", () => {
+    const result = filterBootstrapFilesForSession(ALL_FILES, SUBAGENT_KEY, "standard");
     const names = result.map((f) => f.name);
     expect(names).toContain("AGENTS.md");
-    expect(names).toContain("TOOLS.md");
-    expect(names).toContain("SOUL.md");
-    expect(names).toContain("IDENTITY.md");
-    expect(names).toContain("USER.md");
-    expect(names).not.toContain("HEARTBEAT.md");
-    expect(names).not.toContain("BOOTSTRAP.md");
-    expect(names).not.toContain("MEMORY.md");
+    expect(names).toContain("HEARTBEAT.md");
+    expect(names).toContain("BOOTSTRAP.md");
+    expect(names).toContain("MEMORY.md");
     expect(names).not.toContain("PROJECT.md");
   });
 
-  it("returns minimal files for cron session", () => {
-    const result = filterBootstrapFilesForSession(ALL_FILES, CRON_KEY);
-    const names = result.map((f) => f.name);
-    expect(names).toContain("AGENTS.md");
-    expect(names).toContain("TOOLS.md");
-    expect(names).toContain("SOUL.md");
-    expect(names).not.toContain("HEARTBEAT.md");
+  it("returns minimal tier files when bootstrapTier=minimal for a subagent session", () => {
+    const result = filterBootstrapFilesForSession(ALL_FILES, SUBAGENT_KEY, "minimal");
+    const names = result.map((f) => f.name).toSorted();
+    expect(names).toEqual(["AGENTS.md", "IDENTITY.md", "SOUL.md", "TOOLS.md", "USER.md"]);
     expect(names).not.toContain("PROJECT.md");
   });
 
@@ -152,12 +164,12 @@ describe("filterBootstrapFilesForSession", () => {
   });
 
   it("minimal tier excludes hook-sourced files even when basename matches the allowlist", () => {
-    // Same regression as the standard-tier guard above, but for the minimal
-    // tier: a hook-loaded `packages/api/AGENTS.md` must NOT slip into a
-    // subagent or cron session just because its basename is in
-    // MINIMAL_BOOTSTRAP_ALLOWLIST. Without this guard, `minimal` could return
-    // more files than `standard` for the same input, breaking the natural
-    // `minimal ⊂ standard ⊂ full` inclusion expected by callers.
+    // Same regression as the standard-tier guard above, but for the explicit
+    // `minimal` tier override: a hook-loaded `packages/api/AGENTS.md` must NOT
+    // slip in just because its basename is in MINIMAL_BOOTSTRAP_ALLOWLIST.
+    // Without this guard, `minimal` could return more files than `standard`
+    // for the same input, breaking the `minimal ⊂ standard ⊂ full` inclusion
+    // expected by callers.
     const rootAgents = makeFile("AGENTS.md");
     const rootTools = makeFile("TOOLS.md");
     const rootSoul = makeFile("SOUL.md");
@@ -175,12 +187,12 @@ describe("filterBootstrapFilesForSession", () => {
       hookAgentsWeb,
     ];
 
-    const minimal = filterBootstrapFilesForSession(files, SUBAGENT_KEY);
+    const minimal = filterBootstrapFilesForSession(files, SUBAGENT_KEY, "minimal");
     expect(minimal).toHaveLength(5);
     for (const file of minimal) {
       expect(file.source).toBe("root");
     }
-    expect(minimal.map((f) => f.name).sort()).toEqual([
+    expect(minimal.map((f) => f.name).toSorted()).toEqual([
       "AGENTS.md",
       "IDENTITY.md",
       "SOUL.md",
@@ -188,8 +200,9 @@ describe("filterBootstrapFilesForSession", () => {
       "USER.md",
     ]);
 
-    // Inclusion check: every file the minimal tier returns must also be
-    // returned by the standard and full tiers for the same input set.
+    // Inclusion check: every file the explicit `minimal` tier returns must
+    // also be returned by the explicit `standard` and `full` tiers for the
+    // same input set.
     const standard = filterBootstrapFilesForSession(files, MAIN_KEY, "standard");
     const full = filterBootstrapFilesForSession(files, MAIN_KEY, "full");
     const standardPaths = new Set(standard.map((f) => f.path));
