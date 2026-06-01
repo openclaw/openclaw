@@ -255,9 +255,6 @@ export async function handleCodexConversationInboundClaim(
   if (!data) {
     return undefined;
   }
-  if (event.commandAuthorized !== true) {
-    return { handled: true };
-  }
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
@@ -277,6 +274,9 @@ export async function handleCodexConversationInboundClaim(
     if (inputResult.matched) {
       return { handled: true, reply: { text: inputResult.message } };
     }
+  }
+  if (event.commandAuthorized !== true) {
+    return { handled: true };
   }
   const nativeExecutionBlock =
     data.kind === "codex-cli-node-session"
@@ -739,10 +739,16 @@ async function runBoundTurn(params: {
       .finally(activeCleanup);
     const replyText = completion.replyText.trim();
     const planText = completion.planText.trim();
-    if (binding.collaborationMode === "plan" && hasCodexProposedPlan(replyText || planText)) {
+    const planReplyText =
+      binding.collaborationMode === "plan"
+        ? hasCodexProposedPlan(replyText)
+          ? replyText
+          : planText
+        : "";
+    if (planReplyText) {
       return {
         reply: buildCodexPlanDecisionReply({
-          text: replyText || planText,
+          text: planReplyText,
           scope: {
             sessionFile: params.data.sessionFile,
             threadId,

@@ -14,6 +14,7 @@ import {
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
   enqueueSystemEventMock,
+  parsePluginBindingApprovalCustomIdMock,
   readSessionUpdatedAtMock,
   recordInboundSessionMock,
   resetDiscordComponentRuntimeMocks,
@@ -898,6 +899,42 @@ describe("discord component interactions", () => {
 
     expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges normal plugin Discord interactions without plugin-binding parsing", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "codex:approve" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        onMatched: () => Promise<void>;
+      };
+      await typedParams.onMatched();
+      return {
+        matched: true,
+        handled: true,
+        duplicate: false,
+      };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
+      string,
+      unknown
+    >;
+    const interaction = {
+      ...baseInteraction,
+      acknowledge,
+    } as unknown as ButtonInteraction;
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(parsePluginBindingApprovalCustomIdMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 

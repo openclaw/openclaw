@@ -201,7 +201,26 @@ describe("codex conversation turn collector", () => {
     });
   });
 
-  it("emits live progress for commentary, plan, and item state changes", async () => {
+  it("collects plan deltas without emitting them as live progress", async () => {
+    const onProgress = vi.fn();
+    const collector = createCodexConversationTurnCollector("thread-1", { onProgress });
+    collector.setTurnId("turn-1");
+    const completion = collector.wait({ timeoutMs: 1_000 });
+
+    collector.handleNotification({
+      method: "item/plan/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "plan-1", delta: "# Plan" },
+    });
+    collector.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+    });
+
+    expect(onProgress).not.toHaveBeenCalled();
+    await expect(completion).resolves.toEqual({ replyText: "", planText: "# Plan" });
+  });
+
+  it("emits live progress for commentary and item state changes", async () => {
     const onProgress = vi.fn();
     const collector = createCodexConversationTurnCollector("thread-1", { onProgress });
     collector.setTurnId("turn-1");
@@ -232,7 +251,7 @@ describe("codex conversation turn collector", () => {
     });
 
     expect(onProgress).toHaveBeenCalledWith("Codex: thinking");
-    expect(onProgress).toHaveBeenCalledWith("Codex plan:\ndo it");
+    expect(onProgress).not.toHaveBeenCalledWith("Codex plan:\ndo it");
     expect(onProgress).toHaveBeenCalledWith("Codex started shell (toolCall).");
   });
 

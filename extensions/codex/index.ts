@@ -235,6 +235,23 @@ type CodexInteractiveConversationBindingHelpers = {
   getCurrentConversationBinding?: (...args: never[]) => Promise<unknown>;
 };
 
+type DiscordCodexControlResponder = {
+  clearComponents?: (params?: { text?: string }) => Promise<void>;
+  disableComponents?: () => Promise<void>;
+};
+
+async function resolveDiscordCodexControls(respond: DiscordCodexControlResponder): Promise<void> {
+  try {
+    if (respond.disableComponents) {
+      await respond.disableComponents();
+      return;
+    }
+    await respond.clearComponents?.();
+  } catch {
+    // The Codex answer is already accepted; a stale message edit should not fail the interaction.
+  }
+}
+
 function registerCodexUserInputInteractiveHandlers(
   api: CodexPluginInteractiveApi,
   options: {
@@ -323,11 +340,7 @@ function registerCodexUserInputInteractiveHandlers(
       });
       if (result.matched) {
         if (shouldClearResolvedCodexControl(result)) {
-          if (ctx.respond.disableComponents) {
-            await ctx.respond.disableComponents();
-          } else {
-            await ctx.respond.clearComponents?.();
-          }
+          await resolveDiscordCodexControls(ctx.respond);
         }
         await ctx.respond.reply({ text: result.message, ephemeral: true });
         return { handled: true };
@@ -348,11 +361,7 @@ function registerCodexUserInputInteractiveHandlers(
         return { handled: false };
       }
       if (planResult.consumed) {
-        if (ctx.respond.disableComponents) {
-          await ctx.respond.disableComponents();
-        } else {
-          await ctx.respond.clearComponents?.();
-        }
+        await resolveDiscordCodexControls(ctx.respond);
       }
       if (planResult.reply.text) {
         await ctx.respond.reply({ text: planResult.reply.text, ephemeral: true });

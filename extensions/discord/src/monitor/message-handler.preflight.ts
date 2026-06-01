@@ -414,7 +414,11 @@ export async function preflightDiscordMessage(
     return null;
   }
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
-  const bypassMentionRequirement = isBoundThreadSession;
+  const isPluginOwnedBoundConversation =
+    conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding);
+  // Plugin-owned bindings own plain inbound text; mention gating here would
+  // drop freeform replies before the plugin can consume pending controls.
+  const bypassMentionRequirement = isBoundThreadSession || isPluginOwnedBoundConversation;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,

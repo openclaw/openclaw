@@ -27,6 +27,10 @@ async function loadConversationRuntime() {
   return await conversationRuntimePromise;
 }
 
+function couldBePluginBindingApprovalCustomId(value: string): boolean {
+  return value.trimStart().startsWith("pluginbind:");
+}
+
 export async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -119,8 +123,12 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     },
     disableComponents: disableCurrentMessageComponents,
   };
-  const conversationRuntime = await loadConversationRuntime();
-  const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
+  const conversationRuntime = couldBePluginBindingApprovalCustomId(params.data)
+    ? await loadConversationRuntime()
+    : undefined;
+  const pluginBindingApproval = conversationRuntime?.parsePluginBindingApprovalCustomId(
+    params.data,
+  );
   if (pluginBindingApproval) {
     const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
       conversationRuntime;

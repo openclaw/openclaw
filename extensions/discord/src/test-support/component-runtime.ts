@@ -16,6 +16,7 @@ type DiscordComponentRuntimeMocks = {
   dispatchPluginInteractiveHandlerMock: AsyncUnknownMock;
   dispatchReplyMock: DispatchReplyMock;
   enqueueSystemEventMock: UnknownMock;
+  parsePluginBindingApprovalCustomIdMock: UnknownMock;
   readAllowFromStoreMock: AsyncUnknownMock;
   readSessionUpdatedAtMock: UnknownMock;
   recordInboundSessionMock: AsyncUnknownMock;
@@ -30,6 +31,7 @@ const runtimeMocks = vi.hoisted(
     dispatchPluginInteractiveHandlerMock: vi.fn(),
     dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
     enqueueSystemEventMock: vi.fn(),
+    parsePluginBindingApprovalCustomIdMock: vi.fn(),
     readAllowFromStoreMock: vi.fn(),
     readSessionUpdatedAtMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
@@ -44,6 +46,8 @@ export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
   runtimeMocks.dispatchPluginInteractiveHandlerMock;
 export const dispatchReplyMock: DispatchReplyMock = runtimeMocks.dispatchReplyMock;
 export const enqueueSystemEventMock: UnknownMock = runtimeMocks.enqueueSystemEventMock;
+export const parsePluginBindingApprovalCustomIdMock: UnknownMock =
+  runtimeMocks.parsePluginBindingApprovalCustomIdMock;
 export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPairingRequestMock;
 export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
 export const readSessionUpdatedAtMock: UnknownMock = runtimeMocks.readSessionUpdatedAtMock;
@@ -116,7 +120,8 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
       dispatchPluginInteractiveHandlerMock(...args),
     dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock,
     finalizeInboundContext: vi.fn((ctx) => ctx),
-    parsePluginBindingApprovalCustomId,
+    parsePluginBindingApprovalCustomId: (...args: unknown[]) =>
+      parsePluginBindingApprovalCustomIdMock(...args),
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
     resolveChunkMode: vi.fn(() => "sentences"),
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>
@@ -159,6 +164,9 @@ export function resetDiscordComponentRuntimeMocks() {
   });
   dispatchReplyMock.mockClear();
   enqueueSystemEventMock.mockClear();
+  parsePluginBindingApprovalCustomIdMock
+    .mockReset()
+    .mockImplementation((value) => parsePluginBindingApprovalCustomId(String(value)));
   readAllowFromStoreMock.mockClear().mockResolvedValue([]);
   readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
   upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });

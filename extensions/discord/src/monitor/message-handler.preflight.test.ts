@@ -452,6 +452,63 @@ describe("preflightDiscordMessage", () => {
     });
   });
 
+  it("bypasses mention gating for plugin-owned channel bindings", async () => {
+    const channelId = "channel-plugin-owned";
+    const guildId = "guild-plugin-owned";
+    const binding = createThreadBinding({
+      bindingId: "default:channel-plugin-owned",
+      targetSessionKey: "plugin-binding:codex:channel-plugin-owned",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: channelId,
+      },
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      },
+    });
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => (ref.conversationId === channelId ? binding : null),
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message: createDiscordMessage({
+        id: "m-plugin-owned",
+        channelId,
+        content: "Fail closed",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.shouldRequireMention).toBe(false);
+    expect(preflight.threadBinding).toBe(binding);
+  });
+
   it("ignores stale route-shaped channel bindings when config now routes to another agent", async () => {
     const channelId = "channel-stale-route";
     registerSessionBindingAdapter({
