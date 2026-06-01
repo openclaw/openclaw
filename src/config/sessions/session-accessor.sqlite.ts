@@ -66,6 +66,11 @@ type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 
+type ResolvedSqliteStoreTarget = {
+  agentId?: string;
+  path: string;
+};
+
 /** Loads one session entry from the additive SQLite session store. */
 export function loadSqliteSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   const resolved = resolveSqliteScope(scope);
@@ -299,12 +304,15 @@ function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
 function resolveSqliteScope(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "sessionKey" | "storePath">,
 ): ResolvedSqliteScope {
+  const storeTarget = scope.storePath
+    ? resolveSqliteTargetFromSessionStorePath(scope.storePath)
+    : undefined;
   return {
     agentId: scope.agentId
       ? normalizeAgentId(scope.agentId)
-      : resolveAgentIdFromSessionKey(scope.sessionKey),
+      : (storeTarget?.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey)),
     ...(scope.env ? { env: scope.env } : {}),
-    ...(scope.storePath ? { path: resolveSqlitePathFromSessionStorePath(scope.storePath) } : {}),
+    ...(storeTarget ? { path: storeTarget.path } : {}),
     sessionKey: normalizeSqliteSessionKey(scope.sessionKey),
   };
 }
@@ -312,37 +320,41 @@ function resolveSqliteScope(
 function resolveSqliteReadScope(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionKey" | "storePath">,
 ): ResolvedSqliteReadScope {
+  const storeTarget = scope.storePath
+    ? resolveSqliteTargetFromSessionStorePath(scope.storePath)
+    : undefined;
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const agentId = scope.agentId
     ? normalizeAgentId(scope.agentId)
-    : sessionKey
-      ? resolveAgentIdFromSessionKey(sessionKey)
-      : undefined;
+    : (storeTarget?.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined));
   if (!agentId) {
     throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
   }
   return {
     agentId,
     ...(scope.env ? { env: scope.env } : {}),
-    ...(scope.storePath ? { path: resolveSqlitePathFromSessionStorePath(scope.storePath) } : {}),
+    ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
 }
 
-function resolveSqlitePathFromSessionStorePath(storePath: string): string {
+function resolveSqliteTargetFromSessionStorePath(storePath: string): ResolvedSqliteStoreTarget {
   const resolved = path.resolve(storePath);
   if (path.basename(resolved) !== "sessions.json") {
-    return resolved;
+    return { path: resolved };
   }
   const sessionsDir = path.dirname(resolved);
   if (path.basename(sessionsDir) !== "sessions") {
-    return resolved;
+    return { path: resolved };
   }
   const agentDir = path.dirname(sessionsDir);
   if (path.basename(path.dirname(agentDir)) !== "agents") {
-    return resolved;
+    return { path: resolved };
   }
-  return path.join(agentDir, "agent", "openclaw-agent.sqlite");
+  return {
+    agentId: normalizeAgentId(path.basename(agentDir)),
+    path: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
+  };
 }
 
 function resolveSqliteTranscriptScope(
