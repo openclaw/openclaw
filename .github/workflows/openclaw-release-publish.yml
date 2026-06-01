@@ -832,6 +832,18 @@ jobs:
             echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"
           }
 
+          verify_desktop_beta_distribution_before_publish() {
+            local release_version
+            release_version="${RELEASE_TAG#v}"
+            pnpm release:verify-beta -- \
+              "${release_version}" \
+              --tag "${RELEASE_TAG}" \
+              --dist-tag "${RELEASE_NPM_DIST_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --desktop-only
+            echo "- Desktop beta distribution: verified before npm/plugin publish" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           {
             echo "### Publish sequence"
             echo
@@ -857,6 +869,10 @@ jobs:
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
             clawhub_args+=(-f plugins="${PLUGINS}")
+          fi
+
+          if [[ "${RELEASE_TAG}" == *"-beta."* ]]; then
+            verify_desktop_beta_distribution_before_publish
           fi
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"

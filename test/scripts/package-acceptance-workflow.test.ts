@@ -1427,6 +1427,14 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
     expect(releaseWorkflow).toContain("release:verify-beta");
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain("verify_desktop_beta_distribution_before_publish");
+    expect(releaseWorkflow).toContain("--desktop-only");
+    expect(
+      releaseWorkflow.indexOf(
+        "verify_desktop_beta_distribution_before_publish\n          fi\n\n          plugin_npm_run_id=",
+      ),
+    ).toBeGreaterThan(-1);
+    expect(releaseWorkflow).not.toContain("--skip-desktop-beta");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
     expect(releaseWorkflow).toContain("Failed child job summary");

@@ -85,10 +85,13 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
    validation and npm preflight evidence, runs Parallels and Telegram package
    proof, records plugin npm and ClawHub plans, and prints the exact
    `OpenClaw Release Publish` command only after the evidence bundle is green.
-   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin
-   packages to npm and the same set to ClawHub in parallel, and then promotes the
-   prepared OpenClaw npm preflight artifact with the matching dist-tag as soon as
-   plugin npm publish succeeds.
+   For beta tags, `OpenClaw Release Publish` first requires the signed desktop
+   beta distribution to already be live on the GitHub prerelease and
+   `appcast-beta.xml`; this keeps npm/plugin beta publication from getting ahead
+   of the desktop update channel. It then dispatches the selected or
+   all-publishable plugin packages to npm and the same set to ClawHub in
+   parallel, and promotes the prepared OpenClaw npm preflight artifact with the
+   matching dist-tag as soon as plugin npm publish succeeds.
    After the OpenClaw npm publish child succeeds, it creates or updates the
    matching GitHub release/prerelease page from the complete matching
    `CHANGELOG.md` section. Stable releases published to npm `latest` become the
@@ -100,14 +103,16 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
    release environment gates the workflow token is allowed to approve, summarizes
    failed child jobs with log tails, closes out the GitHub release and dependency
    evidence as soon as OpenClaw npm publish succeeds, waits for ClawHub whenever
-   OpenClaw npm is being published, then runs `pnpm release:verify-beta` and
-   uploads postpublish evidence for the GitHub release, npm package, selected
-   plugin npm packages, selected ClawHub packages, child workflow run IDs, and
-   optional NPM Telegram run ID. The ClawHub path retries transient CLI
+   OpenClaw npm is being published, then runs `pnpm release:verify-beta` again
+   and uploads postpublish evidence for the GitHub release, npm package, desktop
+   beta distribution, selected plugin npm packages, selected ClawHub packages,
+   child workflow run IDs, and optional NPM Telegram run ID. The ClawHub path retries transient CLI
    dependency install failures, publishes preview-passing plugins even when one
    preview cell flakes, and ends with registry verification for every expected
-   plugin version so partial publishes remain visible and retryable. Then run the post-publish
-   package acceptance against the published
+   plugin version so partial publishes remain visible and retryable. The desktop
+   beta check covers `OpenClaw-YYYY.M.D-beta.N.zip`, `.dmg`, `.dSYM.zip`, and
+   `appcast-beta.xml`.
+   Then run the post-publish package acceptance against the published
    `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old
@@ -301,6 +306,11 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
     them again
+- Beta macOS release readiness uses the same signed desktop packaging path, but
+  publishes to `appcast-beta.xml`. `scripts/package-mac-app.sh` points
+  prerelease bundles at `appcast-beta.xml` by default, and
+  `scripts/make_appcast.sh` writes `appcast-beta.xml` automatically for
+  `YYYY.M.D-beta.N` zips unless `SPARKLE_APPCAST_PATH` is set explicitly.
 - For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
@@ -648,10 +658,12 @@ orchestrates the trusted-publisher workflows in the order the release needs:
 1. Check out the release tag and resolve its commit SHA.
 2. Verify the tag is reachable from `main` or `release/*`.
 3. Run `pnpm plugins:sync:check`.
-4. Dispatch `Plugin NPM Release` with `publish_scope=all-publishable` and
+4. For beta tags, verify signed desktop beta assets and `appcast-beta.xml`
+   before any npm/plugin publish dispatch.
+5. Dispatch `Plugin NPM Release` with `publish_scope=all-publishable` and
    `ref=<release-sha>`.
-5. Dispatch `Plugin ClawHub Release` with the same scope and SHA.
-6. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and
+6. Dispatch `Plugin ClawHub Release` with the same scope and SHA.
+7. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and
    saved `preflight_run_id`.
 
 Beta publish example:
@@ -756,13 +768,16 @@ When cutting a stable npm release:
 4. If you intentionally only need the deterministic normal test graph, run the
    manual `CI` workflow on the release ref instead
 5. Save the successful `preflight_run_id`
-6. Run `OpenClaw Release Publish` with the same `tag`, the same `npm_dist_tag`,
+6. For beta tags, make sure the signed macOS beta publish has already promoted
+   `OpenClaw-YYYY.M.D-beta.N.zip`, `.dmg`, `.dSYM.zip`, and `appcast-beta.xml`
+   for the tag.
+7. Run `OpenClaw Release Publish` with the same `tag`, the same `npm_dist_tag`,
    and the saved `preflight_run_id`; it publishes externalized plugins to npm
    and ClawHub before promoting the OpenClaw npm package
-7. If the release landed on `beta`, use the
+8. If the release landed on `beta`, use the
    `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml`
    workflow to promote that stable version from `beta` to `latest`
-8. If the release intentionally published directly to `latest` and `beta`
+9. If the release intentionally published directly to `latest` and `beta`
    should follow the same stable build immediately, use that same release
    workflow to point both dist-tags at the stable version, or let its scheduled
    self-healing sync move `beta` later

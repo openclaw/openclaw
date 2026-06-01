@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { canonicalSparkleBuildFromVersion } from "../sparkle-build.ts";
 import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
@@ -16,9 +17,12 @@ export type ReleaseVerifyBetaArgs = {
   distTag: string;
   repo: string;
   registry: string;
+  desktopAppcastUrl: string;
   workflowRef?: string;
   pluginSelection: string[];
   evidenceOut?: string;
+  desktopOnly: boolean;
+  skipDesktopBeta: boolean;
   skipPostpublish: boolean;
   skipClawHub: boolean;
   rerunFailedClawHub: boolean;
@@ -46,6 +50,8 @@ type WorkflowRunSummary = {
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
+const DEFAULT_DESKTOP_BETA_APPCAST_URL =
+  "https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-beta.xml";
 const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
 const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
@@ -117,7 +123,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID] [--skip-clawhub]",
+      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID] [--desktop-only] [--skip-clawhub]",
     );
   }
 
@@ -127,9 +133,12 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     distTag: "beta",
     repo: DEFAULT_REPO,
     registry: DEFAULT_CLAWHUB_REGISTRY,
+    desktopAppcastUrl: DEFAULT_DESKTOP_BETA_APPCAST_URL,
     workflowRef: undefined,
     pluginSelection: [],
     evidenceOut: undefined,
+    desktopOnly: false,
+    skipDesktopBeta: false,
     skipPostpublish: false,
     skipClawHub: false,
     rerunFailedClawHub: false,
@@ -160,6 +169,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--registry":
         parsed.registry = next();
         break;
+      case "--desktop-appcast-url":
+        parsed.desktopAppcastUrl = next();
+        break;
       case "--workflow-ref":
         parsed.workflowRef = next();
         break;
@@ -171,6 +183,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
         break;
       case "--evidence-out":
         parsed.evidenceOut = next();
+        break;
+      case "--desktop-only":
+        parsed.desktopOnly = true;
         break;
       case "--full-release-validation-run":
         parsed.workflowRuns.fullReleaseValidation = next();
@@ -189,6 +204,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
         break;
       case "--skip-postpublish":
         parsed.skipPostpublish = true;
+        break;
+      case "--skip-desktop-beta":
+        parsed.skipDesktopBeta = true;
         break;
       case "--skip-clawhub":
         parsed.skipClawHub = true;
@@ -239,6 +257,18 @@ async function fetchJsonWithRetry(url: string): Promise<unknown> {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
   return await readBoundedJsonResponse(response, url);
+}
+
+async function fetchTextWithRetry(url: string): Promise<string> {
+  const response = await fetchWithRetry(
+    url,
+    { headers: { accept: "application/xml,text/xml,text/plain,*/*" } },
+    5,
+  );
+  if (!response.ok) {
+    throw new Error(`${url} returned HTTP ${response.status}.`);
+  }
+  return await readBoundedResponseText(response, url, CLAWHUB_RESPONSE_BODY_MAX_BYTES);
 }
 
 export async function readBoundedJsonResponse(
@@ -350,6 +380,102 @@ function verifyGitHubRelease(params: ReleaseVerifyBetaArgs): string {
     throw new Error(`${params.tag} is not marked as a GitHub prerelease.`);
   }
   return requireString(release.url, "GitHub release URL");
+}
+
+export function requiredDesktopBetaAssetNames(version: string): string[] {
+  return [`OpenClaw-${version}.zip`, `OpenClaw-${version}.dmg`, `OpenClaw-${version}.dSYM.zip`];
+}
+
+export function collectMissingDesktopBetaAssets(assetNames: string[], version: string): string[] {
+  const present = new Set(assetNames);
+  return requiredDesktopBetaAssetNames(version).filter((name) => !present.has(name));
+}
+
+function firstAppcastItemForVersion(appcastXml: string, version: string): string | undefined {
+  return [...appcastXml.matchAll(/<item>([\s\S]*?)<\/item>/g)]
+    .map((match) => match[1])
+    .find((item) =>
+      item.includes(`<sparkle:shortVersionString>${version}</sparkle:shortVersionString>`),
+    );
+}
+
+function extractTagValue(item: string, tag: string): string | undefined {
+  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`).exec(item)?.[1]?.trim();
+}
+
+export function collectDesktopBetaAppcastErrors(params: {
+  appcastXml: string;
+  repo: string;
+  version: string;
+}): string[] {
+  const errors: string[] = [];
+  const item = firstAppcastItemForVersion(params.appcastXml, params.version);
+  if (item === undefined) {
+    return [`appcast-beta.xml is missing an item for ${params.version}.`];
+  }
+
+  const expectedSparkleBuild = canonicalSparkleBuildFromVersion(params.version);
+  const sparkleBuild = extractTagValue(item, "sparkle:version");
+  if (expectedSparkleBuild !== null && sparkleBuild !== String(expectedSparkleBuild)) {
+    errors.push(
+      `${params.version} has sparkle:version ${sparkleBuild ?? "<missing>"}; expected ${expectedSparkleBuild}.`,
+    );
+  }
+
+  const expectedZipUrl = `https://github.com/${params.repo}/releases/download/v${params.version}/OpenClaw-${params.version}.zip`;
+  if (!item.includes(`url="${expectedZipUrl}"`)) {
+    errors.push(`${params.version} appcast enclosure does not point at ${expectedZipUrl}.`);
+  }
+  if (!item.includes('sparkle:edSignature="')) {
+    errors.push(`${params.version} appcast enclosure is missing sparkle:edSignature.`);
+  }
+
+  return errors;
+}
+
+async function verifyDesktopBetaDistribution(params: ReleaseVerifyBetaArgs): Promise<string> {
+  const raw = runCommand("gh", [
+    "release",
+    "view",
+    params.tag,
+    "--repo",
+    params.repo,
+    "--json",
+    "assets",
+  ]);
+  const parsed = parseJson(raw, "gh release view desktop assets");
+  if (!isRecord(parsed)) {
+    throw new Error("GitHub release assets returned an unsupported JSON shape.");
+  }
+
+  const assets = Array.isArray(parsed.assets) ? parsed.assets.filter(isRecord) : [];
+  const assetNames = assets
+    .map((asset) => readString(asset.name))
+    .filter((name) => name !== undefined);
+  const errors = collectMissingDesktopBetaAssets(assetNames, params.version).map(
+    (name) => `GitHub release is missing desktop asset ${name}.`,
+  );
+
+  try {
+    const appcastXml = await fetchTextWithRetry(params.desktopAppcastUrl);
+    errors.push(
+      ...collectDesktopBetaAppcastErrors({
+        appcastXml,
+        repo: params.repo,
+        version: params.version,
+      }),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`desktop beta appcast unavailable: ${message}`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Desktop beta distribution is incomplete:\n  - ${errors.join("\n  - ")}`);
+  }
+
+  return `${params.desktopAppcastUrl} (${requiredDesktopBetaAssetNames(params.version).join(", ")})`;
 }
 
 function verifyWorkflowRun(params: {
@@ -481,6 +607,24 @@ export async function verifyBetaRelease(
   const releaseUrl = verifyGitHubRelease(args);
   lines.push(`GitHub release OK: ${releaseUrl}`);
 
+  if (args.desktopOnly) {
+    if (!args.version.includes("-beta.")) {
+      throw new Error("--desktop-only is only valid for beta versions.");
+    }
+    if (args.skipDesktopBeta) {
+      throw new Error("--desktop-only cannot be combined with --skip-desktop-beta.");
+    }
+    const desktopBetaDistribution = await verifyDesktopBetaDistribution(args);
+    lines.push(`desktop beta distribution OK: ${desktopBetaDistribution}`);
+    return lines;
+  }
+
+  let desktopBetaDistribution: string | undefined;
+  if (args.version.includes("-beta.") && !args.skipDesktopBeta) {
+    desktopBetaDistribution = await verifyDesktopBetaDistribution(args);
+    lines.push(`desktop beta distribution OK: ${desktopBetaDistribution}`);
+  }
+
   const openclawNpm = verifyNpmPackage("openclaw", args.version, args.distTag);
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
 
@@ -610,6 +754,7 @@ export async function verifyBetaRelease(
           releaseTag: args.tag,
           npmDistTag: args.distTag,
           pluginSelection: args.pluginSelection,
+          desktopBetaDistribution,
           openclawNpmIntegrity: openclawNpm.integrity,
           githubReleaseUrl: releaseUrl,
           pluginNpmPackageCount: npmPlugins.length,
