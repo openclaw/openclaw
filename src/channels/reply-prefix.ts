@@ -44,7 +44,8 @@ export function createReplyPrefixContext(params: {
   };
 
   const onModelSelected = (ctx: ModelSelectionContext) => {
-    // Mutate the object directly instead of reassigning to ensure closures see updates.
+    // Mutate the object directly instead of reassigning so provider callbacks
+    // holding responsePrefixContextProvider see model updates before rendering.
     prefixContext.provider = ctx.provider;
     prefixContext.model = extractShortModelName(ctx.model);
     prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
@@ -53,6 +54,8 @@ export function createReplyPrefixContext(params: {
 
   return {
     prefixContext,
+    // Resolve the prefix template at the same agent/channel/account scope as
+    // the reply route, while model facts remain mutable until provider choice.
     responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId, {
       channel: params.channel,
       accountId: params.accountId,
