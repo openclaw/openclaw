@@ -538,7 +538,7 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
 });
 
 test("sessions.compaction.* ignores malformed usable-looking stored checkpoint metadata when disk checkpoint matches", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
+  const { dir } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
   const preCompactionSession = fixture.preCompactionSession;
   const preCompactionSessionFile = fixture.preCompactionSessionFile;
