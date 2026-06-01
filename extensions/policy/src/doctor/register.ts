@@ -16,6 +16,7 @@ import {
   type PolicyAuthProfileEvidence,
   type PolicyAgentWorkspaceEvidence,
   type PolicyEvidence,
+  type PolicyFeedSourceEvidence,
   type PolicyToolPostureEvidence,
 } from "../policy-state.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
@@ -39,6 +40,9 @@ const CHECK_IDS = {
   policyGatewayRemoteEnabled: "policy/gateway-remote-enabled",
   policyGatewayHttpEndpointEnabled: "policy/gateway-http-endpoint-enabled",
   policyGatewayHttpUrlFetchUnrestricted: "policy/gateway-http-url-fetch-unrestricted",
+  policyFeedsRequiredSourceMissing: "policy/feeds-required-source-missing",
+  policyFeedsSourceUnpinned: "policy/feeds-source-unpinned",
+  policyFeedsSourceUnsigned: "policy/feeds-source-unsigned",
   policyAgentsWorkspaceAccessDenied: "policy/agents-workspace-access-denied",
   policyAgentsToolNotDenied: "policy/agents-tool-not-denied",
   policyToolsElevatedEnabled: "policy/tools-elevated-enabled",
@@ -81,6 +85,9 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyGatewayHttpEndpointEnabled,
   CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+  CHECK_IDS.policyFeedsRequiredSourceMissing,
+  CHECK_IDS.policyFeedsSourceUnpinned,
+  CHECK_IDS.policyFeedsSourceUnsigned,
   CHECK_IDS.policyAgentsWorkspaceAccessDenied,
   CHECK_IDS.policyAgentsToolNotDenied,
   CHECK_IDS.policyToolsProfileUnapproved,
@@ -263,6 +270,9 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyGatewayRemoteEnabledCheck);
   registerHealthCheck(policyGatewayHttpEndpointEnabledCheck);
   registerHealthCheck(policyGatewayHttpUrlFetchUnrestrictedCheck);
+  registerHealthCheck(policyFeedsRequiredSourceMissingCheck);
+  registerHealthCheck(policyFeedsSourceUnpinnedCheck);
+  registerHealthCheck(policyFeedsSourceUnsignedCheck);
   registerHealthCheck(policyAgentsWorkspaceAccessDeniedCheck);
   registerHealthCheck(policyAgentsToolNotDeniedCheck);
   registerHealthCheck(policyToolsProfileUnapprovedCheck);
@@ -509,6 +519,36 @@ const policyGatewayHttpUrlFetchUnrestrictedCheck: HealthCheck = {
   },
 };
 
+const policyFeedsRequiredSourceMissingCheck: HealthCheck = {
+  id: CHECK_IDS.policyFeedsRequiredSourceMissing,
+  kind: "plugin",
+  description: "Required catalog feed sources are configured and enabled.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyFeedsRequiredSourceMissing);
+  },
+};
+
+const policyFeedsSourceUnpinnedCheck: HealthCheck = {
+  id: CHECK_IDS.policyFeedsSourceUnpinned,
+  kind: "plugin",
+  description: "Enabled catalog feed sources use pinned trust when policy requires it.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyFeedsSourceUnpinned);
+  },
+};
+
+const policyFeedsSourceUnsignedCheck: HealthCheck = {
+  id: CHECK_IDS.policyFeedsSourceUnsigned,
+  kind: "plugin",
+  description: "Enabled catalog feed sources do not use unsigned trust when policy denies it.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyFeedsSourceUnsigned);
+  },
+};
+
 const policyAgentsWorkspaceAccessDeniedCheck: HealthCheck = {
   id: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
   kind: "plugin",
@@ -730,6 +770,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const policyPath = policyDisplayName(ctx);
   let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
     includeGatewayExposure: false,
+    includeFeeds: false,
     includeAgentWorkspace: false,
     includeToolPosture: false,
     includeSecrets: false,
@@ -821,12 +862,14 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const includeSecrets = policyHasSecretRules(policy);
   const includeAuthProfiles = policyHasAuthProfileRules(policy);
   const includeGatewayExposure = policyHasGatewayRules(policy);
+  const includeFeeds = policyHasFeedRules(policy);
   const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
       includeGatewayExposure,
+      includeFeeds,
       includeAgentWorkspace,
       includeToolPosture: policyHasToolPostureRules(policy),
       includeSecrets,
@@ -835,6 +878,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       includeGatewayExposure,
+      includeFeeds,
       includeAgentWorkspace,
       includeToolPosture: policyHasToolPostureRules(policy),
       includeSecrets,
@@ -848,6 +892,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
     ...gatewayExposureFindings(policy, policyFile.ocDocName, evidence),
+    ...feedSourceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...agentWorkspaceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...toolPostureFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
@@ -1196,6 +1241,13 @@ function policyContainerShapeFindings(
       ];
     }
   }
+  const feedsFinding = feedsPolicyShapeFinding(policy.feeds, {
+    policyDocName,
+    policyPath,
+  });
+  if (feedsFinding !== undefined) {
+    return [feedsFinding];
+  }
   if (policy.secrets !== undefined && !isRecord(policy.secrets)) {
     return [
       policyShapeFinding(
@@ -1253,6 +1305,56 @@ function policyContainerShapeFindings(
     return [scopesFinding];
   }
   return [];
+}
+
+function feedsPolicyShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/feeds`,
+      `${params.policyPath} feeds must be an object.`,
+      `Fix ${params.policyPath} so feeds is an object.`,
+    );
+  }
+  if (value.sources !== undefined && !isRecord(value.sources)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/feeds/sources`,
+      `${params.policyPath} feeds.sources must be an object.`,
+      `Fix ${params.policyPath} so feeds.sources is an object.`,
+    );
+  }
+  const sources = isRecord(value.sources) ? value.sources : {};
+  const requireFinding = policyStringArrayPropertyShapeFinding(sources.require, {
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: "feeds.sources.require",
+    target: "feeds/sources/require",
+    valueName: "feed source id",
+  });
+  if (requireFinding !== undefined) {
+    return requireFinding;
+  }
+  for (const key of ["requirePinned", "allowUnsigned"] as const) {
+    if (sources[key] !== undefined && typeof sources[key] !== "boolean") {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/feeds/sources/${key}`,
+        `${params.policyPath} feeds.sources.${key} must be a boolean.`,
+        `Set feeds.sources.${key} to true or false.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 function agentsPolicyShapeFinding(
@@ -2329,6 +2431,100 @@ function gatewayHttpUrlFetchFindings(
     });
 }
 
+function feedSourceFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const shapeFinding = feedsPolicyShapeFinding(isRecord(policy) ? policy.feeds : undefined, {
+    policyDocName,
+    policyPath,
+  });
+  if (shapeFinding !== undefined) {
+    return [];
+  }
+  const required = readStringList(policy, ["feeds", "sources", "require"], { lowercase: false });
+  const requirePinned = readPolicyBoolean(policy, ["feeds", "sources", "requirePinned"]) === true;
+  const allowUnsigned = readPolicyBoolean(policy, ["feeds", "sources", "allowUnsigned"]) !== false;
+  if (required.length === 0 && !requirePinned && allowUnsigned) {
+    return [];
+  }
+
+  const enabledSources = (evidence.feeds ?? []).filter((source) => source.enabled !== false);
+  const enabledById = new Map(enabledSources.map((source) => [source.id, source]));
+  const findings: HealthFinding[] = [];
+
+  for (const sourceId of required) {
+    const source = enabledById.get(sourceId);
+    if (source !== undefined) {
+      continue;
+    }
+    findings.push({
+      checkId: CHECK_IDS.policyFeedsRequiredSourceMissing,
+      severity: "error",
+      message: `Required feed source '${sourceId}' is not configured and enabled.`,
+      source: "policy",
+      path: "openclaw config",
+      target: "oc://openclaw.config/plugins/entries/feeds/config/sources",
+      requirement: `oc://${policyDocName}/feeds/sources/require`,
+      fixHint:
+        "Add the required feed source under plugins.entries.feeds.config.sources or update policy after review.",
+    });
+  }
+
+  for (const source of enabledSources) {
+    if (requirePinned && !feedSourceIsPinned(source)) {
+      findings.push(
+        feedSourceFinding(source, {
+          checkId: CHECK_IDS.policyFeedsSourceUnpinned,
+          message: `Feed source '${source.id}' is not pinned with an integrity hash.`,
+          requirement: `oc://${policyDocName}/feeds/sources/requirePinned`,
+          fixHint:
+            "Set trust to pinned and add integrity: sha256:<hex>, or update policy after review.",
+        }),
+      );
+    }
+    if (!allowUnsigned && (source.trust ?? "unsigned") === "unsigned") {
+      findings.push(
+        feedSourceFinding(source, {
+          checkId: CHECK_IDS.policyFeedsSourceUnsigned,
+          message: `Feed source '${source.id}' uses unsigned trust.`,
+          requirement: `oc://${policyDocName}/feeds/sources/allowUnsigned`,
+          fixHint: "Set trust to pinned with an integrity hash, or update policy after review.",
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+function feedSourceFinding(
+  source: PolicyFeedSourceEvidence,
+  params: {
+    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
+    readonly message: string;
+    readonly requirement: string;
+    readonly fixHint: string;
+  },
+): HealthFinding {
+  return {
+    checkId: params.checkId,
+    severity: "error",
+    message: params.message,
+    source: "policy",
+    path: "openclaw config",
+    ocPath: source.source,
+    target: source.source,
+    requirement: params.requirement,
+    fixHint: params.fixHint,
+  };
+}
+
+function feedSourceIsPinned(source: PolicyFeedSourceEvidence): boolean {
+  return source.trust === "pinned" && source.integrityPresent === true;
+}
+
 function agentWorkspaceFindings(
   policy: unknown,
   policyPath: string,
@@ -2948,6 +3144,17 @@ function policyHasGatewayRules(policy: unknown): boolean {
     (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
     (isRecord(gateway.http) &&
       (gateway.http.denyEndpoints !== undefined || gateway.http.requireUrlAllowlists !== undefined))
+  );
+}
+
+function policyHasFeedRules(policy: unknown): boolean {
+  return (
+    isRecord(policy) &&
+    isRecord(policy.feeds) &&
+    isRecord(policy.feeds.sources) &&
+    (policy.feeds.sources.require !== undefined ||
+      policy.feeds.sources.requirePinned !== undefined ||
+      policy.feeds.sources.allowUnsigned !== undefined)
   );
 }
 

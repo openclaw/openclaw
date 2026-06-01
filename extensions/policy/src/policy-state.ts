@@ -31,6 +31,7 @@ export type PolicyEvidence = {
   readonly modelRefs: readonly PolicyModelRefEvidence[];
   readonly network: readonly PolicyNetworkEvidence[];
   readonly gatewayExposure?: readonly PolicyGatewayExposureEvidence[];
+  readonly feeds?: readonly PolicyFeedSourceEvidence[];
   readonly agentWorkspace?: readonly PolicyAgentWorkspaceEvidence[];
   readonly secrets?: readonly PolicySecretEvidence[];
   readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
@@ -98,6 +99,15 @@ export type PolicyNetworkEvidence = {
   readonly id: string;
   readonly source: string;
   readonly value: boolean;
+};
+
+export type PolicyFeedSourceEvidence = {
+  readonly id: string;
+  readonly source: string;
+  readonly enabled?: boolean;
+  readonly url?: string;
+  readonly trust?: string;
+  readonly integrityPresent?: boolean;
 };
 
 export type PolicyGatewayExposureEvidence = {
@@ -225,6 +235,7 @@ export function collectPolicyEvidence(
   options?: {
     readonly toolsRaw?: undefined;
     readonly includeGatewayExposure?: boolean;
+    readonly includeFeeds?: boolean;
     readonly includeAgentWorkspace?: boolean;
     readonly includeToolPosture?: boolean;
     readonly includeSecrets?: boolean;
@@ -236,6 +247,7 @@ export function collectPolicyEvidence(
   options: {
     readonly toolsRaw: string;
     readonly includeGatewayExposure?: boolean;
+    readonly includeFeeds?: boolean;
     readonly includeAgentWorkspace?: boolean;
     readonly includeToolPosture?: boolean;
     readonly includeSecrets?: boolean;
@@ -247,6 +259,7 @@ export function collectPolicyEvidence(
   options: {
     readonly toolsRaw?: string;
     readonly includeGatewayExposure?: boolean;
+    readonly includeFeeds?: boolean;
     readonly includeAgentWorkspace?: boolean;
     readonly includeToolPosture?: boolean;
     readonly includeSecrets?: boolean;
@@ -262,6 +275,7 @@ export function collectPolicyEvidence(
     ...(options.includeGatewayExposure === false
       ? {}
       : { gatewayExposure: scanPolicyGatewayExposure(cfg) }),
+    ...(options.includeFeeds === false ? {} : { feeds: scanPolicyFeeds(cfg) }),
     ...(options.includeAgentWorkspace === false
       ? {}
       : { agentWorkspace: scanPolicyAgentWorkspace(cfg) }),
@@ -389,6 +403,63 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
       "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
     ),
   ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
+}
+
+export function scanPolicyFeeds(cfg: Record<string, unknown>): readonly PolicyFeedSourceEvidence[] {
+  const plugins = isRecord(cfg.plugins) ? cfg.plugins : {};
+  const entries = isRecord(plugins.entries) ? plugins.entries : {};
+  const feeds = isRecord(entries.feeds) ? entries.feeds : {};
+  const config = isRecord(feeds.config) ? feeds.config : {};
+  const allow = readStringArray(plugins.allow);
+  const deny = readStringArray(plugins.deny);
+  if (
+    plugins.enabled === false ||
+    feeds.enabled !== true ||
+    deny.includes("feeds") ||
+    (allow.length > 0 && !allow.includes("feeds"))
+  ) {
+    return [];
+  }
+  const sources = Array.isArray(config.sources) ? config.sources : [];
+  return sources
+    .map((source, index): PolicyFeedSourceEvidence | undefined => {
+      if (!isRecord(source)) {
+        return undefined;
+      }
+      const id =
+        typeof source.id === "string" && source.id.trim() !== ""
+          ? source.id.trim()
+          : `source-${index}`;
+      const entry: {
+        id: string;
+        source: string;
+        enabled?: boolean;
+        url?: string;
+        trust?: string;
+        integrityPresent?: boolean;
+      } = {
+        id,
+        source: `oc://openclaw.config/plugins/entries/feeds/config/sources/#${index}`,
+      };
+      if (typeof source.enabled === "boolean") {
+        entry.enabled = source.enabled;
+      }
+      if (typeof source.url === "string") {
+        entry.url = redactFeedUrlForEvidence(source.url);
+      }
+      if (typeof source.trust === "string") {
+        entry.trust = source.trust;
+      }
+      if (
+        typeof source.integrity === "string" &&
+        /^sha256:[0-9a-f]{64}$/iu.test(source.integrity)
+      ) {
+        entry.integrityPresent = true;
+      }
+      return entry;
+    })
+    .filter((entry): entry is PolicyFeedSourceEvidence => entry !== undefined)
+    .toSorted((a, b) => a.id.localeCompare(b.id) || a.source.localeCompare(b.source));
 }
 
 export function scanPolicyGatewayExposure(
@@ -1438,6 +1509,22 @@ function redactMcpUrlForEvidence(raw: string): string {
   } catch {
     return "[redacted-url]";
   }
+}
+
+function redactFeedUrlForEvidence(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "file:") {
+      return `file://[redacted-path]#${shortEvidenceHash(raw)}`;
+    }
+    return `${url.protocol}//${url.host}#${shortEvidenceHash(raw)}`;
+  } catch {
+    return `[redacted-url]#${shortEvidenceHash(raw)}`;
+  }
+}
+
+function shortEvidenceHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 function configuredModelProviders(cfg: Record<string, unknown>): Record<string, unknown> {
