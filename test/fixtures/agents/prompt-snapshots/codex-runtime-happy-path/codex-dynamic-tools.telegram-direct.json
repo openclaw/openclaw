@@ -183,15 +183,8 @@
           "additionalProperties": true,
           "properties": {
             "agentId": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent id, or null to keep it unset"
+              "description": "Agent id, or null to keep it unset",
+              "type": "string"
             },
             "deleteAfterRun": {
               "description": "Delete after first run",
@@ -401,15 +394,8 @@
               "type": "object"
             },
             "sessionKey": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Explicit session key, or null to clear it"
+              "description": "Explicit session key, or null to clear it",
+              "type": "string"
             },
             "sessionTarget": {
               "description": "main | isolated | current | session:<id>",
@@ -434,15 +420,8 @@
           "additionalProperties": true,
           "properties": {
             "agentId": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent id, or null to clear it"
+              "description": "Agent id, or null to clear it",
+              "type": "string"
             },
             "deleteAfterRun": {
               "type": "boolean"
@@ -451,29 +430,15 @@
               "additionalProperties": true,
               "properties": {
                 "accountId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Delivery account"
+                  "description": "Delivery account, or null to clear",
+                  "type": "string"
                 },
                 "bestEffort": {
                   "type": "boolean"
                 },
                 "channel": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Delivery channel"
+                  "description": "Delivery channel, or null to clear",
+                  "type": "string"
                 },
                 "failureDestination": {
                   "anyOf": [
@@ -481,26 +446,12 @@
                       "additionalProperties": true,
                       "properties": {
                         "accountId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery account"
+                          "description": "Failure delivery account, or null to clear",
+                          "type": "string"
                         },
                         "channel": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery channel"
+                          "description": "Failure delivery channel, or null to clear",
+                          "type": "string"
                         },
                         "mode": {
                           "anyOf": [
@@ -518,15 +469,8 @@
                           ]
                         },
                         "to": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery target"
+                          "description": "Failure delivery target, or null to clear",
+                          "type": "string"
                         }
                       },
                       "type": "object"
@@ -557,15 +501,8 @@
                   "description": "Thread/topic id"
                 },
                 "to": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Delivery target"
+                  "description": "Delivery target, or null to clear",
+                  "type": "string"
                 }
               },
               "type": "object"
@@ -658,18 +595,11 @@
                   "type": "number"
                 },
                 "toolsAllow": {
-                  "anyOf": [
-                    {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Allowed tool ids, or null to clear"
+                  "description": "Allowed tool ids, or null to clear",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               },
               "type": "object"
@@ -713,15 +643,8 @@
               "type": "object"
             },
             "sessionKey": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Explicit session key, or null to clear it"
+              "description": "Explicit session key, or null to clear it",
+              "type": "string"
             },
             "sessionTarget": {
               "description": "Session target",
