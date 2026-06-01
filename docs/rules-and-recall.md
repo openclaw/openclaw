@@ -104,6 +104,14 @@ The DB-memory structure should evolve like a vector/semantic memory graph while 
 
 Superseded or bad process records are marked as superseded/deprecated with additive metadata. They are not deleted from source history.
 
+## Operator-visible rule recall repair
+
+When the operator reports that replies are still missing active rules, treat the reply format itself as part of the recall test. The assistant should retrieve the active database rules for memory-first behavior, visible timestamp/time-summary requirements, verified-memory wording, summary-before-mutation approval gates, backup gates, publication gates, rule-failure lockout, and completion verification before sending the next visible response.
+
+If a visible reply misses one of those rules, repair recall additively. Add recall hints, query observations, weighted semantic edges, and dynamic rule weights so phrasings such as "timestamps," "last replies," "all rules," "reply incorrectly," "vector database," and "neural connections" retrieve the governing rules together. Run the required PostgreSQL backup and private recovery mirror before production recall/vector/neural/weighted-memory changes. Refresh derived recall surfaces after the additive update and verify natural-language queries return the corrected rules near the top before reporting completion.
+
+The public-safe structure is the repair pattern only: do not publish private operator messages, live database rows, transcripts, contact data, credentials, or private memory contents.
+
 ## Fast-path optimization rule
 
 Recall fast paths may use additive derived materialized views such as `zorg_memory_search_fast_mv` for precomputed lowercase text, tsvectors, ranking helpers, and indexes. These surfaces are rebuildable caches only; they must not be treated as replacements for source memory and must never justify source-data pruning.
