@@ -1564,15 +1564,18 @@ export async function runAgentTurnWithFallback(params: {
   const shouldNotifyUserAboutCompaction =
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
-    if (!params.opts?.onBlockReply) {
-      return;
-    }
     const text =
       phase === "start"
         ? "🧹 Compacting context..."
         : phase === "end"
           ? "🧹 Compaction complete"
           : "🧹 Compaction incomplete";
+    if (!params.opts?.onBlockReply) {
+      console.warn(
+        `[openclaw] compaction notice (${phase}) skipped: no onBlockReply — ${text}`,
+      );
+      return;
+    }
     const noticePayload = params.applyReplyToMode({
       text,
       replyToId: currentMessageId,
@@ -1582,9 +1585,9 @@ export async function runAgentTurnWithFallback(params: {
     try {
       await params.opts.onBlockReply(noticePayload);
     } catch (err) {
-      // Non-critical notice delivery failure should not bubble out of the
-      // fire-and-forget event handler.
-      logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+      console.warn(
+        `[openclaw] compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`,
+      );
     }
   };
   const readCompactionHookMessages = (value: unknown): string[] => {
