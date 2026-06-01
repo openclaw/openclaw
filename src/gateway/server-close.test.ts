@@ -75,7 +75,12 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-const { createGatewayCloseHandler } = await import("./server-close.js");
+const {
+  armGatewayPostShutdownExitWatchdog,
+  createGatewayCloseHandler,
+  isGatewayShuttingDown,
+  resetGatewayShuttingDownForTest,
+} = await import("./server-close.js");
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
 const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
   await import("./restart-trace.js");
@@ -143,6 +148,7 @@ function createGatewayCloseTestDeps(
       close: (cb: (err?: Error | null) => void) => cb(null),
       closeIdleConnections: vi.fn(),
     } as never,
+    armPostShutdownExitWatchdog: vi.fn(() => null),
     ...overrides,
   };
 }
@@ -168,6 +174,8 @@ describe("createGatewayCloseHandler", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetGatewayRestartTraceForTest();
+    resetGatewayShuttingDownForTest();
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     } else {
@@ -1687,6 +1695,85 @@ describe("createGatewayCloseHandler", () => {
       reason: "upgrade",
       restartExpectedMs: null,
     });
+  });
+
+  it("flips the shutting-down flag before any close await", async () => {
+    let observedDuringShutdown: boolean | undefined;
+    const deps = createGatewayCloseTestDeps({
+      bonjourStop: async () => {
+        observedDuringShutdown = isGatewayShuttingDown();
+      },
+    });
+    const close = createGatewayCloseHandler(deps);
+    expect(isGatewayShuttingDown()).toBe(false);
+
+    await close({ reason: "test" });
+
+    expect(observedDuringShutdown).toBe(true);
+    expect(isGatewayShuttingDown()).toBe(true);
+  });
+
+  it("arms the post-shutdown exit watchdog with the clean reason and duration", async () => {
+    const armPostShutdownExitWatchdog = vi.fn(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    const result = await close({ reason: "test" });
+
+    expect(armPostShutdownExitWatchdog).toHaveBeenCalledTimes(1);
+    const armArgs = armPostShutdownExitWatchdog.mock.calls[0]?.[0];
+    expect(armArgs?.reason).toBe("test");
+    expect(armArgs?.shutdownDurationMs).toBe(result.durationMs);
+  });
+});
+
+describe("armGatewayPostShutdownExitWatchdog", () => {
+  it("forces process.exit(0) when the node process is still alive after the timeout", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 25,
+      exitProcess,
+      reason: "gateway stopping",
+      shutdownDurationMs: 5,
+    });
+    expect(exitProcess).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(exitProcess).toHaveBeenCalledWith(0);
+    handle.cancel();
+    vi.useRealTimers();
+  });
+
+  it("does not call exit when the watchdog is cancelled before the timeout", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 50,
+      exitProcess,
+      reason: "test",
+      shutdownDurationMs: 1,
+    });
+    handle.cancel();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exitProcess).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("emits a zombie_detected warn log with handle summary when fired", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    mocks.logWarn.mockClear();
+    armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 10,
+      exitProcess,
+      reason: "telegram zombie",
+      shutdownDurationMs: 7,
+    });
+    await vi.advanceTimersByTimeAsync(15);
+    const warnMessages = mocks.logWarn.mock.calls.map(([message]) => String(message));
+    expect(warnMessages.some((message) => message.includes("still alive after 10ms"))).toBe(true);
+    expect(warnMessages.some((message) => message.includes("forcing process.exit(0)"))).toBe(true);
+    vi.useRealTimers();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
