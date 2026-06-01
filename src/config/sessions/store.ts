@@ -193,6 +193,28 @@ function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return cloneSessionStoreRecord({ entry }).entry;
 }
 
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function preserveHumanSessionTitleFields(params: {
+  existing?: SessionEntry;
+  next: SessionEntry;
+}): void {
+  if (!params.existing) {
+    return;
+  }
+  if (!hasNonEmptyString(params.next.label) && hasNonEmptyString(params.existing.label)) {
+    params.next.label = params.existing.label;
+  }
+  if (
+    !hasNonEmptyString(params.next.displayName) &&
+    hasNonEmptyString(params.existing.displayName)
+  ) {
+    params.next.displayName = params.existing.displayName;
+  }
+}
+
 function resolveSessionWorkflowStorePath(
   options: SessionEntryWorkflowOptions & { sessionKey?: string },
 ): string {
@@ -1048,6 +1070,10 @@ export async function upsertSessionEntry(
     const store = loadMutableSessionStoreForWriter(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
     const next = cloneSessionEntry(params.entry);
+    preserveHumanSessionTitleFields({
+      existing: resolved.existing,
+      next,
+    });
     await persistResolvedSessionEntry({
       storePath,
       store,

@@ -723,6 +723,106 @@ describe("sessions", () => {
     expect(store[sessionKey]?.acp).toBeUndefined();
   });
 
+  it("upsertSessionEntry preserves the main session title when replacement metadata is empty", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-main-title-preserve",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Primary Lane",
+          displayName: "Primary Lane",
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+        label: null as unknown as string,
+        displayName: "",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.sessionId).toBe("sess-2");
+    expect(store[sessionKey]?.label).toBe("Primary Lane");
+    expect(store[sessionKey]?.displayName).toBe("Primary Lane");
+  });
+
+  it("upsertSessionEntry preserves a telegram-backed session title when runtime metadata omits it", async () => {
+    const sessionKey = "agent:main:telegram:direct:opaque-user";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-channel-title-preserve",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Channel Lane",
+          displayName: "Channel Lane",
+          origin: {
+            provider: "telegram",
+            chatType: "direct",
+            from: "opaque-user",
+          },
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+        origin: {
+          provider: "telegram",
+          chatType: "direct",
+          from: "opaque-user",
+        },
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.sessionId).toBe("sess-2");
+    expect(store[sessionKey]?.label).toBe("Channel Lane");
+    expect(store[sessionKey]?.displayName).toBe("Channel Lane");
+  });
+
+  it("upsertSessionEntry accepts replacement human titles when provided", async () => {
+    const sessionKey = "agent:main:ops-lane";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-title-replace",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Old Lane",
+          displayName: "Old Lane",
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+        label: "Ops Lane",
+        displayName: "Ops Lane",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.label).toBe("Ops Lane");
+    expect(store[sessionKey]?.displayName).toBe("Ops Lane");
+  });
+
   it("updateSessionStore preserves concurrent additions", async () => {
     const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
