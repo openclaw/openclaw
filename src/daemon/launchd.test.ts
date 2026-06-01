@@ -24,6 +24,7 @@ import {
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
+  uninstallLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -287,6 +288,16 @@ vi.mock("node:fs/promises", async () => {
     }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
+    }),
+    rename: vi.fn(async (source: string, dest: string) => {
+      const data = state.files.get(source);
+      if (data === undefined) {
+        throw new Error(`ENOENT: no such file or directory, rename '${source}'`);
+      }
+      state.files.delete(source);
+      state.files.set(dest, data);
+      state.fileModes.set(dest, state.fileModes.get(source) ?? 0o666);
+      state.dirs.add(dest.split("/").slice(0, -1).join("/"));
     }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = p;
@@ -984,6 +995,30 @@ describe("launchd install", () => {
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o600);
+  });
+
+  it("writes the plist under the boot-volume user LaunchAgents dir for external HOME", async () => {
+    const env = {
+      HOME: "/Volumes/MainDataDrive/Users/test",
+      USER: "test",
+      OPENCLAW_PROFILE: "default",
+    };
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    expect(plistPath).toBe("/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    expect(state.files.has(plistPath)).toBe(true);
+    expect(state.dirs.has("/Volumes/MainDataDrive/Users/test/Library/LaunchAgents")).toBe(false);
+    expect(state.launchctlCalls).toContainEqual([
+      "bootstrap",
+      typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+      plistPath,
+    ]);
   });
 
   it("stops LaunchAgent via bootout by default, preserving KeepAlive for future crashes", async () => {
@@ -1686,11 +1721,62 @@ describe("launchd install", () => {
   });
 });
 
+describe("launchd uninstall", () => {
+  function seedInstalledPlist(env: Record<string, string | undefined>): string {
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "<plist/>");
+    return plistPath;
+  }
+
+  it("moves the plist into the boot-volume user Trash on external HOME", async () => {
+    const env = {
+      HOME: "/Volumes/MainDataDrive/Users/test",
+      USER: "test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const plistPath = seedInstalledPlist(env);
+    const stdout = new PassThrough();
+    const collected: string[] = [];
+    stdout.on("data", (chunk: Buffer | string) => {
+      collected.push(chunk.toString());
+    });
+
+    await uninstallLaunchAgent({ env, stdout });
+
+    expect(state.files.has(plistPath)).toBe(false);
+    expect(state.files.has("/Users/test/.Trash/ai.openclaw.gateway.plist")).toBe(true);
+    expect(state.dirs.has("/Users/test/.Trash")).toBe(true);
+    expect(state.dirs.has("/Volumes/MainDataDrive/Users/test/.Trash")).toBe(false);
+    expect(collected.join("")).toContain("Moved LaunchAgent to Trash");
+  });
+
+  it("keeps the standard HOME Trash location for /Users homes", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = seedInstalledPlist(env);
+    const stdout = new PassThrough();
+
+    await uninstallLaunchAgent({ env, stdout });
+
+    expect(state.files.has(plistPath)).toBe(false);
+    expect(state.files.has("/Users/test/.Trash/ai.openclaw.gateway.plist")).toBe(true);
+  });
+});
+
 describe("resolveLaunchAgentPlistPath", () => {
   it.each([
     {
       name: "uses default label when OPENCLAW_PROFILE is unset",
       env: { HOME: "/Users/test" },
+      expected: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    },
+    {
+      name: "keeps standard /Users HOME even when USER points elsewhere",
+      env: { HOME: "/Users/test", USER: "other" },
+      expected: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    },
+    {
+      name: "uses the boot-volume user LaunchAgents dir when HOME is external",
+      env: { HOME: "/Volumes/MainDataDrive/Users/test", USER: "test" },
       expected: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
     },
     {

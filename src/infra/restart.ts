@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -8,6 +7,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { resolveLaunchAgentPlistPathForLabel } from "../daemon/launchd-path.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
@@ -664,9 +664,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
   // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
-  // Use env HOME to match how launchd.ts resolves the plist install path.
-  const home = process.env.HOME?.trim() || os.homedir();
-  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  const plistPath = resolveLaunchAgentPlistPathForLabel(process.env, label);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
   tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
   const boot = spawnSync("launchctl", bootstrapArgs, {

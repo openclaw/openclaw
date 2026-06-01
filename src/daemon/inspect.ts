@@ -8,6 +8,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { resolveLaunchAgentPlistPathForLabel } from "./launchd-path.js";
 import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
@@ -47,7 +48,9 @@ export function renderGatewayServiceCleanupHints(
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
+      const pathEnv = { ...process.env, ...env, OPENCLAW_PROFILE: profile };
+      const plistPath = resolveLaunchAgentPlistPathForLabel(pathEnv, label);
+      return [`launchctl bootout gui/$UID/${label}`, `rm ${plistPath}`];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
@@ -442,8 +445,8 @@ export async function findExtraGatewayServices(
 
   if (process.platform === "darwin") {
     try {
-      const home = resolveHomeDir(env);
-      const userDir = path.join(home, "Library", "LaunchAgents");
+      const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+      const userDir = path.dirname(resolveLaunchAgentPlistPathForLabel(env, label));
       for (const svc of await scanLaunchdDir({
         dir: userDir,
         scope: "user",

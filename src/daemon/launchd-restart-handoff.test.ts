@@ -94,6 +94,22 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
+  it("uses the boot-volume user LaunchAgents dir when HOME is external", () => {
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/Volumes/MainDataDrive/Users/test",
+        USER: "test",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "kickstart",
+    });
+
+    const [, args] = requireSpawnCall();
+    expect(args[5]).toBe("/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist");
+  });
+
   it("polls after bootout and falls back to kickstart on bootstrap failure for reload mode", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 

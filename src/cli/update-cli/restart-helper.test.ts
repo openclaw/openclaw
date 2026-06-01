@@ -566,6 +566,20 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
+    it("uses boot-volume LaunchAgents plist path when HOME is external", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 502;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Volumes/MainDataDrive/Users/test",
+        USER: "test",
+        OPENCLAW_PROFILE: "default",
+      });
+      expect(content).toMatch(/[\\/]Users[\\/]test[\\/]Library[\\/]LaunchAgents[\\/]/);
+      expect(content).not.toContain("/Volumes/MainDataDrive/Users/test/Library/LaunchAgents");
+      await cleanupScript(scriptPath);
+    });
+
     it("shell-escapes the label in the plist path on macOS", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;

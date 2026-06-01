@@ -3,6 +3,24 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayLaunchAgentManagerTests {
+    @Test func `launch agent plist URL preserves standard user home`() {
+        let url = GatewayLaunchAgentManager.resolveLaunchAgentPlistURL(
+            homeDirectory: URL(fileURLWithPath: "/Users/test", isDirectory: true),
+            shortUserName: "other",
+            label: "ai.openclaw.gateway")
+
+        #expect(url.path == "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist")
+    }
+
+    @Test func `launch agent plist URL uses boot volume user home for external home`() {
+        let url = GatewayLaunchAgentManager.resolveLaunchAgentPlistURL(
+            homeDirectory: URL(fileURLWithPath: "/Volumes/MainDataDrive/Users/test", isDirectory: true),
+            shortUserName: "test",
+            label: "ai.openclaw.gateway")
+
+        #expect(url.path == "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist")
+    }
+
     @Test func `attach only runtime override does not uninstall gateway launch agent`() throws {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)

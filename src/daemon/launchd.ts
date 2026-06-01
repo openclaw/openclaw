@@ -16,6 +16,8 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { resolveLaunchAgentPlistPathForLabel } from "./launchd-path.js";
+import { resolveLaunchAgentHomeDir } from "./launchd-path.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
@@ -24,8 +26,8 @@ import {
   isCurrentProcessLaunchdServiceLabel,
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
-import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { formatLine, writeFormattedLines } from "./output.js";
+import { resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -119,14 +121,6 @@ function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefine
     return assertValidLaunchAgentLabel(envLabel);
   }
   return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE));
-}
-
-function resolveLaunchAgentPlistPathForLabel(
-  env: Record<string, string | undefined>,
-  label: string,
-): string {
-  const home = toPosixPath(resolveHomeDir(env));
-  return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
@@ -654,7 +648,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = resolveLaunchAgentHomeDir(env);
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
@@ -870,11 +864,12 @@ async function writeLaunchAgentPlist({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
-  const libraryDir = path.posix.join(home, "Library");
-  await ensureSecureDirectory(home);
+  const launchAgentsDir = path.dirname(plistPath);
+  const libraryDir = path.dirname(launchAgentsDir);
+  const launchAgentHomeDir = path.dirname(libraryDir);
+  await ensureSecureDirectory(launchAgentHomeDir);
   await ensureSecureDirectory(libraryDir);
-  await ensureSecureDirectory(path.dirname(plistPath));
+  await ensureSecureDirectory(launchAgentsDir);
   await ensureLaunchAgentEnvironmentDirectories(environment);
   const prepared = await prepareLaunchAgentProgramArguments({
     env,

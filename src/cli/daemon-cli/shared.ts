@@ -6,6 +6,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
+import { resolveLaunchAgentPlistPathForLabel } from "../../daemon/launchd-path.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 import {
   buildPlatformRuntimeLogHints,
@@ -188,11 +189,13 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
+  const launchAgentLabel = resolveGatewayLaunchAgentLabel(profile);
+  const launchAgentEnv = { ...process.env, ...env, OPENCLAW_PROFILE: profile };
   const container = resolveDaemonContainerContext(env);
   const hints = buildPlatformServiceStartHints({
     installCommand: formatCliCommand("openclaw gateway install", env),
     startCommand: formatCliCommand("openclaw gateway", env),
-    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
+    launchAgentPlistPath: resolveLaunchAgentPlistPathForLabel(launchAgentEnv, launchAgentLabel),
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });

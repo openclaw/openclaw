@@ -10,6 +10,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveLaunchAgentPlistPathForLabel } from "../../daemon/launchd-path.js";
 import {
   renderPosixRestartLogSetup,
   resolveGatewayRestartLogPath,
@@ -120,10 +121,7 @@ exit "$status"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
-      // Resolve HOME at generation time via env/process.env to match launchd.ts,
-      // and shell-escape the label in the plist filename to prevent injection.
-      const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
-      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      const plistPath = resolveLaunchAgentPlistPathForLabel({ ...process.env, ...env }, label);
       const escapedPlistPath = shellEscape(plistPath);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
       filename = `openclaw-restart-${timestamp}.sh`;

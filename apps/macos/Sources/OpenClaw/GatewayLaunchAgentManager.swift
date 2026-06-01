@@ -15,8 +15,36 @@ enum GatewayLaunchAgentManager {
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        self.resolveLaunchAgentPlistURL()
+    }
+
+    static func resolveLaunchAgentPlistURL(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        shortUserName: String = NSUserName(),
+        label: String = gatewayLaunchdLabel) -> URL
+    {
+        let standardizedHome = homeDirectory.standardizedFileURL
+        let homeComponents = standardizedHome.pathComponents
+        if homeComponents.count == 3, homeComponents[0] == "/", homeComponents[1] == "Users",
+           !homeComponents[2].isEmpty
+        {
+            return standardizedHome
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("LaunchAgents", isDirectory: true)
+                .appendingPathComponent("\(label).plist")
+        }
+        let trimmedUserName = shortUserName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUserName.isEmpty, !trimmedUserName.contains("/") else {
+            return standardizedHome
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("LaunchAgents", isDirectory: true)
+                .appendingPathComponent("\(label).plist")
+        }
+        return URL(fileURLWithPath: "/Users", isDirectory: true)
+            .appendingPathComponent(trimmedUserName, isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(label).plist")
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {

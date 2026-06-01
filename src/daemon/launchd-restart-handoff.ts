@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
-import os from "node:os";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+import { resolveLaunchAgentPlistPathForLabel } from "./launchd-path.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
@@ -82,8 +81,7 @@ function resolveLaunchdRestartTarget(
 ): LaunchdRestartTarget {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(env);
-  const home = normalizeOptionalString(env.HOME) || os.homedir();
-  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
   return {
     domain,
     label,
