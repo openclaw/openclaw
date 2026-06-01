@@ -1281,6 +1281,45 @@ describe("deliverOutboundPayloads", () => {
     resolveMediaAccessSpy.mockRestore();
   });
 
+  it("forwards requester sender id to channel send contexts", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "m-requester",
+      roomId: "!room:example",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      session: {
+        requesterSenderId: "sender-1",
+      },
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "sender-1",
+      }),
+    );
+  });
+
   it("scopes media access after reply payload hooks add local media", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_payload_sending",

@@ -34,6 +34,7 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  requesterSenderId?: string | null;
   gatewayClientScopes?: readonly string[];
 };
 

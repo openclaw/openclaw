@@ -352,6 +352,29 @@ describe("sendMessageIMessage receipts", () => {
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
+  it("blocks sender-based group allowance when the reply id sanitizes empty", async () => {
+    const client = createClient({ guid: "p:0/group-empty-reply-id" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15551230000"],
+            },
+          },
+        },
+        client,
+        replyToId: "[]",
+        replyRequesterSender: "+15551230000",
+      }),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
   it("treats direct chat identifiers as DM allowlist targets", async () => {
     const client = createClient({ guid: "p:0/direct-chat" });
 

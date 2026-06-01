@@ -168,6 +168,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   accountId?: string | null;
   deps?: OutboundSendDeps;
   replyToId?: string | null;
+  requesterSenderId?: string | null;
   replyToIdSource?: "explicit" | "implicit";
   replyToMode?: ReplyToMode;
   threadId?: string | number | null;
