@@ -8,6 +8,7 @@ import {
   buildChildCompletionFindings,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
+import { projectChatDisplayMessages } from "../gateway/chat-display-projection.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
@@ -31,7 +32,7 @@ function installOutputDeps(params: {
   return { callGateway, readSessionMessagesAsync };
 }
 
-function sessionsYieldTurn(message = "Waiting for subagent completion.") {
+function sessionsYieldTurn(message = "Waiting for subagent completion.", toolCallType = "toolCall") {
   // sessions_yield is requester control flow, not child output; fixtures keep
   // that wait turn adjacent to later assistant completions.
   return [
@@ -41,7 +42,7 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
       content: [
         { type: "text", text: message },
         {
-          type: "toolCall",
+          type: toolCallType,
           id: "call-yield",
           name: "sessions_yield",
           arguments: { message },
@@ -102,6 +103,36 @@ describe("readSubagentOutput", () => {
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
     expect(deps.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat projected duplicate sessions_yield wait text as completion output", async () => {
+    const projected = projectChatDisplayMessages(sessionsYieldTurn());
+    installOutputDeps({ messages: projected });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(
+      (projected[0] as { openclawSessionsYieldMirror?: unknown }).openclawSessionsYieldMirror,
+    ).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+      duplicateAssistantText: true,
+    });
+  });
+
+  it("does not treat normalized projected sessions_yield wait text as completion output", async () => {
+    const projected = projectChatDisplayMessages(
+      sessionsYieldTurn("Waiting for subagent completion.", "tool_call"),
+    );
+    installOutputDeps({ messages: projected });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(
+      (projected[0] as { openclawSessionsYieldMirror?: unknown }).openclawSessionsYieldMirror,
+    ).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+      duplicateAssistantText: true,
+    });
   });
 
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {

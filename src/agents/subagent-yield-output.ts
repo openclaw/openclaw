@@ -24,13 +24,9 @@ function isToolCallBlock(value: unknown): boolean {
   if (!record) {
     return false;
   }
-  return (
-    record.type === "toolCall" ||
-    record.type === "tool_use" ||
-    record.type === "toolUse" ||
-    record.type === "functionCall" ||
-    record.type === "function_call"
-  );
+  const type =
+    typeof record.type === "string" ? record.type.trim().toLowerCase().replace(/_/g, "") : "";
+  return type === "toolcall" || type === "tooluse" || type === "functioncall";
 }
 
 /** Returns true when an assistant message requested the sessions_yield tool. */
@@ -96,6 +92,9 @@ export function isSessionsYieldToolResult(
   const toolName = readToolName(record);
   if (toolName === "sessions_yield") {
     return true;
+  }
+  if (toolName !== undefined) {
+    return false;
   }
   if (!previousAssistantCalledYield) {
     return false;

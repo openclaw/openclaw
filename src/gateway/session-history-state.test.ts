@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { projectChatDisplayMessage } from "./chat-display-projection.js";
+import { projectChatDisplayMessage, projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionUtils from "./session-utils.js";
 
@@ -89,6 +89,22 @@ function appendAssistantText(state: SessionHistorySseState, text: string, messag
 }
 
 describe("SessionHistorySseState", () => {
+  const hasHistoryContentBlockType = (messages: unknown[], type: string): boolean =>
+    messages.some((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+      const content = (message as { content?: unknown }).content;
+      return (
+        Array.isArray(content) &&
+        content.some((block) => {
+          return Boolean(
+            block && typeof block === "object" && (block as { type?: unknown }).type === type,
+          );
+        })
+      );
+    });
+
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
     const readSpy = vi
       .spyOn(sessionUtils, "readSessionMessagesAsync")
@@ -336,6 +352,7 @@ describe("SessionHistorySseState", () => {
       ),
     ).toBe(true);
     expect(snapshot.history.messages.at(-1)?.["__openclaw"]?.seq).toBe(3);
+    expect(hasHistoryContentBlockType(snapshot.history.messages, "toolCall")).toBe(false);
   });
 
   test("projects sessions_yield results separated from their call by visible assistant text", () => {
@@ -392,8 +409,143 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.messages.at(-1)?.["__openclaw"]?.seq).toBe(4);
   });
 
+  test("projects OpenAI function_call sessions_yield results by call_id", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "function_call",
+              id: "fc-item-yield",
+              call_id: "call-yield",
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I started the child session." }],
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "toolResult",
+          call_id: "call-yield",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+            },
+          ],
+          details: { status: "yielded", message: yieldMessage },
+          __openclaw: { seq: 3 },
+        },
+      ],
+    });
+
+    expect(
+      snapshot.history.messages.flatMap(
+        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+      ),
+    ).toEqual(["I started the child session.", yieldMessage]);
+    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+    });
+    expect(hasHistoryContentBlockType(snapshot.history.messages, "function_call")).toBe(false);
+  });
+
+  test("projects explicit sessions_yield results that omit result call ids", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-yield",
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+            },
+          ],
+          details: { status: "yielded", message: yieldMessage },
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(
+      snapshot.history.messages.flatMap(
+        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+      ),
+    ).toEqual([yieldMessage]);
+    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+    });
+  });
+
+  test("projects unnamed yielded results when one sessions_yield call is pending", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-yield",
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "toolResult",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+            },
+          ],
+          details: { status: "yielded", message: yieldMessage },
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(
+      snapshot.history.messages.flatMap(
+        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+      ),
+    ).toEqual([yieldMessage]);
+    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+    });
+  });
+
   test("does not mirror a single sessions_yield tool result without prior assistant context", () => {
-    const projected = projectChatDisplayMessage({
+    const orphanToolResult = {
       role: "toolResult",
       toolName: "sessions_yield",
       toolCallId: "call-yield",
@@ -405,35 +557,192 @@ describe("SessionHistorySseState", () => {
       ],
       details: { status: "yielded", message: "Waiting for child completion." },
       __openclaw: { seq: 3 },
-    });
+    };
+    const projected = projectChatDisplayMessage(orphanToolResult);
+    const projectedHistory = projectChatDisplayMessages([orphanToolResult]);
 
     expect(projected?.role).toBe("toolResult");
     expect(projected?.openclawSessionsYieldMirror).toBeUndefined();
+    expect(projectedHistory).toHaveLength(1);
+    expect(projectedHistory[0]?.role).toBe("toolResult");
+    expect(projectedHistory[0]?.openclawSessionsYieldMirror).toBeUndefined();
+  });
+
+  test("does not reuse completed sessions_yield mirrors as pending context", () => {
+    const projected = projectChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Waiting for child completion." }],
+        openclawSessionsYieldMirror: {
+          toolName: "sessions_yield",
+          toolCallId: "call-yield",
+        },
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-other",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ status: "yielded", message: "Unrelated wait." }),
+          },
+        ],
+        details: { status: "yielded", message: "Unrelated wait." },
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    expect(projected).toHaveLength(2);
+    expect(projected[1]?.role).toBe("toolResult");
+    expect(projected[1]?.openclawSessionsYieldMirror).toBeUndefined();
+  });
+
+  test("does not mirror explicit non-yield tool results after a pending sessions_yield call", () => {
+    const projected = projectChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "sessions_yield",
+            arguments: { message: "Waiting for child completion." },
+          },
+        ],
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "yielded",
+              message: "ordinary tool output, not sessions_yield",
+            }),
+          },
+        ],
+        details: { status: "yielded", message: "ordinary tool output, not sessions_yield" },
+        __openclaw: { id: "msg-exec", seq: 2 },
+      },
+    ]);
+
+    expect(projected).toHaveLength(1);
+    expect(projected[0]?.role).toBe("toolResult");
+    expect(projected[0]?.toolName).toBe("exec");
+    expect(projected[0]?.openclawSessionsYieldMirror).toBeUndefined();
   });
 
   test("does not duplicate visible sessions_yield text during inline SSE appends", () => {
     const yieldMessage = "Waiting for child completion.";
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "assistant",
+    const toolCallBlocks = [
+      { type: "toolCall", id: "call-yield" },
+      { type: "tool_call", id: "call-yield" },
+      { type: "toolcall", id: "call-yield" },
+      { type: "function_call", id: "fc-item-yield", call_id: "call-yield" },
+    ];
+    for (const toolCallBlock of toolCallBlocks) {
+      const state = SessionHistorySseState.fromRawSnapshot({
+        target: { sessionId: "sess-main" },
+        rawMessages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: yieldMessage },
+              {
+                ...toolCallBlock,
+                name: "sessions_yield",
+                arguments: { message: yieldMessage },
+              },
+            ],
+            __openclaw: { seq: 1 },
+          },
+        ],
+      });
+
+      const appended = state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield",
           content: [
-            { type: "text", text: yieldMessage },
             {
-              type: "toolCall",
-              id: "call-yield",
-              name: "sessions_yield",
-              arguments: { message: yieldMessage },
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
             },
           ],
-          __openclaw: { seq: 1 },
+          details: { status: "yielded", message: yieldMessage },
         },
-      ],
-    });
+        messageSeq: 2,
+      });
 
-    const appended = state.appendInlineMessage({
-      message: {
+      expect(appended?.shouldRefresh).toBe(true);
+      expect(
+        state
+          .snapshot()
+          .messages.flatMap(
+            (message) =>
+              (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+          ),
+      ).toEqual([yieldMessage]);
+      expect(
+        hasHistoryContentBlockType(state.snapshot().messages, "function_call"),
+      ).toBe(false);
+      expect(
+        state
+          .snapshot()
+          .messages.at(-1)?.openclawSessionsYieldMirror,
+      ).toEqual({
+        toolName: "sessions_yield",
+        toolCallId: "call-yield",
+        duplicateAssistantText: true,
+      });
+    }
+  });
+
+  test("does not duplicate visible sessions_yield text after interleaved tool results", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const projected = projectChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: yieldMessage },
+          {
+            type: "toolCall",
+            id: "call-yield",
+            name: "sessions_yield",
+            arguments: { message: yieldMessage },
+          },
+          {
+            type: "toolCall",
+            id: "call-other",
+            name: "exec",
+            arguments: { command: "echo done" },
+          },
+        ],
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        toolCallId: "call-other",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "yielded",
+              message: "ordinary tool output, not sessions_yield",
+            }),
+          },
+        ],
+        details: {
+          status: "yielded",
+          message: "ordinary tool output, not sessions_yield",
+        },
+        __openclaw: { seq: 2 },
+      },
+      {
         role: "toolResult",
         toolName: "sessions_yield",
         toolCallId: "call-yield",
@@ -444,23 +753,109 @@ describe("SessionHistorySseState", () => {
           },
         ],
         details: { status: "yielded", message: yieldMessage },
+        __openclaw: { seq: 3 },
       },
-      messageSeq: 2,
-    });
+    ]);
 
-    expect(appended?.shouldRefresh).toBe(true);
+    const visibleYieldTextRows = projected.filter(
+      (message) =>
+        message.role === "assistant" &&
+        (message as { content?: Array<{ text?: string }> }).content?.[0]?.text === yieldMessage,
+    );
+    expect(visibleYieldTextRows).toHaveLength(1);
+    expect(visibleYieldTextRows[0]?.openclawSessionsYieldMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+      duplicateAssistantText: true,
+    });
     expect(
-      state
-        .snapshot()
-        .messages.flatMap(
-          (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-        ),
-    ).toEqual([yieldMessage]);
-    expect(
-      state
-        .snapshot()
-        .messages.some((message) => message.openclawSessionsYieldMirror !== undefined),
+      projected.some(
+        (message) => message.role === "toolResult" && message.toolName === "sessions_yield",
+      ),
     ).toBe(false);
+  });
+
+  test("uses hidden sessions_yield calls as inline context for following tool results", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const toolCallBlocks = [
+      { type: "toolCall", id: "call-yield" },
+      { type: "function_call", id: "fc-item-yield", call_id: "call-yield" },
+    ];
+    for (const toolCallBlock of toolCallBlocks) {
+      const state = SessionHistorySseState.fromRawSnapshot({
+        target: { sessionId: "sess-main" },
+        rawMessages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "spawn a child" }],
+            __openclaw: { seq: 1 },
+          },
+        ],
+      });
+
+      const hiddenCallAppend = state.appendInlineMessage({
+        message: {
+          role: "assistant",
+          content: [
+            {
+              ...toolCallBlock,
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+        },
+        messageSeq: 2,
+      });
+
+      expect(hiddenCallAppend).toBeNull();
+      expect(
+        state
+          .snapshot()
+          .messages.flatMap(
+            (message) =>
+              (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+          ),
+      ).toEqual(["spawn a child"]);
+      expect(hasHistoryContentBlockType(state.snapshot().messages, toolCallBlock.type)).toBe(
+        false,
+      );
+
+      const yieldedResultAppend = state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+            },
+          ],
+          details: { status: "yielded", message: yieldMessage },
+        },
+        messageSeq: 3,
+      });
+
+      expect(yieldedResultAppend?.messageSeq).toBe(3);
+      expect(
+        (yieldedResultAppend?.message as { openclawSessionsYieldMirror?: unknown } | undefined)
+          ?.openclawSessionsYieldMirror,
+      ).toEqual({
+        toolName: "sessions_yield",
+        toolCallId: "call-yield",
+      });
+      expect(
+        state
+          .snapshot()
+          .messages.flatMap(
+            (message) =>
+              (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+          ),
+      ).toEqual(["spawn a child", yieldMessage]);
+      expect(state.snapshot().messages.some((message) => message.role === "toolResult")).toBe(
+        false,
+      );
+    }
   });
 
   test("does not coerce partial cursor values", () => {

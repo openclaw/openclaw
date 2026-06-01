@@ -2721,6 +2721,201 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get expands truncated sessions_yield mirrors with history context", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const yieldMessage = "Waiting for child completion with a long visible status.";
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-yield-user",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "spawn a child" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-yield-call",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-yield",
+                name: "sessions_yield",
+                arguments: { message: yieldMessage },
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-yield-result",
+          message: {
+            role: "toolResult",
+            toolName: "sessions_yield",
+            toolCallId: "call-yield",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+              },
+            ],
+            details: { status: "yielded", message: yieldMessage },
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 18 });
+      const yieldMirror = historyMessages.find(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawSessionsYieldMirror?: unknown }).openclawSessionsYieldMirror),
+      ) as { __openclaw?: { id?: string }; content?: Array<{ text?: string }> } | undefined;
+      expect(yieldMirror?.["__openclaw"]?.id).toBe("msg-yield-result");
+      expect(yieldMirror?.content?.[0]?.text).toContain("...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-yield-result",
+      });
+
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect((full.message as { role?: unknown } | undefined)?.role).toBe("assistant");
+      expect(
+        (full.message as { openclawSessionsYieldMirror?: unknown } | undefined)
+          ?.openclawSessionsYieldMirror,
+      ).toEqual({
+        toolName: "sessions_yield",
+        toolCallId: "call-yield",
+      });
+      expect(JSON.stringify(full.message)).toContain(yieldMessage);
+      expect(JSON.stringify(full.message)).not.toContain("toolResult");
+    });
+  });
+
+  test("chat.message.get does not expose hidden duplicate sessions_yield results", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const yieldMessage = "Waiting for child completion.";
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-yield-call",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: yieldMessage },
+              {
+                type: "toolCall",
+                id: "call-yield",
+                name: "sessions_yield",
+                arguments: { message: yieldMessage },
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-yield-result",
+          message: {
+            role: "toolResult",
+            toolName: "sessions_yield",
+            toolCallId: "call-yield",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+              },
+            ],
+            details: { status: "yielded", message: yieldMessage },
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const historyMessages = await fetchHistoryMessages(ws);
+      expect(
+        historyMessages.some(
+          (message) =>
+            (message as { ["__openclaw"]?: { id?: string } } | undefined)?.["__openclaw"]?.id ===
+            "msg-yield-result",
+        ),
+      ).toBe(false);
+
+      const hidden = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-yield-result",
+      });
+
+      expect(hidden.ok).toBe(false);
+      expect(hidden.unavailableReason).toBe("not_visible");
+      expect(hidden.message).toBeUndefined();
+    });
+  });
+
+  test("chat.message.get keeps ordinary tool results on the indexed message path", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-yield-call",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-yield",
+                name: "sessions_yield",
+                arguments: { message: "Waiting for child completion." },
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-exec-result",
+          message: {
+            role: "toolResult",
+            toolName: "exec",
+            toolCallId: "call-exec",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "yielded",
+                  message: "ordinary tool output, not sessions_yield",
+                }),
+              },
+            ],
+            details: {
+              status: "yielded",
+              message: "ordinary tool output, not sessions_yield",
+            },
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-exec-result",
+      });
+
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect((full.message as { role?: unknown } | undefined)?.role).toBe("toolResult");
+      expect((full.message as { toolName?: unknown } | undefined)?.toolName).toBe("exec");
+      expect(
+        (full.message as { openclawSessionsYieldMirror?: unknown } | undefined)
+          ?.openclawSessionsYieldMirror,
+      ).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("ordinary tool output, not sessions_yield");
+    });
+  });
+
   test("chat.message.get accepts the selected agent for global sessions", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
