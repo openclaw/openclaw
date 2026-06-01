@@ -101,6 +101,25 @@ describe("sendMessageIMessage receipts", () => {
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
+  it("applies channel default group policy to explicit chat targets", async () => {
+    const client = createClient({ guid: "p:0/default-disabled" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            defaults: {
+              groupPolicy: "disabled",
+            },
+            imessage: {},
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: group targets are disabled");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
   it("allows explicit chat targets listed by group allowlist policy", async () => {
     const client = createClient({ guid: "p:0/group" });
 
@@ -122,6 +141,50 @@ describe("sendMessageIMessage receipts", () => {
       expect.objectContaining({ chat_id: 42 }),
       expect.any(Object),
     );
+  });
+
+  it("falls back to legacy allowFrom conversation entries when groupAllowFrom is absent", async () => {
+    const client = createClient({ guid: "p:0/group-legacy-allow-from" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          defaults: {
+            groupPolicy: "allowlist",
+          },
+          imessage: {
+            allowFrom: ["chat_id:42"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
+  it("does not fall back to legacy allowFrom when groupAllowFrom is explicitly empty", async () => {
+    const client = createClient({ guid: "p:0/group-empty-explicit" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              allowFrom: ["chat_id:42"],
+              groupPolicy: "allowlist",
+              groupAllowFrom: [],
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
   it("allows explicit chat targets through configured group access groups", async () => {

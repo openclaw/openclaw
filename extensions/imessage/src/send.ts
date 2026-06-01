@@ -14,6 +14,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
@@ -953,6 +957,24 @@ async function isIMessageSenderBasedGroupReplyAllowed(params: {
   });
 }
 
+function resolveIMessageOutboundGroupPolicy(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+}) {
+  return resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.imessage !== undefined,
+    groupPolicy: params.account.config.groupPolicy,
+    defaultGroupPolicy: resolveDefaultGroupPolicy(params.cfg),
+  }).groupPolicy;
+}
+
+function resolveIMessageOutboundGroupAllowFrom(
+  account: ResolvedIMessageAccount,
+): Array<string | number> {
+  const configuredGroupAllowFrom = account.config.groupAllowFrom;
+  return [...(configuredGroupAllowFrom ?? account.config.allowFrom ?? [])];
+}
+
 export async function assertIMessageOutboundAllowed(params: {
   cfg: OpenClawConfig;
   account: ResolvedIMessageAccount;
@@ -961,14 +983,15 @@ export async function assertIMessageOutboundAllowed(params: {
 }): Promise<void> {
   const { cfg, account, target } = params;
   if (!isIMessageOutboundDmTarget(target)) {
-    if (account.config.groupPolicy === "disabled") {
+    const groupPolicy = resolveIMessageOutboundGroupPolicy({ cfg, account });
+    if (groupPolicy === "disabled") {
       throw new Error("iMessage outbound blocked: group targets are disabled");
     }
-    if (account.config.groupPolicy !== "allowlist") {
+    if (groupPolicy !== "allowlist") {
       return;
     }
     const normalizedTarget = normalizeIMessageOutboundTarget(target);
-    const configuredGroupAllowFrom = account.config.groupAllowFrom ?? [];
+    const configuredGroupAllowFrom = resolveIMessageOutboundGroupAllowFrom(account);
     const allowFrom = await expandIMessageOutboundAllowFrom({
       cfg,
       account,
