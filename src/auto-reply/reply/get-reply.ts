@@ -475,6 +475,7 @@ export async function getReplyFromConfig(
           ctx: finalized,
           cfg,
           commandAuthorized,
+          requestedSessionId: resolvedOpts?.requestedSessionId,
         }),
       );
   const {
