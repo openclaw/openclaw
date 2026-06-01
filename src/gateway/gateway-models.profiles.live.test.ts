@@ -52,6 +52,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { ModelRegistry } from "../llm/model-registry.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
@@ -195,6 +196,29 @@ function providerScopedModelRegistryProviders(params: {
     modelFilter: params.modelFilter,
     providerFilter: params.providerFilter,
   });
+}
+
+function filterGatewayLiveModelRefsByProvider(
+  refs: readonly { provider: string; id: string }[],
+  providerFilter: ReadonlySet<string> | null,
+): Array<{ provider: string; id: string }> {
+  if (!providerFilter) {
+    return [...refs];
+  }
+  const providers = new Set(
+    [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
+  );
+  return refs.filter((ref) => providers.has(normalizeProviderId(ref.provider)));
+}
+
+function isWantedSmallGatewayLiveModel(params: {
+  model: Pick<Model, "provider" | "id">;
+  targetMatcher: ReturnType<typeof createLiveTargetMatcher>;
+}): boolean {
+  return (
+    params.targetMatcher.matchesProvider(params.model.provider) &&
+    isSmallLiveModelRef({ provider: params.model.provider, id: params.model.id })
+  );
 }
 
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
@@ -998,6 +1022,24 @@ function createExplicitLiveFallbackModel(provider: string, id: string): Model {
   };
 }
 
+function createGatewayLiveTestRegistry(overrides: Partial<ModelRegistry>): ModelRegistry {
+  return {
+    find() {
+      return undefined;
+    },
+    getAll() {
+      return [];
+    },
+    getAvailable() {
+      return [];
+    },
+    hasConfiguredAuth() {
+      return true;
+    },
+    ...overrides,
+  };
+}
+
 describe("resolveExplicitLiveModelCandidates", () => {
   it("uses targeted registry lookup for explicit provider/model filters", () => {
     const model = createGatewayLiveTestModel("xai", "grok-4.3");
@@ -1007,7 +1049,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("xai");
           expect(modelId).toBe("grok-4.3");
@@ -1016,7 +1058,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["xai/grok-4.3"]),
       providerFilter: new Set(["xai"]),
       targetMatcher: matcher,
@@ -1033,7 +1075,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("google");
           expect(modelId).toBe("gemini-3.1-pro-preview");
@@ -1042,7 +1084,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["google/gemini-3-pro-preview"]),
       providerFilter: new Set(["google"]),
       targetMatcher: matcher,
@@ -1058,7 +1100,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("openai");
           expect(modelId).toBe("gpt-5.5");
@@ -1067,7 +1109,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["openai/gpt-5.5"]),
       providerFilter: new Set(["openai"]),
       targetMatcher: matcher,
@@ -1089,14 +1131,14 @@ describe("resolveExplicitLiveModelCandidates", () => {
 
     expect(
       resolveExplicitLiveModelCandidates({
-        modelRegistry: {
+        modelRegistry: createGatewayLiveTestRegistry({
           find() {
             throw new Error("ambiguous model-only lookup should not use direct find");
           },
           getAll() {
             return [];
           },
-        },
+        }),
         modelFilter: new Set(["grok-4.3"]),
         providerFilter: null,
         targetMatcher: matcher,
@@ -1152,6 +1194,36 @@ describe("providerScopedModelRegistryProviders", () => {
         providerFilter: new Set(["ollama", "openai"]),
       }),
     ).toEqual(["ollama"]);
+  });
+
+  it("filters prioritized small refs before dynamic lookup", () => {
+    expect(
+      filterGatewayLiveModelRefsByProvider(
+        listPrioritizedSmallLiveModelRefs(),
+        new Set(["ollama"]),
+      ),
+    ).toEqual([{ provider: "ollama", id: "gemma3:4b" }]);
+  });
+
+  it("does not count small models outside a provider-scoped gateway sweep", () => {
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["ollama"]),
+      modelFilter: null,
+      env: {},
+    });
+
+    expect(
+      isWantedSmallGatewayLiveModel({
+        model: createGatewayLiveTestModel("openrouter", "qwen/qwen3.5-9b"),
+        targetMatcher: matcher,
+      }),
+    ).toBe(false);
+    expect(
+      isWantedSmallGatewayLiveModel({
+        model: createGatewayLiveTestModel("ollama", "gemma3:4b"),
+        targetMatcher: matcher,
+      }),
+    ).toBe(true);
   });
 
   it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
@@ -2157,10 +2229,7 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
-type LiveModelRegistry = {
-  find(provider: string, modelId: string): Model | null | undefined;
-  getAll(): Array<Model>;
-};
+type LiveModelRegistry = ModelRegistry;
 
 function toGatewayLiveModel(params: {
   provider: string;
@@ -2258,6 +2327,12 @@ function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry 
     },
     getAll() {
       return models;
+    },
+    getAvailable() {
+      return models;
+    },
+    hasConfiguredAuth() {
+      return true;
     },
   };
 }
@@ -3512,7 +3587,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               workspaceDir,
               env: process.env,
               modelRegistry,
-              refs: listPrioritizedSmallLiveModelRefs(),
+              refs: filterGatewayLiveModelRefsByProvider(
+                listPrioritizedSmallLiveModelRefs(),
+                PROVIDERS,
+              ),
             }),
             "[all-models] load dynamic small model refs",
           );
@@ -3543,7 +3621,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           wanted = filter
             ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
             : useSmall
-              ? all.filter((m) => isSmallLiveModelRef({ provider: m.provider, id: m.id }))
+              ? all.filter((m) => isWantedSmallGatewayLiveModel({ model: m, targetMatcher }))
               : all.filter(
                   (m) =>
                     !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
