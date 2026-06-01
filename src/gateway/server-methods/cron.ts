@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   isInvalidCronRunLogJobIdError,
@@ -115,43 +116,6 @@ function assertCompatibleAnnounceTarget(params: {
   });
   if (error) {
     throw new Error(`${params.field}: ${error.message}`);
-  }
-}
-
-function assertNonBlankStringField(field: string, value: unknown) {
-  if (value === undefined || value === null || typeof value !== "string") {
-    return;
-  }
-  if (value.trim()) {
-    return;
-  }
-  throw new Error(`${field} must be a non-empty string`);
-}
-
-function assertDeliveryInputNonBlankFields(delivery: unknown, fieldPrefix = "delivery") {
-  if (!delivery || typeof delivery !== "object") {
-    return;
-  }
-  const deliveryRecord = delivery as {
-    channel?: unknown;
-    to?: unknown;
-    failureDestination?: unknown;
-    completionDestination?: unknown;
-  };
-  assertNonBlankStringField(`${fieldPrefix}.channel`, deliveryRecord.channel);
-  assertNonBlankStringField(`${fieldPrefix}.to`, deliveryRecord.to);
-
-  const failureDestination = deliveryRecord.failureDestination;
-  if (failureDestination && typeof failureDestination === "object") {
-    const failureRecord = failureDestination as { channel?: unknown; to?: unknown };
-    assertNonBlankStringField(`${fieldPrefix}.failureDestination.channel`, failureRecord.channel);
-    assertNonBlankStringField(`${fieldPrefix}.failureDestination.to`, failureRecord.to);
-  }
-
-  const completionDestination = deliveryRecord.completionDestination;
-  if (completionDestination && typeof completionDestination === "object") {
-    const completionRecord = completionDestination as { to?: unknown };
-    assertNonBlankStringField(`${fieldPrefix}.completionDestination.to`, completionRecord.to);
   }
 }
 
@@ -401,7 +365,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
     let normalized: unknown;
     try {
-      assertDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
+      assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
           sessionContext: { sessionKey },
@@ -480,7 +444,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
     try {
       const rawPatch = (params as { patch?: unknown } | null)?.patch;
-      assertDeliveryInputNonBlankFields(
+      assertCronDeliveryInputNonBlankFields(
         rawPatch && typeof rawPatch === "object"
           ? (rawPatch as { delivery?: unknown }).delivery
           : undefined,
