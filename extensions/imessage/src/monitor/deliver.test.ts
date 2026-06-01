@@ -117,6 +117,42 @@ describe("deliverReplies", () => {
     ]);
   });
 
+  it("preserves implicit reply source through legacy text sends", async () => {
+    const payload = {
+      text: "reply",
+      replyToId: "reply-implicit",
+      replyToIdSource: "implicit",
+    } as const;
+
+    await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
+      replies: [payload],
+      target: "chat_id:31",
+      client,
+      accountId: "acct-31",
+      runtime,
+      maxBytes: 4096,
+      textLimit: 4000,
+      replyRequesterSender: "+15551230000",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:31",
+        "reply",
+        {
+          config: IMESSAGE_TEST_CFG,
+          maxBytes: 4096,
+          client,
+          accountId: "acct-31",
+          replyToId: "reply-implicit",
+          replyToIdSource: "implicit",
+          replyRequesterSender: "+15551230000",
+        },
+      ],
+    ]);
+  });
+
   it("propagates payload replyToId through media sends", async () => {
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
