@@ -15,6 +15,7 @@ export type DreamingShadowTrialInput = {
   reason: string;
   riskFlags?: string[];
   evidenceRefs?: string[];
+  candidateScore?: number;
   workspaceDir?: string;
   reportPath?: string;
   nowMs?: number;
@@ -31,6 +32,11 @@ export type DreamingShadowTrialReport = {
   reason: string;
   riskFlags: string[];
   evidenceRefs: string[];
+  scoreBeforeShadowTrial?: number;
+  shadowTrialScoreDelta?: number;
+  scoreAfterShadowTrial?: number;
+  rejectedByShadowTrial?: boolean;
+  scoringAction: "report-only";
   promotionAction: "report-only";
   reportPath?: string;
   markdown: string;
@@ -107,6 +113,12 @@ function formatList(values: string[]): string {
   return values.map((value) => `- ${value}`).join("\n");
 }
 
+function formatScore(value: number): string {
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 function resolveReportContentHash(params: {
   candidate: string;
   trialPrompt: string;
@@ -116,6 +128,7 @@ function resolveReportContentHash(params: {
   reason: string;
   riskFlags: string[];
   evidenceRefs: string[];
+  candidateScore?: number;
 }): string {
   const seed = JSON.stringify([
     params.candidate,
@@ -126,6 +139,7 @@ function resolveReportContentHash(params: {
     params.reason,
     params.riskFlags,
     params.evidenceRefs,
+    params.candidateScore,
   ]);
   return crypto.createHash("sha256").update(seed).digest("hex").slice(0, 12);
 }
@@ -153,6 +167,7 @@ export function defaultDreamingShadowTrialReportPath(params: {
   reason: string;
   riskFlags?: string[];
   evidenceRefs?: string[];
+  candidateScore?: number;
   nowMs?: number;
   timezone?: string;
 }): string {
@@ -167,6 +182,9 @@ export function defaultDreamingShadowTrialReportPath(params: {
     reason: normalizeRequiredText(params.reason, "reason"),
     riskFlags: normalizeDataList(params.riskFlags),
     evidenceRefs: normalizeDataList(params.evidenceRefs),
+    ...(params.candidateScore !== undefined
+      ? { candidateScore: clampScore(params.candidateScore) }
+      : {}),
   });
   return path.join(
     params.workspaceDir,
@@ -188,6 +206,7 @@ function resolveReportPath(params: {
   reason: string;
   riskFlags: string[];
   evidenceRefs: string[];
+  candidateScore?: number;
   reportPath?: string;
   nowMs?: number;
   timezone?: string;
@@ -214,6 +233,7 @@ function resolveReportPath(params: {
     reason: params.reason,
     riskFlags: params.riskFlags,
     evidenceRefs: params.evidenceRefs,
+    candidateScore: params.candidateScore,
     nowMs: params.nowMs,
     timezone: params.timezone,
   });
@@ -230,6 +250,22 @@ export function buildDreamingShadowTrialReport(
   const riskFlags = normalizeDataList(input.riskFlags);
   const evidenceRefs = normalizeDataList(input.evidenceRefs);
   const recommendation = resolveDreamingShadowTrialRecommendation(input.verdict);
+  const hasCandidateScore = input.candidateScore !== undefined;
+  const scoreBeforeShadowTrial = hasCandidateScore
+    ? clampScore(input.candidateScore ?? 0)
+    : undefined;
+  const shadowTrialScoreDelta = hasCandidateScore
+    ? resolveDreamingShadowTrialScoreDelta(input.verdict)
+    : undefined;
+  const rejectedByShadowTrial = hasCandidateScore
+    ? input.verdict === "harmful" || recommendation === "reject"
+    : undefined;
+  const scoreAfterShadowTrial =
+    scoreBeforeShadowTrial === undefined || shadowTrialScoreDelta === undefined
+      ? undefined
+      : rejectedByShadowTrial
+        ? 0
+        : clampScore(scoreBeforeShadowTrial + shadowTrialScoreDelta);
   const reportPath = resolveReportPath({
     workspaceDir: input.workspaceDir,
     candidate,
@@ -240,6 +276,7 @@ export function buildDreamingShadowTrialReport(
     reason,
     riskFlags,
     evidenceRefs,
+    candidateScore: input.candidateScore,
     reportPath: input.reportPath,
     nowMs: input.nowMs,
     timezone: input.timezone,
@@ -259,6 +296,16 @@ export function buildDreamingShadowTrialReport(
     formatList(normalizeList(riskFlags, "none recorded")),
     "evidence refs:",
     formatList(normalizeList(evidenceRefs, "none supplied")),
+    "scoring:",
+    ...(hasCandidateScore
+      ? [
+          `- base score: ${formatScore(scoreBeforeShadowTrial ?? 0)}`,
+          `- shadow-trial delta: ${formatScore(shadowTrialScoreDelta ?? 0)}`,
+          `- final review score: ${formatScore(scoreAfterShadowTrial ?? 0)}`,
+          `- rejected by shadow trial: ${rejectedByShadowTrial ? "yes" : "no"}`,
+          "- scoring action: report-only",
+        ]
+      : ["- scoring action: report-only", "- score fields: not supplied"]),
     "promotion action: report-only",
     "",
   ].join("\n");
@@ -273,6 +320,11 @@ export function buildDreamingShadowTrialReport(
     reason,
     riskFlags,
     evidenceRefs,
+    ...(scoreBeforeShadowTrial !== undefined ? { scoreBeforeShadowTrial } : {}),
+    ...(shadowTrialScoreDelta !== undefined ? { shadowTrialScoreDelta } : {}),
+    ...(scoreAfterShadowTrial !== undefined ? { scoreAfterShadowTrial } : {}),
+    ...(rejectedByShadowTrial !== undefined ? { rejectedByShadowTrial } : {}),
+    scoringAction: "report-only",
     promotionAction: "report-only",
     ...(reportPath ? { reportPath } : {}),
     markdown,

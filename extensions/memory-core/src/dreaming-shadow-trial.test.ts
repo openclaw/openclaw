@@ -38,6 +38,7 @@ describe("dreaming shadow trial runner", () => {
     });
 
     expect(report.recommendation).toBe("promote");
+    expect(report.scoringAction).toBe("report-only");
     expect(report.promotionAction).toBe("report-only");
     expect(report.markdown).toContain("candidate: The user prefers release notes");
     expect(report.markdown).toContain("baseline outcome: Mentions tests passed");
@@ -47,8 +48,54 @@ describe("dreaming shadow trial runner", () => {
     expect(report.markdown).toContain("risk flags:");
     expect(report.markdown).toContain("- no secret exposure");
     expect(report.markdown).toContain("evidence refs:");
+    expect(report.markdown).toContain("scoring:");
+    expect(report.markdown).toContain("scoring action: report-only");
+    expect(report.markdown).toContain("score fields: not supplied");
     expect(report.markdown).toContain("promotion action: report-only");
     expect(report.markdown).not.toContain("promoted to MEMORY.md");
+  });
+
+  it("exposes shadow-trial scoring in the report without changing promotion action", () => {
+    const report = buildDreamingShadowTrialReport({
+      ...baseInput,
+      verdict: "helpful",
+      candidateScore: 0.74,
+    });
+
+    expect(report.scoreBeforeShadowTrial).toBe(0.74);
+    expect(report.shadowTrialScoreDelta).toBe(0.04);
+    expect(report.scoreAfterShadowTrial).toBe(0.78);
+    expect(report.rejectedByShadowTrial).toBe(false);
+    expect(report.scoringAction).toBe("report-only");
+    expect(report.promotionAction).toBe("report-only");
+    expect(report.markdown).toContain("base score: 0.74");
+    expect(report.markdown).toContain("shadow-trial delta: 0.04");
+    expect(report.markdown).toContain("final review score: 0.78");
+    expect(report.markdown).toContain("rejected by shadow trial: no");
+    expect(report.markdown).toContain("scoring action: report-only");
+    expect(report.markdown).toContain("promotion action: report-only");
+    expect(report.markdown).not.toContain("would-promote");
+    expect(report.markdown).not.toContain("promoted to MEMORY.md");
+  });
+
+  it("exposes harmful scoring as report-only rejection metadata", () => {
+    const report = buildDreamingShadowTrialReport({
+      ...baseInput,
+      verdict: "harmful",
+      candidateScore: 0.92,
+      reason: "The candidate would normalize credential exposure.",
+      riskFlags: ["credential exposure"],
+    });
+
+    expect(report.scoreBeforeShadowTrial).toBe(0.92);
+    expect(report.shadowTrialScoreDelta).toBe(-1);
+    expect(report.scoreAfterShadowTrial).toBe(0);
+    expect(report.rejectedByShadowTrial).toBe(true);
+    expect(report.scoringAction).toBe("report-only");
+    expect(report.promotionAction).toBe("report-only");
+    expect(report.markdown).toContain("rejected by shadow trial: yes");
+    expect(report.markdown).toContain("scoring action: report-only");
+    expect(report.markdown).toContain("promotion action: report-only");
   });
 
   it("writes only the shadow-trial report and leaves MEMORY.md unchanged", async () => {
@@ -64,6 +111,7 @@ describe("dreaming shadow trial runner", () => {
     });
 
     expect(report.recommendation).toBe("defer");
+    expect(report.scoringAction).toBe("report-only");
     expect(path.dirname(report.reportPath!)).toBe(
       path.join(workspaceDir, "memory", "dreaming", "shadow-trials", "2026-05-18"),
     );
@@ -122,6 +170,33 @@ describe("dreaming shadow trial runner", () => {
     );
     await expect(fs.readFile(second.reportPath!, "utf-8")).resolves.toContain(
       "candidate: The user prefers terse release notes",
+    );
+  });
+
+  it("keeps scored and unscored reports in separate default report files", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-shadow-trial-score-collisions-");
+    const nowMs = Date.parse("2026-05-18T18:00:00.000Z");
+
+    const unscored = await writeDreamingShadowTrialReport({
+      ...baseInput,
+      verdict: "helpful",
+      workspaceDir,
+      nowMs,
+    });
+    const scored = await writeDreamingShadowTrialReport({
+      ...baseInput,
+      verdict: "helpful",
+      candidateScore: 0.74,
+      workspaceDir,
+      nowMs,
+    });
+
+    expect(unscored.reportPath).not.toBe(scored.reportPath);
+    await expect(fs.readFile(unscored.reportPath!, "utf-8")).resolves.toContain(
+      "score fields: not supplied",
+    );
+    await expect(fs.readFile(scored.reportPath!, "utf-8")).resolves.toContain(
+      "final review score: 0.78",
     );
   });
 
