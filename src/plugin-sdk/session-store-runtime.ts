@@ -3,6 +3,7 @@
 import {
   listSessionEntries,
   loadSessionEntry as getSessionEntry,
+  readSessionUpdatedAt,
 } from "../config/sessions/session-accessor.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 
@@ -12,7 +13,7 @@ import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/sto
  * legacy mutable whole-store shape and will remain a compatibility escape hatch.
  */
 export const loadSessionStore = loadSessionStoreImpl;
-export { getSessionEntry, listSessionEntries };
+export { getSessionEntry, listSessionEntries, readSessionUpdatedAt };
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export {
@@ -28,7 +29,6 @@ export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 export {
   clearSessionStoreCacheForTest,
   patchSessionEntry,
-  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
   updateLastRoute,
