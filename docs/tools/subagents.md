@@ -506,6 +506,31 @@ Announce context is normalized to a stable internal event block:
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.
 
+### Recovery-card output
+
+For larger delegated tasks, ask sub-agents or orchestrator agents to return a
+small recovery card instead of a loose progress note. This makes the parent run
+easier to resume after compaction, timeout, or handoff.
+
+Use this shape when the child touched files, hit a blocker, or produced work
+that another agent must merge:
+
+```text
+Objective:
+Files touched:
+Commands run:
+Decisions:
+Blockers:
+Safety notes:
+Next action:
+```
+
+The recovery card should name paths relative to the workspace, describe proof
+that was actually run, and state what was not tested. It should not include
+secrets, raw tokens, cookies, OTPs, private contact details, or credential
+values. If a child saw credential-like text, it should say that credentials were
+visible and recommend rotation without repeating the value.
+
 ### Stats line
 
 Announce payloads include a stats line at the end (even when wrapped):

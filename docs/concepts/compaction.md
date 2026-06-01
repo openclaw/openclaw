@@ -56,6 +56,34 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 
 When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that OpenClaw cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
 
+## Recovery notes before long compactions
+
+For long-running work, ask the agent for a short recovery note before manual
+compaction or before switching devices. A recovery note is different from the
+model-generated compaction summary: it is written for the next human or agent
+that has to continue the task.
+
+Use a recovery note when the task has any of these:
+
+- open files or pending patches
+- a blocked login, approval, or external service
+- sub-agent results that still need to be merged
+- commands or tests that must be rerun
+- public, security, or credential-sensitive context that should not be guessed
+
+Recommended prompt:
+
+```text
+Before compacting, write a recovery note with: current objective, latest user
+correction, files touched, commands run, blockers, decisions, safety notes, and
+the exact next action. Do not include secrets, tokens, cookies, private contact
+details, or raw credentials.
+```
+
+Keep the note short enough to paste back into the same thread after `/compact`
+or into a new agent session. Store durable facts in [Memory](/concepts/memory)
+when they should survive beyond this task.
+
 ## Configuration
 
 Configure compaction under `agents.defaults.compaction` in your `openclaw.json`. The most common knobs are listed below; for the full reference, see [Session management deep dive](/reference/session-management-compaction).
