@@ -28,7 +28,7 @@ async function runBatchGroupTasks(params: {
   concurrency: number;
 }): Promise<void> {
   let next = 0;
-  let firstError: unknown;
+  let firstError: Error | undefined;
 
   const workers = Array.from(
     { length: Math.min(params.concurrency, params.tasks.length) },
@@ -43,7 +43,7 @@ async function runBatchGroupTasks(params: {
         try {
           await task();
         } catch (error) {
-          firstError ??= error;
+          firstError ??= error instanceof Error ? error : new Error(String(error));
           return;
         }
       }

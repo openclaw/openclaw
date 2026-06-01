@@ -512,11 +512,11 @@ describe("memory index", () => {
       releaseBatchGate = resolve;
     });
     const syncPromise = manager.sync({ reason: "test" });
-    let waitError: unknown;
+    let waitError: Error | undefined;
     try {
       await vi.waitFor(() => expect(providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1));
     } catch (err) {
-      waitError = err;
+      waitError = err instanceof Error ? err : new Error(String(err));
     } finally {
       releaseBatchGate?.();
       await syncPromise;

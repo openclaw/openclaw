@@ -76,54 +76,56 @@ async function startBatchServer(params?: {
   const statusResponses = [...(params?.statusResponses ?? [])];
   const statusFailures = [...(params?.statusFailures ?? [])];
   const completedStatus = { id: "batch-1", status: "completed", output_file_id: "file-output" };
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    try {
-      if (req.method === "POST" && req.url === "/v1/files") {
-        uploads.push(await readRawBody(req));
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "file-input" }));
-        return;
-      }
-      if (req.method === "POST" && req.url === "/v1/batches") {
-        batches.push(await readJsonBody(req));
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(params?.createStatus ?? completedStatus));
-        return;
-      }
-      if (req.method === "GET" && req.url === "/v1/batches/batch-1") {
-        statusPolls.push(req.url);
-        const failure = statusFailures.shift();
-        if (failure) {
-          res.writeHead(failure.status, { "content-type": "text/plain" });
-          res.end(failure.body);
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      try {
+        if (req.method === "POST" && req.url === "/v1/files") {
+          uploads.push(await readRawBody(req));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ id: "file-input" }));
           return;
         }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(statusResponses.shift() ?? completedStatus));
-        return;
+        if (req.method === "POST" && req.url === "/v1/batches") {
+          batches.push(await readJsonBody(req));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(params?.createStatus ?? completedStatus));
+          return;
+        }
+        if (req.method === "GET" && req.url === "/v1/batches/batch-1") {
+          statusPolls.push(req.url);
+          const failure = statusFailures.shift();
+          if (failure) {
+            res.writeHead(failure.status, { "content-type": "text/plain" });
+            res.end(failure.body);
+            return;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(statusResponses.shift() ?? completedStatus));
+          return;
+        }
+        if (req.method === "GET" && req.url === "/v1/files/file-output/content") {
+          res.writeHead(200, { "content-type": "application/jsonl" });
+          res.end(
+            [
+              JSON.stringify({
+                custom_id: "0",
+                response: { status_code: 200, body: { data: [{ embedding: [1, 0] }] } },
+              }),
+              JSON.stringify({
+                custom_id: "1",
+                response: { status_code: 200, body: { data: [{ embedding: [2, 1] }] } },
+              }),
+            ].join("\n"),
+          );
+          return;
+        }
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `unexpected ${req.method} ${req.url}` }));
+      } catch (error) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
       }
-      if (req.method === "GET" && req.url === "/v1/files/file-output/content") {
-        res.writeHead(200, { "content-type": "application/jsonl" });
-        res.end(
-          [
-            JSON.stringify({
-              custom_id: "0",
-              response: { status_code: 200, body: { data: [{ embedding: [1, 0] }] } },
-            }),
-            JSON.stringify({
-              custom_id: "1",
-              response: { status_code: 200, body: { data: [{ embedding: [2, 1] }] } },
-            }),
-          ].join("\n"),
-        );
-        return;
-      }
-      res.writeHead(404, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: `unexpected ${req.method} ${req.url}` }));
-    } catch (error) {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
-    }
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {
