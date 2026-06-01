@@ -1241,7 +1241,11 @@ describe("handleSendChat", () => {
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("use the newly selected model");
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "sending",
+      text: "use the newly selected model",
+    });
 
     switchUpdate.resolve(true);
     await send;
@@ -1333,11 +1337,11 @@ describe("handleSendChat", () => {
     expect(attachments[0]?.mimeType).toBe("application/pdf");
     expect(attachments[0]?.type).toBe("file");
     expect(host.chatMessage).toBe("keep typing with the attachment");
-    expect(host.chatAttachments).toEqual([attachment]);
-    expect(getChatAttachmentDataUrl(attachment)).toBe("data:application/pdf;base64,JVBERi0xLjQK");
+    expect(host.chatAttachments).toStrictEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
-  it("preserves draft text when only attachments change during a delayed send", async () => {
+  it("preserves edited attachments when attachments change during a delayed send", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -1393,7 +1397,7 @@ describe("handleSendChat", () => {
     expect(attachments[0]?.fileName).toBe("original.pdf");
     expect(attachments[0]?.mimeType).toBe("application/pdf");
     expect(attachments[0]?.type).toBe("file");
-    expect(host.chatMessage).toBe("send this");
+    expect(host.chatMessage).toBe("");
     expect(host.chatAttachments).toEqual([editedAttachment]);
     expect(getChatAttachmentDataUrl(originalAttachment)).toBeNull();
     expect(getChatAttachmentDataUrl(editedAttachment)).toBe("data:application/pdf;base64,ZWRpdGVk");
@@ -1445,7 +1449,7 @@ describe("handleSendChat", () => {
     expect(attachments[0]?.fileName).toBe("original.pdf");
     expect(attachments[0]?.mimeType).toBe("application/pdf");
     expect(attachments[0]?.type).toBe("file");
-    expect(host.chatMessage).toBe("send this");
+    expect(host.chatMessage).toBe("");
     expect(host.chatAttachments).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });

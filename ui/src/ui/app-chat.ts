@@ -475,6 +475,17 @@ function removeQueuedMessageWithoutReleasing(
   return item;
 }
 
+function removeVisibleOrScopedQueuedMessageWithoutReleasing(
+  host: ChatHost,
+  id: string,
+  sessionKey: string | undefined,
+): ChatQueueItem | null {
+  return (
+    removeQueuedMessageWithoutReleasing(host, id) ??
+    (sessionKey ? removeQueuedMessageWithoutReleasing(host, id, sessionKey) : null)
+  );
+}
+
 function isRecoverableChatSendError(err: unknown, formattedError: string): boolean {
   if (err instanceof GatewayRequestError) {
     return err.retryable;
@@ -494,6 +505,28 @@ function restoreComposerAfterFailedSend(
   }
   if (opts.previousAttachments?.length && host.chatAttachments.length === 0) {
     host.chatAttachments = opts.previousAttachments;
+  }
+}
+
+function cancelPendingSendBeforeRequest(
+  host: ChatHost,
+  queued: ChatQueueItem,
+  opts: {
+    previousAttachments?: ChatAttachment[];
+    previousDraft?: string;
+  },
+) {
+  const removed = removeVisibleOrScopedQueuedMessageWithoutReleasing(
+    host,
+    queued.id,
+    queued.sessionKey,
+  );
+  const willRestoreAttachments = Boolean(
+    opts.previousAttachments?.length && host.chatAttachments.length === 0,
+  );
+  restoreComposerAfterFailedSend(host, opts);
+  if (removed && !willRestoreAttachments) {
+    releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
 }
 
@@ -1312,10 +1345,6 @@ export async function handleSendChat(
   const refreshSessions = isChatResetCommand(message);
   const submitKey = chatSubmitKey(host, "message", message, attachmentsToSend);
   await withChatSubmitGuard(host, submitKey, async () => {
-    const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
-    if (modelSwitchReady !== true && !(await modelSwitchReady)) {
-      return;
-    }
     if (host.sessionKey !== submittedSessionKey) {
       return;
     }
@@ -1323,26 +1352,49 @@ export async function handleSendChat(
       messageOverride == null
         ? clearSubmittedComposerState(host, previousDraft, attachmentsToSend)
         : {};
+    if (messageOverride == null) {
+      recordNonTranscriptInputHistory(host, message);
+    }
+
+    const queued = enqueuePendingSendMessage(
+      host,
+      message,
+      hasAttachments ? attachmentsToSend : undefined,
+      refreshSessions,
+      submittedAtMs,
+    );
+    if (!queued) {
+      return;
+    }
+
+    const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
+    if (modelSwitchReady !== true && !(await modelSwitchReady)) {
+      cancelPendingSendBeforeRequest(host, queued, {
+        previousDraft: cleared.previousDraft,
+        previousAttachments: cleared.previousAttachments,
+      });
+      return;
+    }
+    if (host.sessionKey !== submittedSessionKey) {
+      cancelPendingSendBeforeRequest(host, queued, {
+        previousDraft: cleared.previousDraft,
+        previousAttachments: cleared.previousAttachments,
+      });
+      return;
+    }
 
     if (isChatBusy(host)) {
-      if (messageOverride == null) {
-        recordNonTranscriptInputHistory(host, message);
-      }
-      enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
-      recordControlUiPerformanceEvent(
-        host as Parameters<typeof recordControlUiPerformanceEvent>[0],
-        "control-ui.chat.send",
-        {
-          phase: "queued-busy",
-          durationMs: roundedControlUiDurationMs(controlUiNowMs() - submittedAtMs),
-          sessionKey: host.sessionKey,
-        },
-        { console: false, maxBufferedEventsForType: 40 },
-      );
+      updateQueuedMessage(host, queued.id, (item) => ({
+        ...item,
+        sendError: undefined,
+        sendState: undefined,
+      }));
+      recordChatSendTiming(host, queued, "queued-busy", submittedAtMs);
       return;
     }
 
     await sendChatMessageNow(host, message, {
+      queueItemId: queued.id,
       previousDraft: cleared.previousDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
       attachments: hasAttachments ? attachmentsToSend : undefined,
