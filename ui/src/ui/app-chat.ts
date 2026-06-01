@@ -22,6 +22,11 @@ import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
 import { formatConnectError } from "./connect-error.ts";
+import {
+  controlUiNowMs,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+} from "./control-ui-performance.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   abortChatRun,
@@ -96,6 +101,9 @@ export type ChatHost = ChatInputHistoryState & {
   chatSubmitGuards?: Map<string, Promise<void>>;
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  eventLogBuffer?: unknown[];
+  eventLog?: unknown[];
+  tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
 };
@@ -380,6 +388,7 @@ function enqueuePendingSendMessage(
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
+  submittedAtMs = controlUiNowMs(),
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -395,10 +404,12 @@ function enqueuePendingSendMessage(
     sendAttempts: 0,
     sendRunId: generateUUID(),
     sendState: host.connected && host.client ? "sending" : "waiting-reconnect",
+    sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
   };
   host.chatQueue = [...host.chatQueue, pending];
+  recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
   return pending;
 }
 
@@ -488,6 +499,44 @@ function restoreComposerAfterFailedSend(
 
 type QueuedChatSendResult = "sent" | "pending" | "failed";
 
+type ChatSendTimingPhase =
+  | "pending-visible"
+  | "request-start"
+  | "ack"
+  | "queued-busy"
+  | "waiting-reconnect"
+  | "failed";
+
+function recordChatSendTiming(
+  host: ChatHost,
+  item: Pick<
+    ChatQueueItem,
+    "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
+  >,
+  phase: ChatSendTimingPhase,
+  startedAtMs = item.sendSubmittedAtMs,
+  extra: Record<string, unknown> = {},
+) {
+  if (startedAtMs == null) {
+    return;
+  }
+  recordControlUiPerformanceEvent(
+    host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+    "control-ui.chat.send",
+    {
+      phase,
+      durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
+      runId: item.sendRunId,
+      sessionKey: item.sessionKey,
+      agentId: item.agentId,
+      sendAttempts: item.sendAttempts ?? 0,
+      sendState: item.sendState,
+      ...extra,
+    },
+    { console: false, maxBufferedEventsForType: 40 },
+  );
+}
+
 function ensureQueuedSendState(
   host: ChatHost,
   item: ChatQueueItem,
@@ -543,15 +592,18 @@ async function sendQueuedChatMessage(
 
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
+  const requestStartedAtMs = controlUiNowMs();
   updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
     sendError: undefined,
     sendRunId: runId,
     sendState: "sending",
+    sendRequestStartedAtMs: requestStartedAtMs,
     sessionKey,
     agentId: prepared.agentId,
   }));
+  recordChatSendTiming(host, prepared, "request-start", prepared.sendSubmittedAtMs);
   host.chatSending = true;
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   if (isVisibleSession()) {
@@ -568,6 +620,10 @@ async function sendQueuedChatMessage(
       runId,
       sessionKey,
       agentId: prepared.agentId,
+    });
+    recordChatSendTiming(host, prepared, "ack", prepared.sendSubmittedAtMs, {
+      ackStatus: ack.status,
+      requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {
@@ -626,6 +682,9 @@ async function sendQueuedChatMessage(
       if (isVisibleSession()) {
         setChatError(host, "Message will send when the Gateway reconnects.");
       }
+      recordChatSendTiming(host, prepared, "waiting-reconnect", prepared.sendSubmittedAtMs, {
+        error,
+      });
       return "pending";
     }
     updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
@@ -637,6 +696,7 @@ async function sendQueuedChatMessage(
       setChatError(host, error);
       restoreComposerAfterFailedSend(host, opts ?? {});
     }
+    recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
     return "failed";
   } finally {
     host.chatSending = false;
@@ -654,6 +714,7 @@ async function sendChatMessageNow(
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
+    submittedAtMs?: number;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
@@ -662,7 +723,13 @@ async function sendChatMessageNow(
   const queued =
     opts?.queueItemId != null
       ? (host.chatQueue.find((item) => item.id === opts.queueItemId) ?? null)
-      : enqueuePendingSendMessage(host, message, opts?.attachments, opts?.refreshSessions);
+      : enqueuePendingSendMessage(
+          host,
+          message,
+          opts?.attachments,
+          opts?.refreshSessions,
+          opts?.submittedAtMs,
+        );
   if (!queued) {
     return false;
   }
@@ -1164,6 +1231,7 @@ export async function handleSendChat(
 ) {
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
+  const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
@@ -1261,6 +1329,16 @@ export async function handleSendChat(
         recordNonTranscriptInputHistory(host, message);
       }
       enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+      recordControlUiPerformanceEvent(
+        host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+        "control-ui.chat.send",
+        {
+          phase: "queued-busy",
+          durationMs: roundedControlUiDurationMs(controlUiNowMs() - submittedAtMs),
+          sessionKey: host.sessionKey,
+        },
+        { console: false, maxBufferedEventsForType: 40 },
+      );
       return;
     }
 
@@ -1271,6 +1349,7 @@ export async function handleSendChat(
       previousAttachments: cleared.previousAttachments,
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       refreshSessions,
+      submittedAtMs,
     });
   });
 }

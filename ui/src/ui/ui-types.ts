@@ -21,6 +21,8 @@ export type ChatQueueItem = {
   sendError?: string;
   sendRunId?: string;
   sendState?: "sending" | "waiting-reconnect" | "failed";
+  sendSubmittedAtMs?: number;
+  sendRequestStartedAtMs?: number;
   sessionKey?: string;
   agentId?: string;
 };

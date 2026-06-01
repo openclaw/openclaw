@@ -107,6 +107,21 @@ function findRequestPayload(source: MockCallSource, method: string, label: strin
   return requireRecord(call[1], label);
 }
 
+function eventPayloads(host: ChatHost, event: string): Array<Record<string, unknown>> {
+  return (host.eventLogBuffer ?? [])
+    .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      const candidate = entry as { event?: unknown; payload?: unknown };
+      return (
+        candidate.event === event &&
+        Boolean(candidate.payload && typeof candidate.payload === "object")
+      );
+    })
+    .map((entry) => entry.payload);
+}
+
 function fetchInit(source: MockCallSource, callIndex: number) {
   return requireRecord(mockArg(source, callIndex, 1, `fetch init ${callIndex}`), "fetch init");
 }
@@ -1176,6 +1191,36 @@ describe("handleSendChat", () => {
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("/reset");
     expect(host.chatMessage).toBe("");
+  });
+
+  it("records visible send timing phases for a normal chat send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "measure first send",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    await handleSendChat(host);
+
+    const sendEvents = eventPayloads(host, "control-ui.chat.send");
+    expect(sendEvents.map((payload) => payload.phase)).toEqual(
+      expect.arrayContaining(["pending-visible", "request-start", "ack"]),
+    );
+    const ack = sendEvents.find((payload) => payload.phase === "ack");
+    expect(ack).toMatchObject({
+      ackStatus: "started",
+      sessionKey: "agent:main",
+      sendState: "sending",
+    });
+    expect(ack?.durationMs).toEqual(expect.any(Number));
+    expect(ack?.requestDurationMs).toEqual(expect.any(Number));
   });
 
   it("waits for an in-flight model picker update before sending chat", async () => {
