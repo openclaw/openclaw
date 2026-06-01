@@ -1334,16 +1334,10 @@ export async function restartLaunchAgent({
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
+    // During a launchd restart, the active LaunchAgent is expected to own the
+    // port until `kickstart -k` replaces it. Reap stale gateway listeners, but
+    // do not require the port to be free before asking launchd to restart.
     cleanStaleGatewayProcessesSync(cleanupPort);
-    const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
-    if (diagnostics?.status === "busy") {
-      throw new Error(
-        [
-          `gateway port ${cleanupPort} is still busy before LaunchAgent restart`,
-          ...formatPortDiagnostics(diagnostics),
-        ].join("\n"),
-      );
-    }
   }
   const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
     env: serviceEnv,
