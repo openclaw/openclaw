@@ -1683,6 +1683,24 @@ function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: stri
   return targetSnippet.slice(0, bodyIndex).trimEnd().endsWith(":");
 }
 
+function extractTargetHeadingBodySnippet(
+  targetSnippet: string,
+  bodySnippet: string,
+): string | null {
+  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
+    return null;
+  }
+  if (bodySnippet.startsWith(targetSnippet)) {
+    return null;
+  }
+  const separatorIndex = targetSnippet.lastIndexOf(": ");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
+  return targetBody || null;
+}
+
 function compareCandidateWindow(
   targetSnippet: string,
   windowSnippet: string,
@@ -1753,26 +1771,42 @@ function relocateCandidateRange(
         listMarkerFreeMatchSnippet === listMarkerFreeSnippet
           ? { matched: false, quality: 0 }
           : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
+      const targetHeadingBodySnippet = extractTargetHeadingBodySnippet(
+        targetSnippet,
+        listMarkerFreeSnippet,
+      );
+      const targetHeadingBodyComparison =
+        targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
+          ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
+          : { matched: false, quality: 0 };
+      const useTargetHeadingBodyContext =
+        targetHeadingBodyComparison.matched &&
+        targetHeadingBodyComparison.quality >= comparison.quality &&
+        targetHeadingBodyComparison.quality >= listMarkerFreeComparison.quality;
       const useListMarkerFreeContext =
+        !useTargetHeadingBodyContext &&
         listMarkerFreeContextComparison.quality > comparison.quality &&
         listMarkerFreeContextComparison.quality >= listMarkerFreeComparison.quality;
       const useListMarkerFree =
         !useListMarkerFreeContext && listMarkerFreeComparison.quality > comparison.quality;
-      const bestComparison = useListMarkerFreeContext
-        ? listMarkerFreeContextComparison
-        : useListMarkerFree
-          ? listMarkerFreeComparison
-          : comparison;
+      const bestComparison = useTargetHeadingBodyContext
+        ? targetHeadingBodyComparison
+        : useListMarkerFreeContext
+          ? listMarkerFreeContextComparison
+          : useListMarkerFree
+            ? listMarkerFreeComparison
+            : comparison;
       if (!bestComparison.matched) {
         continue;
       }
-      const matchedSnippet = useListMarkerFreeContext
-        ? listMarkerFreeMatchSnippet
-        : useListMarkerFree
-          ? targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
-            ? listMarkerFreeMatchSnippet
-            : listMarkerFreeSnippet
-          : snippet;
+      const matchedSnippet =
+        useTargetHeadingBodyContext || useListMarkerFreeContext
+          ? listMarkerFreeMatchSnippet
+          : useListMarkerFree
+            ? targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
+              ? listMarkerFreeMatchSnippet
+              : listMarkerFreeSnippet
+            : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
