@@ -1,10 +1,13 @@
 import { normalizeDeviceAuthScopes } from "./device-auth.js";
 
 export type DevicePairingAccessSummary = {
+  /** Normalized role ids requested or approved for a device. */
   roles: string[];
+  /** Normalized scope ids, including implied operator scopes. */
   scopes: string[];
 };
 
+/** Approval classification shown when a pending pairing differs from existing grants. */
 export type PendingDeviceApprovalKind =
   | "new-pairing"
   | "role-upgrade"
@@ -13,7 +16,9 @@ export type PendingDeviceApprovalKind =
 
 export type PendingDeviceApprovalState = {
   kind: PendingDeviceApprovalKind;
+  /** Access requested by the pending pairing attempt. */
   requested: DevicePairingAccessSummary;
+  /** Existing active access, or null for a new pairing. */
   approved: DevicePairingAccessSummary | null;
 };
 
