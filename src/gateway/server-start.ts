@@ -102,6 +102,10 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Reset the shutting-down flag before any startup work so an in-process
+  // restart starts answering live probes as healthy again.
+  const { resetGatewayShuttingDownState } = await loadGatewayCloseModule();
+  resetGatewayShuttingDownState();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
