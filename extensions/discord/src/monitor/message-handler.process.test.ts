@@ -2504,7 +2504,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("delivers tool warning finals when no recovered reply is available", async () => {
+  it("suppresses pure tool warning finals when no recovered reply is available", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
@@ -2519,18 +2519,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
-      replies: [
-        {
-          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-          isError: true,
-        },
-      ],
-    });
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("delivers tool warning finals when the recovered reply fails to send", async () => {
+  it("suppresses tool warning finals when the recovered reply fails to send", async () => {
     deliverDiscordReply.mockRejectedValueOnce(new Error("send failed"));
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "delivery failed" });
@@ -2549,21 +2541,13 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(2);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       replies: [{ text: "delivery failed" }],
     });
-    expect(deliverDiscordReply.mock.calls[1]?.[0]).toMatchObject({
-      replies: [
-        {
-          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-          isError: true,
-        },
-      ],
-    });
   });
 
-  it("keeps mutating tool warning finals after successful-looking replies", async () => {
+  it("suppresses mutating tool warning finals after successful-looking replies", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "Done." });
@@ -2582,15 +2566,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     expectPreviewEditContent("Done.");
     expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
-      replies: [
-        {
-          text: "⚠️ 🛠️ `write file (agent)` failed",
-          isError: true,
-        },
-      ],
-    });
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
   it("suppresses reasoning payload delivery to Discord", async () => {

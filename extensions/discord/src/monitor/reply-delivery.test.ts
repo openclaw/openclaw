@@ -183,6 +183,7 @@ describe("deliverDiscordReply", () => {
           text: [
             "📊 Session Status: current",
             "🛠️ run git status",
+            "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
             "🛠️ `gh pr view`",
             "🛠️ `docker compose up`",
             "🛠️ elevated · `cd /tmp && pnpm test`",
@@ -202,6 +203,26 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
+  });
+
+  it("drops pure internal tool failure warnings at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+          isError: true,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "final",
+    });
+
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
   });
 
   it("strips serialized tool call blocks at the final Discord send boundary", async () => {
@@ -243,7 +264,7 @@ describe("deliverDiscordReply", () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "commentary: calling tool\nanalysis: inspect private state",
+          text: "tool_call: calling tool\ntool_result: inspect private state",
           mediaUrl: "https://example.com/result.png",
         },
       ],
@@ -283,7 +304,7 @@ describe("deliverDiscordReply", () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "analysis: internal only",
+          text: "tool_result: internal only",
           channelData,
         },
       ],
@@ -313,7 +334,7 @@ describe("deliverDiscordReply", () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "commentary: hidden",
+          text: "function_call: hidden",
           presentation,
         },
       ],

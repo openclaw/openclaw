@@ -830,6 +830,34 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("strips internal tool trace warning lines on the delivery path", () => {
+    const input = [
+      "Visible intro.",
+      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      "🛠️ run git status",
+      "Visible outro.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible intro.\nVisible outro.");
+  });
+
+  it("preserves internal tool trace examples inside fenced code", () => {
+    const input = [
+      "Example:",
+      "```",
+      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves ordinary analysis headings", () => {
+    const input = ["Analysis:", "This is user-visible reasoning about the result."].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("drops malformed reasoning before orphan close tags when final text follows", () => {
     expect(sanitizeAssistantVisibleText("private chain of thought </think> Visible answer")).toBe(
       "Visible answer",

@@ -304,6 +304,37 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips internal tool trace warning lines from error-context delivery text", () => {
+    const input = [
+      "Visible intro.",
+      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      "🛠️ run git status",
+      "📖 Read: lines 1-40 from secret.md",
+      "Visible outro.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input, { errorContext: true })).toBe(
+      "Visible intro.\nVisible outro.",
+    );
+  });
+
+  it("preserves explicit tool progress outside error-context delivery text", () => {
+    const input = "🛠️ Exec: echo queued-progress";
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("preserves internal trace examples inside fenced code", () => {
+    const input = [
+      "Example:",
+      "```",
+      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
   it("strips plural XML function-call wrappers before user-facing delivery", () => {
     const input = [
       "Before",
