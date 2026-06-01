@@ -28,6 +28,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
 import { isGemma4ModelId } from "../shared/google-models.js";
 import {
   isResponsesTextContentPartType,
@@ -1103,8 +1104,14 @@ function convertResponsesMessages(
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
+      type: "message",
       role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+      content: [
+        {
+          type: "input_text",
+          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ],
     });
   }
   let msgIndex = 0;
@@ -1112,6 +1119,7 @@ function convertResponsesMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
         });
@@ -1128,7 +1136,7 @@ function convertResponsesMessages(
           ) as ResponseInputMessageContentList
         ).filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
-          messages.push({ role: "user", content });
+          messages.push({ type: "message", role: "user", content });
         }
       }
     } else if (msg.role === "assistant") {
@@ -2063,6 +2071,7 @@ function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Conte
     );
   }
   messages.push({
+    type: "message",
     role: "user",
     content: [{ type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT }],
   });
@@ -2331,14 +2340,23 @@ function createAzureOpenAIClient(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
 ) {
-  return new AzureOpenAI({
+  const baseURL = normalizeAzureBaseUrl(model.baseUrl);
+  const clientOptions = {
     apiKey,
-    apiVersion: resolveAzureOpenAIApiVersion(),
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
-    baseURL: normalizeAzureBaseUrl(model.baseUrl),
+    baseURL,
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
+  };
+
+  if (isOpenAICompatibleAzureResponsesBaseUrl(baseURL)) {
+    return new OpenAI(clientOptions);
+  }
+
+  return new AzureOpenAI({
+    ...clientOptions,
+    apiVersion: resolveAzureOpenAIApiVersion(),
   });
 }
 

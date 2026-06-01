@@ -853,6 +853,30 @@ describe("openai transport stream", () => {
     );
   });
 
+  it("uses an OpenAI-compatible client for Foundry Azure Responses base URLs", () => {
+    const model = {
+      ...createAzureResponsesModel(),
+      baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
+    };
+    const client = testing.createAzureOpenAIClient(
+      model,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      "test-key",
+    );
+
+    expect(client.constructor.name).toBe("OpenAI");
+  });
+
+  it("keeps traditional Azure Responses hosts on the AzureOpenAI client", () => {
+    const client = testing.createAzureOpenAIClient(
+      createAzureResponsesModel(),
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      "test-key",
+    );
+
+    expect(client.constructor.name).toBe("AzureOpenAI");
+  });
+
   it("passes provider request timeouts to OpenAI SDK clients", () => {
     const requestTimeoutMs = 900_000;
 
@@ -2162,6 +2186,29 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]?.role).toBe("system");
+  });
+
+  it("adds explicit message item types for Responses system and user input items", () => {
+    const params = buildOpenAIResponsesParams(
+      createAzureResponsesModel(),
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ type?: string; role?: string; content?: unknown }> };
+
+    expect(params.input?.[0]).toMatchObject({
+      type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: "system" }],
+    });
+    expect(params.input?.[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hello" }],
+    });
   });
 
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
@@ -3746,6 +3793,7 @@ describe("openai transport stream", () => {
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
     expect(params.input).toEqual([
       {
+        type: "message",
         role: "user",
         content: [{ type: "input_text", text: " " }],
       },
@@ -4113,9 +4161,11 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ content?: string }> };
+    ) as { input?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
 
-    expect(params.input?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input?.[0]?.content).toEqual([
+      { type: "input_text", text: "Stable prefix\nDynamic suffix" },
+    ]);
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {

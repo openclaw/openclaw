@@ -18,6 +18,7 @@ import {
   type AzureResponsesTextContentPart,
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
+  isResponsesTextContentPartType,
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -249,8 +250,9 @@ export function convertResponsesMessages<TApi extends Api>(
   if (includeSystemPrompt && context.systemPrompt) {
     const role = model.reasoning ? "developer" : "system";
     messages.push({
+      type: "message",
       role,
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }],
     });
   }
 
@@ -259,6 +261,7 @@ export function convertResponsesMessages<TApi extends Api>(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
         });
@@ -280,6 +283,7 @@ export function convertResponsesMessages<TApi extends Api>(
           continue;
         }
         messages.push({
+          type: "message",
           role: "user",
           content,
         });
@@ -663,7 +667,7 @@ export async function processResponsesStream<TApi extends Api>(
           continue;
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
-        if (lastPart?.type === "output_text") {
+        if (isResponsesTextContentPartType(lastPart?.type)) {
           currentBlock.text += event.delta;
           lastPart.text += event.delta;
           stream.push({

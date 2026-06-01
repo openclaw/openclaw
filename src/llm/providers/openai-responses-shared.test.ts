@@ -155,6 +155,28 @@ describe("convertResponsesTools", () => {
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 
+  it("adds explicit message item types for system and user input items", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      } satisfies Context,
+      allowedToolCallProviders,
+    );
+
+    expect(input[0]).toMatchObject({
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "system" }],
+    });
+    expect(input[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "hello" }],
+    });
+  });
+
   it("omits phase-tagged assistant replay ids without reasoning", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -425,7 +447,7 @@ describe("Azure OpenAI Responses content type support", () => {
     });
   });
 
-  it("processResponsesStream handles Azure 'text' content type streaming events", async () => {
+  it("processResponsesStream handles Azure 'text' content type with output_text deltas", async () => {
     const azureEvents: OpenAIResponsesStreamEvent[] = [
       {
         type: "response.output_item.added",
@@ -451,16 +473,31 @@ describe("Azure OpenAI Responses content type support", () => {
         },
       },
       {
-        type: "response.text.delta",
+        type: "response.output_text.delta",
+        content_index: 0,
         delta: "Hello",
+        item_id: "msg_azure_1",
+        logprobs: [],
+        output_index: 0,
+        sequence_number: 3,
       },
       {
-        type: "response.text.delta",
+        type: "response.output_text.delta",
+        content_index: 0,
         delta: " from",
+        item_id: "msg_azure_1",
+        logprobs: [],
+        output_index: 0,
+        sequence_number: 4,
       },
       {
-        type: "response.text.delta",
+        type: "response.output_text.delta",
+        content_index: 0,
         delta: " Azure!",
+        item_id: "msg_azure_1",
+        logprobs: [],
+        output_index: 0,
+        sequence_number: 5,
       },
       {
         type: "response.output_item.done",
