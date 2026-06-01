@@ -109,10 +109,12 @@ import {
 } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { isRoutableChannel, routeReply } from "./route-reply.runtime.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 // Maximum number of LiveSessionModelSwitchError retries before surfacing a
@@ -1564,9 +1566,6 @@ export async function runAgentTurnWithFallback(params: {
   const shouldNotifyUserAboutCompaction =
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
-    if (!params.opts?.onBlockReply) {
-      return;
-    }
     const text =
       phase === "start"
         ? "🧹 Compacting context..."
@@ -1579,12 +1578,51 @@ export async function runAgentTurnWithFallback(params: {
       replyToCurrent: true,
       isCompactionNotice: true,
     });
+
+    // Primary path: deliver through the active turn's streaming callback.
+    if (params.opts?.onBlockReply) {
+      try {
+        await params.opts.onBlockReply(noticePayload);
+      } catch (err) {
+        logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+      }
+      return;
+    }
+
+    // Fallback path: deliver through the canonical session outbound path when
+    // no active streaming turn is available (e.g. async / preflight compactions).
+    // Only send when notifyUser is enabled and the channel is routable.
+    if (!shouldNotifyUserAboutCompaction) {
+      return;
+    }
+    const channel = params.sessionCtx.Surface ?? params.sessionCtx.Provider;
+    if (!channel || !isRoutableChannel(channel)) {
+      return;
+    }
+    const to = params.sessionCtx.OriginatingTo ?? params.sessionCtx.To;
+    if (!to) {
+      return;
+    }
+
     try {
-      await params.opts.onBlockReply(noticePayload);
+      const replyKind: ReplyDispatchKind = "block";
+      await routeReply({
+        payload: noticePayload,
+        channel,
+        to,
+        sessionKey: params.sessionKey,
+        accountId: params.sessionCtx.AccountId,
+        requesterSenderId: params.sessionCtx.SenderId,
+        requesterSenderName: params.sessionCtx.SenderName,
+        requesterSenderUsername: params.sessionCtx.SenderUsername,
+        requesterSenderE164: params.sessionCtx.SenderE164,
+        threadId: params.followupRun.originatingThreadId ?? params.sessionCtx.MessageThreadId,
+        cfg: runtimeConfig,
+        replyKind,
+        runId: params.followupRun.run.runId,
+      });
     } catch (err) {
-      // Non-critical notice delivery failure should not bubble out of the
-      // fire-and-forget event handler.
-      logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+      logVerbose(`compaction ${phase} notice route-reply failed (non-fatal): ${String(err)}`);
     }
   };
   const readCompactionHookMessages = (value: unknown): string[] => {
