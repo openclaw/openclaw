@@ -815,6 +815,11 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       unavailableCronWarningEmitted = false;
       clearStartupCronRetry();
     }
+    // Startup retries only probe cron availability; the exhausted retry path
+    // re-enters runtime reconciliation so persistent failures still warn once.
+    if (!cron && params.reason === "startup_retry") {
+      return config;
+    }
     if (params.reason === "runtime") {
       const now = Date.now();
       const withinThrottleWindow =
