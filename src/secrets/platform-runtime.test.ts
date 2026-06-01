@@ -55,6 +55,15 @@ describe("platform runtime secrets", () => {
     expect(result).toEqual({ action: "pass" });
   });
 
+  it("treats ordinary env references as non-secret when tenant runtime identity is absent", async () => {
+    const result = await evaluateSecretAwareExecCommand({
+      command: "echo $PATH && echo $FOO",
+      env: {},
+      client: client({ metadata: { known: { FOO: { category: "token" } }, unknown: ["PATH"] } }),
+    });
+    expect(result).toEqual({ action: "pass" });
+  });
+
   it("handles exact secret form without disclosing prefix bytes", async () => {
     const secret = "CANARY_SECRET_VALUE_abcdef";
     const runtimeClient = client({

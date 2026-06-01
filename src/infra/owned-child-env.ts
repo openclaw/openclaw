@@ -34,6 +34,7 @@ const ALLOWED_EXACT = new Set([
 const ALLOWED_PREFIXES = ["LC_"];
 const BLOCKED_NAME_RE =
   /(?:TOKEN|PASSWORD|PASSWD|SECRET|PRIVATE[_-]?KEY|CREDENTIAL|API[_-]?KEY|BROKER[_-]?TENANT[_-]?TOKEN)/i;
+const PORTABLE_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 export type OwnedChildEnvOptions = {
   baseEnv?: NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -68,11 +69,29 @@ function assignAllowed(
   }
 }
 
+function assignExplicitOverrides(
+  out: Record<string, string>,
+  source: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
+): void {
+  if (!source) {
+    return;
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || value === "" || !PORTABLE_ENV_NAME_RE.test(key)) {
+      continue;
+    }
+    if (key !== "ROCKIELAB_TENANT_TOKEN" && BLOCKED_NAME_RE.test(key)) {
+      continue;
+    }
+    out[key] = value;
+  }
+}
+
 export function buildOwnedChildEnv(options: OwnedChildEnvOptions = {}): NodeJS.ProcessEnv {
   const baseEnv = options.baseEnv ?? process.env;
   const out: Record<string, string> = {};
   assignAllowed(out, baseEnv);
-  assignAllowed(out, options.overrides);
+  assignExplicitOverrides(out, options.overrides);
   out.PATH ||= DEFAULT_PATH;
   const tenantId = options.overrides?.ROCKIELAB_TENANT_ID ?? baseEnv.ROCKIELAB_TENANT_ID;
   if (tenantId?.trim()) {

@@ -245,12 +245,17 @@ describe("exec PATH login shell merge", () => {
 
       expect(entries).toEqual(["/usr/bin"]);
       expect(shellPathMock).toHaveBeenCalledTimes(1);
-      expect(shellPathMock).toHaveBeenCalledWith(
+      const shellPathCall = shellPathMock.mock.calls[0]?.[0];
+      expect(shellPathCall).toEqual(
         expect.objectContaining({
-          env: process.env,
+          env: expect.objectContaining({
+            PATH: "/usr/bin",
+            SHELL: unregisteredShellPath,
+          }),
           timeoutMs: 1234,
         }),
       );
+      expect(shellPathCall?.env).not.toHaveProperty("GITHUB_PERSONAL_ACCESS_TOKEN");
     } finally {
       fs.rmSync(shellDir, { recursive: true, force: true });
     }

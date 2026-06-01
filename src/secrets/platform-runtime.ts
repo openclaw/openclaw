@@ -253,6 +253,9 @@ export async function evaluateSecretAwareExecCommand(params: {
   }
   const tenantId = resolveRuntimeTenantId(params.env);
   if (!tenantId) {
+    if (!exact) {
+      return { action: "pass" };
+    }
     return { action: "reject", reason: "ROCKIELAB_TENANT_ID is required." };
   }
   const names =

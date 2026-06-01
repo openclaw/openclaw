@@ -38,6 +38,24 @@ describe("owned child env", () => {
     expect(env.ROCKIELAB_TENANT_TOKEN).toBe("service-token");
   });
 
+  it("preserves explicit non-secret overrides without broadening inherited env", () => {
+    const env = buildOwnedChildEnv({
+      baseEnv: {
+        PATH: "/usr/bin",
+        OPENAI_API_KEY: "sk-secret",
+        INHERITED_EXAMPLE: "drop-me",
+      },
+      overrides: {
+        EXAMPLE: "1",
+        MCP_SERVER_MODE: "stdio",
+      },
+    });
+    expect(env.EXAMPLE).toBe("1");
+    expect(env.MCP_SERVER_MODE).toBe("stdio");
+    expect(env.INHERITED_EXAMPLE).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
   it("keeps the tenant token carve-out exact-name only", () => {
     const env = buildOwnedChildEnv({
       baseEnv: {
@@ -50,6 +68,22 @@ describe("owned child env", () => {
     expect(env.ROCKIELAB_TENANT_TOKEN).toBe("service-token");
     expect(env.ROCKIELAB_OTHER_TENANT_TOKEN).toBeUndefined();
     expect(env.SERVICE_TOKEN).toBeUndefined();
+  });
+
+  it("drops secret-like explicit overrides except the tenant-token carve-out", () => {
+    const env = buildOwnedChildEnv({
+      baseEnv: { PATH: "/usr/bin" },
+      overrides: {
+        ROCKIELAB_TENANT_TOKEN: "service-token",
+        ROCKIELAB_OTHER_TENANT_TOKEN: "other-secret",
+        SERVICE_TOKEN: "service-secret",
+        PASSWORD: "password",
+      },
+    });
+    expect(env.ROCKIELAB_TENANT_TOKEN).toBe("service-token");
+    expect(env.ROCKIELAB_OTHER_TENANT_TOKEN).toBeUndefined();
+    expect(env.SERVICE_TOKEN).toBeUndefined();
+    expect(env.PASSWORD).toBeUndefined();
   });
 
   it("rejects secret-like keys in explicit owned envs", () => {
