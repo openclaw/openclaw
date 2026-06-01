@@ -32,6 +32,16 @@ const COMMAND_ALIASES: Record<string, string> = {
   gwstatus: "gateway-status",
 };
 
+const LOCAL_SHARED_COMMAND_DISCOVERY_KEYS = new Set([
+  "btw",
+  "elevated",
+  "goal",
+  "reasoning",
+  "status",
+  "think",
+  "verbose",
+]);
+
 function createLevelCompletion(
   levels: string[],
 ): NonNullable<SlashCommand["getArgumentCompletions"]> {
@@ -165,6 +175,9 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const seen = new Set(commands.map((command) => command.name));
   const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
   for (const command of gatewayCommands) {
+    if (options.local && !LOCAL_SHARED_COMMAND_DISCOVERY_KEYS.has(command.key)) {
+      continue;
+    }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
       appendSlashCommand(commands, seen, alias, command.description);
@@ -186,7 +199,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
   return [
     "Slash commands:",
     "/help",
-    "/commands",
+    ...(options.local ? [] : ["/commands"]),
     "/status",
     "/gateway-status",
     "/gwstatus",

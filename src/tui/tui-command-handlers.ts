@@ -497,14 +497,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "goal":
         if (opts.local === true && client.runGoalCommand) {
           try {
+            const goalCommand = args ? `/${name} ${args}` : `/${name}`;
             const result = await client.runGoalCommand({
               sessionKey: state.currentSessionKey,
               agentId: state.currentAgentId,
-              command: raw,
+              command: goalCommand,
             });
             chatLog.addSystem(result.text);
             await refreshSessionInfo();
-            const continuation = goalContinuationPrompt(raw);
+            const continuation = goalContinuationPrompt(goalCommand);
             if (continuation) {
               await sendMessage(continuation);
             }

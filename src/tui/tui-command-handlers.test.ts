@@ -356,6 +356,24 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("Goal: ship");
   });
 
+  it("normalizes colon-form local goal commands before local goal handling", async () => {
+    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal: ship" });
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      runGoalCommand,
+    });
+
+    await handleCommand("/goal: status");
+
+    expect(runGoalCommand).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      command: "/goal status",
+    });
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("Goal: ship");
+  });
+
   it("wraps command-prefixed local goal resume notes before sending", async () => {
     const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal resumed: ship" });
     const { handleCommand, sendChat, addUser } = createHarness({

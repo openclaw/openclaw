@@ -106,6 +106,17 @@ describe("getSlashCommands", () => {
       "Enable or disable memory dreaming.",
     );
   });
+
+  it("filters unsupported shared commands from local embedded discovery", () => {
+    const names = getSlashCommands({ local: true }).map((command) => command.name);
+    expect(names).toContain("status");
+    expect(names).toContain("btw");
+    expect(names).toContain("side");
+    expect(names).toContain("t");
+    expect(names).not.toContain("commands");
+    expect(names).not.toContain("compact");
+    expect(names).not.toContain("context");
+  });
 });
 
 describe("helpText", () => {
@@ -116,5 +127,11 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/crestodian [request]");
+  });
+
+  it("does not advertise /commands in local embedded help", () => {
+    const output = helpText({ local: true });
+    expect(output).toContain("/status");
+    expect(output).not.toContain("/commands");
   });
 });
