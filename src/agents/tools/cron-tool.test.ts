@@ -22,7 +22,7 @@ import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
   type SchemaLike = {
-    anyOf?: Array<{ type?: string }>;
+    anyOf?: Array<{ enum?: unknown[]; type?: string }>;
     description?: string;
     enum?: unknown[];
     properties?: Record<string, SchemaLike>;
