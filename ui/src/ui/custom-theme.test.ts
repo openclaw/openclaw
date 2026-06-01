@@ -113,6 +113,41 @@ describe("custom theme import helpers", () => {
     });
   });
 
+  it("normalizes short built-in tweakcn theme ids", () => {
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/themes/zinc")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/zinc",
+      fetchUrl: "https://tweakcn.com/r/themes/zinc",
+      themeId: "zinc",
+    });
+    expect(normalizeTweakcnThemeUrl("zinc")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/zinc",
+      fetchUrl: "https://tweakcn.com/r/themes/zinc",
+      themeId: "zinc",
+    });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/editor/theme?theme=slate")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/slate",
+      fetchUrl: "https://tweakcn.com/r/themes/slate",
+      themeId: "slate",
+    });
+  });
+
+  it("keeps rejecting malformed short tweakcn theme ids", () => {
+    expect(() => normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/abc")).toThrow(
+      "Unsupported tweakcn link",
+    );
+    expect(() => normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/-bad")).toThrow(
+      "Unsupported tweakcn link",
+    );
+    expect(() => normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/bad!")).toThrow(
+      "Unsupported tweakcn link",
+    );
+  });
+
   it("maps a tweakcn payload into a normalized imported theme record", () => {
     const imported = createImportedTheme();
 
