@@ -863,7 +863,7 @@ describe("connectGateway", () => {
     expect(host.lastError).toBe("disconnected (1006): no reason");
   });
 
-  it("refreshes bootstrap config after hello", () => {
+  it("refreshes bootstrap config after hello", async () => {
     const host = createHost();
 
     connectGateway(host);
@@ -871,7 +871,7 @@ describe("connectGateway", () => {
 
     client.emitHello();
 
-    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1));
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
   });
 

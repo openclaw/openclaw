@@ -36,7 +36,10 @@ import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
+import {
+  recordControlUiConnectTiming,
+  recordControlUiRpcTiming,
+} from "./control-ui-performance.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
@@ -629,6 +632,14 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
 }
 
+function scheduleDeferredStartupWork(callback: () => void) {
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(callback);
+    return;
+  }
+  void Promise.resolve().then(callback);
+}
+
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
@@ -679,10 +690,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
         preserveCurrent: true,
       });
-      void loadControlUiBootstrapConfig(
-        host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
-        { applyIdentity: false },
-      );
       // Process any pending abort from before the disconnect.
       if (host.pendingAbort) {
         const abort = host.pendingAbort;
@@ -750,15 +757,24 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
-      void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      if (host.tab !== "chat") {
-        void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
-      }
-      void loadHealthState(host as unknown as HealthState);
       void loadAgentsThenRefreshActiveTab(host);
-      // Re-run push reconciliation now that the gateway client is available.
-      void host.reconcileWebPushState?.();
-      void verifyPendingUpdateVersion(host, client);
+      scheduleDeferredStartupWork(() => {
+        if (host.client !== client) {
+          return;
+        }
+        void loadControlUiBootstrapConfig(
+          host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+          { applyIdentity: false },
+        );
+        void loadAssistantIdentity(host as unknown as AssistantIdentityState);
+        if (host.tab !== "chat") {
+          void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+        }
+        void loadHealthState(host as unknown as HealthState);
+        // Re-run push reconciliation now that the gateway client is available.
+        void host.reconcileWebPushState?.();
+        void verifyPendingUpdateVersion(host, client);
+      });
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {
@@ -805,6 +821,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       recordControlUiRpcTiming(host, timing);
+    },
+    onConnectTiming: (timing) => {
+      if (host.client !== client) {
+        return;
+      }
+      recordControlUiConnectTiming(host, timing);
     },
     onGap: ({ expected, received }) => {
       if (host.client !== client) {
