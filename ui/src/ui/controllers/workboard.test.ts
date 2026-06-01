@@ -351,7 +351,7 @@ describe("workboard controller", () => {
     await syncWorkboardLifecycle({
       host,
       client: client as never,
-      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 3 }],
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
     });
 
     expect(client.request).toHaveBeenCalledTimes(1);
@@ -1406,7 +1406,7 @@ describe("workboard controller", () => {
     await syncWorkboardLifecycle({
       host,
       client: client as never,
-      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 3 }],
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
     });
 
     expect(client.request).toHaveBeenCalledTimes(1);
@@ -1415,6 +1415,73 @@ describe("workboard controller", () => {
       status: "running",
       position: 2000,
     });
+    expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
+  });
+
+  it("applies fresh completed lifecycle sync after a dragged active-column status change", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = { ...sampleCard, sessionKey: sampleSession.key };
+    const moved = { ...linked, status: "running", position: 2000, updatedAt: 2 };
+    const completed = { ...moved, status: "review", updatedAt: 4 };
+    state.loaded = true;
+    state.cards = [linked];
+    const client = createClient((method) => {
+      if (method === "workboard.cards.move") {
+        return { card: moved };
+      }
+      if (method === "workboard.cards.update") {
+        return { card: completed };
+      }
+      return {};
+    });
+
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: "card-1",
+      status: "running",
+      position: 2000,
+    });
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 3 }],
+    });
+
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: expect.objectContaining({ status: "review" }),
+    });
+    expect(state.cards[0]).toMatchObject({ status: "review", position: 2000 });
+  });
+
+  it("keeps stale lifecycle sync skipped after a Workboard host reload", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const moved = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleSession.key,
+      position: 2000,
+      updatedAt: 2,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [moved];
+    const client = createClient({
+      "workboard.cards.update": {
+        card: { ...moved, status: "review", updatedAt: 3 },
+      },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [{ ...sampleSession, hasActiveRun: false, status: "done", updatedAt: 1 }],
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
     expect(state.cards[0]).toMatchObject({ status: "running", position: 2000 });
   });
 
@@ -1700,6 +1767,72 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
   });
 
+  it("skips stale task lifecycle sync for cards updated after the task", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+      updatedAt: 5,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const client = createClient({
+      "tasks.list": { tasks: [{ ...sampleTask, status: "completed", updatedAt: 2 }] },
+      "workboard.cards.update": {
+        card: { ...linked, status: "review" },
+      },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+    });
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.any(Object));
+    expect(state.cards[0]).toMatchObject({ status: "running" });
+  });
+
+  it("applies fresh failed task lifecycle sync after a newer task update", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+      updatedAt: 5,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const client = createClient({
+      "tasks.list": { tasks: [{ ...sampleTask, status: "failed", updatedAt: 6 }] },
+      "workboard.cards.update": {
+        card: { ...linked, status: "blocked", updatedAt: 7 },
+      },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "blocked" },
+    });
+    expect(state.cards[0]).toMatchObject({ status: "blocked" });
+  });
+
   it("moves stale running sessions into running while recording stale metadata", async () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -1902,7 +2035,7 @@ describe("workboard controller", () => {
     await syncWorkboardLifecycle({
       host,
       client: client as never,
-      sessions: [completedSession],
+      sessions: [{ ...completedSession, updatedAt: 5000 }],
     });
 
     expect(client.request).toHaveBeenCalledTimes(2);

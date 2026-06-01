@@ -289,6 +289,7 @@ export type WorkboardLifecycle = {
   session: GatewaySessionRow | null;
   state: WorkboardLifecycleState;
   targetStatus?: WorkboardStatus;
+  sourceUpdatedAt?: number;
 };
 
 export type WorkboardTaskStatus =
@@ -352,7 +353,6 @@ export type WorkboardUiState = {
   busyCardId: string | null;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
-  manualStatusCardIds: Set<string>;
   capturingSessionKeys: Set<string>;
 };
 
@@ -397,7 +397,6 @@ function createDefaultState(): WorkboardUiState {
     busyCardId: null,
     draggedCardId: null,
     syncingCardIds: new Set(),
-    manualStatusCardIds: new Set(),
     capturingSessionKeys: new Set(),
   };
 }
@@ -1004,6 +1003,10 @@ function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
   return 0;
 }
 
+function sessionUpdatedAtValue(session: GatewaySessionRow): number | undefined {
+  return typeof session.updatedAt === "number" ? session.updatedAt : undefined;
+}
+
 function taskSessionKeyMatchesCardSession(
   cardSessionKey: string,
   taskSessionKey: string | undefined,
@@ -1248,12 +1251,14 @@ export function getWorkboardLifecycle(
           session,
           state: "running",
           targetStatus: "running",
+          sourceUpdatedAt: taskUpdatedAtValue(task),
         };
       case "completed":
         return {
           session,
           state: "succeeded",
           targetStatus: "review",
+          sourceUpdatedAt: taskUpdatedAtValue(task),
         };
       case "failed":
       case "cancelled":
@@ -1262,6 +1267,7 @@ export function getWorkboardLifecycle(
           session,
           state: "failed",
           targetStatus: "blocked",
+          sourceUpdatedAt: taskUpdatedAtValue(task),
         };
     }
   }
@@ -1272,16 +1278,36 @@ export function getWorkboardLifecycle(
     return { session: null, state: "missing" };
   }
   if (staleSessionState(session)) {
-    return { session, state: "stale", targetStatus: "running" };
+    return {
+      session,
+      state: "stale",
+      targetStatus: "running",
+      sourceUpdatedAt: sessionUpdatedAtValue(session),
+    };
   }
   if (session.hasActiveRun === true || session.status === "running") {
-    return { session, state: "running", targetStatus: "running" };
+    return {
+      session,
+      state: "running",
+      targetStatus: "running",
+      sourceUpdatedAt: sessionUpdatedAtValue(session),
+    };
   }
   if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
-    return { session, state: "failed", targetStatus: "blocked" };
+    return {
+      session,
+      state: "failed",
+      targetStatus: "blocked",
+      sourceUpdatedAt: sessionUpdatedAtValue(session),
+    };
   }
   if (session.status === "done") {
-    return { session, state: "succeeded", targetStatus: "review" };
+    return {
+      session,
+      state: "succeeded",
+      targetStatus: "review",
+      sourceUpdatedAt: sessionUpdatedAtValue(session),
+    };
   }
   return { session, state: "idle" };
 }
@@ -1299,19 +1325,12 @@ function shouldSyncCardStatus(card: WorkboardCard, targetStatus: WorkboardStatus
   return false;
 }
 
-function shouldPreserveManualCardStatus(
-  state: WorkboardUiState,
-  card: WorkboardCard,
-  targetStatus: WorkboardStatus | undefined,
-) {
-  if (!state.manualStatusCardIds.has(card.id)) {
-    return false;
-  }
-  if (!targetStatus || targetStatus === card.status) {
-    state.manualStatusCardIds.delete(card.id);
-    return false;
-  }
-  return true;
+function shouldSkipStaleLifecycleStatusSync(card: WorkboardCard, lifecycle: WorkboardLifecycle) {
+  return (
+    Boolean(lifecycle.targetStatus) &&
+    typeof lifecycle.sourceUpdatedAt === "number" &&
+    lifecycle.sourceUpdatedAt < card.updatedAt
+  );
 }
 
 function executionStatusForLifecycle(
@@ -1353,6 +1372,7 @@ function lifecycleSyncKey(card: WorkboardCard, lifecycle: WorkboardLifecycle): s
     session?.status ?? "",
     session?.hasActiveRun === true ? "active" : "idle",
     session?.updatedAt ?? "",
+    lifecycle.sourceUpdatedAt ?? "",
     card.execution?.status ?? "",
     card.execution?.updatedAt ?? "",
   ].join(":");
@@ -1588,7 +1608,7 @@ export async function syncWorkboardLifecycle(params: {
     const executionStatus = executionStatusForLifecycle(lifecycle);
     const patch: Record<string, unknown> = {};
     if (
-      !shouldPreserveManualCardStatus(state, card, lifecycle.targetStatus) &&
+      !shouldSkipStaleLifecycleStatusSync(card, lifecycle) &&
       shouldSyncCardStatus(card, lifecycle.targetStatus)
     ) {
       patch.status = lifecycle.targetStatus;
@@ -1685,18 +1705,13 @@ export async function saveWorkboardCardDraft(params: {
   }
   state.loading = true;
   state.error = null;
-  const previousStatus = state.cards.find((card) => card.id === state.editingCardId)?.status;
   params.requestUpdate?.();
   try {
     const payload = await params.client.request("workboard.cards.update", {
       id: state.editingCardId,
       patch: draftPayload(state),
     });
-    const card = normalizeCardPayload(payload);
-    replaceCard(state, card);
-    if (previousStatus && card.status !== previousStatus) {
-      state.manualStatusCardIds.add(card.id);
-    }
+    replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
     state.error = formatError(error);
@@ -1755,7 +1770,6 @@ export async function moveWorkboardCard(params: {
   }
   state.busyCardId = params.cardId;
   state.error = null;
-  const previousStatus = state.cards.find((card) => card.id === params.cardId)?.status;
   params.requestUpdate?.();
   try {
     const payload = await params.client.request("workboard.cards.move", {
@@ -1763,11 +1777,7 @@ export async function moveWorkboardCard(params: {
       status: params.status,
       position: params.position,
     });
-    const card = normalizeCardPayload(payload);
-    replaceCard(state, card);
-    if (previousStatus && card.status !== previousStatus) {
-      state.manualStatusCardIds.add(params.cardId);
-    }
+    replaceCard(state, normalizeCardPayload(payload));
   } catch (error) {
     state.error = formatError(error);
   } finally {
