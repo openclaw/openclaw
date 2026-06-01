@@ -15,6 +15,7 @@ import {
   getFileSystemResultOrThrow,
   toSession,
 } from "./repo-utils.js";
+import { parseSessionTimestampMs } from "./timestamps.js";
 
 type JsonlSessionRepoFileSystem = Pick<
   FileSystem,
@@ -35,6 +36,7 @@ function encodeCwd(cwd: string): string {
   return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
+/** Repository for JSONL sessions grouped by working directory. */
 export class JsonlSessionRepo implements JsonlSessionRepoApi {
   private readonly fs: JsonlSessionRepoFileSystem;
   private readonly sessionsRootInput: string;
@@ -129,13 +131,19 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
           sessions.push(await loadJsonlSessionMetadata(this.fs, file.path));
         } catch (error) {
           const cause = toError(error);
+          // Listing is best-effort across a sessions directory; corrupt session
+          // headers are skipped, while filesystem and unexpected errors still fail.
           if (!(cause instanceof SessionError) || cause.code !== "invalid_session") {
             throw cause;
           }
         }
       }
     }
-    sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    sessions.sort(
+      (a, b) =>
+        (parseSessionTimestampMs(b.createdAt) ?? Number.NEGATIVE_INFINITY) -
+        (parseSessionTimestampMs(a.createdAt) ?? Number.NEGATIVE_INFINITY),
+    );
     return sessions;
   }
 

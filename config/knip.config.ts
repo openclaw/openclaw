@@ -10,6 +10,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/agents/model-provider-auth.worker.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
@@ -26,7 +27,7 @@ const bundledPluginEntries = [
   "setup-entry.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
-  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
+  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface,mcp-serve}.ts!",
   "src/subagent-hooks-api.ts!",
 ] as const;
 
@@ -49,7 +50,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "lit",
   "linkedom",
   "openclaw",
-  "pdfjs-dist",
+  "clawpdf",
 ] as const;
 
 const rootBundledPluginRuntimeDependencies = [
@@ -69,7 +70,7 @@ const rootBundledPluginRuntimeDependencies = [
   "minimatch",
   "node-edge-tts",
   "openshell",
-  "pdfjs-dist",
+  "clawpdf",
   "tokenjuice",
 ] as const;
 
@@ -143,6 +144,7 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        "file-type",
         "playwright-core",
         "sqlite-vec",
         "tree-sitter-bash",
@@ -159,9 +161,12 @@ const config = {
       entry: [
         "index.html!",
         "src/main.ts!",
+        "src/ui/browser-redact.ts!",
         "vite.config.ts!",
         "vitest*.ts!",
       ],
+      // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
+      ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {
@@ -171,6 +176,39 @@ const config = {
     "packages/agent-core": {
       entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
       project: ["src/**/*.ts!"],
+    },
+    "packages/gateway-client": {
+      entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/gateway-protocol": {
+      entry: ["src/index.ts!", "src/schema.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/net-policy": {
+      entry: ["src/index.ts!", "src/ip.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/markdown-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/media-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/acp-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/terminal-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/speech-core": {
+      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
+      project: ["**/*.ts!"],
+      ignoreDependencies: ["openclaw"],
     },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],

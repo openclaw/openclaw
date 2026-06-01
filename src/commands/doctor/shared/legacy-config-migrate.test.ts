@@ -63,6 +63,70 @@ describe("compatibility binding repair migrate", () => {
 });
 
 describe("legacy memory search config migrate", () => {
+  it("moves legacy OpenAI Codex provider config to canonical OpenAI provider config", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                api: "openai-codex-responses",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-chatgpt-responses",
+        },
+      ],
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.changes).toEqual([
+      'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses".',
+      'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses".',
+      "Moved models.providers.openai-codex → models.providers.openai.",
+    ]);
+  });
+
+  it("records removal when canonical OpenAI provider already exists", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.changes).toEqual([
+      "Removed models.providers.openai-codex because models.providers.openai already exists.",
+    ]);
+  });
+
   it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
     const raw = {
       memorySearch: {
@@ -194,6 +258,45 @@ describe("legacy silent reply config migrate", () => {
     expectMigrationChangesToIncludeFragments(res.changes, [
       "Removed agents.defaults.silentReplyRewrite",
       "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+});
+
+describe("legacy agent system prompt override config migrate", () => {
+  it("removes default and per-agent system prompt overrides", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          systemPromptOverride: "old default prompt",
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            systemPromptOverride: "old alpha prompt",
+          },
+          {
+            id: "beta",
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.systemPromptOverride",
+      "agents.list",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("systemPromptOverride");
+    expect(res.config?.agents?.list?.[0]).not.toHaveProperty("systemPromptOverride");
+    expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
+    expect(res.changes).toEqual([
+      "Removed agents.defaults.systemPromptOverride.",
+      "Removed agents.list.0.systemPromptOverride.",
     ]);
   });
 });
@@ -653,6 +756,70 @@ describe("legacy diagnostics memory pressure snapshot migrate", () => {
     });
     expect(res.changes).toStrictEqual([
       "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+});
+
+describe("legacy WebChat channel config migrate", () => {
+  it("removes retired WebChat channel config", () => {
+    const raw = {
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+          chunkMode: "newline",
+        },
+        discord: {
+          textChunkLimit: 2000,
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["channels.webchat"]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.config?.channels).toEqual({
+      discord: {
+        textChunkLimit: 2000,
+      },
+    });
+    expect(res.changes).toStrictEqual(["Removed retired channels.webchat config."]);
+  });
+
+  it("removes retired WebChat gateway config", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+      },
+    });
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.changes).toStrictEqual(["Removed retired gateway.webchat config."]);
+  });
+
+  it("removes both retired WebChat config sections when present together", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+        bind: "loopback",
+      },
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+        },
+      },
+    });
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.config).not.toHaveProperty("channels");
+    expect(res.changes).toStrictEqual([
+      "Removed retired channels.webchat config.",
+      "Removed retired gateway.webchat config.",
     ]);
   });
 });
@@ -1309,6 +1476,35 @@ describe("legacy migrate x_search auth", () => {
 });
 
 describe("legacy bundled provider discovery migrate", () => {
+  it("rewrites legacy OpenAI Codex plugin policy ids", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram", "openai-codex", "openai"],
+        deny: ["openai-codex"],
+        entries: {
+          "openai-codex": {
+            enabled: false,
+          },
+        },
+        slots: {
+          memory: "openai-codex",
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["telegram", "openai"]);
+    expect(res.config?.plugins?.deny).toEqual(["openai"]);
+    expect(res.config?.plugins?.entries?.openai).toEqual({ enabled: false });
+    expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
+    expect(res.config?.plugins?.slots?.memory).toBe("openai");
+    expect(res.changes).toContain("Rewrote plugins.allow openai-codex references to openai.");
+    expect(res.changes).toContain("Rewrote plugins.deny openai-codex references to openai.");
+    expect(res.changes).toContain(
+      "Rewrote plugins.entries.openai-codex to plugins.entries.openai.",
+    );
+    expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
+  });
+
   it("sets compat mode for existing restrictive plugin allowlists", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
@@ -1467,7 +1663,7 @@ describe("legacy migrate heartbeat config", () => {
       | undefined;
     expect(heartbeat?.every).toBe("30m");
     expect((heartbeat as { polluted?: unknown } | undefined)?.polluted).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(heartbeat ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(heartbeat ?? {}, "__proto__")).toBe(false);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({ showOk: true });
   });
 
@@ -1707,7 +1903,7 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
     expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
       fallbacks: ["github-copilot/gpt-5.4-mini"],
@@ -1751,6 +1947,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
     expect(res.config?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-haiku-4-5": { alias: "haiku" },
       "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
       "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
       "openai/gpt-5.5-pro": { alias: "old-pro" },
@@ -1770,10 +1967,9 @@ describe("legacy model compat migrate", () => {
           subagent?: { allowedModels?: string[] };
         }
       )?.subagent?.allowedModels,
-    ).toEqual(["anthropic/claude-sonnet-4-6", "*"]);
+    ).toEqual(["anthropic/claude-haiku-4-5", "*"]);
     expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
     expectMigrationChangesToIncludeFragments(res.changes, [
-      'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
       'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5.4-mini"',
       'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
@@ -1800,7 +1996,6 @@ describe("legacy model compat migrate", () => {
       'config.agents.defaults.models key from "openai/gpt-5.2-pro" to "openai/gpt-5.5-pro"',
       'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
-      'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
     ]);
   });

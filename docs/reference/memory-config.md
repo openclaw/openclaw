@@ -58,6 +58,11 @@ explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
 Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
+If OpenAI embeddings are unreachable from your network, memory recall fails open
+instead of blocking the turn. Set the existing `memorySearch.provider` field to a
+reachable local, Ollama, regional, or OpenAI-compatible provider to restore
+semantic ranking.
+
 ### Custom provider ids
 
 `memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
@@ -557,11 +562,12 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default       | Description                                       |
-| ----------- | --------- | ------------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
-| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
+| Key                                    | Type      | Default       | Description                                                                                                                      |
+| -------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                              | `boolean` | `false`       | Enable or disable dreaming entirely                                                                                              |
+| `frequency`                            | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
+| `model`                                | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
+| `phases.deep.maxPromotedSnippetTokens` | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
 
 ### Example
 

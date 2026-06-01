@@ -18,6 +18,8 @@ import {
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  resolveNpmReleaseCheckCommandTimeoutMs,
+  runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
@@ -416,6 +418,57 @@ describe("resolveNpmCommandInvocation", () => {
       }
     });
   }
+});
+
+describe("runNpmReleaseCheckCommand", () => {
+  it("returns captured command output", () => {
+    expect(
+      runNpmReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toBe("ok");
+  });
+
+  it("bounds commands that ignore termination", () => {
+    const startedAt = Date.now();
+
+    expect(() =>
+      runNpmReleaseCheckCommand(
+        {
+          command: process.execPath,
+          args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+        },
+        { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(2500);
+  });
+
+  it("bounds captured command output", () => {
+    expect(() =>
+      runNpmReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('x'.repeat(4096))"] },
+        { maxBuffer: 1024, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toThrow();
+  });
+});
+
+describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
+  it("parses only positive integer environment timeouts", () => {
+    for (const [raw, expected] of [
+      ["1234", 1234],
+      ["nope", 10 * 60 * 1000],
+      ["10m", 10 * 60 * 1000],
+    ] as const) {
+      expect(
+        resolveNpmReleaseCheckCommandTimeoutMs({
+          OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: raw,
+        }),
+      ).toBe(expected);
+    }
+  });
 });
 
 describe("parseNpmPackJsonOutput", () => {

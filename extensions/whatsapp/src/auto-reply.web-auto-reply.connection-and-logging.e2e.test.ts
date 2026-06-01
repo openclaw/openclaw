@@ -205,7 +205,7 @@ describe("web auto-reply connection", () => {
       },
     };
     const listenerFactory = vi.fn(async () => {
-      throw boom428;
+      throw toLintErrorObject(boom428, "Non-Error thrown");
     });
 
     const sleep = vi.fn(async () => {});
@@ -362,7 +362,9 @@ describe("web auto-reply connection", () => {
 
     const completedQuickly = await Promise.race([
       run.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 60)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 60);
+      }),
     ]);
 
     if (!completedQuickly) {
@@ -996,11 +998,15 @@ describe("web auto-reply connection", () => {
         const firstPattern = escapeRegExp(firstTimestamp);
         const secondPattern = escapeRegExp(secondTimestamp);
         expect(firstArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\+1: \\[openclaw\\] first`,
+          ),
         );
         expect(firstArgs.Body).not.toContain("second");
         expect(secondArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\+1: \\[openclaw\\] second`,
+          ),
         );
         expect(secondArgs.Body).not.toContain("first");
         expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
@@ -1140,3 +1146,17 @@ describe("web auto-reply connection", () => {
     expect(markDispatchIdle).toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

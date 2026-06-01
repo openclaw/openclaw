@@ -216,6 +216,8 @@ export type AgentDefaultsConfig = {
   videoGenerationModel?: AgentToolModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   musicGenerationModel?: AgentToolModelConfig;
+  /** Optional voice model and fallbacks (provider/model) for TTS/STT/realtime voice providers. */
+  voiceModel?: AgentToolModelConfig;
   /**
    * When true (default), shared image/music/video generation appends other
    * auth-backed provider defaults after explicit primary/fallback refs. Set to
@@ -239,8 +241,6 @@ export type AgentDefaultsConfig = {
   silentReply?: SilentReplyPolicyShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
-  /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
-  systemPromptOverride?: string;
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
@@ -407,7 +407,7 @@ export type AgentDefaultsConfig = {
     ackMaxChars?: number;
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
-    /** Run timeout in seconds for heartbeat agent turns. */
+    /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.

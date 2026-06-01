@@ -18,6 +18,7 @@ function createAttemptParams(): EmbeddedRunAttemptParams {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     sessionFile: "/tmp/session.jsonl",
+    effectiveCwd: "/tmp",
     workspaceDir: "/tmp",
     runId: "run-1",
     provider: "codex",
@@ -69,6 +70,7 @@ function startThreadWithHarness(
     buildAttemptParams: createAttemptParams,
     sessionAgentId: "agent-1",
     effectiveWorkspace: "/tmp",
+    effectiveCwd: "/tmp",
     dynamicTools: [],
     developerInstructions: undefined,
     finalConfigPatch: undefined,
@@ -119,18 +121,20 @@ async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number
 
 describe("startCodexAttemptThread", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     clearSharedCodexAppServerClient();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     clearSharedCodexAppServerClient();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
-  it("keeps the shared app-server when thread startup fails with an app error", async () => {
+  it("clears the shared app-server when top-level thread startup fails with an app error", async () => {
     const { harness, run } = startThreadWithHarness(5_000);
     await answerInitialize(harness);
     const threadStart = await waitForThreadStart(harness);
@@ -140,14 +144,11 @@ describe("startCodexAttemptThread", () => {
     });
 
     await expect(run).rejects.toThrow("Invalid bearer token");
-    expect(harness.process.stdin.destroyed).toBe(false);
-
-    clearSharedCodexAppServerClient();
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(200);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -156,9 +157,13 @@ describe("startCodexAttemptThread", () => {
     await waitForThreadStart(harness);
 
     const error = await runError;
+    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
+      interval: 1,
+      timeout: 2_000,
+    });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("codex app-server startup timed out");
-    expect(harness.process.stdin.destroyed).toBe(true);
+    expect(harness.stdinDestroyed).toBe(true);
   });
 
   it("clears the shared app-server when cancellation abandons an in-flight thread request", async () => {

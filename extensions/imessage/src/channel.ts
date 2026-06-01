@@ -16,7 +16,10 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { imessageMessageActions } from "./actions.js";
-import { imessageApprovalCapability } from "./approval-native.js";
+import {
+  imessageApprovalCapability,
+  shouldSuppressLocalIMessageExecApprovalPrompt,
+} from "./approval-native.js";
 import {
   chunkTextForOutbound,
   collectStatusIssuesFromLastError,
@@ -139,6 +142,14 @@ function resolveIMessageOutboundSessionRoute(params: {
     if (!handle) {
       return null;
     }
+    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+    const service =
+      parsed.serviceExplicit || parsed.service !== "auto"
+        ? parsed.service
+        : account.config.service === "sms"
+          ? "sms"
+          : "imessage";
+    const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({
       cfg: params.cfg,
@@ -151,8 +162,8 @@ function resolveIMessageOutboundSessionRoute(params: {
       baseSessionKey,
       peer,
       chatType: "direct" as const,
-      from: `imessage:${handle}`,
-      to: `imessage:${handle}`,
+      from: directTarget,
+      to: directTarget,
     };
   }
 
@@ -320,6 +331,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         chunkerMode: "text",
         textChunkLimit: 4000,
         sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeOutboundText(text)),
+        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+          shouldSuppressLocalIMessageExecApprovalPrompt({ cfg, accountId, payload, hint }),
         deliveryCapabilities: {
           durableFinal: {
             text: true,

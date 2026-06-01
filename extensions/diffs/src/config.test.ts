@@ -6,7 +6,7 @@ import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -17,6 +17,7 @@ import {
   resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
 import { resolveDiffsLanguagePackAvailability } from "./plugin.js";
+import { ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 import {
   getServedLanguagePackViewerAsset,
@@ -45,6 +46,10 @@ const FULL_DEFAULTS = {
   mode: "file",
   ttlSeconds: 21_600,
 } as const;
+
+beforeAll(async () => {
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 function compileManifestConfigSchema() {
   const manifest = JSON.parse(
@@ -541,33 +546,36 @@ describe("viewer assets", () => {
 });
 
 describe("resolveDiffsLanguagePackAvailability", () => {
-  it("requires both the sibling language-pack manifest and generated runtime asset", () => {
-    const root = fs.mkdtempSync(join(os.tmpdir(), "openclaw-diffs-language-pack-"));
-    try {
-      const diffsRoot = join(root, "diffs");
-      const languagePackRoot = join(root, "diffs-language-pack");
-      fs.mkdirSync(diffsRoot, { recursive: true });
-      fs.mkdirSync(languagePackRoot, { recursive: true });
-      fs.writeFileSync(
-        join(languagePackRoot, "openclaw.plugin.json"),
-        '{"id":"diffs-language-pack"}\n',
-      );
-      const api = {
-        rootDir: diffsRoot,
-        config: { plugins: {} },
-        runtime: { config: { current: () => ({ plugins: {} }) } },
-      } as Parameters<typeof resolveDiffsLanguagePackAvailability>[0];
+  it.each(["assets", "dist/assets"])(
+    "requires both the sibling language-pack manifest and generated runtime asset in %s",
+    (assetDir) => {
+      const root = fs.mkdtempSync(join(os.tmpdir(), "openclaw-diffs-language-pack-"));
+      try {
+        const diffsRoot = join(root, "diffs");
+        const languagePackRoot = join(root, "diffs-language-pack");
+        fs.mkdirSync(diffsRoot, { recursive: true });
+        fs.mkdirSync(languagePackRoot, { recursive: true });
+        fs.writeFileSync(
+          join(languagePackRoot, "openclaw.plugin.json"),
+          '{"id":"diffs-language-pack"}\n',
+        );
+        const api = {
+          rootDir: diffsRoot,
+          config: { plugins: {} },
+          runtime: { config: { current: () => ({ plugins: {} }) } },
+        } as Parameters<typeof resolveDiffsLanguagePackAvailability>[0];
 
-      expect(resolveDiffsLanguagePackAvailability(api)).toBe(false);
+        expect(resolveDiffsLanguagePackAvailability(api)).toBe(false);
 
-      fs.mkdirSync(join(languagePackRoot, "assets"), { recursive: true });
-      fs.writeFileSync(join(languagePackRoot, "assets", "viewer-runtime.js"), "export {};\n");
+        fs.mkdirSync(join(languagePackRoot, assetDir), { recursive: true });
+        fs.writeFileSync(join(languagePackRoot, assetDir, "viewer-runtime.js"), "export {};\n");
 
-      expect(resolveDiffsLanguagePackAvailability(api)).toBe(true);
-    } finally {
-      fs.rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(resolveDiffsLanguagePackAvailability(api)).toBe(true);
+      } finally {
+        fs.rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
 
 describe("parseViewerPayloadJson", () => {

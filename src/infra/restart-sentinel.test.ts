@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
-  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
   consumeRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
@@ -271,11 +270,8 @@ describe("restart sentinel", () => {
 });
 
 describe("restart success continuation", () => {
-  it("builds the default agent turn for session-scoped restarts", () => {
-    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
-      kind: "agentTurn",
-      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-    });
+  it("does not infer an agent turn from session context alone", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toBeNull();
   });
 
   it("keeps explicit continuation messages", () => {
@@ -367,9 +363,20 @@ describe("restart sentinel message dedup", () => {
     expect(result).toContain("Reason: /restart");
   });
 
-  it("formats the non-interactive doctor command", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toContain(
-      "openclaw doctor --non-interactive",
+  it("formats the non-interactive doctor command as actionability guidance", () => {
+    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+    );
+  });
+
+  it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {
+    expect(
+      formatDoctorNonInteractiveHint({
+        OPENCLAW_PROFILE: "isolated",
+        PATH: "/usr/bin:/bin",
+      }),
+    ).toBe(
+      "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
   });
 });

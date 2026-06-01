@@ -1,4 +1,5 @@
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   createWriteStream,
@@ -319,7 +320,7 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   // during startup, so sharing a fixed directory causes races.
   const extractDir = join(
     TOOLS_DIR,
-    `extract_tmp_${config.binaryName}_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+    `extract_tmp_${config.binaryName}_${process.pid}_${randomUUID()}`,
   );
   mkdirSync(extractDir, { recursive: true });
 
@@ -375,10 +376,7 @@ const TERMUX_PACKAGES: Record<string, string> = {
 
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(
-  tool: "fd" | "rg",
-  silent: boolean = false,
-): Promise<string | undefined> {
+export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
   const existingPath = getToolPath(tool);
   if (existingPath) {
     return existingPath;

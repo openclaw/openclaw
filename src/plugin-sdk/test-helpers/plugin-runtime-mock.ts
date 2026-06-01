@@ -58,6 +58,7 @@ function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
     createManaged: vi.fn(),
+    tryCreateManaged: vi.fn(),
     get: vi.fn(),
     list: vi.fn(() => []),
     findLatest: vi.fn(),
@@ -764,6 +765,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: vi.fn(() => {
+        throw new Error("openSyncKeyedStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
+      openChannelIngressQueue: vi.fn(() => {
+        throw new Error("openChannelIngressQueue mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
     },
     tasks: {
       runs: {

@@ -96,7 +96,7 @@ function packageBackedDockerRunnerPaths(): string[] {
     .filter((entry) => entry.endsWith("-docker.sh"))
     .map((entry) => join("scripts/e2e", entry))
     .filter((path) => readFileSync(path, "utf8").includes("docker_e2e_prepare_package_tgz"))
-    .sort();
+    .toSorted();
 }
 
 function shellQuote(value: string): string {
@@ -508,6 +508,68 @@ stderr="$(<"$TMPDIR/stderr")"
 [[ "$status" = "13" ]]
 [[ "$stderr" = *"timeout command not found; using Node watchdog for Docker command timeout 7s"* ]]
 [[ "$(<"$TMPDIR/docker-seen")" = "run -i demo|payload" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("escalates Docker watchdog children that ignore parent termination", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-node-signal-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "node"),
+        `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
+      );
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/bash
+printf "%s\\n" "$$" >"$TMPDIR/docker-pid"
+printf "%s\\n" "$PPID" >"$TMPDIR/watchdog-pid"
+trap "" TERM
+while true; do /bin/sleep 1; done
+`,
+      );
+      chmodSync(join(binDir, "node"), 0o755);
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export DOCKER_COMMAND_TIMEOUT=30s
+export OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS=100
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_cmd run demo &
+watchdog_pid="$!"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s "$TMPDIR/docker-pid" ] && [ -s "$TMPDIR/watchdog-pid" ] && break
+  /bin/sleep 0.02
+done
+[ -s "$TMPDIR/docker-pid" ]
+[ -s "$TMPDIR/watchdog-pid" ]
+kill -TERM "$(/bin/cat "$TMPDIR/watchdog-pid")"
+set +e
+wait "$watchdog_pid"
+status="$?"
+set -e
+[ "$status" = "143" ]
+docker_pid="$(/bin/cat "$TMPDIR/docker-pid")"
+for ((i = 0; i < 100; i += 1)); do
+  kill -0 "$docker_pid" 2>/dev/null || exit 0
+  /bin/sleep 0.02
+done
+echo "docker child still alive after watchdog termination" >&2
+exit 1
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -1045,6 +1107,28 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     }
   });
 
+  it("keeps upgrade survivor mutable state off the host-mounted artifact tree", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("openclaw-upgrade-survivor-runtime");
+      expect(script).toContain("OPENCLAW_UPGRADE_SURVIVOR_TMPDIR");
+      expect(script).toContain("OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR");
+      expect(script).toContain(
+        'export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"',
+      );
+      expect(script).toContain('export NPM_CONFIG_CACHE="$npm_config_cache"');
+      expect(script).toContain('chmod 700 "$npm_config_cache" || true');
+      expect(script).not.toContain('export TMPDIR="$ARTIFACT_ROOT/tmp"');
+      expect(script).not.toContain('export TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/tmp"');
+      expect(script).not.toContain('export npm_config_cache="$ARTIFACT_ROOT/npm-cache"');
+      expect(script).not.toContain(
+        'export npm_config_cache="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/npm-cache"',
+      );
+    }
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,
@@ -1259,6 +1343,17 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(runner).not.toContain("docker run --rm");
   });
 
+  it("prints plugins Docker E2E logs on successful runs", () => {
+    const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
+    const runner = readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8");
+
+    expect(helper).toContain("docker_e2e_run_logged_print_with_harness()");
+    expect(helper).toContain("run_logged_print_heartbeat \\");
+    expect(helper).toContain("OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS");
+    expect(runner).toContain("docker_e2e_run_logged_print_with_harness \\");
+    expect(runner).not.toContain("docker_e2e_run_logged_with_harness plugins-run");
+  });
+
   it("includes procps in the shared Docker E2E image for process watchdogs", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
@@ -1275,7 +1370,9 @@ test -f "$TMPDIR/docker-cmd-seen"
     );
     expect(runner).toContain('-e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT"');
     expect(runner).toContain('--name "$CONTAINER_NAME"');
-    expect(runner).toContain("docker_e2e_docker_cmd stats --no-stream");
+    expect(runner).toContain("docker_e2e_sample_stats_until_exit \\");
+    expect(runner).toContain('"$STATS_LOG" \\');
+    expect(runner).toContain('"$RUN_LOG" \\');
     expect(runner).toContain("assert-resource-ceiling.mjs");
     expect(runner).not.toContain("docker_e2e_run_with_harness -t");
   });
@@ -1295,8 +1392,9 @@ test -f "$TMPDIR/docker-cmd-seen"
         'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME"',
       );
       expect(runner, path).toContain('DOCKER_RUN_TIMEOUT="${OPENCLAW_');
-      expect(runner, path).toContain('docker_e2e_docker_cmd inspect "$CONTAINER_NAME"');
-      expect(runner, path).toContain("docker_e2e_docker_cmd stats --no-stream");
+      expect(runner, path).toContain("docker_e2e_sample_stats_until_exit \\");
+      expect(runner, path).toContain('"$STATS_LOG" \\');
+      expect(runner, path).toContain('"$RUN_LOG" \\');
       expect(runner, path).not.toMatch(/(^|\n)docker run --name "\$CONTAINER_NAME"/u);
       expect(runner, path).not.toMatch(/(^|\n)docker (?:inspect|stats) /u);
       expect(runner, path).toMatch(/cleanup\(\) \{[\s\S]*rm -f "\$RUN_LOG" "\$STATS_LOG"/u);
@@ -1454,7 +1552,9 @@ test -f "$TMPDIR/docker-cmd-seen"
 
     expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
     expect(probe).toContain("plugin install record changed unexpectedly");
-    expect(probe).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
+    expect(probe).toContain(
+      "readPluginInstallRecords({ fallbackRecords: config.plugins?.installs ?? {} })",
+    );
     expect(scenario).toContain("Config changed unexpectedly for modern package");
     expect(scenario).not.toContain("before_hash");
   });
@@ -1597,6 +1697,7 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
+    expect(runner).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TRACE");
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
     expect(runner).toContain('tee "$RUN_LOG"');
     expect(runner).not.toContain('cat "$RUN_LOG"');
@@ -1606,6 +1707,12 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
+    expect(sweep).toContain("now_ms()");
+    expect(sweep).toContain("lifecycle_trace_enabled()");
+    expect(sweep).toContain("if lifecycle_trace_enabled; then");
+    expect(sweep).toContain("install_ms=");
+    expect(sweep).toContain("runtime_ms=");
+    expect(sweep).toContain("uninstall_ms=");
     expect(sweep).toContain("assert-installed");
     expect(sweep).toContain("assert-uninstalled");
   });
@@ -1685,6 +1792,12 @@ test -f "$TMPDIR/docker-cmd-seen"
     );
     expect(runner).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
     expect(runner).not.toMatch(/(^|\n)docker run --rm/u);
+    expect(runner).toContain(
+      "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
+    );
+    expect(runner).not.toContain(
+      "keeps unauthorized plugin-owned binding slash text routed to the bound plugin",
+    );
     expect(runner).toContain("expected focused Vitest summary for exactly 3 passed tests");
     expect(dockerfile).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1");
     expect(dockerfile).toContain(

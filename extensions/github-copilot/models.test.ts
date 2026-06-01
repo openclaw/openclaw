@@ -59,6 +59,10 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
     });
 
+    it("includes claude-opus-4.8", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.8");
+    });
+
     it("includes claude-sonnet-4.6", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });
@@ -97,6 +101,22 @@ describe("github-copilot model defaults", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
+      });
+    });
+
+    it("uses static metadata overrides for Claude Opus 1M fallback rows", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.7-1m-internal");
+      expect(def).toEqual({
+        id: "claude-opus-4.7-1m-internal",
+        name: "Claude Opus 4.7 (1M context)",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
+        thinkingLevelMap: { xhigh: "xhigh" },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
       });
     });
 
@@ -198,6 +218,14 @@ describe("resolveCopilotForwardCompatModel", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
       maxTokens: 128_000,
+    });
+  });
+
+  it("preserves static Anthropic thinking maps for Claude Opus 1M fallback rows", () => {
+    const result = requireResolvedModel(createMockCtx("claude-opus-4.7-1m-internal"));
+    expect(result.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+    expect(result.compat).toEqual({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
     });
   });
 
@@ -472,7 +500,11 @@ describe("fetchCopilotModelCatalog", () => {
             max_context_window_tokens: 1000000,
             max_output_tokens: 64000,
           },
-          supports: { vision: true, tool_calls: true },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            reasoning_effort: ["low", "medium", "high", "xhigh"],
+          },
         },
       },
       {
@@ -536,6 +568,7 @@ describe("fetchCopilotModelCatalog", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
       maxTokens: 128000,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
     });
 
     const codex = out.find((m) => m.id === "gpt-5.3-codex");
@@ -555,6 +588,10 @@ describe("fetchCopilotModelCatalog", () => {
     const opus1m = out.find((m) => m.id === "claude-opus-4.7-1m-internal");
     expect(opus1m?.api).toBe("anthropic-messages");
     expect(opus1m?.contextWindow).toBe(1_000_000);
+    expect(opus1m?.thinkingLevelMap).toEqual({ xhigh: "xhigh" });
+    expect(opus1m?.compat).toEqual({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
   });
 
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
@@ -609,6 +646,59 @@ describe("fetchCopilotModelCatalog", () => {
 
     expect(out).toHaveLength(1);
     expect(out[0].name).toBe("GPT-5.5");
+  });
+
+  it("falls back from malformed live token limits", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          {
+            id: "gpt-bad-window",
+            name: "GPT Bad Window",
+            object: "model",
+            capabilities: {
+              type: "chat",
+              limits: {
+                max_context_window_tokens: -1,
+                max_output_tokens: 128000.5,
+              },
+            },
+          },
+          {
+            id: "gpt-bad-output",
+            name: "GPT Bad Output",
+            object: "model",
+            capabilities: {
+              type: "chat",
+              limits: {
+                max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_output_tokens: 0,
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    const out = await fetchCopilotModelCatalog({
+      copilotApiToken: "tid=test",
+      baseUrl: "https://api.githubcopilot.com",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      id: "gpt-bad-window",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+    expect(out[1]).toMatchObject({
+      id: "gpt-bad-output",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
   });
 
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {

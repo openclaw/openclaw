@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -15,7 +17,9 @@ import type {
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
+import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
+import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -24,8 +28,8 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { isGemma4ModelId } from "../shared/google-models.js";
+import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -55,6 +59,7 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
+import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   findOpenAIStrictToolSchemaDiagnostics,
@@ -78,6 +83,7 @@ import {
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "Follow the user request.";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
@@ -87,6 +93,7 @@ const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -111,10 +118,12 @@ type BaseStreamOptions = {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  stop?: string[];
   signal?: AbortSignal;
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
   sessionId?: string;
+  promptCacheKey?: string;
   authProfileId?: string;
   onPayload?: (payload: unknown, model: Model) => unknown;
   headers?: Record<string, string>;
@@ -165,6 +174,7 @@ type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 };
@@ -880,8 +890,10 @@ function encryptedReasoningReplayMetadataMatches(
   metadata: OpenAIResponsesReasoningReplayMetadata | undefined,
   context: OpenAIResponsesReplayContext,
 ): boolean {
+  if (!metadata) {
+    return false;
+  }
   return (
-    !!metadata &&
     metadata.provider === context.provider &&
     metadata.api === context.api &&
     metadata.model === context.model &&
@@ -898,6 +910,16 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : undefined;
 }
 
+function normalizeOpenAIResponsesReasoningReplayItem(
+  item: ReplayableResponseReasoningItem,
+): ReplayableResponseReasoningItem {
+  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
+  if (record.type !== "reasoning" || Array.isArray(record.summary)) {
+    return item;
+  }
+  return { ...record, summary: [] } as ReplayableResponseReasoningItem;
+}
+
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
@@ -906,16 +928,18 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } =
     item as ReplayableResponseReasoningItem & Record<string, unknown>;
   if (!("encrypted_content" in rest)) {
-    return rest as ReplayableResponseReasoningItem;
+    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const metadata =
     blockMetadata ??
     (isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined);
   if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
-    return rest as ReplayableResponseReasoningItem;
+    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedContentFields(rest);
-  return stripped.value as ReplayableResponseReasoningItem;
+  return normalizeOpenAIResponsesReasoningReplayItem(
+    stripped.value as ReplayableResponseReasoningItem,
+  );
 }
 
 async function createResponsesStreamWithEncryptedContentRetry(params: {
@@ -980,17 +1004,24 @@ function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"
 
 function parseTextSignature(
   signature: string | undefined,
-): { id: string; phase?: "commentary" | "final_answer" } | undefined {
+): { id?: string; phase?: "commentary" | "final_answer" } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
       const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        return parsed.phase === "commentary" || parsed.phase === "final_answer"
-          ? { id: parsed.id, phase: parsed.phase }
-          : { id: parsed.id };
+      if (parsed.v === 1) {
+        const id = typeof parsed.id === "string" ? parsed.id : undefined;
+        const phase =
+          parsed.phase === "commentary" || parsed.phase === "final_answer"
+            ? parsed.phase
+            : undefined;
+        // A reasoning-dropped replay keeps the phase but omits the paired id.
+        if (id !== undefined || phase !== undefined) {
+          return { id, phase };
+        }
+        return undefined;
       }
     } catch {
       // Keep legacy plain-string behavior below.
@@ -1098,6 +1129,8 @@ function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
+      let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -1126,18 +1159,27 @@ function convertResponsesMessages(
               delete replayableReasoningItem.id;
             }
             if (
+              shouldReplayResponsesItemIds &&
               model.provider === "github-copilot" &&
               !isSafeResponsesReplayItemId(replayableReasoningItem.id)
             ) {
               continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
+            previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
           const textSignature = parseTextSignature(block.textSignature);
-          let msgId = shouldReplayResponsesItemIds
-            ? (textSignature?.id ?? `msg_${msgIndex}`)
-            : undefined;
+          let msgId = resolveReplayableResponsesMessageId({
+            replayResponsesItemIds: shouldReplayResponsesItemIds,
+            textSignatureId: textSignature?.id,
+            fallbackId: `msg_${msgIndex}`,
+            fallbackOrdinal: textFallbackOrdinal,
+            previousReplayItemWasReasoning,
+          });
+          if (!textSignature?.id) {
+            textFallbackOrdinal += 1;
+          }
           msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
@@ -1154,6 +1196,7 @@ function convertResponsesMessages(
             phase: textSignature?.phase,
           };
           output.push(messageItem as ResponseInputItem);
+          previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const [callId, itemIdRaw] = block.id.split("|");
           const itemId =
@@ -1162,7 +1205,7 @@ function convertResponsesMessages(
               : undefined;
           output.push({
             type: "function_call",
-            id: itemId,
+            ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: block.name,
             arguments:
@@ -1170,6 +1213,7 @@ function convertResponsesMessages(
                 ? block.arguments
                 : JSON.stringify(block.arguments ?? {}),
           });
+          previousReplayItemWasReasoning = false;
         }
       }
       if (output.length > 0) {
@@ -1843,6 +1887,16 @@ function resolveCacheRetention(cacheRetention: string | undefined): "short" | "l
   return "short";
 }
 
+function resolvePromptCacheKey(
+  options: Pick<BaseStreamOptions, "promptCacheKey" | "sessionId"> | undefined,
+  cacheRetention: "short" | "long" | "none",
+): string | undefined {
+  if (cacheRetention === "none") {
+    return undefined;
+  }
+  return clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
+}
+
 function getPromptCacheRetention(
   baseUrl: string | undefined,
   cacheRetention: "short" | "long" | "none",
@@ -1902,8 +1956,9 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 
 function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
-    model.provider === "openai-codex" &&
-    (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
+    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
+    (model.api === "openai-chatgpt-responses" ||
+      model.api === "openclaw-openai-responses-transport")
   );
 }
 
@@ -1980,6 +2035,19 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
+function resolveOpenAICodexResponsesInstructions(
+  model: Model,
+  context: Context,
+): string | undefined {
+  const instructions = buildOpenAICodexResponsesInstructions(context);
+  if (instructions && instructions.trim().length > 0) {
+    return instructions;
+  }
+  return usesNativeOpenAICodexResponsesBackend(model)
+    ? OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS
+    : undefined;
+}
+
 function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
   if (messages.length > 0 || !context.systemPrompt) {
     return;
@@ -2024,15 +2092,21 @@ export function buildOpenAIResponsesParams(
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  });
+  const policyAllowsReplayIds = payloadPolicy.explicitStore !== false;
+  const replayResponsesItemIds =
+    !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
+    new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
       replayReasoningItems: true,
-      replayResponsesItemIds: !isNativeCodexResponses,
+      replayResponsesItemIds,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
     },
@@ -2041,16 +2115,16 @@ export function buildOpenAIResponsesParams(
     ensureOpenAICodexResponsesInput(messages, context);
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
-  });
+  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
-    prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
+    prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
+    ...(isCodexResponses
+      ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
+      : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
@@ -2240,16 +2314,10 @@ function normalizeAzureBaseUrl(baseUrl: string): string {
 }
 
 function resolveAzureDeploymentName(model: Model): string {
-  const deploymentMap = process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
-  if (deploymentMap) {
-    for (const entry of deploymentMap.split(",")) {
-      const [modelId, deploymentName] = entry.split("=", 2).map((value) => value?.trim());
-      if (modelId === model.id && deploymentName) {
-        return deploymentName;
-      }
-    }
-  }
-  return model.id;
+  return resolveAzureDeploymentNameFromMap({
+    modelId: model.id,
+    deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
+  });
 }
 
 function createAzureOpenAIClient(
@@ -2459,6 +2527,7 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2478,6 +2547,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+  let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
@@ -2593,6 +2663,22 @@ async function processOpenAICompletionsStream(
       appendVisibleTextDelta(part);
     }
   };
+  const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
+    if (delta.kind === "text") {
+      appendFilteredVisibleTextDelta(delta.text);
+      return;
+    }
+    if (currentBlock?.type === "toolCall") {
+      queuePostToolCallDelta(delta);
+    } else {
+      appendThinkingDelta(delta);
+    }
+  };
+  const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
+    if (delta.kind === "text") {
+      appendFilteredVisibleTextDelta(delta.text);
+    }
+  };
   const flushDeepSeekTextFilterAtEnd = () => {
     const parts = deepSeekTextFilter?.flush();
     if (!parts) {
@@ -2600,6 +2686,11 @@ async function processOpenAICompletionsStream(
     }
     for (const part of parts) {
       appendVisibleTextDelta(part);
+    }
+  };
+  const flushReasoningTagTextPartitionerAtEnd = () => {
+    for (const delta of reasoningTagTextPartitioner.flush()) {
+      appendPartitionedVisibleDelta(delta);
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
@@ -2626,6 +2717,9 @@ async function processOpenAICompletionsStream(
     if (choice.finish_reason) {
       const finishReasonResult = mapStopReason(choice.finish_reason);
       output.stopReason = finishReasonResult.stopReason;
+      if (finishReasonResult.stopReason === "stop") {
+        sawStopFinishReason = true;
+      }
       if (finishReasonResult.errorMessage) {
         output.errorMessage = finishReasonResult.errorMessage;
       }
@@ -2637,24 +2731,32 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    const reasoningDeltas = getCompletionsReasoningDeltas(
+      choiceDelta as Record<string, unknown>,
+      compat.visibleReasoningDetailTypes,
+    );
+    const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
+    if (hasMirroredReasoning) {
+      reasoningTagTextPartitioner.markStrict();
+    }
     if (choiceDelta.content) {
       // Structured content can contain visible text and thinking blocks in the
       // same delta, so route each extracted block through the normal stream path.
       const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
       for (const contentDelta of contentDeltas) {
         if (contentDelta.kind === "text") {
-          appendFilteredVisibleTextDelta(contentDelta.text);
-        } else if (currentBlock?.type === "toolCall") {
-          queuePostToolCallDelta(contentDelta);
+          const routedDeltas = hasMirroredReasoning
+            ? reasoningTagTextPartitioner.push(contentDelta.text)
+            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+          for (const routedDelta of routedDeltas) {
+            appendPartitionedVisibleDelta(routedDelta);
+          }
         } else {
-          appendThinkingDelta(contentDelta);
+          reasoningTagTextPartitioner.markStrict();
+          appendRoutedContentDelta(contentDelta);
         }
       }
     }
-    const reasoningDeltas = getCompletionsReasoningDeltas(
-      choiceDelta as Record<string, unknown>,
-      compat.visibleReasoningDetailTypes,
-    );
     for (const reasoningDelta of reasoningDeltas) {
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
@@ -2667,6 +2769,7 @@ async function processOpenAICompletionsStream(
       }
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      flushReasoningTagTextPartitionerAtEnd();
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
         let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
@@ -2732,13 +2835,24 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     await cooperativeScheduler.afterEvent();
   }
+  flushReasoningTagTextPartitionerAtEnd();
   flushDeepSeekTextFilterAtEnd();
   finishAllToolCallBlocks();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+  const hasVisibleText = output.content.some(
+    (block) =>
+      block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
+  );
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
+  }
+  if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
+    output.stopReason = "toolUse";
+  }
+  if (hasToolCalls && output.stopReason !== "toolUse") {
+    output.content = output.content.filter((block) => block.type !== "toolCall");
   }
 }
 
@@ -2965,11 +3079,25 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
-): number | undefined {
+): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
+  if (options?.maxTokens) {
+    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
+  }
   const paramsMaxTokens = resolveMaxTokensParam(
     (model as { params?: Record<string, unknown> }).params,
   );
-  return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
+  if (paramsMaxTokens) {
+    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
+  }
+  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
+}
+
+function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
+  return typeof model.maxTokens === "number" &&
+    Number.isFinite(model.maxTokens) &&
+    model.maxTokens > 0
+    ? Math.floor(model.maxTokens)
+    : undefined;
 }
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
@@ -3385,6 +3513,23 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 
+// Tier/access suffixes that some providers append to otherwise identical model
+// ids (OpenCode Zen exposes `deepseek-v4-flash-free`, OpenRouter exposes
+// `:free` / `:cloud`, etc.). The base model id before the suffix still owns
+// the same DeepSeek-style reasoning_content replay contract, so reasoning
+// replay must not be stripped just because the catalog id grew a marketing
+// suffix (#87575).
+const REASONING_CONTENT_REPLAY_TIER_SUFFIXES = ["-free", "-paid", "-trial"] as const;
+
+function stripReasoningContentReplayTierSuffix(modelId: string): string {
+  for (const suffix of REASONING_CONTENT_REPLAY_TIER_SUFFIXES) {
+    if (modelId.length > suffix.length && modelId.endsWith(suffix)) {
+      return modelId.slice(0, -suffix.length);
+    }
+  }
+  return modelId;
+}
+
 function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] {
   if (typeof modelId !== "string") {
     return [];
@@ -3400,6 +3545,17 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
   }
+  const baseCount = candidates.length;
+  for (let index = 0; index < baseCount; index += 1) {
+    const candidate = candidates[index];
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const stripped = stripReasoningContentReplayTierSuffix(candidate);
+    if (stripped !== candidate) {
+      candidates.push(stripped);
+    }
+  }
   return uniqueStrings(candidates.filter(Boolean));
 }
 
@@ -3410,7 +3566,8 @@ function shouldPreserveReasoningContentReplay(
   if (
     compat.requiresReasoningContentOnAssistantMessages ||
     compat.thinkingFormat === "deepseek" ||
-    compat.thinkingFormat === "zai"
+    compat.thinkingFormat === "zai" ||
+    shouldTrustReasoningContentReplayMetadata(model)
   ) {
     return true;
   }
@@ -3425,6 +3582,17 @@ function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolea
   }
   const normalizedModelId = model.id.trim().toLowerCase();
   return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
+}
+
+function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
+  if (!model.reasoning || isGemma4ModelId(model.id)) {
+    return false;
+  }
+  const provider = model.provider.trim().toLowerCase();
+  if (provider === "openai") {
+    return false;
+  }
+  return shouldPreserveOpenRouterReasoningReplay(model);
 }
 
 // OpenAI Chat Completions assistant-message input does not define reasoning
@@ -3480,6 +3648,7 @@ export function buildOpenAICompletionsParams(
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -3493,8 +3662,8 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsStore) {
     params.store = false;
   }
-  if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
-    params.prompt_cache_key = options.sessionId;
+  if (compat.supportsPromptCacheKey && promptCacheKey) {
+    params.prompt_cache_key = promptCacheKey;
     // When the caller explicitly opted into long retention, forward the
     // canonical prompt_cache_retention value alongside the cache key so
     // OpenAI-compatible completions backends (oMLX, llama.cpp, official
@@ -3523,6 +3692,9 @@ export function buildOpenAICompletionsParams(
   if (options?.seed !== undefined) {
     params.seed = options.seed;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
+  }
   if (supportsModelTools(model)) {
     if (context.tools) {
       params.tools = convertTools(context.tools, compat, model);
@@ -3548,17 +3720,33 @@ export function buildOpenAICompletionsParams(
     }
   }
   {
-    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
+    const effectiveMaxTokens = maxTokenBudget.maxTokens;
     const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
     let clampedMaxTokens = effectiveMaxTokens;
+    const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
+    if (
+      maxTokenBudget.clampToModelMaxTokens &&
+      clampedMaxTokens !== undefined &&
+      modelMaxTokens !== undefined &&
+      clampedMaxTokens > modelMaxTokens
+    ) {
+      clampedMaxTokens = modelMaxTokens;
+      emitModelTransportDebug(
+        log,
+        `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+          `modelMaxTokens=${modelMaxTokens}`,
+      );
+    }
     if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
-      effectiveMaxTokens !== undefined &&
+      clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
-      if (effectiveMaxTokens > remainingBudget) {
+      if (clampedMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(
           log,

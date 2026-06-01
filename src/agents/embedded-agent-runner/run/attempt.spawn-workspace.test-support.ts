@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { expect, vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -14,10 +18,6 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -90,7 +90,8 @@ type AttemptSpawnWorkspaceHoisted = {
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
-  systemPromptOverrideTexts: string[];
+  systemPromptTexts: string[];
+  embeddedSystemPromptInputs: unknown[];
   sessionManager: SessionManagerMocks;
 };
 
@@ -187,7 +188,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     (messages) => messages,
   );
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
-  const systemPromptOverrideTexts: string[] = [];
+  const systemPromptTexts: string[] = [];
+  const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -228,7 +230,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
-    systemPromptOverrideTexts,
+    systemPromptTexts,
+    embeddedSystemPromptInputs,
     sessionManager,
   };
 });
@@ -280,6 +283,7 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => true,
   listPluginOriginsFromMetadataSnapshot: () => new Map(),
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
@@ -376,13 +380,16 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
-vi.mock("../../skills.js", () => ({
+vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
+}));
+
+vi.mock("../../../skills/loading/workspace.js", () => ({
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../skills-runtime.js", () => ({
+vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
     hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));
@@ -519,13 +526,13 @@ vi.mock("../system-prompt.js", async () => {
   const actual = await vi.importActual<typeof import("../system-prompt.js")>("../system-prompt.js");
   return {
     ...actual,
-    applySystemPromptOverrideToSession: (session: MutableSession, systemPrompt: string) => {
-      session.agent.state.systemPrompt = systemPrompt;
+    applySystemPromptToSession: (session: MutableSession, systemPrompt: string) => {
+      hoisted.systemPromptTexts.push(systemPrompt);
+      session.setBaseSystemPrompt(systemPrompt);
     },
-    buildEmbeddedSystemPrompt: () => "system prompt",
-    createSystemPromptOverride: (prompt: string) => {
-      hoisted.systemPromptOverrideTexts.push(prompt);
-      return () => prompt;
+    buildEmbeddedSystemPrompt: (params: unknown) => {
+      hoisted.embeddedSystemPromptInputs.push(params);
+      return "system prompt";
     },
   };
 });
@@ -773,6 +780,7 @@ vi.mock("../model.js", () => ({
 
 vi.mock("../sandbox-info.js", () => ({
   buildEmbeddedSandboxInfo: () => undefined,
+  resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
 vi.mock("../thinking.js", () => ({
@@ -848,7 +856,11 @@ export type MutableSession = {
       systemPrompt?: string;
     };
   };
-  prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  prompt: (
+    prompt: string,
+    options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
+  ) => Promise<void>;
+  setBaseSystemPrompt: (systemPrompt: string) => void;
   sendCustomMessage: (
     message: {
       customType: string;
@@ -867,7 +879,7 @@ export type MutableSession = {
 type SessionPromptOverride = (
   session: MutableSession,
   prompt: string,
-  options?: { images?: unknown[] },
+  options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
 ) => Promise<void>;
 
 type TestAgentStream = {
@@ -898,6 +910,10 @@ async function loadRunEmbeddedAttempt() {
   return await runEmbeddedAttemptPromise;
 }
 
+export async function preloadRunEmbeddedAttemptForTests(): Promise<void> {
+  await loadRunEmbeddedAttempt();
+}
+
 export function resetEmbeddedAttemptHarness(
   params: {
     includeSpawnSubagent?: boolean;
@@ -916,13 +932,14 @@ export function resetEmbeddedAttemptHarness(
   }
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+  hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
-    .mockImplementation((params) => params);
+    .mockImplementation((paramsLocal) => paramsLocal);
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {
@@ -982,7 +999,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
-  hoisted.systemPromptOverrideTexts.length = 0;
+  hoisted.systemPromptTexts.length = 0;
+  hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
@@ -1009,13 +1027,13 @@ export function createDefaultEmbeddedSession(params?: {
   prompt?: (
     session: MutableSession,
     prompt: string,
-    options?: { images?: unknown[] },
+    options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
 }): MutableSession {
   let pendingPrompt:
     | {
         prompt: string;
-        options?: { images?: unknown[] };
+        options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void };
       }
     | undefined;
   const session: MutableSession = {
@@ -1025,13 +1043,20 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     agent: {
       prompt: async (prompt, options) => {
-        pendingPrompt = { prompt: String(prompt), options: options as { images?: unknown[] } };
+        pendingPrompt = {
+          prompt: String(prompt),
+          options: options as {
+            images?: unknown[];
+            preflightResult?: (submitted: boolean) => void;
+          },
+        };
         await session.agent.streamFn?.();
       },
       streamFn: async () => {
         if (params?.prompt && pendingPrompt) {
           const currentPrompt = pendingPrompt;
           pendingPrompt = undefined;
+          currentPrompt.options?.preflightResult?.(true);
           await params.prompt(session, currentPrompt.prompt, currentPrompt.options);
         }
         return createCompletedAssistantStream();
@@ -1049,6 +1074,9 @@ export function createDefaultEmbeddedSession(params?: {
       },
     },
     setActiveToolsByName: () => {},
+    setBaseSystemPrompt: (systemPrompt) => {
+      session.agent.state.systemPrompt = systemPrompt;
+    },
     prompt: async (prompt, options) => {
       await session.agent.prompt?.(prompt, options);
       if (params?.prompt) {

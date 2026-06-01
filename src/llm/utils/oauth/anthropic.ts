@@ -6,6 +6,16 @@
  */
 
 import type { Server } from "node:http";
+import {
+  parseOAuthAuthorizationInput,
+  resolveOAuthTokenExpiresAt,
+} from "../../../plugin-sdk/provider-oauth-runtime.js";
+import {
+  buildOAuthRequestSignal,
+  createOAuthLoginCancelledError,
+  throwIfOAuthLoginAborted,
+  withOAuthLoginAbort,
+} from "./abort.js";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
 import { generateOAuthState, generatePKCE } from "./pkce.js";
 import type {
@@ -55,38 +65,6 @@ async function getNodeApis(): Promise<NodeApis> {
   return nodeApis;
 }
 
-function parseAuthorizationInput(input: string): { code?: string; state?: string } {
-  const value = input.trim();
-  if (!value) {
-    return {};
-  }
-
-  try {
-    const url = new URL(value);
-    return {
-      code: url.searchParams.get("code") ?? undefined,
-      state: url.searchParams.get("state") ?? undefined,
-    };
-  } catch {
-    // not a URL
-  }
-
-  if (value.includes("#")) {
-    const [code, state] = value.split("#", 2);
-    return { code, state };
-  }
-
-  if (value.includes("code=")) {
-    const params = new URLSearchParams(value);
-    return {
-      code: params.get("code") ?? undefined,
-      state: params.get("state") ?? undefined,
-    };
-  }
-
-  return { code: value };
-}
-
 function formatErrorDetails(error: unknown): string {
   if (error instanceof Error) {
     const details: string[] = [`${error.name}: ${error.message}`];
@@ -114,6 +92,50 @@ function formatErrorDetails(error: unknown): string {
 
 function formatTokenResponseParseContext(responseBody: string): string {
   return `bodyBytes=${Buffer.byteLength(responseBody, "utf8")}`;
+}
+
+function parseTokenCredentials(
+  responseBody: string,
+  options: {
+    invalidJsonMessage: string;
+    invalidFieldsMessage: string;
+  },
+): OAuthCredentials {
+  let data: unknown;
+  try {
+    data = JSON.parse(responseBody);
+  } catch (error) {
+    throw new Error(
+      `${options.invalidJsonMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
+      { cause: error },
+    );
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error(
+      `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  const record = data as Record<string, unknown>;
+  const expires = resolveOAuthTokenExpiresAt(record.expires_in, { refreshSkewMs: 5 * 60 * 1000 });
+  if (
+    typeof record.access_token !== "string" ||
+    !record.access_token ||
+    typeof record.refresh_token !== "string" ||
+    !record.refresh_token ||
+    expires === undefined
+  ) {
+    throw new Error(
+      `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
+    );
+  }
+
+  return {
+    refresh: record.refresh_token,
+    access: record.access_token,
+    expires,
+  };
 }
 
 async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
@@ -191,7 +213,13 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
   });
 }
 
-async function postJson(url: string, body: Record<string, string | number>): Promise<string> {
+async function postJson(
+  url: string,
+  body: Record<string, string | number>,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  throwIfOAuthLoginAborted(options.signal);
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -199,7 +227,7 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
       Accept: "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
+    signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
   const responseBody = await response.text();
@@ -218,43 +246,36 @@ async function exchangeAuthorizationCode(
   state: string,
   verifier: string,
   redirectUri: string,
+  signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
   let responseBody: string;
   try {
-    responseBody = await postJson(TOKEN_URL, {
-      grant_type: "authorization_code",
-      client_id: CLIENT_ID,
-      code,
-      state,
-      redirect_uri: redirectUri,
-      code_verifier: verifier,
-    });
+    responseBody = await postJson(
+      TOKEN_URL,
+      {
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        code,
+        state,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+      },
+      { signal },
+    );
   } catch (error) {
+    if (signal?.aborted) {
+      throw createOAuthLoginCancelledError();
+    }
     throw new Error(
       `Token exchange request failed. url=${TOKEN_URL}; redirect_uri=${redirectUri}; response_type=authorization_code; details=${formatErrorDetails(error)}`,
       { cause: error },
     );
   }
 
-  let tokenData: { access_token: string; refresh_token: string; expires_in: number };
-  try {
-    tokenData = JSON.parse(responseBody) as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-    };
-  } catch (error) {
-    throw new Error(
-      `Token exchange returned invalid JSON. url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
-      { cause: error },
-    );
-  }
-
-  return {
-    refresh: tokenData.refresh_token,
-    access: tokenData.access_token,
-    expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
-  };
+  return parseTokenCredentials(responseBody, {
+    invalidJsonMessage: "Token exchange returned invalid JSON.",
+    invalidFieldsMessage: "Token exchange returned invalid token fields.",
+  });
 }
 
 /**
@@ -265,7 +286,9 @@ export async function loginAnthropic(options: {
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
   onManualCodeInput?: () => Promise<string>;
+  signal?: AbortSignal;
 }): Promise<OAuthCredentials> {
+  throwIfOAuthLoginAborted(options.signal);
   const { verifier, challenge } = await generatePKCE();
   const expectedState = generateOAuthState();
   const server = await startCallbackServer(expectedState);
@@ -275,6 +298,7 @@ export async function loginAnthropic(options: {
   let redirectUriForExchange = REDIRECT_URI;
 
   try {
+    throwIfOAuthLoginAborted(options.signal);
     const authParams = new URLSearchParams({
       code: "true",
       client_id: CLIENT_ID,
@@ -291,6 +315,7 @@ export async function loginAnthropic(options: {
       instructions:
         "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
     });
+    throwIfOAuthLoginAborted(options.signal);
 
     if (options.onManualCodeInput) {
       let manualInput: string | undefined;
@@ -301,12 +326,16 @@ export async function loginAnthropic(options: {
           manualInput = input;
           server.cancelWait();
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           manualError = err instanceof Error ? err : new Error(String(err));
           server.cancelWait();
         });
 
-      const result = await server.waitForCode();
+      const result = await withOAuthLoginAbort(
+        server.waitForCode(),
+        options.signal,
+        server.cancelWait,
+      );
 
       if (manualError) {
         throw manualError;
@@ -317,7 +346,7 @@ export async function loginAnthropic(options: {
         state = result.state;
         redirectUriForExchange = REDIRECT_URI;
       } else if (manualInput) {
-        const parsed = parseAuthorizationInput(manualInput);
+        const parsed = parseOAuthAuthorizationInput(manualInput);
         if (parsed.state && parsed.state !== expectedState) {
           throw new Error("OAuth state mismatch");
         }
@@ -326,12 +355,12 @@ export async function loginAnthropic(options: {
       }
 
       if (!code) {
-        await manualPromise;
+        await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
-          throw manualError;
+          throw toLintErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
-          const parsed = parseAuthorizationInput(manualInput);
+          const parsed = parseOAuthAuthorizationInput(manualInput);
           if (parsed.state && parsed.state !== expectedState) {
             throw new Error("OAuth state mismatch");
           }
@@ -340,7 +369,11 @@ export async function loginAnthropic(options: {
         }
       }
     } else {
-      const result = await server.waitForCode();
+      const result = await withOAuthLoginAbort(
+        server.waitForCode(),
+        options.signal,
+        server.cancelWait,
+      );
       if (result?.code) {
         code = result.code;
         state = result.state;
@@ -349,11 +382,15 @@ export async function loginAnthropic(options: {
     }
 
     if (!code) {
-      const input = await options.onPrompt({
-        message: "Paste the authorization code or full redirect URL:",
-        placeholder: REDIRECT_URI,
-      });
-      const parsed = parseAuthorizationInput(input);
+      const input = await withOAuthLoginAbort(
+        options.onPrompt({
+          message: "Paste the authorization code or full redirect URL:",
+          placeholder: REDIRECT_URI,
+        }),
+        options.signal,
+        server.cancelWait,
+      );
+      const parsed = parseOAuthAuthorizationInput(input);
       if (parsed.state && parsed.state !== expectedState) {
         throw new Error("OAuth state mismatch");
       }
@@ -370,7 +407,7 @@ export async function loginAnthropic(options: {
     }
 
     options.onProgress?.("Exchanging authorization code for tokens...");
-    return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange);
+    return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange, options.signal);
   } finally {
     server.server.close();
   }
@@ -394,26 +431,10 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
     );
   }
 
-  let data: { access_token: string; refresh_token: string; expires_in: number; scope?: string };
-  try {
-    data = JSON.parse(responseBody) as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-      scope?: string;
-    };
-  } catch (error) {
-    throw new Error(
-      `Anthropic token refresh returned invalid JSON. url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
-      { cause: error },
-    );
-  }
-
-  return {
-    refresh: data.refresh_token,
-    access: data.access_token,
-    expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
-  };
+  return parseTokenCredentials(responseBody, {
+    invalidJsonMessage: "Anthropic token refresh returned invalid JSON.",
+    invalidFieldsMessage: "Anthropic token refresh returned invalid token fields.",
+  });
 }
 
 export const anthropicOAuthProvider: OAuthProviderInterface = {
@@ -427,6 +448,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
       onPrompt: callbacks.onPrompt,
       onProgress: callbacks.onProgress,
       onManualCodeInput: callbacks.onManualCodeInput,
+      signal: callbacks.signal,
     });
   },
 
@@ -438,3 +460,17 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
     return credentials.access;
   },
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

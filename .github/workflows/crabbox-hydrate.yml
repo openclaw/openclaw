@@ -123,6 +123,7 @@ jobs:
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             mkdir -p "$PNPM_CONFIG_MODULES_DIR"
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+            export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
           fi
           pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
@@ -137,7 +138,10 @@ jobs:
           set -euo pipefail
 
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+            timeout --signal=TERM --kill-after=10s 30s git \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+              "+refs/heads/main:refs/remotes/origin/main"
           fi
 
       - name: Prepare Crabbox shell
@@ -318,7 +322,26 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           if (git rev-parse --is-inside-work-tree 2>$null) {
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+            $repo = (Get-Location).Path
+            $fetchInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $fetchInfo.FileName = "git"
+            $fetchInfo.WorkingDirectory = $repo
+            $fetchInfo.UseShellExecute = $false
+            $fetchInfo.Arguments = '-c protocol.version=2 fetch --no-tags --no-progress --prune --no-recurse-submodules --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"'
+
+            $fetch = New-Object System.Diagnostics.Process
+            $fetch.StartInfo = $fetchInfo
+            if (-not $fetch.Start()) {
+              throw "git fetch failed to start"
+            }
+            if (-not $fetch.WaitForExit(30000)) {
+              $fetch.Kill()
+              $fetch.WaitForExit()
+              throw "git fetch timed out after 30 seconds"
+            }
+            if ($fetch.ExitCode -ne 0) {
+              throw "git fetch failed with exit code $($fetch.ExitCode)"
+            }
           }
 
       - name: Setup pnpm and dependencies
@@ -335,8 +358,8 @@ jobs:
           $env:COREPACK_HOME = Join-Path $env:XDG_CACHE_HOME "corepack"
           $env:PNPM_HOME = Join-Path $cacheRoot "pnpm-home"
           $env:PNPM_CONFIG_STORE_DIR = Join-Path $cacheRoot "openclaw-pnpm-store"
-          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"
-          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $workspace "node_modules\.pnpm"
+          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $cacheRoot "openclaw-pnpm-node-modules"
+          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $env:PNPM_CONFIG_MODULES_DIR ".pnpm"
           $env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"
           $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"
           $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
@@ -408,6 +431,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+          $workspaceNodeModules = Join-Path $workspace "node_modules"
+          if (Test-Path $workspaceNodeModules) {
+            $workspaceNodeModulesItem = Get-Item $workspaceNodeModules -Force
+            if (($workspaceNodeModulesItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+              $nodeModulesChildren = @(Get-ChildItem -LiteralPath $workspaceNodeModules -Force)
+              $hasOnlyPnpmWorkspaceState = $nodeModulesChildren.Count -eq 1 -and $nodeModulesChildren[0].Name -eq ".pnpm-workspace-state-v1.json"
+              if ($nodeModulesChildren.Count -ne 0 -and -not $hasOnlyPnpmWorkspaceState) {
+                throw "workspace node_modules exists and is not a link: $workspaceNodeModules"
+              }
+              foreach ($nodeModulesChild in $nodeModulesChildren) {
+                Remove-Item -LiteralPath $nodeModulesChild.FullName -Force
+              }
+              Remove-Item -LiteralPath $workspaceNodeModules -Force
+              New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+            }
+          } else {
+            New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+          }
+
           $corepackShimDir = Join-Path $nodeBin "node_modules\corepack\shims"
           if (Test-Path $corepackShimDir) {
             $env:PNPM_HOME = $corepackShimDir
@@ -513,7 +555,10 @@ jobs:
           set -euo pipefail
 
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+            timeout --signal=TERM --kill-after=10s 30s git \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+              "+refs/heads/main:refs/remotes/origin/main"
           fi
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"

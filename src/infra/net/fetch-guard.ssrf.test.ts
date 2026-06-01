@@ -946,6 +946,32 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("does not restore authorization across HTTPS-to-HTTP redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("http://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: {
+        headers: {
+          Authorization: "Bearer secret",
+          Accept: "application/json",
+        },
+      },
+      retainAuthorizationRedirectHostnameAllowlist: ["cdn.example.com"],
+    });
+
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("accept")).toBe("application/json");
+    await result.release();
+  });
+
   it("handles symbol-bearing header dictionaries while rewriting cross-origin redirects", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
@@ -1713,7 +1739,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
-            reject(init.signal?.reason ?? new Error("aborted"));
+            reject(
+              toLintErrorObject(init.signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
+            );
           });
         }),
     );
@@ -2082,3 +2110,17 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -45,7 +45,9 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     ...actual,
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
-    shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
+    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+      context?: { resolvedApiKey?: string };
+    }) => params.context?.resolvedApiKey === "synthetic-defer",
     resolveProviderSyntheticAuthWithPlugin: (params: {
       provider: string;
       config?: {
@@ -170,6 +172,14 @@ afterEach(() => {
 });
 
 describe("createRuntimeProviderAuthLookup", () => {
+  it("marks env auth maps as authoritative so hot checks skip setup runtime fallback", () => {
+    expect(
+      createRuntimeProviderAuthLookup({
+        env: {},
+      }).envApiKey.skipSetupProviderFallback,
+    ).toBe(true);
+  });
+
   it("omits synthetic auth refs when plugin synthetic auth is disabled", () => {
     expect(
       createRuntimeProviderAuthLookup({
@@ -356,7 +366,7 @@ describe("resolveModelAuthMode", () => {
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "token",
         refresh: "refresh",
         expires: Date.now() + 60_000,
@@ -882,6 +892,34 @@ describe("resolveApiKeyForProvider", () => {
       apiKey: "native-cli-access-token",
       source: "Native CLI auth",
       mode: "oauth",
+    });
+  });
+
+  it("reuses the loaded auth profile store after deferring an explicit synthetic profile", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "custom-auth",
+      profileId: "custom-auth:synthetic",
+      store: {
+        version: 1,
+        profiles: {
+          "custom-auth:synthetic": {
+            type: "api_key",
+            provider: "custom-auth",
+            key: "synthetic-defer", // pragma: allowlist secret
+          },
+          "custom-auth:real": {
+            type: "api_key",
+            provider: "custom-auth",
+            key: "sk-real", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "sk-real",
+      source: "profile:custom-auth:real",
+      mode: "api-key",
     });
   });
 

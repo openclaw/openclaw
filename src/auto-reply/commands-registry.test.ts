@@ -19,6 +19,7 @@ import {
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
+  resolveTextCommand,
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
@@ -231,6 +232,17 @@ describe("commands registry", () => {
     const sideNativeSpec = requireNativeSpec(listNativeCommandSpecs(), "side");
     expect(sideNativeSpec.acceptsArgs).toBe(true);
     expect(sideNativeSpec.isAlias).toBe(true);
+  });
+
+  it("matches text command names case-insensitively without changing args", () => {
+    expect(normalizeCommandBody("/STATUS")).toBe("/status");
+    expect(normalizeCommandBody("/Model OpenAI-Codex/GPT-5.5")).toBe("/model OpenAI-Codex/GPT-5.5");
+    expect(normalizeCommandBody("/T HIGH")).toBe("/think HIGH");
+
+    expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.command.key).toBe("compact");
+    expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.args).toBe(
+      "Keep CaseSensitivePath",
+    );
   });
 
   it("filters commands based on config flags", () => {
@@ -669,12 +681,12 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, catalog, command, arg }) => {
+          choices: ({ provider, model, catalog, command: commandLocal, arg }) => {
             seen = {
               provider,
               model,
               catalogLength: catalog?.length,
-              commandKey: command.key,
+              commandKey: commandLocal.key,
               argName: arg.name,
             };
             return ["low", "high"];

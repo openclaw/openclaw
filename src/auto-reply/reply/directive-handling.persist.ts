@@ -7,7 +7,7 @@ import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,8 +19,7 @@ import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thin
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
-  canPersistInternalExecDirective,
-  canPersistInternalVerboseDirective,
+  canPersistSessionDirectiveDefaults,
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
@@ -96,6 +95,7 @@ export async function persistInlineDirectives(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   markLiveSwitchPending?: boolean;
   thinkingCatalog?: ModelCatalogEntry[];
@@ -124,15 +124,19 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
-  const allowInternalExecPersistence = canPersistInternalExecDirective({
+  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
@@ -392,6 +396,7 @@ export async function persistInlineDirectives(params: {
           agentId: activeAgentId,
           sessionKey,
         }).runtime,
+        config: cfg,
       }),
       model,
     }),

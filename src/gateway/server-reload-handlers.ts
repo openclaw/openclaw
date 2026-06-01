@@ -7,7 +7,7 @@ import {
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import {
   clearCurrentProviderAuthState,
-  warmCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
 } from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -440,7 +440,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             import("../hooks/gmail-watcher-lifecycle.js"),
           ]);
           if (!restartAbortController.signal.aborted) {
-            await stopGmailWatcher().catch((err) => {
+            await stopGmailWatcher().catch((err: unknown) => {
               params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
             });
           }
@@ -500,7 +500,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
-    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
     });
 
@@ -563,20 +563,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onStillPending: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersValue = formatTaskBlockers();
             params.logReload.warn(
               `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersValue ? ` (${taskBlockersValue})` : ""
               }`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersLocal = formatTaskBlockers();
             restartPending = false;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersLocal ? ` (${taskBlockersLocal})` : ""
               }; forcing restart`,
             );
           },

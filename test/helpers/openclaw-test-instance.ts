@@ -191,13 +191,17 @@ async function resolveGatewayEntrypoint(cwd: string): Promise<string[]> {
 
 const getFreePort = async () => {
   const srv = net.createServer();
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    srv.listen(0, "127.0.0.1", resolve);
+  });
   const addr = srv.address();
   if (!addr || typeof addr === "string") {
     srv.close();
     throw new Error("failed to bind ephemeral port");
   }
-  await new Promise<void>((resolve) => srv.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    srv.close(() => resolve());
+  });
   return addr.port;
 };
 
@@ -210,7 +214,7 @@ async function waitForPortOpen(
 ) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (proc.exitCode !== null) {
+    if (hasChildExited(proc)) {
       throw new Error(
         `gateway exited before listening (code=${String(proc.exitCode)} signal=${String(
           proc.signalCode,
@@ -249,12 +253,17 @@ async function waitForGatewayExit(
   return await Promise.race([
     new Promise<boolean>((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) {
-        return resolve(true);
+        resolve(true);
+        return;
       }
       child.once("exit", () => resolve(true));
     }),
     sleep(timeoutMs).then(() => false),
   ]);
+}
+
+function hasChildExited(child: Pick<ChildProcessWithoutNullStreams, "exitCode" | "signalCode">) {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -371,7 +380,7 @@ export async function createOpenClawTestInstance(
       });
     },
     startGateway: async () => {
-      if (child && child.exitCode === null && !child.killed) {
+      if (child && !hasChildExited(child) && !child.killed) {
         return;
       }
       const entrypoint = await resolveGatewayEntrypoint(cwd);
@@ -416,7 +425,7 @@ export async function createOpenClawTestInstance(
       if (!child) {
         return;
       }
-      if (child.exitCode === null && !child.killed) {
+      if (!hasChildExited(child) && !child.killed) {
         try {
           child.kill("SIGTERM");
         } catch {
@@ -427,7 +436,7 @@ export async function createOpenClawTestInstance(
         child,
         options.stopTimeoutMs ?? GATEWAY_STOP_TIMEOUT_MS,
       );
-      if (!exited && child.exitCode === null && !child.killed) {
+      if (!exited && !hasChildExited(child) && !child.killed) {
         try {
           child.kill("SIGKILL");
         } catch {
@@ -500,4 +509,6 @@ export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
+  hasChildExited,
+  waitForPortOpen,
 };
