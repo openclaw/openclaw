@@ -128,12 +128,16 @@ function coercePayload(payload: UnknownRecord) {
     const trimmed = normalizeOptionalString(next.message) ?? "";
     if (trimmed) {
       next.message = trimmed;
+    } else {
+      next.message = "";
     }
   }
   if (typeof next.text === "string") {
     const trimmed = normalizeOptionalString(next.text) ?? "";
     if (trimmed) {
       next.text = trimmed;
+    } else {
+      next.text = "";
     }
   }
   if ("model" in next) {

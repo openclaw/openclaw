@@ -1085,6 +1085,10 @@
       "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
       "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
     },
+    "./plugin-sdk/memory-core-host-embedding-registry": {
+      "types": "./dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-embedding-registry.js"
+    },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
