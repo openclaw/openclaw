@@ -342,7 +342,7 @@ export class FeishuStreamingSession {
       sequence: 1,
       currentText: "",
       sentText: "",
-      hasNote: !!options?.note,
+      hasNote: Boolean(options?.note),
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
@@ -520,12 +520,12 @@ export class FeishuStreamingSession {
       .then(async ({ release }) => {
         await release();
       })
-      .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
+      .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<void> {
+  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
     if (!this.state || this.closed) {
-      return;
+      return false;
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -534,9 +534,11 @@ export class FeishuStreamingSession {
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
     const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
+    let visibleContentSent = Boolean(this.state.sentText.trim());
 
-    // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.sentText) {
+    // Only send final update if content differs from what's already displayed.
+    // An explicit empty final text clears a transient preview before closeout.
+    if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
         ? await this.updateCardContent(
             resolveStreamingCardAppendContent(this.state.sentText, text),
@@ -548,6 +550,7 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;
+        visibleContentSent = Boolean(text.trim());
       }
     }
 
@@ -581,12 +584,39 @@ export class FeishuStreamingSession {
       .then(async ({ release }) => {
         await release();
       })
-      .catch((e) => this.log?.(`Close failed: ${String(e)}`));
+      .catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
     const finalState = this.state;
     this.state = null;
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
+    return visibleContentSent;
+  }
+
+  async discard(): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.clearFlushTimer();
+    await this.queue;
+
+    const currentState = this.state;
+    try {
+      const response = await this.client.im.message.delete({
+        path: { message_id: currentState.messageId },
+      });
+      if (response.code !== undefined && response.code !== 0) {
+        throw new Error(`Delete streaming card message failed: ${response.msg ?? response.code}`);
+      }
+      this.state = null;
+      this.pendingText = null;
+      this.log?.(`Discarded streaming card: cardId=${currentState.cardId}`);
+    } catch (error) {
+      this.log?.(`Discard failed: ${String(error)}`);
+      this.closed = false;
+      await this.close("");
+    }
   }
 
   isActive(): boolean {

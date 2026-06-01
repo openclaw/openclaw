@@ -150,7 +150,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
 
   const append = (value) => {
     const text = String(value);
-    let textBytes = Buffer.byteLength(text);
+    const textBytes = Buffer.byteLength(text);
     if (textBytes >= limit) {
       const buffer = Buffer.from(text);
       const tail = buffer.subarray(buffer.length - limit).toString("utf8");

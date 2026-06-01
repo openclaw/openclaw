@@ -1,10 +1,9 @@
 import "./fs-safe-defaults.js";
 import fs from "node:fs";
 import path from "node:path";
-import { tryReadJsonSync, tryReadJson, writeJsonSync } from "@openclaw/fs-safe/json";
+import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
 
-export { tryReadJson, tryReadJsonSync, writeJsonSync };
-export const readJsonFile = tryReadJson;
+export { tryReadJsonSync, writeJsonSync };
 
 function resolveJsonSymlinkTarget(pathname: string): string | undefined {
   let stat: fs.Stats;

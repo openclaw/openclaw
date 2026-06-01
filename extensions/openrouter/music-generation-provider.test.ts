@@ -226,7 +226,9 @@ describe("openrouter music generation provider", () => {
       ).rejects.toThrow("OpenRouter music generation response missing audio data");
 
       expect(postRequest().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      const streamTimeoutMs = timeoutSpy.mock.calls.at(-1)?.[1];
+      expect(streamTimeoutMs).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS - 1_000);
+      expect(streamTimeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
     }

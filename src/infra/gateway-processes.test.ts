@@ -9,20 +9,18 @@ const isGatewayArgvMock = vi.hoisted(() => vi.fn());
 const findGatewayPidsOnPortSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, spawnSync: spawnSyncMock };
-});
-
-vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    {
-      readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
-    },
-    { mirrorToDefault: true },
+  const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeChildProcessSpawnSync(spawnSyncMock, () =>
+    vi.importActual<typeof import("node:child_process")>("node:child_process"),
   );
 });
+
+vi.mock("node:fs", () => ({
+  default: {
+    readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
+  },
+  readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
+}));
 
 vi.mock("../daemon/cmd-argv.js", () => ({
   parseCmdScriptCommandLine: (...args: unknown[]) => parseCmdScriptCommandLineMock(...args),

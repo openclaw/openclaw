@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCommandResolutionFromArgv } from "../../../infra/exec-command-resolution.js";
@@ -11,7 +12,6 @@ import {
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../../../infra/exec-safe-bin-trust.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { asObjectRecord } from "./object.js";
 
 export type ExecSafeBinCoverageHit = {

@@ -85,7 +85,9 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   }
   await Promise.race([
     Promise.allSettled(attempts.map((attempt) => attempt.promise)),
-    new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 5_000);
+    }),
   ]);
 }
 
@@ -140,8 +142,8 @@ export function assistantMessage(text: string, timestamp: number) {
   return {
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     model: "gpt-5.4-codex",
     usage: {
       input: 0,
@@ -312,7 +314,7 @@ export function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string, timeoutMs: number = appServerHarnessWait.timeout) {
+    waitForMethod: async (method: string, timeoutMs: number = appServerHarnessWait.timeout) => {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -330,15 +332,15 @@ export function createAppServerHarness(
         { interval: 1, timeout: timeoutMs },
       );
     },
-    async notify(notification: CodexServerNotification) {
+    notify: async (notification: CodexServerNotification) => {
       await sendNotification(notification);
     },
     waitForServerRequestHandler,
-    async handleServerRequest(request: Parameters<AppServerRequestHandler>[0]) {
+    handleServerRequest: async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
       const handler = await waitForServerRequestHandler();
-      return handler(request);
+      return handler(requestLocal);
     },
-    async completeTurn(params: { threadId: string; turnId: string }) {
+    completeTurn: async (params: { threadId: string; turnId: string }) => {
       await sendNotification({
         method: "turn/completed",
         params: {
@@ -348,7 +350,7 @@ export function createAppServerHarness(
         },
       });
     },
-    close() {
+    close: () => {
       for (const handler of closeHandlers) {
         handler();
       }

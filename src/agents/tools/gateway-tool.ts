@@ -1,10 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
@@ -15,8 +21,6 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
-import { isRecord as isPlainObject } from "../../shared/record-coerce.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { optionalNonNegativeIntegerSchema, stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
@@ -30,6 +34,7 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 // Per SECURITY.md the model/agent itself is not a trusted principal.
 // `assertGatewayConfigMutationAllowed` is the explicit model -> operator
 // trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
@@ -109,6 +114,14 @@ function stripConfigWriteResultPayload(result: unknown): unknown {
   const stripped = { ...result };
   delete stripped.config;
   return stripped;
+}
+
+function isConfigSchemaPathNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes(CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE)
+  );
 }
 
 function parseGatewayConfigMutationRaw(
@@ -472,8 +485,20 @@ export function createGatewayTool(opts?: {
           required: true,
           label: "path",
         });
-        const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
-        return jsonResult({ ok: true, result });
+        try {
+          const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+          return jsonResult({ ok: true, result });
+        } catch (error) {
+          if (isConfigSchemaPathNotFoundError(error)) {
+            return jsonResult({
+              ok: false,
+              code: "schema_path_not_found",
+              path,
+              message: CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE,
+            });
+          }
+          throw error;
+        }
       }
       if (action === "config.apply") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =

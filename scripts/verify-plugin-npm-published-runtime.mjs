@@ -230,7 +230,9 @@ function npmViewReadme(spec) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function readPositiveIntEnv(name, fallback, env = process.env) {
@@ -306,10 +308,24 @@ function readPackedPackage(tarballPath, extractDir) {
   tar.x({ file: tarballPath, cwd: extractDir, sync: true });
   const packageDir = path.join(extractDir, "package");
   const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8"));
+  const files = listFiles(packageDir);
   return {
     packageJson,
-    files: listFiles(packageDir),
+    files,
+    readme: readPackedPackageReadme(packageDir, files),
   };
+}
+
+export function findPackedPackageReadmePath(files) {
+  return files.find((file) => /^readme(?:\.(?:md|markdown|txt|rst))?$/iu.test(file)) ?? "";
+}
+
+function readPackedPackageReadme(packageDir, files) {
+  const readmePath = findPackedPackageReadmePath(files);
+  if (!readmePath) {
+    return "";
+  }
+  return fs.readFileSync(path.join(packageDir, readmePath), "utf8").trim();
 }
 
 export async function verifyPublishedPluginRuntime(spec) {
@@ -326,7 +342,18 @@ export async function verifyPublishedPluginRuntime(spec) {
     if (errors.length > 0) {
       throw new Error(errors.join("\n"));
     }
-    const readme = await verifyPublishedPackageReadme(spec);
+    let readme;
+    try {
+      readme = await verifyPublishedPackageReadme(spec);
+    } catch (error) {
+      if (!packedPackage.readme) {
+        throw error;
+      }
+      console.error(
+        `npm readme metadata for ${spec} was unavailable; verified README from published tarball instead.`,
+      );
+      readme = packedPackage.readme;
+    }
     return {
       packageName: packedPackage.packageJson.name,
       version: packedPackage.packageJson.version,
@@ -350,10 +377,12 @@ async function main(argv) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main(process.argv.slice(2)).catch((error) => {
-    console.error(
-      `plugin-npm-published-runtime-check: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exitCode = 1;
-  });
+  main(process.argv.slice(2)).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(
+        `plugin-npm-published-runtime-check: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exitCode = 1;
+    },
+  );
 }

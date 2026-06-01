@@ -50,6 +50,14 @@ export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
+export function resolvePluginApprovalTimeoutMs(value: unknown): number {
+  const candidate =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+  return Math.min(MAX_PLUGIN_APPROVAL_TIMEOUT_MS, Math.max(1, Math.floor(candidate)));
+}
+
 export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -100,9 +108,9 @@ export function buildPluginApprovalRequestMessage(
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
   lines.push(
-    `Reply with: /approve <id> ${resolvePluginApprovalRequestAllowedDecisions(request.request).join(
-      "|",
-    )}`,
+    `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
+      request.request,
+    ).join("|")}`,
   );
   return lines.join("\n");
 }

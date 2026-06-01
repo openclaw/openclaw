@@ -19,7 +19,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { type TelegramTransport } from "./fetch.js";
+import type { TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
@@ -36,6 +36,7 @@ import {
   recoverStaleTelegramSpooledUpdateClaims,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
+  writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
   type TelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
@@ -373,7 +374,7 @@ export class TelegramPollingSession {
         bypassBackoff: false,
       }),
     })
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
       })
       .finally(() => {
@@ -629,7 +630,7 @@ export class TelegramPollingSession {
         continue;
       }
       const ageMs = now - handler.startedAt;
-      if (ageMs <= this.#spooledUpdateHandlerTimeoutMs) {
+      if (ageMs < this.#spooledUpdateHandlerTimeoutMs) {
         continue;
       }
       if (!timedOut || ageMs > timedOut.ageMs) {
@@ -767,6 +768,23 @@ export class TelegramPollingSession {
     });
     const stalledBacklogKeys = new Set<string>();
     const unsubscribe = worker.onMessage((message) => {
+      const ackSpooledUpdate = (
+        requestId: string,
+        result:
+          | { ok: true; updateId: number }
+          | {
+              ok: false;
+              message: string;
+            },
+      ): void => {
+        try {
+          worker.ackSpooledUpdate?.(requestId, result);
+        } catch (err) {
+          this.opts.log(
+            `[telegram][diag] isolated polling worker ack failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      };
       if (message.type === "poll-start") {
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
@@ -790,6 +808,23 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
+        return;
+      }
+      if (message.type === "update") {
+        void writeTelegramSpooledUpdate({
+          spoolDir,
+          update: message.update,
+        }).then(
+          (updateId) => {
+            ackSpooledUpdate(message.requestId, { ok: true, updateId });
+          },
+          (err: unknown) => {
+            ackSpooledUpdate(message.requestId, {
+              ok: false,
+              message: formatErrorMessage(err),
+            });
+          },
+        );
         return;
       }
       if (message.type === "spooled") {
@@ -1125,4 +1160,9 @@ const isGetUpdatesConflict = (err: unknown) => {
     .join(" ");
   const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
   return normalizedHaystack.includes("getupdates");
+};
+
+export const testing = {
+  resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
+    resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };

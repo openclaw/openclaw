@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
@@ -117,6 +118,40 @@ describe("Codex app-server config", () => {
       transport: "websocket",
       url: "ws://127.0.0.1:39175",
       headers: { "X-Test": "yes" },
+    });
+  });
+
+  it("clamps oversized app-server timer config", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          requestTimeoutMs: Number.MAX_SAFE_INTEGER,
+          turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          postToolRawAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", {
+      requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      turnCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      postToolRawAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
+
+  it("falls back for non-positive app-server timer config", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          requestTimeoutMs: 0,
+          turnCompletionIdleTimeoutMs: -1,
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", {
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
     });
   });
 
@@ -616,6 +651,59 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(config.codexPlugins).toBeUndefined();
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
+
+  it("accepts native plugin identities from every first-party OpenAI marketplace", () => {
+    // OpenAI ships first-party Codex plugins across three marketplaces: the local
+    // openai-bundled marketplace shipped with Codex.app (chrome, browser, computer-use,
+    // latex-tectonic), the remote openai-curated marketplace, and the
+    // openai-primary-runtime marketplace owned by the Codex primary runtime
+    // (documents, spreadsheets, presentations). All three should resolve.
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          chrome: {
+            marketplaceName: "openai-bundled",
+            pluginName: "chrome",
+          },
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          documents: {
+            marketplaceName: "openai-primary-runtime",
+            pluginName: "documents",
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins?.enabled).toBe(true);
+    const policy = resolveCodexPluginsPolicy(config);
+    expect(policy.pluginPolicies).toEqual([
+      {
+        configKey: "chrome",
+        marketplaceName: "openai-bundled",
+        pluginName: "chrome",
+        enabled: true,
+        allowDestructiveActions: true,
+      },
+      {
+        configKey: "documents",
+        marketplaceName: "openai-primary-runtime",
+        pluginName: "documents",
+        enabled: true,
+        allowDestructiveActions: true,
+      },
+      {
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+        enabled: true,
+        allowDestructiveActions: true,
+      },
+    ]);
   });
 
   it("treats configured and environment commands as explicit overrides", () => {

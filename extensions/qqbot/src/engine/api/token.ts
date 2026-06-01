@@ -7,8 +7,8 @@
  */
 
 import {
+  asDateTimestampMs,
   parseStrictPositiveInteger,
-  resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -190,9 +190,11 @@ export class TokenManager {
       this.logger?.info?.(`[qqbot:token:${appId}] Background refresh stopped`);
     };
 
-    loop().catch((err) => {
+    loop().catch((err: unknown) => {
       this.refreshControllers.delete(appId);
-      this.logger?.error?.(`[qqbot:token:${appId}] Background refresh crashed: ${err}`);
+      this.logger?.error?.(
+        `[qqbot:token:${appId}] Background refresh crashed: ${formatErrorMessage(err)}`,
+      );
     });
   }
 
@@ -278,7 +280,11 @@ export class TokenManager {
         throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
       }
 
-      const nowMs = resolveDateTimestampMs(Date.now());
+      const nowMs = asDateTimestampMs(Date.now());
+      if (nowMs === undefined) {
+        this.logger?.debug?.(`[qqbot:token:${appId}] Not cached: invalid process clock`);
+        return data.access_token;
+      }
       const expiresAt =
         resolveExpiresAtMsFromDurationSeconds(resolveTokenExpiresInSeconds(data.expires_in), {
           nowMs,

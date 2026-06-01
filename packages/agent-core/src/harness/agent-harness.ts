@@ -1,8 +1,8 @@
-import {
-  type AssistantMessage,
-  type ImageContent,
-  type Model,
-  type UserMessage,
+import type {
+  AssistantMessage,
+  ImageContent,
+  Model,
+  UserMessage,
 } from "../../../llm-core/src/index.js";
 import { runAgentLoop } from "../agent-loop.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";
@@ -588,7 +588,7 @@ export class AgentHarness<
       const hadPendingMutations = this.pendingSessionWrites.length > 0;
       await this.flushPendingSessionWrites();
       if (eventError) {
-        throw eventError;
+        throw toLintErrorObject(eventError, "Non-Error thrown");
       }
       await this.emitOwn({ type: "save_point", hadPendingMutations });
       return;
@@ -1186,4 +1186,18 @@ export class AgentHarness<
     handlers.add(handler as AgentHarnessHandler);
     return () => handlers.delete(handler as AgentHarnessHandler);
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

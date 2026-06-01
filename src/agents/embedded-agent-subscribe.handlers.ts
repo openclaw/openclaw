@@ -33,7 +33,6 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return handler();
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-        return;
       }
     };
 
@@ -43,7 +42,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       }
       const task = result
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
         })
         .finally(() => {
@@ -59,7 +58,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
 
     const task = pendingEventChain
       .then(() => run())
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
       })
       .finally(() => {
@@ -136,9 +135,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         scheduleEvent(evt, () => {
           return handleAgentEnd(ctx);
         });
-        return;
       default:
-        return;
     }
   };
 }

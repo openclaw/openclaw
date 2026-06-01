@@ -377,8 +377,14 @@ async function acquireWithRetry(config) {
       const code = error instanceof BrokerError ? error.code : undefined;
       const retryable = code ? RETRYABLE_ACQUIRE_CODES.has(code) : false;
       const elapsedMs = Date.now() - startedAt;
-      if (!retryable || elapsedMs >= config.acquireTimeoutMs) {
+      if (!retryable) {
         throw error;
+      }
+      if (elapsedMs >= config.acquireTimeoutMs) {
+        throw taggedError(
+          `credential broker acquire timed out after ${config.acquireTimeoutMs}ms before retry`,
+          "ETIMEDOUT",
+        );
       }
       const fallbackDelay = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
       const retryAfterMs = error instanceof BrokerError ? error.retryAfterMs : undefined;
@@ -390,7 +396,9 @@ async function acquireWithRetry(config) {
           "ETIMEDOUT",
         );
       }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
   }
 }
@@ -445,7 +453,9 @@ async function heartbeat(opts) {
       config.heartbeatIntervalMs,
       "heartbeatIntervalMs",
     );
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, intervalMs);
+    });
   }
 }
 

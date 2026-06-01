@@ -74,6 +74,7 @@ export type AppViewState = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  chatError: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
@@ -127,12 +128,14 @@ export type AppViewState = {
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
   chatSessionPickerOpen: boolean;
-  chatSessionPickerSurface: "desktop" | "mobile" | null;
+  chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
   chatSessionPickerQuery: string;
   chatSessionPickerAppliedQuery: string;
   chatSessionPickerLoading: boolean;
   chatSessionPickerError: string | null;
   chatSessionPickerResult: SessionsListResult | null;
+  sessionsResultAgentId?: string | null;
+  chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;
@@ -202,6 +205,7 @@ export type AppViewState = {
   configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
+  selectedAgentId: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -460,7 +464,7 @@ export type AppViewState = {
     overviewLogLines: string[];
     overviewLogCursor: number;
     client: GatewayBrowserClient | null;
-    refreshSessionsAfterChat: Set<string>;
+    refreshSessionsAfterChat: Map<string, import("./ui-types.js").ChatSessionRefreshTarget>;
     connect: () => void;
     setTab: (tab: Tab) => void;
     setChatMobileControlsOpen: (

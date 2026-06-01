@@ -59,6 +59,28 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 
 let callGatewayModulePromise;
 
+function usage() {
+  return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
+
+Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
+
+Environment:
+  OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
+  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
+  OPENCLAW_KITCHEN_SINK_PLUGIN_ID        Plugin id. Default: openclaw-kitchen-sink-fixture.
+  OPENCLAW_KITCHEN_SINK_RPC_READY_MS     Gateway readiness timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS   OpenClaw command timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS   Plugin install timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_CALL_MS      RPC call timeout.
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB      Gateway RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP=1       Preserve the isolated temp home.
+`;
+}
+
+export function shouldPrintHelp(argv) {
+  return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
 export function readPositiveInt(raw, fallback) {
   const text = String(raw || "").trim();
   if (!/^\d+$/u.test(text)) {
@@ -159,16 +181,65 @@ function formatCapturedOutput(label, buffer) {
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutKillGraceMs = 2000, timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
+    const {
+      resourceLabel,
+      resourceSampleIntervalMs = 1000,
+      resourceSampleOptions,
+      resourceSamples,
+      sampleProcessImpl = sampleProcess,
+      timeoutKillGraceMs = 2000,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+      ...spawnOptions
+    } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let forceKillTimer;
+    let sampleTimer;
+    let resourceSampleInFlight = null;
+    const commandLabel = resourceLabel ?? [command, ...args.slice(0, 2)].join(" ");
+    const shouldSampleResources = Array.isArray(resourceSamples);
+    const collectResourceSample = () => {
+      if (!shouldSampleResources || !child.pid) {
+        return null;
+      }
+      resourceSampleInFlight ??= Promise.resolve()
+        .then(() => sampleProcessImpl(child.pid, resourceSampleOptions ?? {}))
+        .then((sample) => {
+          if (sample) {
+            resourceSamples.push({
+              ...sample,
+              elapsedMs: Date.now() - startedAt,
+              label: commandLabel,
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          resourceSampleInFlight = null;
+        });
+      return resourceSampleInFlight;
+    };
+    const stopResourceSampling = async () => {
+      clearInterval(sampleTimer);
+      await resourceSampleInFlight?.catch(() => {});
+    };
+    if (shouldSampleResources) {
+      void collectResourceSample();
+      sampleTimer = setInterval(
+        () => {
+          void collectResourceSample();
+        },
+        Math.max(100, resourceSampleIntervalMs),
+      );
+      sampleTimer.unref?.();
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
@@ -184,35 +255,39 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      reject(error);
+      void stopResourceSampling().finally(() =>
+        reject(toLintErrorObject(error, "Command failed before exit")),
+      );
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      if (status === 0) {
-        resolve({
-          stdout: stdout.text,
-          stderr: stderr.text,
-          stdoutTruncatedChars: stdout.truncatedChars,
-          stderrTruncatedChars: stderr.truncatedChars,
-        });
-        return;
-      }
-      const detail = [
-        formatCapturedOutput("stdout", stdout),
-        formatCapturedOutput("stderr", stderr),
-      ]
-        .filter(Boolean)
-        .join("\n")
-        .trim();
-      const failure = timedOut
-        ? `timed out after ${timeoutMs}ms`
-        : `failed with ${signal || status}`;
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
-        ),
-      );
+      void stopResourceSampling().then(() => {
+        if (status === 0) {
+          resolve({
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdoutTruncatedChars: stdout.truncatedChars,
+            stderrTruncatedChars: stderr.truncatedChars,
+          });
+          return;
+        }
+        const detail = [
+          formatCapturedOutput("stdout", stdout),
+          formatCapturedOutput("stderr", stderr),
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        const failure = timedOut
+          ? `timed out after ${timeoutMs}ms`
+          : `failed with ${signal || status}`;
+        reject(
+          new Error(
+            `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          ),
+        );
+      });
     });
   });
 }
@@ -240,6 +315,10 @@ async function runOpenClaw(runner, args, env, options = {}) {
   return runCommand(command.command, command.args, {
     ...command.options,
     env,
+    resourceLabel: options.resourceLabel,
+    resourceSampleIntervalMs: options.resourceSampleIntervalMs,
+    resourceSampleOptions: options.resourceSampleOptions,
+    resourceSamples: options.resourceSamples,
     timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
   });
 }
@@ -427,7 +506,10 @@ async function retryRpcCall(method, params, options) {
       await delay(500);
     }
   }
-  throw lastError ?? new Error(`gateway RPC ${method} timed out before retry`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
+    "Non-Error thrown",
+  );
 }
 
 function isRetryableGatewayCallError(error) {
@@ -508,7 +590,7 @@ export async function fetchJson(url, options = {}) {
       }
     }
   }
-  throw lastError ?? new Error(`fetch ${url} failed`);
+  throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
 export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
@@ -636,17 +718,23 @@ export async function stopGateway(child, options = {}) {
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
   const killGraceMs = Math.max(0, options.killGraceMs ?? GATEWAY_TEARDOWN_KILL_GRACE_MS);
-  const exited = new Promise((resolve) => child.once("exit", resolve));
+  const exited = new Promise((resolve) => {
+    child.once("exit", resolve);
+  });
   const waitForExit = async (ms) =>
     hasChildExited(child)
       ? true
       : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
 
-  signalGateway(child, "SIGTERM");
+  if (!signalGateway(child, "SIGTERM")) {
+    return;
+  }
   if (await waitForExit(teardownGraceMs)) {
     return;
   }
-  signalGateway(child, "SIGKILL");
+  if (!signalGateway(child, "SIGKILL")) {
+    return;
+  }
   if (await waitForExit(killGraceMs)) {
     return;
   }
@@ -668,10 +756,21 @@ function signalGateway(child, signal) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
-      return;
-    } catch {}
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return false;
+      }
+    }
   }
-  child.kill(signal);
+  try {
+    return child.kill(signal) !== false;
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+    return false;
+  }
 }
 
 export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready") {
@@ -1105,7 +1204,9 @@ async function sampleWindowsPidWithTasklist(pid, run) {
     if (!line) {
       return null;
     }
-    const [, processIdRaw, , , memoryRaw] = parseTasklistCsvLine(line);
+    const tasklistFields = parseTasklistCsvLine(line);
+    const processIdRaw = tasklistFields[1];
+    const memoryRaw = tasklistFields[4];
     const processId = Number.parseInt(processIdRaw ?? "", 10);
     const memoryKiB = Number.parseInt((memoryRaw ?? "").replace(/[^\d]/gu, ""), 10);
     if (!Number.isFinite(memoryKiB)) {
@@ -1350,20 +1451,35 @@ export async function main() {
   let child;
 
   const processSamples = [];
+  const commandSamples = [];
+  const commandResourceOptions = {
+    resourceSampleIntervalMs: 500,
+    resourceSamples: commandSamples,
+  };
   let sampleInFlight = null;
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
     await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+      ...commandResourceOptions,
+      resourceLabel: "plugins install",
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);
-    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, { timeoutMs: 60000 });
+    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, {
+      ...commandResourceOptions,
+      resourceLabel: "plugins enable",
+      timeoutMs: 60000,
+    });
     const inspect = parseJsonOutput(
-      (await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env))
-        .stdout,
+      (
+        await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env, {
+          ...commandResourceOptions,
+          resourceLabel: "plugins inspect",
+        })
+      ).stdout,
     );
     if (inspect?.plugin?.status !== "loaded") {
       throw new Error(`Kitchen Sink plugin did not inspect as loaded: ${JSON.stringify(inspect)}`);
@@ -1488,6 +1604,7 @@ export async function main() {
     const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
     const peakSample = summarizeProcessSamples(processSamples);
+    const commandPeakSample = summarizeProcessSamples(commandSamples);
     assertResourceCeiling(peakSample);
     assertNoErrorLogs(logPath);
 
@@ -1499,6 +1616,7 @@ export async function main() {
           commands: commandNames,
           catalogTools: catalogToolIds.filter((id) => EXPECTED_TOOLS.includes(id)),
           channelAccount,
+          commandPeakSample,
           initialSample,
           finalSample,
           peakSample,
@@ -1526,5 +1644,23 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    process.stdout.write(usage());
+  } else {
+    await main();
+  }
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

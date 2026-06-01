@@ -1273,7 +1273,9 @@ describe("gateway Gmail hot reload handlers", () => {
     const stopPromise = reloader.stop();
     releaseSecrets?.();
     await stopPromise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(hoisted.stopGmailWatcher).not.toHaveBeenCalled();
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();

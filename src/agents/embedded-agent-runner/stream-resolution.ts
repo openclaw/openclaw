@@ -50,7 +50,7 @@ function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
 }
 
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
-  return model.provider === "openai" && model.api === "openai-codex-responses";
+  return model.provider === "openai" && model.api === "openai-chatgpt-responses";
 }
 
 function resolveOpenClawNativeCodexResponsesStreamFn(params: {

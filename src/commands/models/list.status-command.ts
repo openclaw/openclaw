@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentDir,
@@ -34,7 +35,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
@@ -60,11 +61,10 @@ import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-r
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
-import { type AuthProbeSummary } from "./list.probe.js";
+import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -442,7 +442,7 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolved = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
         context: {
@@ -451,15 +451,15 @@ export async function modelsStatusCommand(
           providerConfig: resolveProviderConfigForStatus(cfg, normalized),
         },
       });
-      if (!resolved) {
+      if (!resolvedLocal) {
         continue;
       }
       const syntheticAuth: StatusSyntheticAuth = {
         value: "plugin-owned",
-        source: resolved.source,
-        credential: resolved.apiKey,
-        mode: resolved.mode,
-        expiresAt: resolved.expiresAt,
+        source: resolvedLocal.source,
+        credential: resolvedLocal.apiKey,
+        mode: resolvedLocal.mode,
+        expiresAt: resolvedLocal.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
       if (normalized === "codex" || normalized === codexProviderAlias) {
@@ -1145,7 +1145,7 @@ export async function modelsStatusCommand(
         runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
         for (const profile of profiles) {
           const labelText = profile.label || profile.profileId;
-          const label = colorize(rich, theme.accent, labelText);
+          const labelLocal = colorize(rich, theme.accent, labelText);
           const status = formatStatus(profile.status);
           const expiry =
             profile.status === "static"
@@ -1153,7 +1153,7 @@ export async function modelsStatusCommand(
               : profile.expiresAt
                 ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
                 : " expires unknown";
-          runtime.log(`  - ${label} ${status}${expiry}`);
+          runtime.log(`  - ${labelLocal} ${status}${expiry}`);
         }
       }
     }

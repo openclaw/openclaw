@@ -5,12 +5,7 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import type { AuthChoice } from "./onboard-types.js";
 
-const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set([
-  "claude-cli",
-  "codex-cli",
-  "openai-codex",
-  "openai-codex-device-code",
-]);
+const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set(["claude-cli"]);
 
 function resolveLegacyCliBackendChoice(
   choice: string,
@@ -39,7 +34,7 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
     .flatMap((choice) => choice.deprecatedChoiceIds ?? [])
     .filter((choice): choice is AuthChoice => LEGACY_REPLACEMENT_AUTH_CHOICES.has(choice))
     .toSorted((left, right) => left.localeCompare(right));
-  return manifestCliAliases;
+  return Array.from(new Set(manifestCliAliases));
 }
 
 export function normalizeLegacyOnboardAuthChoice(

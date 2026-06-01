@@ -987,9 +987,7 @@ function recordDiagnosticEvent(
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
-      return;
     default:
-      return;
   }
 }
 

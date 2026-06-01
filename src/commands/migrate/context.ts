@@ -1,10 +1,10 @@
 import path from "node:path";
+import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { timestampMsToIsoFileStamp } from "../../shared/number-coercion.js";
 
 export function createMigrationLogger(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const info = opts.json ? runtime.error : runtime.log;

@@ -1,6 +1,6 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
 
 const formatKv = (line: string, rich: boolean) => {
@@ -207,7 +207,7 @@ export const formatHealthChannelLines = (
             .map((account) => formatAccountProbeTiming(account))
             .filter((value): value is string => Boolean(value))
         : [];
-    const failedSummary = listSummaries.find((summary) => isProbeFailure(summary));
+    const failedSummary = listSummaries.find((summaryLocal) => isProbeFailure(summaryLocal));
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe, { botUsernames });
       if (failureLine) {

@@ -1,11 +1,12 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
@@ -159,21 +160,15 @@ export async function flowsListCommand(
   });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: flows.length,
-          status: statusFilter ?? null,
-          flows: flows.map((flow) => ({
-            ...flow,
-            tasks: listTasksForFlowId(flow.flowId),
-            taskSummary: getFlowTaskSummary(flow.flowId),
-          })),
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: flows.length,
+      status: statusFilter ?? null,
+      flows: flows.map((flow) => ({
+        ...flow,
+        tasks: listTasksForFlowId(flow.flowId),
+        taskSummary: getFlowTaskSummary(flow.flowId),
+      })),
+    });
     return;
   }
 
@@ -209,17 +204,11 @@ export async function flowsShowCommand(
   const stateSummary = summarizeFlowState(flow);
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          ...flow,
-          tasks,
-          taskSummary,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      ...flow,
+      tasks,
+      taskSummary,
+    });
     return;
   }
 

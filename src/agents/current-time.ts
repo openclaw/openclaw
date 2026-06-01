@@ -1,4 +1,4 @@
-import { resolveDateTimestampMs } from "../shared/number-coercion.js";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   type TimeFormatPreference,
   formatUserTime,

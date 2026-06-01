@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -6,7 +7,6 @@ import {
 import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   ExecApprovalIdLookupResult,
   ExecApprovalManager,
@@ -67,6 +67,17 @@ type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
   errors?: ValidationError[] | null;
 };
 
+type ApprovalRecordLookupResult<TPayload> =
+  | {
+      ok: true;
+      approvalId: string;
+      snapshot: ExecApprovalRecord<TPayload>;
+    }
+  | {
+      ok: false;
+      response: PendingApprovalLookupError;
+    };
+
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
 }
@@ -105,6 +116,7 @@ function normalizeApprovalIdentity(value: string | null | undefined): string | n
   return normalizeOptionalString(value) ?? null;
 }
 
+/** Checks whether a client can observe or resolve an approval record. */
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
@@ -121,6 +133,8 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return true;
   }
 
+  // Device identity is the strongest requester binding; fall back to the
+  // live connection only for older callers that have not attached a device.
   if (requestedByDeviceId) {
     return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
   }
@@ -134,9 +148,12 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return false;
   }
 
+  // Unbound approvals predate requester metadata and remain visible so pending
+  // work can still be resolved after upgrades or gateway restarts.
   return true;
 }
 
+/** Returns only pending approval requests the connected client is allowed to see. */
 export function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   client?: GatewayClient | null;
@@ -157,6 +174,7 @@ export function listVisiblePendingApprovalRequests<TPayload>(params: {
     }));
 }
 
+/** Binds the current gateway client identity onto a newly-created approval record. */
 export function bindApprovalRequesterMetadata<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client?: GatewayClient | null;
@@ -167,6 +185,7 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
 }
 
+/** Registers an approval record and converts manager registration errors to gateway errors. */
 export function registerPendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   record: ExecApprovalRecord<TPayload>;
@@ -185,6 +204,7 @@ export function registerPendingApprovalRecord<TPayload>(params: {
   }
 }
 
+/** Builds the gateway event payload broadcast when an approval starts waiting. */
 export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields>(
   record: ExecApprovalRecord<TPayload>,
 ): RequestedApprovalEvent<TPayload> {
@@ -196,6 +216,7 @@ export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceF
   };
 }
 
+/** Validates approval resolve params and narrows the decision to the supported enum. */
 export function resolveApprovalDecisionParams<TParams extends ApprovalResolveParams>(params: {
   rawParams: unknown;
   validate: ApprovalResolveParamsValidator<TParams>;
@@ -224,6 +245,7 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
   };
 }
 
+/** Resolves the approval clients that should receive request or resolution events. */
 export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
   context: GatewayRequestContext;
   record: ExecApprovalRecord<TPayload>;
@@ -242,42 +264,14 @@ export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
   );
 }
 
+/** Finds a pending approval by full id or prefix after applying client visibility rules. */
 export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
   client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
-}):
-  | {
-      ok: true;
-      approvalId: string;
-      snapshot: ExecApprovalRecord<TPayload>;
-    }
-  | {
-      ok: false;
-      response: PendingApprovalLookupError;
-    } {
-  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
-    filter: (record) =>
-      isApprovalRecordVisibleToClient({
-        record,
-        client: params.client ?? null,
-      }),
-  });
-  if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
-    return {
-      ok: false,
-      response: resolvePendingApprovalLookupError({
-        resolvedId,
-        exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-      }),
-    };
-  }
-  const snapshot = params.manager.getSnapshot(resolvedId.id);
-  if (!snapshot || snapshot.resolvedAtMs !== undefined) {
-    return { ok: false, response: "missing" };
-  }
-  return { ok: true, approvalId: resolvedId.id, snapshot };
+}): ApprovalRecordLookupResult<TPayload> {
+  return resolveApprovalRecordForState(params, "pending");
 }
 
 function resolveResolvedApprovalRecord<TPayload>(params: {
@@ -285,18 +279,21 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
   inputId: string;
   client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
-}):
-  | {
-      ok: true;
-      approvalId: string;
-      snapshot: ExecApprovalRecord<TPayload>;
-    }
-  | {
-      ok: false;
-      response: PendingApprovalLookupError;
-    } {
+}): ApprovalRecordLookupResult<TPayload> {
+  return resolveApprovalRecordForState(params, "resolved");
+}
+
+function resolveApprovalRecordForState<TPayload>(
+  params: {
+    manager: ExecApprovalManager<TPayload>;
+    inputId: string;
+    client?: GatewayClient | null;
+    exposeAmbiguousPrefixError?: boolean;
+  },
+  expectedState: "pending" | "resolved",
+): ApprovalRecordLookupResult<TPayload> {
   const resolvedId = params.manager.lookupApprovalId(params.inputId, {
-    includeResolved: true,
+    includeResolved: expectedState === "resolved",
     filter: (record) =>
       isApprovalRecordVisibleToClient({
         record,
@@ -313,12 +310,14 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
     };
   }
   const snapshot = params.manager.getSnapshot(resolvedId.id);
-  if (!snapshot || snapshot.resolvedAtMs === undefined) {
+  const isResolved = snapshot?.resolvedAtMs !== undefined;
+  if (!snapshot || isResolved !== (expectedState === "resolved")) {
     return { ok: false, response: "missing" };
   }
   return { ok: true, approvalId: resolvedId.id, snapshot };
 }
 
+/** Sends the public lookup failure shape for missing, expired, or ambiguous approvals. */
 export function respondPendingApprovalLookupError(params: {
   respond: RespondFn;
   response: PendingApprovalLookupError;
@@ -330,6 +329,7 @@ export function respondPendingApprovalLookupError(params: {
   params.respond(false, undefined, errorShape(params.response.code, params.response.message));
 }
 
+/** Waits for an already-registered approval decision visible to the caller. */
 export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
@@ -378,6 +378,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   );
 }
 
+/** Broadcasts or routes a pending approval request, then responds after acceptance/decision. */
 export async function handlePendingApprovalRequest<
   TPayload extends ApprovalTurnSourceFields,
 >(params: {
@@ -431,6 +432,8 @@ export async function handlePendingApprovalRequest<
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = suppressDelivery ? false : params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+  // A turn-source route can approve without an active approval client, so keep
+  // the record alive when the originating channel/account can still receive it.
   const hasTurnSourceRoute =
     !hasApprovalClients &&
     !delivered &&
@@ -496,6 +499,7 @@ export async function handlePendingApprovalRequest<
   );
 }
 
+/** Resolves a pending approval and broadcasts the final decision exactly once. */
 export async function handleApprovalResolve<TPayload, TResolvedEvent extends object>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
@@ -540,6 +544,8 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
       exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     });
     if (resolvedRepeat.ok) {
+      // Treat repeated identical resolves as successful retries; a conflicting
+      // retry is rejected so stale operators cannot overwrite the first choice.
       if (resolveRecordedApprovalDecision(resolvedRepeat.snapshot) === params.decision) {
         params.respond(true, { ok: true }, undefined);
         return;
@@ -618,6 +624,8 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
       Boolean(entry),
   );
 
+  // Resolution has already been recorded and broadcast; follow-up hooks are
+  // best-effort so a plugin/channel forwarding failure cannot reopen it.
   for (const followUp of followUps) {
     try {
       await followUp.run(resolvedEvent);

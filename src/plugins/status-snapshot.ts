@@ -43,11 +43,14 @@ function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: Trac
     return fn();
   }
   const start = process.hrtime.bigint();
-  let status: "error" | "ok" = "error";
+  let status: "error" | "ok" | undefined;
   try {
     const result = fn();
     status = "ok";
     return result;
+  } catch (error) {
+    status = "error";
+    throw error;
   } finally {
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1_000_000;
     const detailText = Object.entries(details ?? {})
@@ -56,7 +59,7 @@ function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: Trac
       .join(" ");
     const suffix = detailText ? ` ${detailText}` : "";
     console.error(
-      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status}${suffix}`,
+      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status ?? "error"}${suffix}`,
     );
   }
 }

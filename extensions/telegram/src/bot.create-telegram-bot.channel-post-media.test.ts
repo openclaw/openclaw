@@ -1,3 +1,4 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
@@ -197,7 +198,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("album caption");
     } finally {
@@ -235,7 +236,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroupForDelay(setTimeoutSpy, 75);
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("configured album");
     } finally {
@@ -282,7 +283,7 @@ describe("createTelegramBot channel_post media", () => {
         TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
       );
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { RawBody?: string };
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
@@ -569,7 +570,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
       const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("partial album");
     } finally {
@@ -582,11 +583,17 @@ describe("createTelegramBot channel_post media", () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
 
-    const fetchSpy = createImageFetchSpy();
-
+    const runtimeError = vi.fn();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const handler = getChannelPostHandler();
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        runtime: { error: runtimeError } as unknown as RuntimeEnv,
+      });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
       await queueChannelPostAlbum(handler, {
         caption: "fatal album",
         mediaGroupId: "fatal-album-1",
@@ -597,10 +604,14 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
+      await vi.waitFor(() =>
+        expect(runtimeError).toHaveBeenCalledWith(
+          expect.stringContaining("media group handler failed"),
+        ),
+      );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
-      fetchSpy.mockRestore();
     }
   });
 });

@@ -206,6 +206,45 @@ describe("runtime postbuild static assets", () => {
     await expect(fs.readFile(runtimeAsset, "utf8")).resolves.toBe("console.log('viewer');\n");
   });
 
+  it("can skip static asset copies for minimal runtime builds", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const warn = vi.fn();
+    const output = "assets/viewer-runtime.js";
+
+    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf8",
+    );
+    await fs.mkdir(path.join(rootDir, "extensions", "diffs"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "diffs", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/diffs",
+        openclaw: {
+          extensions: ["./index.ts"],
+          build: {
+            staticAssets: [{ source: `./${output}`, output }],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    runRuntimePostBuild({
+      cwd: rootDir,
+      repoRoot: rootDir,
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+      warn,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    await expectPathMissing(path.join(rootDir, "dist", "extensions", "diffs", output));
+  });
+
   it("skips runtime overlay asset copies when the runtime extension root is absent", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });

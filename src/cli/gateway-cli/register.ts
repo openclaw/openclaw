@@ -8,9 +8,9 @@ import type {
   DiagnosticStabilityBundle,
   ReadDiagnosticStabilityBundleResult,
 } from "../../logging/diagnostic-stability-bundle.js";
-import {
-  type DiagnosticStabilityEventRecord,
-  type DiagnosticStabilitySnapshot,
+import type {
+  DiagnosticStabilityEventRecord,
+  DiagnosticStabilitySnapshot,
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
