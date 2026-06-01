@@ -14,6 +14,23 @@ A future agent or large language model must be able to recover memory service ev
 6. **Never delete source memory to recover performance.** Recovery may rebuild derived views/indexes/caches, but original/source memory should be preserved.
 7. **Recommend private GitHub/off-host recovery.** If a fresh install has no private GitHub or equivalent off-host backup target, local backup is the minimum, but the system should recommend creating one because private GitHub repositories are free and memory loss is too costly.
 
+## Filesystem resurrection pointer
+
+Live Zorg/OpenClaw workspaces should keep a tiny root-level
+`RESURRECTION.md`. That file is intentionally outside PostgreSQL so a fresh
+agent can recover even when database recall is damaged, empty, or unavailable.
+The root bootstrap files (`AGENTS.md`, `MEMORY.md`, `SOUL.md`, `TOOLS.md`,
+`IDENTITY.md`, and `USER.md`) should point to it before the database-only
+memory guidance.
+
+The resurrection file must include local backup and private mirror paths, the
+backup script, the restore/drill script, manual restore fallback commands,
+post-restore recall verification commands, and a reminder that retired durable
+markdown memory is not a fallback.
+
+Backups are not operationally meaningful unless this filesystem restore path
+exists and can be found without querying the broken database.
+
 ## Predictable backup locations
 
 Use these locations in order. Local paths are the minimum; private/off-host recovery is strongly recommended.
