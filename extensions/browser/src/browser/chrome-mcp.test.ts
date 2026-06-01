@@ -953,16 +953,40 @@ describe("chrome MCP page parsing", () => {
 
     const tabsPromise = listChromeMcpTabs("chrome-live");
     const siblingTabsPromise = listChromeMcpTabs("chrome-live");
+    ctrl.abort(new Error("first waiter cancelled"));
+    releaseFirstReady();
     await vi.waitFor(() => expect(factoryCalls).toBe(2));
     const [tabs, siblingTabs] = await Promise.all([tabsPromise, siblingTabsPromise]);
     expect(tabs).toHaveLength(2);
     expect(siblingTabs).toHaveLength(2);
 
-    ctrl.abort(new Error("first waiter cancelled"));
-    releaseFirstReady();
     await firstTabsExpectation;
     await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
     expect(closeMocks[1]).not.toHaveBeenCalled();
+  });
+
+  it("surfaces startup failures before treating null-pid pending sessions as stale", async () => {
+    let factoryCalls = 0;
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      if (factoryCalls > 1) {
+        throw new Error("unexpected retry");
+      }
+      const session = createFakeSession();
+      (session.transport as { pid: number | null }).pid = null;
+      const readyFailure = Promise.reject(new Error("startup failed"));
+      readyFailure.catch(() => {});
+      session.ready = readyFailure;
+      session.client.close = closeMock as typeof session.client.close;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/startup failed/);
+
+    expect(factoryCalls).toBe(1);
+    expect(closeMock).not.toHaveBeenCalled();
   });
 
   it("does not reuse a stale ready-pending session for ephemeral probes", async () => {
@@ -1006,16 +1030,15 @@ describe("chrome MCP page parsing", () => {
     }
     (firstSession.transport as { pid: number | null }).pid = null;
 
-    await expect(
-      ensureChromeMcpAvailable("chrome-live", undefined, {
-        ephemeral: true,
-      }),
-    ).resolves.toBeUndefined();
+    const availablePromise = ensureChromeMcpAvailable("chrome-live", undefined, {
+      ephemeral: true,
+    });
+    ctrl.abort(new Error("first waiter cancelled"));
+    releaseFirstReady();
+    await expect(availablePromise).resolves.toBeUndefined();
     expect(factoryCalls).toBe(2);
     await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
 
-    ctrl.abort(new Error("first waiter cancelled"));
-    releaseFirstReady();
     await firstAvailableExpectation;
     await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
   });

@@ -87,7 +87,7 @@ vi.mock("../agents/model-selection.js", () => {
   });
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const modelKey = (provider: string, model: string) =>
-    `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+    `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
     if (allowedKeys.has(key)) {
       return true;
