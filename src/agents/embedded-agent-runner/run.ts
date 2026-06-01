@@ -6,11 +6,13 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -658,6 +660,7 @@ export async function runEmbeddedAgent(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
+      const requestedModelId = modelId;
       const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
       startupStages.mark("hooks");
       await ensureSelectedAgentHarnessPlugin({
@@ -1017,6 +1020,30 @@ export async function runEmbeddedAgent(
       const profileFailureStore = pluginHarnessOwnsTransport ? attemptAuthProfileStore : authStore;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
+      const resolveRuntimeFallbackReason = (): string | null => {
+        const fallbackAttempt = traceAttempts.findLast(
+          (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
+        );
+        return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
+      };
+      const buildEmbeddedContextEngineRuntimeSettings = (settingsParams: {
+        tokenBudget?: number | null;
+        maxOutputTokens?: number | null;
+        degradedReason?: string | null;
+      }) => {
+        const fallbackReason = resolveRuntimeFallbackReason();
+        return buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider,
+          requestedModel: requestedModelId,
+          resolvedModel: modelId,
+          tokenBudget: settingsParams.tokenBudget,
+          maxOutputTokens: settingsParams.maxOutputTokens,
+          fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
+          fallbackReason,
+          degradedReason: settingsParams.degradedReason,
+        });
+      };
 
       const initialThinkLevel = params.thinkLevel ?? "off";
       let thinkLevel = initialThinkLevel;
@@ -1590,6 +1617,9 @@ export async function runEmbeddedAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
+            requestedModelId,
+            fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
+            fallbackReason: resolveRuntimeFallbackReason(),
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
@@ -1963,6 +1993,9 @@ export async function runEmbeddedAgent(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: timeoutCompactionRuntimeContext,
+                    runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
+                      tokenBudget: ctxInfo.tokens,
+                    }),
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2147,6 +2180,12 @@ export async function runEmbeddedAgent(
                 // run-level abort signal through, so a hung plugin compact()
                 // cannot stall overflow recovery indefinitely. A timeout/abort
                 // surfaces as a thrown error handled by the catch below.
+                const overflowCompactionRuntimeSettings = buildEmbeddedContextEngineRuntimeSettings(
+                  {
+                    tokenBudget: ctxInfo.tokens,
+                    degradedReason: "context_overflow",
+                  },
+                );
                 compactResult = await compactContextEngineWithSafetyTimeout(
                   contextEngine,
                   {
@@ -2160,6 +2199,7 @@ export async function runEmbeddedAgent(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2173,6 +2213,7 @@ export async function runEmbeddedAgent(
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: overflowCompactionRuntimeSettings,
                     config: params.config,
                     agentId: sessionAgentId,
                   });

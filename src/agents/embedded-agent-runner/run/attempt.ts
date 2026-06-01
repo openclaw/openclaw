@@ -2005,6 +2005,13 @@ export async function runEmbeddedAttempt(
           activeAgentId: sessionAgentId,
           contextEnginePluginId: resolveActiveContextEnginePluginId(),
         }),
+        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        providerId: params.provider,
+        requestedModelId: params.requestedModelId,
+        modelId: params.modelId,
+        fallbackActive: params.fallbackActive,
+        fallbackReason: params.fallbackReason,
+        degradedReason: params.degradedReason,
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
             contextEngine: contextParams.contextEngine as never,
@@ -2014,6 +2021,7 @@ export async function runEmbeddedAttempt(
             reason: contextParams.reason,
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
+            runtimeSettings: contextParams.runtimeSettings,
             config: params.config,
             agentId: sessionAgentId,
           }),
@@ -2939,6 +2947,12 @@ export async function runEmbeddedAttempt(
               availableTools: new Set(effectiveTools.map((tool) => tool.name)),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+              providerId: params.provider,
+              requestedModelId: params.requestedModelId,
+              fallbackActive: params.fallbackActive,
+              fallbackReason: params.fallbackReason,
+              degradedReason: params.degradedReason,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
             if (!assembled) {
@@ -4536,6 +4550,13 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
+            contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+            providerId: params.provider,
+            requestedModelId: params.requestedModelId,
+            modelId: params.modelId,
+            fallbackActive: params.fallbackActive,
+            fallbackReason: params.fallbackReason,
+            degradedReason: params.degradedReason,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,
@@ -4547,6 +4568,7 @@ export async function runEmbeddedAttempt(
                 withSessionManagerRewriteLock: async (operation) =>
                   await sessionLockController.withSessionWriteLock(operation),
                 runtimeContext: contextParams.runtimeContext,
+                runtimeSettings: contextParams.runtimeSettings,
                 config: params.config,
                 agentId: sessionAgentId,
               }),

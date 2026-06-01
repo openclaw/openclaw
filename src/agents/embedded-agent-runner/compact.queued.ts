@@ -1,9 +1,15 @@
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+} from "../../context-engine/types.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
@@ -94,6 +100,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
   compactParams: CompactEmbeddedAgentSessionParams;
   contextEngine: ContextEngine;
   contextEngineRuntimeContext: ContextEngineRuntimeContext;
+  contextEngineRuntimeSettings: ContextEngineRuntimeSettings;
 }): Promise<EmbeddedAgentCompactResult> {
   let deferredScheduled = false;
   let deferredScheduleFailure: unknown;
@@ -105,6 +112,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       sessionFile: params.compactParams.sessionFile,
       reason: "turn",
       runtimeContext: params.contextEngineRuntimeContext,
+      runtimeSettings: params.contextEngineRuntimeSettings,
       config: params.compactParams.config,
       disposeDeferredContextEngineAfterMaintenance: true,
       onDeferredMaintenance: () => {
@@ -260,6 +268,13 @@ export async function compactEmbeddedAgentSession(
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
+  const contextEngineRuntimeSettings = buildContextEngineRuntimeSettings({
+    contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+    provider: ceProvider,
+    requestedModel: params.model,
+    resolvedModel: ceModelId,
+    tokenBudget: contextTokenBudget,
+  });
   const harnessResult = attemptNativeHarnessCompaction
     ? await maybeCompactAgentHarnessSession({
         ...params,
@@ -287,6 +302,7 @@ export async function compactEmbeddedAgentSession(
       compactParams: params,
       contextEngine,
       contextEngineRuntimeContext,
+      contextEngineRuntimeSettings,
     });
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
@@ -378,6 +394,7 @@ export async function compactEmbeddedAgentSession(
                       : undefined,
                 preflightCompactionTrigger: params.preflightCompactionTrigger,
               },
+              runtimeSettings: contextEngineRuntimeSettings,
             },
             resolveCompactionTimeoutMs(params.config),
             params.abortSignal,
@@ -457,6 +474,7 @@ export async function compactEmbeddedAgentSession(
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
+            runtimeSettings: contextEngineRuntimeSettings,
             config: params.config,
           });
         }

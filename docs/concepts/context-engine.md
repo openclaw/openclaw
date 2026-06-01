@@ -224,6 +224,26 @@ Optional members:
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                           |
 
+### Runtime settings
+
+Lifecycle hooks that run inside OpenClaw receive an optional
+`runtimeSettings` object. It is a versioned, read-only snapshot of host and
+model facts for the current operation:
+
+- `schemaVersion`: currently `1`
+- `runtime`: OpenClaw host, runtime mode (`normal`, `fallback`, or
+  `degraded`), and optional harness/runtime ids
+- `model`: requested model, resolved model, provider, optional model family,
+  and whether fallback is active
+- `contextEngine`: host id, label, and supported capabilities
+- `limits`: token budget and max output tokens when known
+- `diagnostics`: fallback and degraded reasons when known
+
+Treat every field other than `schemaVersion` as nullable. Older engines remain
+compatible: if a strict legacy engine rejects `runtimeSettings` as an unknown
+property, OpenClaw retries the lifecycle call without it instead of quarantining
+the engine.
+
 ### Host requirements
 
 Context engines can declare host capability requirements on `info.hostRequirements`.
