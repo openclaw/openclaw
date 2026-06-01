@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
 import { CronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -26,6 +27,9 @@ function propertyAt(
 
 describe("CronToolSchema", () => {
   const schemaRecord = CronToolSchema as unknown as Record<string, unknown>;
+  const providerSchemaRecord = normalizeToolParameterSchema(CronToolSchema, {
+    modelProvider: "gemini",
+  }) as Record<string, unknown>;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -197,32 +201,32 @@ describe("CronToolSchema", () => {
     expect(schema?.description).toMatch(/false/i);
   });
 
-  it("job.agentId and job.sessionKey use plain string type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
+  it("job.agentId and job.sessionKey use plain string type after provider normalization", () => {
+    const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
 
-    // Must be plain "string" — not ["string", "null"] — for provider compat.
-    // Null semantics are conveyed via the field description and handled at runtime.
+    // Runtime schema accepts null clears; provider-facing schema stays OpenAPI 3.0-friendly.
     expect(jobProps?.agentId?.type).toBe("string");
     expect(jobProps?.sessionKey?.type).toBe("string");
   });
 
-  it("patch.payload.toolsAllow uses plain array type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
+  it("patch.payload.toolsAllow uses plain array type after provider normalization", () => {
+    const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const patchProps = root?.patch?.properties as
       | Record<string, { properties?: Record<string, { type?: unknown }> }>
       | undefined;
 
-    // Must be plain "array" — not ["array", "null"] — for provider compat.
+    // Runtime schema accepts null clears; provider-facing schema stays OpenAPI 3.0-friendly.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
   });
 
-  // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
-  // serialized cron tool schema.  This catches future regressions at the source.
+  // Regression guard: ensure no type-array or not/const keywords leak into the
+  // serialized cron tool schema. Nullable clears use anyOf so runtime validation
+  // can preserve null values before provider-specific schema normalization.
   it("serialized schema contains no type-array or not/const keywords", () => {
     const json = JSON.stringify(CronToolSchema);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
