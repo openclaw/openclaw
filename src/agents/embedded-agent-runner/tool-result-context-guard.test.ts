@@ -816,6 +816,33 @@ describe("installContextEngineLoopHook", () => {
     );
   });
 
+  it("repairs same-reference ownsCompaction assembled loop views", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      repairAssembledMessages: sanitizeToolUseResultPairing,
+    });
+
+    const { transformed, withNew } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+
+    expect(recordMockArg(engine.assemble).messages).toBe(withNew);
+    expect(transformed).not.toBe(withNew);
+    expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "first" })]);
+    expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
+      false,
+    );
+  });
+
   it("clears an assembled view when the engine fails on a later source", async () => {
     const agent = makeGuardableAgent();
     const compactedView = [makeUser("compacted")];

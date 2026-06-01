@@ -428,13 +428,14 @@ export function installContextEngineLoopHook(params: {
       });
       if (
         assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages !== providerMessages
+        Array.isArray(assembled.messages)
       ) {
         const repairedMessages =
           params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
-        lastAssembledView = repairedMessages;
-        return repairedMessages;
+        if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {
+          lastAssembledView = repairedMessages;
+          return repairedMessages;
+        }
       }
       lastAssembledView = null;
     } catch {

@@ -1763,7 +1763,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       sessionPrompt: async (session) => {
-        promptMessages = [...session.messages];
+        promptMessages = session.messages.map((message) => message as AgentMessage);
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 3 },
