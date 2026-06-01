@@ -53,6 +53,7 @@ import {
   looksLikeIMessageExplicitTargetId,
   normalizeIMessageHandle,
   parseIMessageTarget,
+  resolveIMessageDirectChatHandle,
 } from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -153,6 +154,42 @@ function resolveIMessageOutboundSessionRoute(params: {
         : account.config.service === "sms"
           ? "sms"
           : "imessage";
+    const directTarget = `${service}:${handle}`;
+    const peer: RoutePeer = { kind: "direct", id: handle };
+    const baseSessionKey = buildIMessageBaseSessionKey({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      accountId: params.accountId,
+      peer,
+    });
+    return {
+      sessionKey: baseSessionKey,
+      baseSessionKey,
+      peer,
+      chatType: "direct" as const,
+      from: directTarget,
+      to: directTarget,
+    };
+  }
+
+  const directHandle =
+    parsed.kind === "chat_identifier"
+      ? resolveIMessageDirectChatHandle(parsed.chatIdentifier)
+      : parsed.kind === "chat_guid"
+        ? resolveIMessageDirectChatHandle(parsed.chatGuid)
+        : null;
+  if (directHandle) {
+    const handle = normalizeIMessageHandle(directHandle);
+    if (!handle) {
+      return null;
+    }
+    const rawDirectTarget =
+      parsed.kind === "chat_identifier"
+        ? parsed.chatIdentifier.trim()
+        : parsed.kind === "chat_guid"
+          ? parsed.chatGuid.trim()
+          : "";
+    const service = /^SMS;-;/iu.test(rawDirectTarget) ? "sms" : "imessage";
     const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({

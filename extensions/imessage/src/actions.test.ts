@@ -12,6 +12,11 @@ const runtimeMock = vi.hoisted(() => ({
   sendReaction: vi.fn(),
   sendRichMessage: vi.fn(),
   sendAttachment: vi.fn(),
+  renameGroup: vi.fn(),
+  setGroupIcon: vi.fn(),
+  addParticipant: vi.fn(),
+  removeParticipant: vi.fn(),
+  leaveGroup: vi.fn(),
 }));
 
 const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
@@ -93,6 +98,11 @@ describe("imessage message actions", () => {
     runtimeMock.sendReaction.mockReset();
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
+    runtimeMock.renameGroup.mockReset();
+    runtimeMock.setGroupIcon.mockReset();
+    runtimeMock.addParticipant.mockReset();
+    runtimeMock.removeParticipant.mockReset();
+    runtimeMock.leaveGroup.mockReset();
     rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
@@ -464,6 +474,87 @@ describe("imessage message actions", () => {
     );
     expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
     expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["renameGroup", { chatIdentifier: "blocked-thread", displayName: "Blocked" }, "renameGroup"],
+    ["setGroupIcon", { chatIdentifier: "blocked-thread", buffer: "aWNvbg==" }, "setGroupIcon"],
+    [
+      "addParticipant",
+      { chatIdentifier: "blocked-thread", address: "+15551230000" },
+      "addParticipant",
+    ],
+    [
+      "removeParticipant",
+      { chatIdentifier: "blocked-thread", address: "+15551230000" },
+      "removeParticipant",
+    ],
+    ["leaveGroup", { chatIdentifier: "blocked-thread" }, "leaveGroup"],
+  ] as const)(
+    "blocks %s when the group target is not allowlisted",
+    async (action, params, runtimeMethod) => {
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action,
+          cfg: cfg(undefined, {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["chat_identifier:allowed-thread"],
+          }),
+          params,
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+      );
+      expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+      expect(runtimeMock[runtimeMethod]).not.toHaveBeenCalled();
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows group mutation actions when the group target is allowlisted", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;allowed-thread");
+    runtimeMock.renameGroup.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "renameGroup",
+      cfg: cfg(undefined, {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["chat_identifier:allowed-thread"],
+      }),
+      params: {
+        chatIdentifier: "allowed-thread",
+        displayName: "Allowed",
+      },
+    } as never);
+
+    expect(runtimeMock.renameGroup).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;allowed-thread",
+      displayName: "Allowed",
+      options: imsgOptions("iMessage;+;allowed-thread"),
+    });
+  });
+
+  it("validates group mutation inputs before outbound policy", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "renameGroup",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_identifier:allowed-thread"],
+        }),
+        params: {
+          chatIdentifier: "blocked-thread",
+        },
+      } as never),
+    ).rejects.toThrow("iMessage renameGroup requires displayName or name.");
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.renameGroup).not.toHaveBeenCalled();
     expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
   });
 

@@ -8,6 +8,7 @@ import type { ResolvedIMessageAccount } from "./accounts.js";
 import {
   isAllowedIMessageReplyContextSender,
   type IMessageTarget,
+  resolveIMessageDirectChatHandle,
   normalizeIMessageHandle,
 } from "./targets.js";
 
@@ -22,41 +23,18 @@ function normalizeIMessageOutboundAllowValue(raw: string | number | null | undef
   return normalizeIMessageHandle(value);
 }
 
-function isIMessageDirectEmailHandle(raw: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(raw);
-}
-
-function isIMessageDirectPhoneHandle(raw: string): boolean {
-  if (!/^\+[0-9][0-9\s().-]*$/u.test(raw)) {
-    return false;
-  }
-  const digitCount = raw.replace(/\D/g, "").length;
-  return digitCount >= 7 && digitCount <= 15;
-}
-
 function resolveIMessageDirectChatIdentifier(target: IMessageTarget): string | null {
   if (target.kind !== "chat_identifier") {
     return null;
   }
-  const raw = target.chatIdentifier.trim();
-  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(raw);
-  const handle = match?.[1]?.trim();
-  if (handle) {
-    return handle;
-  }
-  if (isIMessageDirectEmailHandle(raw) || isIMessageDirectPhoneHandle(raw)) {
-    return raw;
-  }
-  return null;
+  return resolveIMessageDirectChatHandle(target.chatIdentifier);
 }
 
 function resolveIMessageDirectChatGuid(target: IMessageTarget): string | null {
   if (target.kind !== "chat_guid") {
     return null;
   }
-  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(target.chatGuid.trim());
-  const handle = match?.[1]?.trim();
-  return handle || null;
+  return resolveIMessageDirectChatHandle(target.chatGuid);
 }
 
 function normalizeIMessageOutboundTarget(target: IMessageTarget): string {

@@ -667,11 +667,12 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "renameGroup") {
-      await assertPrivateApiEnabled();
       const displayName = readStringParam(params, "displayName") ?? readStringParam(params, "name");
       if (!displayName) {
         throw new Error("iMessage renameGroup requires displayName or name.");
       }
+      await assertOutboundActionAllowed();
+      await assertPrivateApiEnabled();
       const resolvedChatGuid = await chatGuid();
       await runtime.renameGroup({
         chatGuid: resolvedChatGuid,
@@ -682,6 +683,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "setGroupIcon") {
+      await assertOutboundActionAllowed();
       await assertPrivateApiEnabled();
       const filename =
         readStringParam(params, "filename") ?? readStringParam(params, "name") ?? "icon.png";
@@ -696,11 +698,12 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "addParticipant" || action === "removeParticipant") {
-      await assertPrivateApiEnabled();
       const address = readStringParam(params, "address") ?? readStringParam(params, "participant");
       if (!address) {
         throw new Error(`iMessage ${action} requires address or participant.`);
       }
+      await assertOutboundActionAllowed();
+      await assertPrivateApiEnabled();
       const resolvedChatGuid = await chatGuid();
       if (action === "addParticipant") {
         await runtime.addParticipant({
@@ -719,6 +722,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "leaveGroup") {
+      await assertOutboundActionAllowed();
       await assertPrivateApiEnabled();
       const resolvedChatGuid = await chatGuid();
       await runtime.leaveGroup({

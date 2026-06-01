@@ -54,9 +54,6 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
-          ...(payload.replyToId && params.replyRequesterSender
-            ? { replyToIdSource: "implicit" as const }
-            : {}),
           ...(params.replyRequesterSender
             ? { replyRequesterSender: params.replyRequesterSender }
             : {}),
@@ -78,9 +75,6 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
-          ...(payload.replyToId && params.replyRequesterSender
-            ? { replyToIdSource: "implicit" as const }
-            : {}),
           ...(params.replyRequesterSender
             ? { replyRequesterSender: params.replyRequesterSender }
             : {}),
