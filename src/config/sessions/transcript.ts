@@ -5,7 +5,6 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -13,12 +12,10 @@ import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
 } from "./paths.js";
+import { appendTranscriptMessage, publishTranscriptUpdate } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry, updateSessionStoreEntry } from "./store.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
-import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { writeJsonlEntry } from "./transcript-jsonl.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
@@ -99,6 +96,8 @@ type AssistantTranscriptText = {
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 export type TailAssistantTranscriptText = AssistantTranscriptText;
 
+export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
+
 function parseAssistantTranscriptText(
   line: string,
   options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
@@ -137,52 +136,6 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
   model?: unknown;
 }): boolean {
   return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
-}
-
-export async function resolveSessionTranscriptFile(params: {
-  sessionId: string;
-  sessionKey: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  agentId: string;
-  threadId?: string | number;
-}): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
-  const sessionPathOpts = resolveSessionFilePathOptions({
-    agentId: params.agentId,
-    storePath: params.storePath,
-  });
-  let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
-  let sessionEntry = params.sessionEntry;
-
-  if (params.sessionStore && params.storePath) {
-    // Persisting the resolved transcript path keeps later tail reads and exports on the same file.
-    const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-    const fallbackSessionFile = !sessionEntry?.sessionFile
-      ? resolveSessionTranscriptPath(
-          params.sessionId,
-          params.agentId,
-          params.threadId ?? threadIdFromSessionKey,
-        )
-      : undefined;
-    const resolvedSessionFile = await resolveAndPersistSessionFile({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
-      sessionEntry,
-      agentId: sessionPathOpts?.agentId,
-      sessionsDir: sessionPathOpts?.sessionsDir,
-      fallbackSessionFile,
-    });
-    sessionFile = resolvedSessionFile.sessionFile;
-    sessionEntry = resolvedSessionFile.sessionEntry;
-  }
-
-  return {
-    sessionFile,
-    sessionEntry,
-  };
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
@@ -378,6 +331,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         if (latestEquivalentAssistantId) {
           return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
         }
+        const transcriptScope = {
+          sessionFile,
+          sessionId: currentEntry.sessionId,
+          sessionKey: resolved.normalizedKey,
+          storePath,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+        };
         const appendedResult = await runWithOwnedSessionTranscriptWritePublication(
           { sessionFile, sessionKey: resolved.normalizedKey },
           async () => {
@@ -386,8 +346,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
               sessionId: currentEntry.sessionId,
               cwd: currentEntry.spawnedCwd,
             });
-            return await appendSessionTranscriptMessage({
-              transcriptPath: sessionFile,
+            return await appendTranscriptMessage(transcriptScope, {
               message: preparedUnkeyedMessage,
               ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
               ...(explicitIdempotencyKey && params.beforeMessageWrite
@@ -404,7 +363,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
                       }),
                   }
                 : {}),
-              config: params.config,
+              ...(params.config ? { config: params.config } : {}),
             });
           },
         );
@@ -423,8 +382,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
         switch (params.updateMode ?? "inline") {
           case "inline":
-            emitSessionTranscriptUpdate({
-              sessionFile,
+            await publishTranscriptUpdate(transcriptScope, {
               sessionKey,
               ...(params.agentId ? { agentId: params.agentId } : {}),
               message: appendedMessage,
@@ -432,8 +390,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
             });
             break;
           case "file-only":
-            emitSessionTranscriptUpdate({
-              sessionFile,
+            await publishTranscriptUpdate(transcriptScope, {
               sessionKey,
               ...(params.agentId ? { agentId: params.agentId } : {}),
             });
