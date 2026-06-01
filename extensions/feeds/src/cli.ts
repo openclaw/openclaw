@@ -66,6 +66,11 @@ export type FeedInstallPolicy = {
   readonly requireApproval: boolean;
 };
 
+export type FeedSearchConfig = {
+  readonly default: boolean;
+  readonly sources?: readonly string[];
+};
+
 export type FeedsInstallOptions = FeedsCommandOptions & {
   readonly dryRun?: boolean;
   readonly force?: boolean;
@@ -74,6 +79,7 @@ export type FeedsInstallOptions = FeedsCommandOptions & {
 type ConfiguredFeeds = {
   readonly sources: readonly FeedSourceConfig[];
   readonly installPolicy: FeedInstallPolicy;
+  readonly search: FeedSearchConfig;
 };
 
 export type FeedInstalledEntry = {
@@ -103,6 +109,13 @@ export type FeedUpdateNotice = {
 export type FeedEntryResult = FeedEntry & {
   readonly sourceId: string;
   readonly feedId: string;
+};
+
+export type FeedNativeSearchOptions = {
+  readonly query?: string;
+  readonly type?: FeedEntryType;
+  readonly sourceIds?: readonly string[];
+  readonly limit?: number;
 };
 
 export type FeedBuildRules = {
@@ -286,6 +299,28 @@ export async function feedsSearchCommand(
     runtime.error(err instanceof Error ? err.message : String(err));
     return 2;
   }
+}
+
+export async function searchConfiguredFeedEntries(
+  options: FeedNativeSearchOptions,
+  runtime: FeedsCommandRuntime = defaultRuntime,
+): Promise<readonly FeedEntryResult[]> {
+  const config = await readConfiguredFeedsConfig(runtime);
+  const loaded = await loadFeedDocuments(config.sources, { type: options.type }, runtime, {
+    sourceIds: options.sourceIds,
+  });
+  const query = options.query?.trim() ?? "";
+  const entries = filterEntriesByType(
+    flattenFeedEntries(loaded).filter((entry) => feedEntryMatchesQuery(entry, query)),
+    options.type,
+  );
+  return entries.slice(0, clampNativeSearchLimit(options.limit));
+}
+
+export async function readConfiguredFeedSearchConfig(
+  runtime: FeedsCommandRuntime = defaultRuntime,
+): Promise<FeedSearchConfig> {
+  return (await readConfiguredFeedsConfig(runtime)).search;
 }
 
 export async function feedsUpdatesCommand(
@@ -867,9 +902,10 @@ async function loadFeedDocuments(
   configuredSources: readonly FeedSourceConfig[],
   options: FeedsCommandOptions,
   runtime: FeedsCommandRuntime,
+  selection?: { readonly sourceIds?: readonly string[] },
 ): Promise<readonly LoadedFeedDocument[]> {
   const sources = configuredSources.filter((source) => source.enabled);
-  const selected = selectSources(sources, options.source);
+  const selected = selectSources(sources, options.source, selection?.sourceIds);
   return Promise.all(selected.map((source) => loadFeedDocument(source, runtime)));
 }
 
@@ -888,13 +924,21 @@ async function readConfiguredFeedsConfig(runtime: FeedsCommandRuntime): Promise<
   }
   const config = snapshot.config.plugins?.entries?.feeds?.config;
   if (config === undefined) {
-    return { sources: [], installPolicy: { mode: "off", requireApproval: false } };
+    return {
+      sources: [],
+      installPolicy: { mode: "off", requireApproval: false },
+      search: { default: false },
+    };
   }
   if (!isRecord(config)) {
     throw new Error("plugins.entries.feeds.config must be an object.");
   }
   if (config.sources === undefined) {
-    return { sources: [], installPolicy: parseInstallPolicy(config.installPolicy) };
+    return {
+      sources: [],
+      installPolicy: parseInstallPolicy(config.installPolicy),
+      search: parseSearchConfig(config.search),
+    };
   }
   if (!Array.isArray(config.sources)) {
     throw new Error("plugins.entries.feeds.config.sources must be an array.");
@@ -902,6 +946,29 @@ async function readConfiguredFeedsConfig(runtime: FeedsCommandRuntime): Promise<
   return {
     sources: config.sources.map((source, index) => parseSourceConfig(source, index)),
     installPolicy: parseInstallPolicy(config.installPolicy),
+    search: parseSearchConfig(config.search),
+  };
+}
+
+function parseSearchConfig(value: unknown): FeedSearchConfig {
+  if (value === undefined) {
+    return { default: false };
+  }
+  if (!isRecord(value)) {
+    throw new Error("plugins.entries.feeds.config.search must be an object.");
+  }
+  if (value.default !== undefined && typeof value.default !== "boolean") {
+    throw new Error("feeds search.default must be a boolean.");
+  }
+  if (
+    value.sources !== undefined &&
+    (!Array.isArray(value.sources) || !value.sources.every((source) => typeof source === "string"))
+  ) {
+    throw new Error("feeds search.sources must be an array of source ids.");
+  }
+  return {
+    default: value.default === true,
+    ...(Array.isArray(value.sources) ? { sources: value.sources } : {}),
   };
 }
 
@@ -953,15 +1020,35 @@ function parseSourceConfig(value: unknown, index: number): FeedSourceConfig {
 function selectSources(
   sources: readonly FeedSourceConfig[],
   selectedId: string | undefined,
+  selectedIds?: readonly string[],
 ): readonly FeedSourceConfig[] {
   if (selectedId === undefined) {
-    return sources;
+    if (selectedIds === undefined) {
+      return sources;
+    }
+    if (selectedIds.length === 0) {
+      return [];
+    }
+    const selectedIdSet = new Set(selectedIds);
+    const selected = sources.filter((source) => selectedIdSet.has(source.id));
+    const missing = selectedIds.find((id) => !selected.some((source) => source.id === id));
+    if (missing !== undefined) {
+      throw new Error(`No enabled feed source found for '${missing}'.`);
+    }
+    return selected;
   }
   const selected = sources.filter((source) => source.id === selectedId);
   if (selected.length === 0) {
     throw new Error(`No enabled feed source found for '${selectedId}'.`);
   }
   return selected;
+}
+
+function clampNativeSearchLimit(limit: number | undefined): number {
+  if (!Number.isFinite(limit) || !limit || limit <= 0) {
+    return 20;
+  }
+  return Math.min(Math.max(Math.trunc(limit), 1), 100);
 }
 
 function flattenFeedEntries(loaded: readonly LoadedFeedDocument[]): readonly FeedEntryResult[] {
@@ -1024,7 +1111,7 @@ type FeedInstallCommand = {
   readonly label: string;
 };
 
-function formatFeedInstallCommand(entry: FeedEntry): string | undefined {
+export function formatFeedInstallCommand(entry: FeedEntry): string | undefined {
   return buildFeedInstallCommand(entry)?.label;
 }
 
@@ -1190,7 +1277,7 @@ function stableJson(value: unknown): string {
   if (isRecord(value)) {
     return `{${Object.keys(value)
       .filter((key) => value[key] !== undefined)
-      .sort()
+      .toSorted()
       .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
       .join(",")}}`;
   }

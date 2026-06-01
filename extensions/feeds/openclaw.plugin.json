@@ -4,9 +4,17 @@
   "description": "Adds configured catalog feed source validation for skills and plugins.",
   "activation": {
     "onStartup": false,
-    "onCommands": ["doctor", "feeds"]
+    "onCommands": [
+      "doctor",
+      "feeds"
+    ]
   },
-  "commandAliases": [{ "name": "feeds", "kind": "cli" }],
+  "commandAliases": [
+    {
+      "name": "feeds",
+      "kind": "cli"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -22,12 +30,34 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["off", "warn", "enforce"],
+            "enum": [
+              "off",
+              "warn",
+              "enforce"
+            ],
             "description": "Install policy mode. Defaults to off."
           },
           "requireApproval": {
             "type": "boolean",
             "description": "Require feed entries to declare approval.status=approved before install."
+          }
+        }
+      },
+      "search": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional native skills/plugins search integration for configured feeds.",
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "Use configured feeds for native skills/plugins search when no CLI feed option is supplied."
+          },
+          "sources": {
+            "type": "array",
+            "description": "Optional source ids used by default native search. Omit to search all enabled sources.",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -37,7 +67,10 @@
         "items": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["id", "url"],
+          "required": [
+            "id",
+            "url"
+          ],
           "properties": {
             "id": {
               "type": "string",
@@ -53,7 +86,10 @@
             },
             "trust": {
               "type": "string",
-              "enum": ["unsigned", "pinned"],
+              "enum": [
+                "unsigned",
+                "pinned"
+              ],
               "description": "Whether this source is accepted unsigned or pinned by integrity hash."
             },
             "integrity": {

@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => {
     errors,
     runtime,
     searchClawHubPackages: vi.fn(),
+    shouldSearchCatalogFeeds: vi.fn(() => false),
+    searchCatalogFeedEntriesForCli: vi.fn(),
+    formatFeedSearchEntry: vi.fn((entry: { id: string }) => `feed:${entry.id}`),
   };
 });
 
@@ -33,6 +36,12 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../infra/clawhub.js", () => ({
   searchClawHubPackages: mocks.searchClawHubPackages,
+}));
+
+vi.mock("./feed-search-options.js", () => ({
+  shouldSearchCatalogFeeds: mocks.shouldSearchCatalogFeeds,
+  searchCatalogFeedEntriesForCli: mocks.searchCatalogFeedEntriesForCli,
+  formatFeedSearchEntry: mocks.formatFeedSearchEntry,
 }));
 
 const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
@@ -47,6 +56,10 @@ describe("plugins search command", () => {
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
     mocks.searchClawHubPackages.mockReset();
+    mocks.shouldSearchCatalogFeeds.mockReset();
+    mocks.shouldSearchCatalogFeeds.mockReturnValue(false);
+    mocks.searchCatalogFeedEntriesForCli.mockReset();
+    mocks.formatFeedSearchEntry.mockClear();
   });
 
   it("searches ClawHub code and bundle plugin families", async () => {
@@ -100,6 +113,22 @@ describe("plugins search command", () => {
     expect(mocks.logs.join("\n")).toContain(
       "Install: openclaw plugins install clawhub:openclaw-calendar",
     );
+  });
+
+  it("searches catalog feed plugins when requested", async () => {
+    mocks.shouldSearchCatalogFeeds.mockResolvedValueOnce(true);
+    mocks.searchCatalogFeedEntriesForCli.mockResolvedValueOnce([{ id: "calendar-helper" }]);
+
+    await runPluginsSearchCommand(["calendar"], { catalogFeeds: true, limit: 5 }, mocks.runtime);
+
+    expect(mocks.searchCatalogFeedEntriesForCli).toHaveBeenCalledWith({
+      queryParts: ["calendar"],
+      type: "plugin",
+      limit: 5,
+      opts: { catalogFeeds: true, limit: 5 },
+    });
+    expect(mocks.searchClawHubPackages).not.toHaveBeenCalled();
+    expect(mocks.logs.join("\n")).toContain("feed:calendar-helper");
   });
 
   it("writes JSON results when requested", async () => {

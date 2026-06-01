@@ -80,6 +80,9 @@ const mocks = vi.hoisted(() => {
       (configForTest: unknown, _agentId: string) => "/tmp/workspace",
     ),
     searchSkillsFromClawHubMock: vi.fn(),
+    shouldSearchCatalogFeedsMock: vi.fn(() => false),
+    searchCatalogFeedEntriesForCliMock: vi.fn(),
+    formatFeedSearchEntryMock: vi.fn((entry: { id: string }) => `feed:${entry.id}`),
     installSkillFromClawHubMock: vi.fn(),
     installSkillFromSourceMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
@@ -102,6 +105,9 @@ const {
   resolveAgentIdByWorkspacePathMock,
   resolveAgentWorkspaceDirMock,
   searchSkillsFromClawHubMock,
+  shouldSearchCatalogFeedsMock,
+  searchCatalogFeedEntriesForCliMock,
+  formatFeedSearchEntryMock,
   installSkillFromClawHubMock,
   installSkillFromSourceMock,
   updateSkillsFromClawHubMock,
@@ -178,6 +184,12 @@ vi.mock("../agents/agent-scope.js", () => ({
     mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
 
+vi.mock("./feed-search-options.js", () => ({
+  shouldSearchCatalogFeeds: mocks.shouldSearchCatalogFeedsMock,
+  searchCatalogFeedEntriesForCli: mocks.searchCatalogFeedEntriesForCliMock,
+  formatFeedSearchEntry: mocks.formatFeedSearchEntryMock,
+}));
+
 vi.mock("../agents/skills-clawhub.js", () => ({
   searchSkillsFromClawHub: (...args: unknown[]) => mocks.searchSkillsFromClawHubMock(...args),
   installSkillFromClawHub: (...args: unknown[]) => mocks.installSkillFromClawHubMock(...args),
@@ -237,6 +249,9 @@ describe("skills cli commands", () => {
     resolveAgentIdByWorkspacePathMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     searchSkillsFromClawHubMock.mockReset();
+    shouldSearchCatalogFeedsMock.mockReset();
+    searchCatalogFeedEntriesForCliMock.mockReset();
+    formatFeedSearchEntryMock.mockClear();
     installSkillFromClawHubMock.mockReset();
     installSkillFromSourceMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
@@ -251,6 +266,7 @@ describe("skills cli commands", () => {
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     searchSkillsFromClawHubMock.mockResolvedValue([]);
+    shouldSearchCatalogFeedsMock.mockResolvedValue(false);
     installSkillFromClawHubMock.mockResolvedValue({
       ok: false,
       error: "install disabled in test",
@@ -339,6 +355,22 @@ describe("skills cli commands", () => {
       runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar")),
       "search result log",
     ).toBe(true);
+  });
+
+  it("searches catalog feed skills when requested", async () => {
+    mocks.shouldSearchCatalogFeedsMock.mockResolvedValueOnce(true);
+    mocks.searchCatalogFeedEntriesForCliMock.mockResolvedValueOnce([{ id: "excel-review" }]);
+
+    await runCommand(["skills", "search", "excel", "--catalog-feeds"]);
+
+    expect(mocks.searchCatalogFeedEntriesForCliMock).toHaveBeenCalledWith({
+      queryParts: ["excel"],
+      type: "skill",
+      limit: undefined,
+      opts: { catalogFeeds: true, feedSource: [], json: false },
+    });
+    expect(searchSkillsFromClawHubMock).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("feed:excel-review");
   });
 
   it("rejects partial numeric search limits", async () => {

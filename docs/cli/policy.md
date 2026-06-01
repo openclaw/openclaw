@@ -107,6 +107,10 @@ posture, and tool metadata looks like this:
       "requirePinned": true,
       "allowUnsigned": false,
     },
+    "search": {
+      "requireDefault": true,
+      "requireSources": ["company-approved"],
+    },
   },
   "agents": {
     "workspace": {
@@ -238,13 +242,16 @@ that runtime agent id instead of being skipped.
 
 #### Feed catalog sources
 
-| Policy field                  | Observed state                                   | Use when                                                       |
-| ----------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
-| `feeds.sources.require`       | `plugins.entries.feeds.config.sources[].id`      | Require specific feed source ids to be configured and enabled. |
-| `feeds.sources.requirePinned` | Feed source `trust` and `integrity` declarations | Set to `true` to require enabled feed sources to be pinned.    |
-| `feeds.sources.allowUnsigned` | Feed source `trust` declarations                 | Set to `false` to reject enabled sources using unsigned trust. |
+| Policy field                  | Observed state                                   | Use when                                                            |
+| ----------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
+| `feeds.sources.require`       | `plugins.entries.feeds.config.sources[].id`      | Require specific feed source ids to be configured and enabled.      |
+| `feeds.sources.requirePinned` | Feed source `trust` and `integrity` declarations | Set to `true` to require enabled feed sources to be pinned.         |
+| `feeds.sources.allowUnsigned` | Feed source `trust` declarations                 | Set to `false` to reject enabled sources using unsigned trust.      |
+| `feeds.search.requireDefault` | `plugins.entries.feeds.config.search.default`    | Set to `true` to require native skills/plugins search to use feeds. |
+| `feeds.search.requireSources` | `plugins.entries.feeds.config.search.sources[]`  | Require default native feed search to use selected source ids.      |
 
-Feed policy observes only configured source declarations. It does not fetch
+Feed policy observes only configured source declarations and native search
+configuration. It does not fetch
 feed documents, install entries, or enforce install decisions at runtime.
 
 #### Agent workspace
@@ -574,6 +581,8 @@ Policy currently verifies:
 | `policy/feeds-required-source-missing`       | A required feed source id is not configured and enabled.                         |
 | `policy/feeds-source-unpinned`               | An enabled feed source is not pinned when policy requires pinned feeds.          |
 | `policy/feeds-source-unsigned`               | An enabled feed source uses unsigned trust when policy denies unsigned feeds.    |
+| `policy/feeds-search-default-missing`        | Native skills/plugins search is not configured to use feeds by default.          |
+| `policy/feeds-search-source-missing`         | Native feed search does not require a policy-required source id.                 |
 | `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
 | `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
 | `policy/tools-profile-unapproved`            | A configured global or per-agent tool profile is outside the allowlist.          |

@@ -27,6 +27,11 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import {
+  formatFeedSearchEntry,
+  searchCatalogFeedEntriesForCli,
+  shouldSearchCatalogFeeds,
+} from "./feed-search-options.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
@@ -155,6 +160,10 @@ function readVerifiedSkillCardUrl(
   return { ok: true, url };
 }
 
+function collectFeedSource(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
 /**
  * Register the skills CLI commands
  */
@@ -175,30 +184,57 @@ export function registerSkillsCli(program: Command) {
     .argument("[query...]", "Optional search query")
     .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Output as JSON", false)
-    .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
-      try {
-        const results = await searchSkillsFromClawHub({
-          query: normalizeOptionalString(queryParts.join(" ")),
-          limit: opts.limit,
-        });
-        if (opts.json) {
-          defaultRuntime.writeJson({ results });
-          return;
+    .option("--catalog-feeds", "Search configured catalog feeds instead of ClawHub", false)
+    .option("--feed-source <id>", "Search one configured feed source id", collectFeedSource, [])
+    .action(
+      async (
+        queryParts: string[],
+        opts: { limit?: number; json?: boolean; catalogFeeds?: boolean; feedSource?: string[] },
+      ) => {
+        try {
+          if (await shouldSearchCatalogFeeds(opts)) {
+            const results = await searchCatalogFeedEntriesForCli({
+              queryParts,
+              type: "skill",
+              limit: opts.limit,
+              opts,
+            });
+            if (opts.json) {
+              defaultRuntime.writeJson({ results });
+              return;
+            }
+            if (results.length === 0) {
+              defaultRuntime.log("No catalog feed skills found.");
+              return;
+            }
+            for (const entry of results) {
+              defaultRuntime.log(formatFeedSearchEntry(entry));
+            }
+            return;
+          }
+          const results = await searchSkillsFromClawHub({
+            query: normalizeOptionalString(queryParts.join(" ")),
+            limit: opts.limit,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson({ results });
+            return;
+          }
+          if (results.length === 0) {
+            defaultRuntime.log("No ClawHub skills found.");
+            return;
+          }
+          for (const entry of results) {
+            const version = entry.version ? ` v${entry.version}` : "";
+            const summary = entry.summary ? `  ${entry.summary}` : "";
+            defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
+          }
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
         }
-        if (results.length === 0) {
-          defaultRuntime.log("No ClawHub skills found.");
-          return;
-        }
-        for (const entry of results) {
-          const version = entry.version ? ` v${entry.version}` : "";
-          const summary = entry.summary ? `  ${entry.summary}` : "";
-          defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
-        }
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
+      },
+    );
 
   skills
     .command("install")

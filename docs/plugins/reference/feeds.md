@@ -7,7 +7,9 @@ title: "Feeds plugin"
 
 # Feeds plugin
 
-Adds configured catalog feed source validation for skills and plugins.
+Adds configured catalog feed source validation, search, install handoff,
+lifecycle tooling, and optional native `skills search` / `plugins search` feed
+integration.
 
 ## Distribution
 
@@ -36,13 +38,13 @@ integrity.
               "id": "company-approved",
               "url": "https://feeds.example.com/openclaw/feed.json",
               "trust": "pinned",
-              "integrity": "sha256:...",
-            },
-          ],
-        },
-      },
-    },
-  },
+              "integrity": "sha256:..."
+            }
+          ]
+        }
+      }
+    }
+  }
 }
 ```
 
@@ -82,18 +84,18 @@ Use `--dry-run` to print the underlying install command without running it. Use
         "config": {
           "installPolicy": {
             "mode": "enforce",
-            "requireApproval": true,
+            "requireApproval": true
           },
           "sources": [
             {
               "id": "company-approved",
-              "url": "file:///opt/openclaw/feeds/company.json",
-            },
-          ],
-        },
-      },
-    },
-  },
+              "url": "file:///opt/openclaw/feeds/company.json"
+            }
+          ]
+        }
+      }
+    }
+  }
 }
 ```
 
@@ -105,3 +107,43 @@ Use `--dry-run` to print the underlying install command without running it. Use
 If `requireApproval` is `true` and `mode` is omitted, OpenClaw treats the policy
 as enforce. If `mode` is `enforce` and `requireApproval` is omitted, approval is
 required.
+
+## Native search
+
+`openclaw skills search` and `openclaw plugins search` continue to use ClawHub by
+default. Operators can opt into configured feeds explicitly:
+
+```bash
+openclaw skills search calendar --catalog-feeds
+openclaw plugins search calendar --feed-source company-approved
+```
+
+To make native search use feeds by default, configure the bundled Feeds plugin:
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "feeds": {
+        "enabled": true,
+        "config": {
+          "search": {
+            "default": true,
+            "sources": ["company-approved"]
+          },
+          "sources": [
+            {
+              "id": "company-approved",
+              "url": "https://feeds.example.com/openclaw/feed.json",
+              "trust": "pinned",
+              "integrity": "sha256:..."
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Omit `search.sources` to search all enabled configured feed sources.
