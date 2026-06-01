@@ -19,6 +19,7 @@ import {
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
+const MANIFESTLESS_CORE_RUNTIME_SUPPORT_DIRS = new Set(["speech-core"]);
 
 function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
   if (!buildablePluginDirs.has(id)) {
@@ -77,6 +78,9 @@ function collectTopLevelPublicSurfaceEntries(pluginDir) {
 }
 
 function isManifestlessBundledRuntimeSupportPackage(params) {
+  if (MANIFESTLESS_CORE_RUNTIME_SUPPORT_DIRS.has(params.dirName)) {
+    return params.topLevelPublicSurfaceEntries.length > 0;
+  }
   const packageName = typeof params.packageJson?.name === "string" ? params.packageJson.name : "";
   if (packageName !== `@openclaw/${params.dirName}`) {
     return false;

@@ -505,4 +505,25 @@ describe("copyBundledPluginMetadata", () => {
       type: "module",
     });
   });
+
+  it("keeps manifestless speech-core runtime support outputs", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-speech-core-support-");
+    const sourcePluginDir = path.join(repoRoot, "extensions", "speech-core");
+    fs.mkdirSync(sourcePluginDir, { recursive: true });
+    fs.writeFileSync(path.join(sourcePluginDir, "api.ts"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(sourcePluginDir, "runtime-api.ts"), "export {};\n", "utf8");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "speech-core");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "api.js"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(distPluginDir, "runtime-api.js"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(distPluginDir, "openclaw.plugin.json"), "{}\n", "utf8");
+    fs.writeFileSync(path.join(distPluginDir, "package.json"), "{}\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(distPluginDir, "api.js"))).toBe(true);
+    expect(fs.existsSync(path.join(distPluginDir, "runtime-api.js"))).toBe(true);
+    expect(fs.existsSync(path.join(distPluginDir, "openclaw.plugin.json"))).toBe(false);
+    expect(fs.existsSync(path.join(distPluginDir, "package.json"))).toBe(false);
+  });
 });
