@@ -50,6 +50,9 @@ describe("SessionManager.open", () => {
         JSON.stringify(assistantEntry),
       ].join("\n") + "\n";
     await fs.writeFile(sessionFile, originalTranscript, "utf8");
+    if (process.platform !== "win32") {
+      await fs.chmod(sessionFile, 0o600);
+    }
 
     const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
 
@@ -63,5 +66,9 @@ describe("SessionManager.open", () => {
     await expect(fs.readFile(path.join(dir, backupFiles[0] ?? ""), "utf8")).resolves.toBe(
       originalTranscript,
     );
+    if (process.platform !== "win32") {
+      const backupStat = await fs.stat(path.join(dir, backupFiles[0] ?? ""));
+      expect(backupStat.mode & 0o777).toBe(0o600);
+    }
   });
 });

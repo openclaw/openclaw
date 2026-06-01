@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -453,7 +454,10 @@ function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[
     } satisfies SessionHeader);
   const recoveredEntries = parsedEntries.filter((entry) => entry.type !== "session");
 
-  writeFileSync(buildCorruptSessionBackupPath(filePath), content, "utf8");
+  const backupPath = buildCorruptSessionBackupPath(filePath);
+  const backupMode = statSync(filePath).mode & 0o777;
+  writeFileSync(backupPath, content, { encoding: "utf8", mode: backupMode || 0o600 });
+  chmodSync(backupPath, backupMode || 0o600);
   return [header, ...recoveredEntries];
 }
 
