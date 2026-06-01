@@ -82,6 +82,37 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionEntries {
+  entry_json: string;
+  session_id: string;
+  session_key: string;
+  updated_at: number;
+}
+
+export interface Sessions {
+  created_at: number;
+  session_id: string;
+  session_key: string;
+  updated_at: number;
+}
+
+export interface TranscriptEventIdentities {
+  created_at: number;
+  event_id: string;
+  event_type: string | null;
+  message_idempotency_key: string | null;
+  parent_id: string | null;
+  seq: number;
+  session_id: string;
+}
+
+export interface TranscriptEvents {
+  created_at: number;
+  event_json: string;
+  seq: number;
+  session_id: string;
+}
+
 export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
@@ -92,4 +123,8 @@ export interface DB {
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
+  session_entries: SessionEntries;
+  sessions: Sessions;
+  transcript_event_identities: TranscriptEventIdentities;
+  transcript_events: TranscriptEvents;
 }
