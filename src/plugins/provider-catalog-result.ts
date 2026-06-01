@@ -116,21 +116,23 @@ export function copyProviderCatalogProviderConfig(
     return undefined;
   }
 
-  try {
-    return {
-      ...(providerConfig as ModelProviderConfig),
-      models: copyProviderCatalogModels(providerConfig as ModelProviderConfig),
-    };
-  } catch {
-    const copied: Partial<ModelProviderConfig> = {
-      models: copyProviderCatalogModels(providerConfig as ModelProviderConfig),
-    };
-    for (const key of MODEL_PROVIDER_CONFIG_KEYS) {
-      const value = readRecordValue(providerConfig, key);
-      if (value !== undefined) {
-        (copied as Record<string, unknown>)[key] = value;
-      }
-    }
-    return copied as ModelProviderConfig;
+  const baseUrl = readRecordValue(providerConfig, "baseUrl");
+  if (typeof baseUrl !== "string") {
+    return undefined;
   }
+
+  const copied: Partial<ModelProviderConfig> = {
+    baseUrl,
+    models: copyProviderCatalogModels(providerConfig as ModelProviderConfig),
+  };
+  for (const key of MODEL_PROVIDER_CONFIG_KEYS) {
+    if (key === "baseUrl") {
+      continue;
+    }
+    const value = readRecordValue(providerConfig, key);
+    if (value !== undefined) {
+      (copied as Record<string, unknown>)[key] = value;
+    }
+  }
+  return copied as ModelProviderConfig;
 }
