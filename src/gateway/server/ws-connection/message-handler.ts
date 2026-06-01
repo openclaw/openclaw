@@ -253,6 +253,16 @@ function resolvePinnedClientMetadata(params: {
     }
   }
 
+  function normalizeDesktopPlatformFamily(value: string): string {
+    if (value === "darwin" || value === "macos" || value.startsWith("macos ")) {
+      return "macos";
+    }
+    if (value === "win32" || value === "windows" || value.startsWith("windows ")) {
+      return "windows";
+    }
+    return "";
+  }
+
   function normalizeMobileAppPlatformPin(clientId: string | undefined, value: string): string {
     if (clientId === GATEWAY_CLIENT_IDS.IOS_APP && /^(?:ios|ipados)(?:\s|$)/.test(value)) {
       return "ios-family";
@@ -276,6 +286,13 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const claimedDesktopFamily = normalizeDesktopPlatformFamily(claimedPlatform);
+  const pairedDesktopFamily = normalizeDesktopPlatformFamily(pairedPlatform);
+  const isDesktopPlatformFamilyMatch =
+    hasPinnedPlatform &&
+    claimedPlatform !== "" &&
+    claimedDesktopFamily !== "" &&
+    claimedDesktopFamily === pairedDesktopFamily;
   const isMobileAppPlatformVersionRefresh =
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
@@ -286,8 +303,12 @@ function resolvePinnedClientMetadata(params: {
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isLegacyNodeHostPlatformPin &&
+    !isDesktopPlatformFamilyMatch &&
     !isMobileAppPlatformVersionRefresh;
-  const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
+  const deviceFamilyMismatch =
+    hasPinnedDeviceFamily &&
+    claimedDeviceFamily !== "" &&
+    claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform =
     claimedPlatform === pairedPlatform
       ? params.pairedPlatform
@@ -295,7 +316,9 @@ function resolvePinnedClientMetadata(params: {
         ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
         : isMobileAppPlatformVersionRefresh
           ? params.claimedPlatform
-          : undefined;
+          : isDesktopPlatformFamilyMatch
+            ? params.pairedPlatform
+            : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,
