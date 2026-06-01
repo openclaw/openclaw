@@ -1965,6 +1965,103 @@ describe("session cost usage", () => {
     });
   });
 
+  it("aggregates same-stem active and archived transcripts for per-session cost summaries", async () => {
+    const root = await makeSessionCostRoot("session-active-plus-archives");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-combined.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "archived answer",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-combined.jsonl"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "active answer",
+          usage: { input: 10, output: 20, totalTokens: 30, cost: { total: 0.03 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-combined" });
+      const timeseries = await loadSessionUsageTimeSeries({ sessionId: "sess-combined" });
+      const logs = await loadSessionLogs({ sessionId: "sess-combined" });
+
+      expect(path.basename(summary?.sessionFile ?? "")).toBe("sess-combined.jsonl");
+      expect(summary?.totalTokens).toBe(40);
+      expect(summary?.totalCost).toBeCloseTo(0.04, 8);
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([10, 30]);
+      expect(timeseries?.points.at(-1)?.cumulativeTokens).toBe(40);
+      expect(logs?.map((log) => log.content)).toEqual(["archived answer", "active answer"]);
+    });
+  });
+
+  it("aggregates same-stem active and archived transcripts from the usage cache", async () => {
+    const root = await makeSessionCostRoot("session-cache-active-plus-archives");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activePath = path.join(sessionsDir, "sess-cache-combined.jsonl");
+    const archivePath = path.join(
+      sessionsDir,
+      "sess-cache-combined.jsonl.reset.2026-02-12T11-00-00.000Z",
+    );
+    await fs.writeFile(
+      archivePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      activePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 20, totalTokens: 30, cost: { total: 0.03 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [activePath, archivePath] });
+      const cached = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-combined",
+        sessionFile: activePath,
+        requestRefresh: false,
+      });
+
+      expect(cached.cacheStatus.status).toBe("fresh");
+      expect(cached.cacheStatus.cachedFiles).toBe(2);
+      expect(cached.summary?.sessionFile).toBe(activePath);
+      expect(cached.summary?.totalTokens).toBe(40);
+      expect(cached.summary?.totalCost).toBeCloseTo(0.04, 8);
+    });
+  });
+
   it("uses the candidate session directory for archived fallback lookups", async () => {
     const root = await makeSessionCostRoot("session-custom-archive");
     const customSessionsDir = path.join(root, "custom-store", "sessions");
@@ -2040,9 +2137,12 @@ describe("session cost usage", () => {
       const summary = await loadSessionCostSummary({ sessionId: "sess-mixed" });
       const logs = await loadSessionLogs({ sessionId: "sess-mixed" });
 
-      expect(summary?.totalTokens).toBe(20);
+      expect(summary?.totalTokens).toBe(30);
       expect(summary?.sessionFile).toContain(".jsonl.deleted.");
-      expect(logs?.[0]?.content).toContain("newer deleted archive");
+      expect(logs?.map((log) => log.content)).toEqual([
+        "older reset archive",
+        "newer deleted archive",
+      ]);
     });
   });
 
