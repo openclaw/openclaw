@@ -270,7 +270,14 @@ async function hasWorkspaceUserContentEvidence(
       // continue
     }
   }
-  return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
+  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
+    return true;
+  }
+  try {
+    return (await fs.readdir(path.join(dir, "skills"))).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<boolean> {
@@ -719,8 +726,7 @@ export async function ensureAgentWorkspace(params?: {
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const userContentPaths = [path.join(dir, "memory"), path.join(dir, ".git")];
-    const paths = [...templatePaths, ...userContentPaths];
+    const paths = [...templatePaths, path.join(dir, "memory"), path.join(dir, ".git")];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -731,8 +737,7 @@ export async function ensureAgentWorkspace(params?: {
         }
       }),
     );
-    const hasCanonicalRootMemory = await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
-    return existing.every((v) => !v) && !hasCanonicalRootMemory;
+    return existing.every((v) => !v) && !(await hasWorkspaceUserContentEvidence(dir));
   })();
 
   if (isBrandNewWorkspace) {
