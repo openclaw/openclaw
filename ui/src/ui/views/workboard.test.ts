@@ -4,6 +4,8 @@ import { getWorkboardState } from "../controllers/workboard.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { renderWorkboard } from "./workboard.ts";
 
+type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
+
 describe("renderWorkboard", () => {
   it("renders board columns and preloaded cards", () => {
     const now = Date.now();
@@ -395,7 +397,7 @@ describe("renderWorkboard", () => {
       ],
       onOpenSession: () => undefined,
       onRequestUpdate: () => undefined,
-    };
+    } satisfies WorkboardRenderProps;
 
     render(renderWorkboard(props), container);
 
