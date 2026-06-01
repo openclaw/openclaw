@@ -25,7 +25,7 @@ export function tenantIdsFromFlyApps(body, prefix = TENANT_APP_PREFIX) {
       tenantIds.add(tenantId);
     }
   }
-  return [...tenantIds].sort();
+  return [...tenantIds].toSorted();
 }
 
 export function tenantImageRequestBody(image) {
@@ -81,13 +81,16 @@ function artifactPaths(dir) {
 async function request(method, url, { headers = {}, body, timeoutMs }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const init = {
+    method,
+    headers,
+    signal: controller.signal,
+  };
+  if (body !== undefined) {
+    init.body = body;
+  }
   try {
-    const response = await fetch(url, {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
+    const response = await fetch(url, init);
     return {
       code: String(response.status).padStart(3, "0"),
       body: await response.text(),
