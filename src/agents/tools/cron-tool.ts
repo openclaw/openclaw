@@ -383,6 +383,63 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
+/**
+ * Repair concatenated JSON keys produced by some local-model tool-call parsers.
+ *
+ * Non-frontier models (e.g. local llamacpp) can emit tool-call arguments where
+ * adjacent sibling keys are concatenated (name+payload → namePayload) or a
+ * parent key merges with its first child key (schedule+kind → scheduleKind).
+ * This narrow recovery splits known patterns back into their intended keys
+ * so downstream normalization can proceed.
+ */
+function repairConcatenatedObjectKeys(obj: Record<string, unknown>): Record<string, unknown> {
+  let next = { ...obj };
+  // Explicit patterns observed with local llamacpp / qwen models.
+  const explicit: Record<string, [string, string]> = {
+    namePayload: ["name", "payload"],
+    scheduleKind: ["schedule", "kind"],
+    sessionTargetName: ["sessionTarget", "name"],
+  };
+  for (const [corrupted, [first, second]] of Object.entries(explicit)) {
+    if (!(corrupted in next)) {
+      continue;
+    }
+    const value = next[corrupted];
+    if (first === "schedule") {
+      // scheduleKind: the value is the full schedule object; keep under "schedule".
+      if (!("schedule" in next)) {
+        next.schedule = value;
+      }
+    } else {
+      // namePayload / sessionTargetName: value belongs to the second key.
+      if (!(second in next) && value !== undefined) {
+        next[second] = value;
+      }
+    }
+    delete next[corrupted];
+  }
+  // Generic: try to split any remaining unrecognized key into two known cron keys.
+  for (const key of Object.keys(next)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key)) {
+      continue;
+    }
+    for (const known of CRON_RECOVERABLE_OBJECT_KEYS) {
+      if (key.startsWith(known) && key.length > known.length) {
+        const remainder = key.slice(known.length);
+        if (CRON_RECOVERABLE_OBJECT_KEYS.has(remainder)) {
+          if (remainder in next || known in next) {
+            continue;
+          }
+          next[remainder] = next[key];
+          delete next[key];
+          break;
+        }
+      }
+    }
+  }
+  return next;
+}
+
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -517,6 +574,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
+          // Repair concatenated keys from local-model tool-call parsers.
+          if (isRecord(params.job)) {
+            params.job = repairConcatenatedObjectKeys(params.job);
+          }
           const job =
             normalizeCronJobCreate(params.job, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
@@ -637,6 +698,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
 
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
+          }
+          // Repair concatenated keys from local-model tool-call parsers.
+          if (isRecord(params.patch)) {
+            params.patch = repairConcatenatedObjectKeys(params.patch);
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
           if (
