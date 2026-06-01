@@ -172,6 +172,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     `groupAllowFrom` entries should be numeric Telegram user IDs (`telegram:` / `tg:` prefixes are normalized).
     Do not put Telegram group or supergroup chat IDs in `groupAllowFrom`. Negative chat IDs belong under `channels.telegram.groups`.
     Non-numeric entries are ignored for sender authorization.
+    Bot-authored group messages are dropped by default. Set `allowBots: true` to accept them after the normal group allowlist checks, or `allowBots: "mentions"` to require an explicit `@<bot_username>` mention. Accepted bot-authored messages use shared [bot loop protection](/channels/bot-loop-protection); set `botLoopProtection` at the Telegram account, group, or topic level when a trusted multi-bot group needs a custom budget.
     Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
     If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
@@ -210,6 +211,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
         "-1001234567890": {
           groupPolicy: "open",
           requireMention: false,
+          allowBots: "mentions",
         },
       },
     },
@@ -637,7 +639,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)`)
     - typing actions still include `message_thread_id`
 
-    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`).
+    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `allowBots`, `botLoopProtection`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`).
     `agentId` is topic-only and does not inherit from group defaults.
     `topics."*"` sets defaults for every topic in that group; exact topic IDs still win over `"*"`.
 
@@ -1075,7 +1077,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 <Accordion title="High-signal Telegram fields">
 
 - startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*` (`tokenFile` must point to a regular file; symlinks are rejected)
-- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
+- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `allowBots`, `botLoopProtection`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - topic defaults: `groups.<chatId>.topics."*"` applies to unmatched forum topics; exact topic IDs override it
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`

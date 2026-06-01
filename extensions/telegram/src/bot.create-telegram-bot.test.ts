@@ -1630,6 +1630,112 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("drops bot-authored group messages unless allowBots is enabled", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+          groups: { "-1001234": { requireMention: false } },
+        },
+      },
+    });
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+        message_id: 1885,
+        date: 1736380800,
+        from: { id: 77, is_bot: true, first_name: "Fleet Bot", username: "fleet_bot" },
+        text: "status green",
+      },
+      me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts bot-authored group messages when allowBots is enabled", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+          allowBots: true,
+          groups: { "-1001234": { requireMention: false } },
+        },
+      },
+    });
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+        message_id: 1886,
+        date: 1736380800,
+        from: { id: 77, is_bot: true, first_name: "Fleet Bot", username: "fleet_bot" },
+        text: "status green",
+      },
+      me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires explicit mentions for bot-authored group messages when allowBots is mentions", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+          allowBots: "mentions",
+          groups: { "-1001234": { requireMention: false } },
+        },
+      },
+    });
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+        message_id: 1887,
+        date: 1736380800,
+        from: { id: 77, is_bot: true, first_name: "Fleet Bot", username: "fleet_bot" },
+        text: "status green",
+      },
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+        message_id: 1888,
+        date: 1736380801,
+        from: { id: 77, is_bot: true, first_name: "Fleet Bot", username: "fleet_bot" },
+        text: "@openclaw_bot status green",
+        entities: [{ type: "mention", offset: 0, length: 13 }],
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "disabled" } },
