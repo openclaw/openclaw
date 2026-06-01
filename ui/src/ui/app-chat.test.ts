@@ -1501,6 +1501,33 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("do not send on rollback");
   });
 
+  it("does not restore a canceled model-wait send into a different session", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send from session a",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]?.text).toBe("send from session a");
+
+    host.sessionKey = "agent:other";
+    host.chatMessage = "session b draft";
+    switchUpdate.resolve(true);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("session b draft");
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
     vi.stubGlobal(
       "fetch",

@@ -514,6 +514,7 @@ function cancelPendingSendBeforeRequest(
   opts: {
     previousAttachments?: ChatAttachment[];
     previousDraft?: string;
+    restoreComposer?: boolean;
   },
 ) {
   const removed = removeVisibleOrScopedQueuedMessageWithoutReleasing(
@@ -521,10 +522,13 @@ function cancelPendingSendBeforeRequest(
     queued.id,
     queued.sessionKey,
   );
+  const restoreComposer = opts.restoreComposer !== false;
   const willRestoreAttachments = Boolean(
-    opts.previousAttachments?.length && host.chatAttachments.length === 0,
+    restoreComposer && opts.previousAttachments?.length && host.chatAttachments.length === 0,
   );
-  restoreComposerAfterFailedSend(host, opts);
+  if (restoreComposer) {
+    restoreComposerAfterFailedSend(host, opts);
+  }
   if (removed && !willRestoreAttachments) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));
   }
@@ -1379,6 +1383,7 @@ export async function handleSendChat(
       cancelPendingSendBeforeRequest(host, queued, {
         previousDraft: cleared.previousDraft,
         previousAttachments: cleared.previousAttachments,
+        restoreComposer: false,
       });
       return;
     }
