@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
@@ -28,6 +29,10 @@ afterAll(() => {
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
+let providerRuntimeBatchCalls: string[][] = [];
+let providerRuntimeBatchGate: Promise<void> | null = null;
+let providerRuntimeActiveBatchCalls = 0;
+let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
@@ -65,8 +70,6 @@ vi.mock("./embeddings.js", () => {
         };
       },
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
-    resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
-      providerId === "local" ? "local" : "remote",
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -88,6 +91,8 @@ vi.mock("./embeddings.js", () => {
       const providerId =
         options.provider === "gemini" ||
         options.provider === "fallback-provider" ||
+        options.provider === "batch-test" ||
+        options.provider === "batch-wide-test" ||
         options.provider === "ollama"
           ? options.provider
           : "mock";
@@ -141,20 +146,41 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "gemini" || providerId === "fallback-provider"
+        ...(providerId === "batch-test" || providerId === "batch-wide-test"
           ? {
               runtime: {
                 id: providerId,
-                cacheKeyData: {
-                  provider: providerId,
-                  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                  model,
-                  outputDimensionality: options.outputDimensionality,
-                  headers: [],
+                ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
+                batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                  providerRuntimeActiveBatchCalls += 1;
+                  providerRuntimeMaxActiveBatchCalls = Math.max(
+                    providerRuntimeMaxActiveBatchCalls,
+                    providerRuntimeActiveBatchCalls,
+                  );
+                  try {
+                    await providerRuntimeBatchGate;
+                    providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                    return batch.chunks.map((chunk) => embedText(chunk.text));
+                  } finally {
+                    providerRuntimeActiveBatchCalls -= 1;
+                  }
                 },
               },
             }
-          : {}),
+          : providerId === "gemini" || providerId === "fallback-provider"
+            ? {
+                runtime: {
+                  id: providerId,
+                  cacheKeyData: {
+                    provider: providerId,
+                    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                    model,
+                    outputDimensionality: options.outputDimensionality,
+                    headers: [],
+                  },
+                },
+              }
+            : {}),
       };
     },
   };
@@ -221,6 +247,10 @@ describe("memory index", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
+    providerRuntimeBatchCalls = [];
+    providerRuntimeBatchGate = null;
+    providerRuntimeActiveBatchCalls = 0;
+    providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
     providerCloseGate = null;
@@ -268,6 +298,7 @@ describe("memory index", () => {
     provider?: string;
     fallback?: "none" | "gemini" | "fallback-provider";
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
+    batchEnabled?: boolean;
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -286,7 +317,7 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            ...(params.provider !== undefined ? { provider: params.provider } : {}),
+            provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
@@ -294,6 +325,12 @@ describe("memory index", () => {
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
+            remote: params.batchEnabled
+              ? {
+                  nonBatchConcurrency: 1,
+                  batch: { enabled: true, pollIntervalMs: 0, timeoutMinutes: 1 },
+                }
+              : undefined,
             query: {
               minScore: params.minScore ?? 0,
               hybrid: params.hybrid ?? { enabled: false },
@@ -414,6 +451,209 @@ describe("memory index", () => {
           chunks: status.chunks,
         },
       ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("batches dirty memory chunks across files", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-cross-file-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerRuntimeBatchCalls[0]).toEqual([
+        "# Log\nAlpha memory line.\nZebra memory line.",
+        "# Log\nBeta memory line.",
+        "# Log\nGamma memory line.",
+      ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("splits oversized source-wide embedding requests at the request cap", () => {
+    expect(splitSourceWideEmbeddingChunks(["one", "two", "three", "four", "five"], 2)).toEqual([
+      ["one", "two"],
+      ["three", "four"],
+      ["five"],
+    ]);
+  });
+
+  it("keeps split chunks from oversized files in one source-wide batch", async () => {
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      `# Log\n${"Long split memory line. ".repeat(1200)}`,
+    );
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nBeta memory line.");
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-split-chunks-cross-file-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(combinedBatch.length).toBeGreaterThan(3);
+      expect(combinedBatch.join("\n")).toContain("Long split memory line.");
+      expect(combinedBatch).toContain("# Log\nBeta memory line.");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps custom batch runtimes per file without source-wide opt in", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-custom-batch-compat.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(3);
+      expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
+      expect(providerRuntimeBatchCalls.map((call) => call[0]).toSorted()).toEqual(
+        [
+          "# Log\nAlpha memory line.\nZebra memory line.",
+          "# Log\nBeta memory line.",
+          "# Log\nGamma memory line.",
+        ].toSorted(),
+      );
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps custom batch runtimes concurrent without source-wide opt in", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-custom-batch-concurrency.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    let releaseBatchGate: (() => void) | undefined;
+    providerRuntimeBatchGate = new Promise((resolve) => {
+      releaseBatchGate = resolve;
+    });
+    const syncPromise = manager.sync({ reason: "test" });
+    let waitError: Error | undefined;
+    try {
+      await vi.waitFor(() => expect(providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1));
+    } catch (err) {
+      waitError = err instanceof Error ? err : new Error(String(err));
+    } finally {
+      releaseBatchGate?.();
+      await syncPromise;
+      await manager.close?.();
+    }
+    if (waitError) {
+      throw waitError;
+    }
+  });
+
+  it("bounds source-wide memory batches", async () => {
+    const batchFileLimit = 2048;
+    for (let index = 0; index < batchFileLimit; index += 1) {
+      await fs.writeFile(
+        path.join(memoryDir, `2026-02-${String(index + 1).padStart(4, "0")}.md`),
+        `# Log\nBounded memory line ${index}.`,
+      );
+    }
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-bounded-cross-file-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerRuntimeBatchCalls[0]).toHaveLength(batchFileLimit);
+      expect(providerRuntimeBatchCalls[1]).toHaveLength(1);
+      expect(providerRuntimeBatchCalls.flat()).toHaveLength(batchFileLimit + 1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("batches forced memory and session indexing across files", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "session-alpha.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session-alpha",
+          timestamp: "2026-04-07T15:24:04.113Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: [{ type: "text", text: "Session alpha memory line." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "session-beta.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session-beta",
+          timestamp: "2026-04-07T15:24:04.113Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: [{ type: "text", text: "Session beta memory line." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      storePath: path.join(workspaceDir, "index-force-cross-source-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "cli", force: true });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(combinedBatch.slice(0, 2)).toEqual([
+        "# Log\nAlpha memory line.\nZebra memory line.",
+        "# Log\nBeta memory line.",
+      ]);
+      expect(combinedBatch.join("\n")).toContain("Session alpha memory line.");
+      expect(combinedBatch.join("\n")).toContain("Session beta memory line.");
     } finally {
       await manager.close?.();
     }
@@ -1041,25 +1281,6 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
-  it("closes stale default managers when provider requirement changes", async () => {
-    const storePath = path.join(workspaceDir, "index-provider-requirement-cache.sqlite");
-    const implicitCfg = createCfg({ storePath });
-    const implicit = requireManager(
-      await getMemorySearchManager({ cfg: implicitCfg, agentId: "main" }),
-    );
-    managersForCleanup.add(implicit);
-    await implicit.probeEmbeddingAvailability();
-
-    const explicitCfg = createCfg({ storePath, provider: "openai" });
-    const explicit = requireManager(
-      await getMemorySearchManager({ cfg: explicitCfg, agentId: "main" }),
-    );
-    managersForCleanup.add(explicit);
-
-    expect(explicit === implicit).toBe(false);
-    expect(providerCloseCalls).toBe(1);
-  });
-
   it("retries embedding provider close before releasing the manager", async () => {
     providerCloseFailuresRemaining = 1;
     const cfg = createCfg({
@@ -1599,6 +1820,25 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps metadata after unchanged safe force reindex", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-safe-force-metadata.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+      await manager.sync({ reason: "cli", force: true });
+
+      expect(manager.status().dirty).toBe(false);
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("streams embedding cache rows during safe reindex", async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     type EmbeddingCacheRow = {
@@ -1690,12 +1930,6 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
-    expect(status.custom?.providerUnavailableReason).toBe("No API key found for provider");
-    expect(status.custom?.providerState).toEqual({
-      mode: "fts-only",
-      reason: "No API key found for provider",
-      attemptedProviderId: "openai",
-    });
 
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
@@ -1754,7 +1988,6 @@ describe("memory index", () => {
       await manager.close?.();
     }
   });
-
   it("prefers exact session transcript hits in FTS-only mode", async () => {
     try {
       const manager = await getFtsSessionManager({

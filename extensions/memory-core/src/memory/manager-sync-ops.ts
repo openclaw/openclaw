@@ -95,13 +95,27 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-type MemoryIndexEntry = {
+export type MemoryIndexEntry = {
   path: string;
   absPath: string;
   mtimeMs: number;
   size: number;
   hash: string;
+  kind?: "markdown" | "multimodal";
   content?: string;
+  contentText?: string;
+  lineMap?: number[];
+};
+
+export type MemoryIndexWorkItem = {
+  entry: MemoryIndexEntry;
+  source: MemorySource;
+  afterIndex?: () => void;
+};
+
+type MemorySourceSyncPlan = {
+  indexItems: MemoryIndexWorkItem[];
+  finalize: () => Promise<void> | void;
 };
 
 const META_KEY = "memory_index_meta_v1";
@@ -285,6 +299,68 @@ export abstract class MemoryManagerSyncOps {
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
+    for (const item of items) {
+      await this.indexFile(item.entry, { source: item.source });
+    }
+  }
+
+  private emptySourceSyncPlan(): MemorySourceSyncPlan {
+    return { indexItems: [], finalize: () => {} };
+  }
+
+  private shouldDeferSourceWideBatch(): boolean {
+    return Boolean(
+      this.batch.enabled &&
+      this.provider &&
+      this.providerRuntime?.batchEmbed &&
+      this.providerRuntime.sourceWideBatchEmbed === true,
+    );
+  }
+
+  private async indexQueuedFiles(
+    items: MemoryIndexWorkItem[],
+    progress?: MemorySyncProgressState,
+    label?: string,
+  ): Promise<void> {
+    if (items.length === 0) {
+      return;
+    }
+    if (progress && label) {
+      progress.report({
+        completed: progress.completed,
+        total: progress.total,
+        label,
+      });
+    }
+    await this.indexFiles(items);
+    for (const item of items) {
+      item.afterIndex?.();
+    }
+    if (progress) {
+      progress.completed += items.length;
+      progress.report({
+        completed: progress.completed,
+        total: progress.total,
+      });
+    }
+  }
+
+  private async executeSourceSyncPlans(
+    plans: MemorySourceSyncPlan[],
+    progress?: MemorySyncProgressState,
+  ): Promise<void> {
+    const indexItems = plans.flatMap((plan) => plan.indexItems);
+    const sources = new Set(indexItems.map((item) => item.source));
+    await this.indexQueuedFiles(
+      indexItems,
+      progress,
+      sources.size > 1 ? "Indexing memory sources (batch)..." : undefined,
+    );
+    for (const plan of plans) {
+      await plan.finalize();
+    }
+  }
 
   protected hasIndexedChunks(): boolean {
     const row = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
@@ -1504,7 +1580,8 @@ export abstract class MemoryManagerSyncOps {
   private async syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
-  }) {
+    deferIndex?: boolean;
+  }): Promise<MemorySourceSyncPlan> {
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
     );
@@ -1558,8 +1635,61 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
-    const tasks = fileEntries.map((entry) => async () => {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+    const deleteStaleRows = async () => {
+      for (const stale of existingRows) {
+        if (activePaths.has(stale.path)) {
+          continue;
+        }
+        deleteFileByPathAndSource.run(stale.path, "memory");
+        if (deleteVectorRowsByPathAndSource) {
+          try {
+            deleteVectorRowsByPathAndSource.run(stale.path, "memory");
+          } catch {}
+        }
+        deleteChunksByPathAndSource.run(stale.path, "memory");
+        if (deleteFtsRowsByPathAndSource) {
+          try {
+            deleteFtsRowsByPathAndSource.run(stale.path, "memory");
+          } catch {}
+        }
+      }
+    };
+
+    if (this.batch.enabled) {
+      const dirtyEntries: MemoryIndexEntry[] = [];
+      for (const entry of fileEntries) {
+        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          continue;
+        }
+        dirtyEntries.push(entry);
+      }
+      const indexItems = dirtyEntries.map(
+        (entry): MemoryIndexWorkItem => ({ entry, source: "memory" }),
+      );
+      if (params.deferIndex) {
+        return { indexItems, finalize: deleteStaleRows };
+      }
+      await this.indexQueuedFiles(indexItems, params.progress);
+    } else {
+      const tasks = fileEntries.map((entry) => async () => {
+        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          return;
+        }
+        await this.indexFile(entry, { source: "memory" });
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -1567,43 +1697,20 @@ export abstract class MemoryManagerSyncOps {
             total: params.progress.total,
           });
         }
-        return;
-      }
-      await this.indexFile(entry, { source: "memory" });
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-    });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
-
-    for (const stale of existingRows) {
-      if (activePaths.has(stale.path)) {
-        continue;
-      }
-      deleteFileByPathAndSource.run(stale.path, "memory");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "memory");
-      if (deleteFtsRowsByPathAndSource) {
-        try {
-          deleteFtsRowsByPathAndSource.run(stale.path, "memory");
-        } catch {}
-      }
+      });
+      await runWithConcurrency(tasks, this.getIndexConcurrency());
     }
+
+    await deleteStaleRows();
+    return this.emptySourceSyncPlan();
   }
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
-  }) {
+    deferIndex?: boolean;
+  }): Promise<MemorySourceSyncPlan> {
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
     );
@@ -1659,36 +1766,145 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const yieldAfterSessionFile = createSessionSyncYield(files.length);
-    const tasks = files.map((absPath) => async () => {
-      try {
-        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
+    const deleteStaleRows = async () => {
+      if (activePaths === null) {
+        return;
+      }
+
+      const staleRows = existingRows ?? [];
+      const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
+      for (const stale of staleRows) {
+        try {
+          if (activePaths.has(stale.path)) {
+            continue;
           }
-          return;
-        }
-        const entry = await buildSessionEntry(absPath);
-        if (!entry) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
+          deleteFileByPathAndSource.run(stale.path, "sessions");
+          if (deleteVectorRowsByPathAndSource) {
+            try {
+              deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+            } catch {}
           }
-          return;
+          deleteChunksByPathAndSource.run(stale.path, "sessions");
+          if (deleteFtsRowsByPathSourceAndModel) {
+            try {
+              deleteFtsRowsByPathSourceAndModel.run(
+                stale.path,
+                "sessions",
+                this.provider?.model ?? "fts-only",
+              );
+            } catch {}
+          }
+        } finally {
+          await yieldAfterStaleSessionRow();
         }
-        const existingHash = resolveMemorySourceExistingHash({
-          db: this.db,
+      }
+    };
+
+    if (this.batch.enabled) {
+      const dirtyEntries = (
+        await runWithConcurrency(
+          files.map((absPath) => async (): Promise<MemoryIndexEntry | null> => {
+            try {
+              if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+                if (params.progress) {
+                  params.progress.completed += 1;
+                  params.progress.report({
+                    completed: params.progress.completed,
+                    total: params.progress.total,
+                  });
+                }
+                return null;
+              }
+              const entry = await buildSessionEntry(absPath);
+              if (!entry) {
+                if (params.progress) {
+                  params.progress.completed += 1;
+                  params.progress.report({
+                    completed: params.progress.completed,
+                    total: params.progress.total,
+                  });
+                }
+                return null;
+              }
+              const existingHash = resolveMemorySourceExistingHash({
+                db: this.db,
+                source: "sessions",
+                path: entry.path,
+                existingHashes,
+              });
+              if (!params.needsFullReindex && existingHash === entry.hash) {
+                if (params.progress) {
+                  params.progress.completed += 1;
+                  params.progress.report({
+                    completed: params.progress.completed,
+                    total: params.progress.total,
+                  });
+                }
+                this.resetSessionDelta(absPath, entry.size);
+                return null;
+              }
+              return entry;
+            } finally {
+              await yieldAfterSessionFile();
+            }
+          }),
+          this.getIndexConcurrency(),
+        )
+      ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+      const indexItems = dirtyEntries.map(
+        (entry): MemoryIndexWorkItem => ({
+          entry,
           source: "sessions",
-          path: entry.path,
-          existingHashes,
-        });
-        if (!params.needsFullReindex && existingHash === entry.hash) {
+          afterIndex: () => this.resetSessionDelta(entry.absPath, entry.size),
+        }),
+      );
+      if (params.deferIndex) {
+        return { indexItems, finalize: deleteStaleRows };
+      }
+      await this.indexQueuedFiles(indexItems, params.progress);
+    } else {
+      const tasks = files.map((absPath) => async () => {
+        try {
+          if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+            if (params.progress) {
+              params.progress.completed += 1;
+              params.progress.report({
+                completed: params.progress.completed,
+                total: params.progress.total,
+              });
+            }
+            return;
+          }
+          const entry = await buildSessionEntry(absPath);
+          if (!entry) {
+            if (params.progress) {
+              params.progress.completed += 1;
+              params.progress.report({
+                completed: params.progress.completed,
+                total: params.progress.total,
+              });
+            }
+            return;
+          }
+          const existingHash = resolveMemorySourceExistingHash({
+            db: this.db,
+            source: "sessions",
+            path: entry.path,
+            existingHashes,
+          });
+          if (!params.needsFullReindex && existingHash === entry.hash) {
+            if (params.progress) {
+              params.progress.completed += 1;
+              params.progress.report({
+                completed: params.progress.completed,
+                total: params.progress.total,
+              });
+            }
+            this.resetSessionDelta(absPath, entry.size);
+            return;
+          }
+          await this.indexFile(entry, { source: "sessions", content: entry.content });
+          this.resetSessionDelta(absPath, entry.size);
           if (params.progress) {
             params.progress.completed += 1;
             params.progress.report({
@@ -1696,53 +1912,15 @@ export abstract class MemoryManagerSyncOps {
               total: params.progress.total,
             });
           }
-          this.resetSessionDelta(absPath, entry.size);
-          return;
+        } finally {
+          await yieldAfterSessionFile();
         }
-        await this.indexFile(entry, { source: "sessions", content: entry.content });
-        this.resetSessionDelta(absPath, entry.size);
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-      } finally {
-        await yieldAfterSessionFile();
-      }
-    });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
-
-    if (activePaths === null) {
-      // Targeted syncs only refresh the requested transcripts and should not
-      // prune unrelated session rows without a full directory enumeration.
-      return;
+      });
+      await runWithConcurrency(tasks, this.getIndexConcurrency());
     }
 
-    const staleRows = existingRows ?? [];
-    const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
-    for (const stale of staleRows) {
-      try {
-        if (activePaths.has(stale.path)) {
-          continue;
-        }
-        deleteFileByPathAndSource.run(stale.path, "sessions");
-        if (deleteVectorRowsByPathAndSource) {
-          try {
-            deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-          } catch {}
-        }
-        deleteChunksByPathAndSource.run(stale.path, "sessions");
-        if (deleteFtsRowsByPathAndSource) {
-          try {
-            deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
-          } catch {}
-        }
-      } finally {
-        await yieldAfterStaleSessionRow();
-      }
-    }
+    await deleteStaleRows();
+    return this.emptySourceSyncPlan();
   }
 
   private createSyncProgress(
@@ -1910,23 +2088,58 @@ export abstract class MemoryManagerSyncOps {
         ((!hasTargetSessionFiles && params?.force) || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
-      if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-        this.dirty = false;
-      }
-
-      if (shouldSyncSessions) {
-        await this.syncSessionFiles({
-          needsFullReindex,
-          targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
-          progress: progress ?? undefined,
-        });
-        this.sessionsDirty = false;
-        this.sessionsDirtyFiles.clear();
-      } else if (this.sessionsDirtyFiles.size > 0) {
-        this.sessionsDirty = true;
+      if (this.shouldDeferSourceWideBatch()) {
+        const sourcePlans: MemorySourceSyncPlan[] = [];
+        if (shouldSyncMemory) {
+          sourcePlans.push(
+            await this.syncMemoryFiles({
+              needsFullReindex,
+              progress: progress ?? undefined,
+              deferIndex: true,
+            }),
+          );
+        }
+        if (shouldSyncSessions) {
+          sourcePlans.push(
+            await this.syncSessionFiles({
+              needsFullReindex,
+              targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+              progress: progress ?? undefined,
+              deferIndex: true,
+            }),
+          );
+        }
+        await this.executeSourceSyncPlans(sourcePlans, progress ?? undefined);
+        if (shouldSyncMemory) {
+          this.dirty = false;
+        }
+        if (shouldSyncSessions) {
+          this.sessionsDirty = false;
+          this.sessionsDirtyFiles.clear();
+        } else if (this.sessionsDirtyFiles.size > 0) {
+          this.sessionsDirty = true;
+        } else {
+          this.sessionsDirty = false;
+        }
       } else {
-        this.sessionsDirty = false;
+        if (shouldSyncMemory) {
+          await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+          this.dirty = false;
+        }
+
+        if (shouldSyncSessions) {
+          await this.syncSessionFiles({
+            needsFullReindex,
+            targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+            progress: progress ?? undefined,
+          });
+          this.sessionsDirty = false;
+          this.sessionsDirtyFiles.clear();
+        } else if (this.sessionsDirtyFiles.size > 0) {
+          this.sessionsDirty = true;
+        } else {
+          this.sessionsDirty = false;
+        }
       }
     } catch (err) {
       const reason = formatErrorMessage(err);
@@ -2087,19 +2300,53 @@ export abstract class MemoryManagerSyncOps {
             true,
           );
 
-          if (shouldSyncMemory) {
-            await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-            this.dirty = false;
-          }
-
-          if (shouldSyncSessions) {
-            await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-            this.sessionsDirty = false;
-            this.sessionsDirtyFiles.clear();
-          } else if (this.sessionsDirtyFiles.size > 0) {
-            this.sessionsDirty = true;
+          if (this.shouldDeferSourceWideBatch()) {
+            const sourcePlans: MemorySourceSyncPlan[] = [];
+            if (shouldSyncMemory) {
+              sourcePlans.push(
+                await this.syncMemoryFiles({
+                  needsFullReindex: true,
+                  progress: params.progress,
+                  deferIndex: true,
+                }),
+              );
+            }
+            if (shouldSyncSessions) {
+              sourcePlans.push(
+                await this.syncSessionFiles({
+                  needsFullReindex: true,
+                  progress: params.progress,
+                  deferIndex: true,
+                }),
+              );
+            }
+            await this.executeSourceSyncPlans(sourcePlans, params.progress);
+            if (shouldSyncMemory) {
+              this.dirty = false;
+            }
+            if (shouldSyncSessions) {
+              this.sessionsDirty = false;
+              this.sessionsDirtyFiles.clear();
+            } else if (this.sessionsDirtyFiles.size > 0) {
+              this.sessionsDirty = true;
+            } else {
+              this.sessionsDirty = false;
+            }
           } else {
-            this.sessionsDirty = false;
+            if (shouldSyncMemory) {
+              await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+              this.dirty = false;
+            }
+
+            if (shouldSyncSessions) {
+              await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+              this.sessionsDirty = false;
+              this.sessionsDirtyFiles.clear();
+            } else if (this.sessionsDirtyFiles.size > 0) {
+              this.sessionsDirty = true;
+            } else {
+              this.sessionsDirty = false;
+            }
           }
           if (!shouldSyncMemory) {
             this.dirty = false;
@@ -2170,19 +2417,53 @@ export abstract class MemoryManagerSyncOps {
       true,
     );
 
-    if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-      this.dirty = false;
-    }
-
-    if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-      this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-    } else if (this.sessionsDirtyFiles.size > 0) {
-      this.sessionsDirty = true;
+    if (this.shouldDeferSourceWideBatch()) {
+      const sourcePlans: MemorySourceSyncPlan[] = [];
+      if (shouldSyncMemory) {
+        sourcePlans.push(
+          await this.syncMemoryFiles({
+            needsFullReindex: true,
+            progress: params.progress,
+            deferIndex: true,
+          }),
+        );
+      }
+      if (shouldSyncSessions) {
+        sourcePlans.push(
+          await this.syncSessionFiles({
+            needsFullReindex: true,
+            progress: params.progress,
+            deferIndex: true,
+          }),
+        );
+      }
+      await this.executeSourceSyncPlans(sourcePlans, params.progress);
+      if (shouldSyncMemory) {
+        this.dirty = false;
+      }
+      if (shouldSyncSessions) {
+        this.sessionsDirty = false;
+        this.sessionsDirtyFiles.clear();
+      } else if (this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      } else {
+        this.sessionsDirty = false;
+      }
     } else {
-      this.sessionsDirty = false;
+      if (shouldSyncMemory) {
+        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+        this.dirty = false;
+      }
+
+      if (shouldSyncSessions) {
+        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        this.sessionsDirty = false;
+        this.sessionsDirtyFiles.clear();
+      } else if (this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      } else {
+        this.sessionsDirty = false;
+      }
     }
     if (!shouldSyncMemory) {
       this.dirty = false;
