@@ -126,6 +126,9 @@ function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number
   const dirs: CandidateDir[] = [];
   let order = startOrder;
   for (const plugin of index.plugins) {
+    if (!plugin.enabled) {
+      continue;
+    }
     const rootDir = normalizeTrimmedString(plugin.rootDir);
     if (!rootDir) {
       continue;

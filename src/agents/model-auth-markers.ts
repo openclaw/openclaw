@@ -30,7 +30,6 @@ const CORE_NON_SECRET_API_KEY_MARKERS = [
   NON_ENV_SECRETREF_MARKER,
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;
-let knownNonSecretApiKeyMarkersCache: string[] | undefined;
 
 // Legacy marker names kept for backward compatibility with existing models.json files.
 const LEGACY_ENV_API_KEY_MARKERS = [
@@ -54,13 +53,12 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
 }
 
 export function listKnownNonSecretApiKeyMarkers(): string[] {
-  knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
+  return uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
     ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
       normalizeTrimmedStringList(plugin.manifest.nonSecretAuthMarkers),
     ),
   ]);
-  return [...knownNonSecretApiKeyMarkersCache];
 }
 
 export function isAwsSdkAuthMarker(value: string): boolean {

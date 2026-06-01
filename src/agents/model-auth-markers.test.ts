@@ -97,7 +97,7 @@ describe("model auth markers", () => {
       listOpenClawPluginManifestMetadata: () => [
         {
           pluginDir: "/tmp/installed-plugin",
-          origin: "npm",
+          origin: "global",
           manifest: { nonSecretAuthMarkers: ["installed-plugin-marker"] },
         },
       ],
@@ -110,6 +110,34 @@ describe("model auth markers", () => {
       expect(
         new Set(markersModule.listKnownNonSecretApiKeyMarkers()).has("installed-plugin-marker"),
       ).toBe(true);
+    } finally {
+      vi.doUnmock("../plugins/manifest-metadata-scan.js");
+      vi.resetModules();
+      await loadMarkerModules();
+    }
+  });
+
+  it("reflects plugin-owned non-secret marker changes across calls", async () => {
+    let pluginMarkers = ["first-plugin-marker"];
+    vi.doMock("../plugins/manifest-metadata-scan.js", () => ({
+      listOpenClawPluginManifestMetadata: () => [
+        {
+          pluginDir: "/tmp/installed-plugin",
+          origin: "global",
+          manifest: { nonSecretAuthMarkers: pluginMarkers },
+        },
+      ],
+    }));
+    vi.resetModules();
+
+    try {
+      const markersModule = await import("./model-auth-markers.js");
+      expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(true);
+
+      pluginMarkers = ["second-plugin-marker"];
+
+      expect(markersModule.isNonSecretApiKeyMarker("second-plugin-marker")).toBe(true);
+      expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(false);
     } finally {
       vi.doUnmock("../plugins/manifest-metadata-scan.js");
       vi.resetModules();
