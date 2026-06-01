@@ -34,7 +34,8 @@ import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 // We spell out job/patch properties so that LLMs know what fields to send.
-// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
+// Provider projections are normalized separately; the runtime schema still
+// accepts nullable clears that normalizeCronJob* knows how to apply.
 
 const CRON_ACTIONS = [
   "status",
@@ -78,17 +79,36 @@ function deliveryStringSchema(params: { description: string; nullableClears: boo
 }
 
 function deliveryThreadIdSchema(params: { nullableClears: boolean }) {
-  const variants = params.nullableClears
-    ? [Type.String(), Type.Number(), Type.Null()]
-    : [Type.String(), Type.Number()];
-  return Type.Optional(Type.Union(variants, { description: "Thread/topic id" }));
+  const description = params.nullableClears
+    ? "Thread/topic id as a string or number, or null to clear"
+    : "Thread/topic id as a string or number";
+  const variants = [Type.String(), Type.Number()];
+  return Type.Optional(
+    params.nullableClears
+      ? Type.Union([...variants, Type.Null()], { description })
+      : Type.Union(variants, { description }),
+  );
 }
 
 function failureDestinationModeSchema(params: { nullableClears: boolean }) {
-  const variants = params.nullableClears
-    ? [Type.Literal("announce"), Type.Literal("webhook"), Type.Null()]
-    : [Type.Literal("announce"), Type.Literal("webhook")];
-  return Type.Optional(Type.Union(variants));
+  const description = params.nullableClears
+    ? "Failure destination mode, or null to clear"
+    : "Failure destination mode";
+  const modeSchema = {
+    type: "string",
+    enum: ["announce", "webhook"],
+  };
+  return Type.Optional(
+    params.nullableClears
+      ? Type.Unsafe<"announce" | "webhook" | null>({
+          anyOf: [modeSchema, { type: "null" }],
+          description,
+        })
+      : Type.Unsafe<"announce" | "webhook">({
+          ...modeSchema,
+          description,
+        }),
+  );
 }
 
 function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
@@ -147,24 +167,24 @@ function createCronPayloadSchema(): TSchema {
 }
 
 function cronDeliverySchema(params: { nullableClears: boolean }) {
-  const failureDestinationObject = Type.Object(
-    {
-      channel: deliveryStringSchema({
-        description: "Failure delivery channel",
-        nullableClears: params.nullableClears,
-      }),
-      to: deliveryStringSchema({
-        description: "Failure delivery target",
-        nullableClears: params.nullableClears,
-      }),
-      accountId: deliveryStringSchema({
-        description: "Failure delivery account",
-        nullableClears: params.nullableClears,
-      }),
-      mode: failureDestinationModeSchema({ nullableClears: params.nullableClears }),
-    },
-    { additionalProperties: true },
-  );
+  const failureDestinationProperties = {
+    channel: deliveryStringSchema({
+      description: "Failure delivery channel",
+      nullableClears: params.nullableClears,
+    }),
+    to: deliveryStringSchema({
+      description: "Failure delivery target",
+      nullableClears: params.nullableClears,
+    }),
+    accountId: deliveryStringSchema({
+      description: "Failure delivery account",
+      nullableClears: params.nullableClears,
+    }),
+    mode: failureDestinationModeSchema({ nullableClears: params.nullableClears }),
+  };
+  const failureDestinationObject = Type.Object(failureDestinationProperties, {
+    additionalProperties: true,
+  });
 
   return Type.Optional(
     Type.Object(
@@ -186,7 +206,10 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
         }),
         failureDestination: params.nullableClears
           ? Type.Optional(
-              Type.Union([failureDestinationObject, Type.Null()], {
+              Type.Unsafe<Record<string, unknown> | null>({
+                type: ["object", "null"],
+                properties: failureDestinationProperties,
+                additionalProperties: true,
                 description: "Failure destination, or null to clear",
               }),
             )
