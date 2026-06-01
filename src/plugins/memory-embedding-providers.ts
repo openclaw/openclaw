@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import type { EmbeddingInput } from "../memory-host-sdk/host/embedding-inputs.js";
+import { openAICompatibleMemoryEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 export type MemoryEmbeddingBatchChunk = {
   text: string;
@@ -101,6 +102,13 @@ export type RegisteredMemoryEmbeddingProvider = {
   ownerPluginId?: string;
 };
 
+const CORE_MEMORY_EMBEDDING_PROVIDERS: RegisteredMemoryEmbeddingProvider[] = [
+  {
+    adapter: openAICompatibleMemoryEmbeddingProviderAdapter,
+    ownerPluginId: "core",
+  },
+];
+
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 
 function getMemoryEmbeddingProviders(): Map<string, RegisteredMemoryEmbeddingProvider> {
@@ -127,15 +135,24 @@ export function registerMemoryEmbeddingProvider(
 export function getRegisteredMemoryEmbeddingProvider(
   id: string,
 ): RegisteredMemoryEmbeddingProvider | undefined {
-  return getMemoryEmbeddingProviders().get(id);
+  return (
+    getMemoryEmbeddingProviders().get(id) ??
+    CORE_MEMORY_EMBEDDING_PROVIDERS.find((entry) => entry.adapter.id === id)
+  );
 }
 
 export function getMemoryEmbeddingProvider(id: string): MemoryEmbeddingProviderAdapter | undefined {
-  return getMemoryEmbeddingProviders().get(id)?.adapter;
+  return getRegisteredMemoryEmbeddingProvider(id)?.adapter;
 }
 
 export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
-  return Array.from(getMemoryEmbeddingProviders().values());
+  const merged = new Map<string, RegisteredMemoryEmbeddingProvider>(
+    CORE_MEMORY_EMBEDDING_PROVIDERS.map((entry) => [entry.adapter.id, entry]),
+  );
+  for (const entry of getMemoryEmbeddingProviders().values()) {
+    merged.set(entry.adapter.id, entry);
+  }
+  return Array.from(merged.values());
 }
 
 export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[] {

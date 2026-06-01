@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { MemoryEmbeddingBatchOptions } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import {
   extractBatchErrorMessage,
   formatUnavailableBatchError,
@@ -40,6 +39,13 @@ import type {
   EmbeddingProviderCreateOptions,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type {
+  MemoryEmbeddingBatchOptions,
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCreateOptions,
+  MemoryEmbeddingProviderRuntime,
+} from "./memory-embedding-providers.js";
 
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
@@ -79,10 +85,6 @@ type OpenAICompatibleBatchStatus = EmbeddingBatchStatus & {
   };
 };
 type OpenAICompatibleBatchOutputLine = ProviderBatchOutputLine;
-type OpenAICompatibleEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
-  sourceWideBatchEmbed: true;
-  batchEmbed: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
-};
 
 const OPENAI_COMPATIBLE_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_COMPATIBLE_BATCH_MAX_REQUESTS = 50000;
@@ -766,51 +768,130 @@ export async function createOpenAICompatibleEmbeddingProvider(
   };
 }
 
+function createOpenAICompatibleRuntime(
+  client: OpenAICompatibleEmbeddingClient,
+): EmbeddingProviderRuntime {
+  const cacheHeaders = sanitizeCacheHeaders(client.headers);
+  return {
+    id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+    inlineBatchTimeoutMs: 10 * 60_000,
+    cacheKeyData: {
+      provider: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+      baseUrl: client.baseUrl,
+      model: client.model,
+      ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+      ...(client.inputType ? { inputType: client.inputType } : {}),
+      ...(client.queryInputType ? { queryInputType: client.queryInputType } : {}),
+      ...(client.documentInputType ? { documentInputType: client.documentInputType } : {}),
+      ...(cacheHeaders ? { headers: cacheHeaders } : {}),
+    },
+  };
+}
+
+function createOpenAICompatibleMemoryRuntime(
+  client: OpenAICompatibleEmbeddingClient,
+): MemoryEmbeddingProviderRuntime {
+  return {
+    ...createOpenAICompatibleRuntime(client),
+    sourceWideBatchEmbed: true,
+    batchEmbed: async (batch) => {
+      const inputType = client.documentInputType ?? client.inputType;
+      const byCustomId = await runOpenAICompatibleEmbeddingBatches({
+        client,
+        agentId: batch.agentId,
+        requests: batch.chunks.map((chunk, index) => ({
+          custom_id: String(index),
+          method: "POST",
+          url: EMBEDDING_BATCH_ENDPOINT,
+          body: {
+            model: client.model,
+            input: chunk.text,
+            ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+            ...(inputType ? { input_type: inputType } : {}),
+          },
+        })),
+        wait: batch.wait,
+        concurrency: batch.concurrency,
+        pollIntervalMs: batch.pollIntervalMs,
+        timeoutMs: batch.timeoutMs,
+        debug: batch.debug,
+      });
+      return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
+    },
+  };
+}
+
+function createOpenAICompatibleMemoryProvider(
+  provider: EmbeddingProvider,
+): MemoryEmbeddingProvider {
+  return {
+    id: provider.id,
+    model: provider.model,
+    embedQuery: async (text, options) =>
+      await provider.embed(text, {
+        ...options,
+        inputType: "query",
+      }),
+    embedBatch: async (texts, options) =>
+      await provider.embedBatch(texts, {
+        ...options,
+        inputType: "document",
+      }),
+    embedBatchInputs: async (inputs, options) =>
+      await provider.embedBatch(inputs, {
+        ...options,
+        inputType: "document",
+      }),
+    ...(provider.close ? { close: provider.close } : {}),
+  };
+}
+
+function createOpenAICompatibleGenericOptions(
+  options: MemoryEmbeddingProviderCreateOptions,
+): EmbeddingProviderCreateOptions {
+  return {
+    config: options.config,
+    ...(options.agentDir ? { agentDir: options.agentDir } : {}),
+    ...(options.provider ? { provider: options.provider } : {}),
+    ...(options.remote ? { remote: options.remote } : {}),
+    model: options.model,
+    ...(options.inputType ? { inputType: options.inputType } : {}),
+    ...(options.queryInputType ? { queryInputType: options.queryInputType } : {}),
+    ...(options.documentInputType ? { documentInputType: options.documentInputType } : {}),
+    ...(options.local
+      ? {
+          local: {
+            ...(options.local.modelPath ? { modelPath: options.local.modelPath } : {}),
+            ...(options.local.modelCacheDir ? { modelCacheDir: options.local.modelCacheDir } : {}),
+          },
+        }
+      : {}),
+    ...(typeof options.outputDimensionality === "number"
+      ? { dimensions: options.outputDimensionality }
+      : {}),
+    ...(options.taskType ? { taskType: options.taskType } : {}),
+  };
+}
+
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",
   create: async (options) => {
     const { provider, client } = await createOpenAICompatibleEmbeddingProvider(options);
-    const cacheHeaders = sanitizeCacheHeaders(client.headers);
-    const runtime: OpenAICompatibleEmbeddingProviderRuntime = {
-      id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
-      inlineBatchTimeoutMs: 10 * 60_000,
-      sourceWideBatchEmbed: true,
-      batchEmbed: async (batch) => {
-        const inputType = client.documentInputType ?? client.inputType;
-        const byCustomId = await runOpenAICompatibleEmbeddingBatches({
-          client,
-          agentId: batch.agentId,
-          requests: batch.chunks.map((chunk, index) => ({
-            custom_id: String(index),
-            method: "POST",
-            url: EMBEDDING_BATCH_ENDPOINT,
-            body: {
-              model: client.model,
-              input: chunk.text,
-              ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
-              ...(inputType ? { input_type: inputType } : {}),
-            },
-          })),
-          wait: batch.wait,
-          concurrency: batch.concurrency,
-          pollIntervalMs: batch.pollIntervalMs,
-          timeoutMs: batch.timeoutMs,
-          debug: batch.debug,
-        });
-        return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
-      },
-      cacheKeyData: {
-        provider: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
-        baseUrl: client.baseUrl,
-        model: client.model,
-        ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
-        ...(client.inputType ? { inputType: client.inputType } : {}),
-        ...(client.queryInputType ? { queryInputType: client.queryInputType } : {}),
-        ...(client.documentInputType ? { documentInputType: client.documentInputType } : {}),
-        ...(cacheHeaders ? { headers: cacheHeaders } : {}),
-      },
+    return { provider, runtime: createOpenAICompatibleRuntime(client) };
+  },
+};
+
+export const openAICompatibleMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
+  id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  transport: "remote",
+  create: async (options) => {
+    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(
+      createOpenAICompatibleGenericOptions(options),
+    );
+    return {
+      provider: createOpenAICompatibleMemoryProvider(provider),
+      runtime: createOpenAICompatibleMemoryRuntime(client),
     };
-    return { provider, runtime };
   },
 };

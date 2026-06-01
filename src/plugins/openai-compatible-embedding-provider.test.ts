@@ -1,12 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import type { MemoryEmbeddingBatchOptions } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
+import type {
+  MemoryEmbeddingBatchOptions,
+  MemoryEmbeddingProviderCreateOptions,
+} from "./memory-embedding-providers.js";
 import {
   createOpenAICompatibleEmbeddingProvider,
   openAICompatibleEmbeddingProviderAdapter,
+  openAICompatibleMemoryEmbeddingProviderAdapter,
 } from "./openai-compatible-embedding-provider.js";
 
 type CapturedRequest = {
@@ -42,6 +46,17 @@ function createOptions(
 ): EmbeddingProviderCreateOptions {
   return {
     config: {} as EmbeddingProviderCreateOptions["config"],
+    provider: "openai-compatible",
+    model: "text-embedding-bge-m3",
+    ...overrides,
+  };
+}
+
+function createMemoryOptions(
+  overrides: Partial<MemoryEmbeddingProviderCreateOptions> = {},
+): MemoryEmbeddingProviderCreateOptions {
+  return {
+    config: {} as MemoryEmbeddingProviderCreateOptions["config"],
     provider: "openai-compatible",
     model: "text-embedding-bge-m3",
     ...overrides,
@@ -228,7 +243,7 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
-  it("registers as a generic embedding provider with source-wide batch runtime", async () => {
+  it("registers as a generic embedding provider without memory batch runtime fields", async () => {
     expect(openAICompatibleEmbeddingProviderAdapter.id).toBe("openai-compatible");
     expect(openAICompatibleEmbeddingProviderAdapter.transport).toBe("remote");
     expect(openAICompatibleEmbeddingProviderAdapter.authProviderId).toBeUndefined();
@@ -241,10 +256,9 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     );
 
-    const runtime = result.runtime as OpenAICompatibleBatchRuntime | undefined;
     expect(result.provider?.id).toBe("openai-compatible");
-    expect(runtime?.sourceWideBatchEmbed).toBe(true);
-    expect(runtime?.batchEmbed).toEqual(expect.any(Function));
+    expect(result.runtime).not.toHaveProperty("sourceWideBatchEmbed");
+    expect(result.runtime).not.toHaveProperty("batchEmbed");
     expect(result.runtime?.cacheKeyData).toMatchObject({
       provider: "openai-compatible",
       baseUrl: server.baseUrl,
@@ -284,10 +298,10 @@ describe("openai-compatible generic embedding provider", () => {
 
   it("runs OpenAI-compatible remote batch embeddings through batch endpoints", async () => {
     const server = await startBatchServer();
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(
-      createOptions({
+    const result = await openAICompatibleMemoryEmbeddingProviderAdapter.create(
+      createMemoryOptions({
         model: "mistral/mistral-embed",
-        dimensions: 128,
+        outputDimensionality: 128,
         documentInputType: "document",
         remote: { baseUrl: server.baseUrl },
       }),
@@ -330,8 +344,8 @@ describe("openai-compatible generic embedding provider", () => {
       statusResponses: [{ id: "batch-1", status: "completed", output_file_id: "file-output" }],
     });
     const debugMessages: string[] = [];
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(
-      createOptions({
+    const result = await openAICompatibleMemoryEmbeddingProviderAdapter.create(
+      createMemoryOptions({
         model: "mistral/mistral-embed",
         remote: { baseUrl: server.baseUrl },
       }),
@@ -375,8 +389,8 @@ describe("openai-compatible generic embedding provider", () => {
       ],
     });
     const debugMessages: string[] = [];
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(
-      createOptions({
+    const result = await openAICompatibleMemoryEmbeddingProviderAdapter.create(
+      createMemoryOptions({
         model: "mistral/mistral-embed",
         remote: { baseUrl: server.baseUrl },
       }),
@@ -426,8 +440,8 @@ describe("openai-compatible generic embedding provider", () => {
       ],
     });
     const debugMessages: string[] = [];
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(
-      createOptions({
+    const result = await openAICompatibleMemoryEmbeddingProviderAdapter.create(
+      createMemoryOptions({
         model: "mistral/mistral-embed",
         remote: { baseUrl: server.baseUrl },
       }),

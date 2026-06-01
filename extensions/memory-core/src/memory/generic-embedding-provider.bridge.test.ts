@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
-  EmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
   createPluginRegistryFixture,
@@ -26,11 +25,6 @@ type CapturedCall = {
   kind: "embed" | "embedBatch";
   input: EmbeddingInput | EmbeddingInput[];
   options: EmbeddingProviderCallOptions | undefined;
-};
-
-type GenericBatchRuntime = EmbeddingProviderRuntime & {
-  sourceWideBatchEmbed: true;
-  batchEmbed: (batch: { chunks: Array<{ text: string }> }) => Promise<number[][]>;
 };
 
 let embeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
@@ -106,14 +100,12 @@ describe("memory-core generic embedding provider bridge", () => {
                 id: "virtual-generic",
                 inlineQueryTimeoutMs: 1234,
                 inlineBatchTimeoutMs: 5678,
-                sourceWideBatchEmbed: true,
-                batchEmbed: async (batch) => batch.chunks.map((_chunk, index) => [index, 42]),
                 cacheKeyData: {
                   provider: "virtual-generic",
                   model: options.model,
                   dimensions: options.dimensions,
                 },
-              } as GenericBatchRuntime,
+              },
             };
           },
         });
@@ -126,7 +118,9 @@ describe("memory-core generic embedding provider bridge", () => {
     expect(registry.registry.embeddingProviders.map((entry) => entry.provider.id)).toEqual([
       "virtual-generic",
     ]);
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
+    expect(listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter.id)).not.toContain(
+      "virtual-generic",
+    );
 
     const result = await createEmbeddingProvider(createOptions(config));
 
@@ -140,29 +134,15 @@ describe("memory-core generic embedding provider bridge", () => {
       id: "virtual-generic",
       inlineQueryTimeoutMs: 1234,
       inlineBatchTimeoutMs: 5678,
-      sourceWideBatchEmbed: true,
-      batchEmbed: expect.any(Function),
       cacheKeyData: {
         provider: "virtual-generic",
         model: "virtual-model",
         dimensions: 7,
       },
     });
+    expect(result.runtime).not.toHaveProperty("sourceWideBatchEmbed");
+    expect(result.runtime).not.toHaveProperty("batchEmbed");
 
-    await expect(
-      result.runtime?.batchEmbed?.({
-        agentId: "main",
-        chunks: [{ text: "doc-a" }, { text: "doc-b" }],
-        wait: true,
-        concurrency: 1,
-        pollIntervalMs: 0,
-        timeoutMs: 1000,
-        debug: () => {},
-      }),
-    ).resolves.toEqual([
-      [0, 42],
-      [1, 42],
-    ]);
     await expect(result.provider?.embedQuery("query")).resolves.toEqual([1, 2, 3]);
     await expect(result.provider?.embedBatch(["doc-a", "doc-b"])).resolves.toEqual([
       [0, 7],

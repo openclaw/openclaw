@@ -3120,7 +3120,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toContain("active");
   });
 
   it("does not replace active embedding providers during non-activating loads", () => {
@@ -3315,7 +3315,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryCorpusSupplements()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
+    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).not.toContain(
+      "failing-memory",
+    );
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {

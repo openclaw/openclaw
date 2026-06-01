@@ -13,6 +13,9 @@ import {
 
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 const INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS = listRegisteredMemoryEmbeddingProviders();
+const INITIAL_MEMORY_EMBEDDING_PROVIDER_IDS = INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS.map(
+  (entry) => entry.adapter.id,
+);
 
 function createAdapter(id: string): MemoryEmbeddingProviderAdapter {
   return {
@@ -109,7 +112,7 @@ describe("memory embedding provider registry", () => {
     registerMemoryEmbeddingProvider(beta);
 
     expectMemoryEmbeddingProviderState({
-      expectedIds: ["alpha", "beta"],
+      expectedIds: [...INITIAL_MEMORY_EMBEDDING_PROVIDER_IDS, "alpha", "beta"],
       expectedCurrent: { id: "alpha", adapter: alpha },
     });
   });
@@ -144,7 +147,9 @@ describe("memory embedding provider registry", () => {
     expectRegisteredProviderSnapshotCase({
       entry,
       setup,
-      ...(expectList ? { expectedList: [entry] } : {}),
+      ...(expectList
+        ? { expectedList: [...INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS, entry] }
+        : {}),
     });
   });
 
@@ -153,7 +158,7 @@ describe("memory embedding provider registry", () => {
 
     clearMemoryEmbeddingProviders();
 
-    expectMemoryEmbeddingProviderIds([]);
+    expectMemoryEmbeddingProviderIds(INITIAL_MEMORY_EMBEDDING_PROVIDER_IDS);
   });
 
   it("stores adapters in a process-global singleton map", () => {
