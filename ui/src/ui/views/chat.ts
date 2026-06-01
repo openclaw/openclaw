@@ -406,6 +406,11 @@ interface ChatEphemeralState {
   historyRenderLimit: number;
   historyRenderLastScrollTop: number | null;
   historyRenderExpansionFrame: number | null;
+  historyRenderAnchorAdjustment: {
+    scrollHeight: number;
+    scrollTop: number;
+  } | null;
+  historyRenderAnchorFrame: number | null;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -426,6 +431,8 @@ function createChatEphemeralState(): ChatEphemeralState {
     historyRenderLimit: 0,
     historyRenderLastScrollTop: null,
     historyRenderExpansionFrame: null,
+    historyRenderAnchorAdjustment: null,
+    historyRenderAnchorFrame: null,
   };
 }
 
@@ -532,6 +539,9 @@ export function resetChatViewState() {
   if (vs.historyRenderExpansionFrame != null) {
     cancelAnimationFrame(vs.historyRenderExpansionFrame);
   }
+  if (vs.historyRenderAnchorFrame != null) {
+    cancelAnimationFrame(vs.historyRenderAnchorFrame);
+  }
   Object.assign(vs, createChatEphemeralState());
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
@@ -623,8 +633,29 @@ function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => v
   if (vs.historyRenderLimit >= cap) {
     return;
   }
+  vs.historyRenderAnchorAdjustment = {
+    scrollHeight: target.scrollHeight,
+    scrollTop,
+  };
+  scheduleChatHistoryRenderAnchorPreservation(target);
   vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH);
   requestUpdate();
+}
+
+function scheduleChatHistoryRenderAnchorPreservation(thread: HTMLElement) {
+  const adjustment = vs.historyRenderAnchorAdjustment;
+  if (!adjustment || vs.historyRenderAnchorFrame != null) {
+    return;
+  }
+  vs.historyRenderAnchorFrame = requestAnimationFrame(() => {
+    vs.historyRenderAnchorFrame = null;
+    vs.historyRenderAnchorAdjustment = null;
+    const heightDelta = thread.scrollHeight - adjustment.scrollHeight;
+    if (heightDelta <= 0) {
+      return;
+    }
+    thread.scrollTop = adjustment.scrollTop + heightDelta;
+  });
 }
 
 function scheduleChatHistoryRenderWindowFill(
@@ -1520,13 +1551,14 @@ export function renderChat(props: ChatProps) {
       class="chat-thread"
       role="log"
       aria-live="polite"
-      ${ref((element) =>
+      ${ref((element) => {
+        const threadElement = element instanceof HTMLElement ? element : null;
         scheduleChatHistoryRenderWindowFill(
-          element instanceof HTMLElement ? element : null,
+          threadElement,
           requestUpdate,
           props.onScrollToBottom ?? (() => {}),
-        ),
-      )}
+        );
+      })}
       @scroll=${handleChatThreadScroll}
       @click=${handleCodeBlockCopy}
     >

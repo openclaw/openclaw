@@ -649,6 +649,86 @@ describe("chat history render window", () => {
     );
   });
 
+  it("preserves the visible anchor across repeated top-scroll expansion", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    Object.defineProperties(thread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+    });
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 600 });
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 60,
+      }),
+    );
+    const firstExpandedThread = requireElement(
+      container,
+      ".chat-thread",
+      "chat thread",
+    ) as HTMLElement;
+    Object.defineProperties(firstExpandedThread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+    expect(firstExpandedThread.scrollTop).toBe(300);
+
+    firstExpandedThread.scrollTop = 0;
+    firstExpandedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 80,
+      }),
+    );
+    const secondExpandedThread = requireElement(
+      container,
+      ".chat-thread",
+      "chat thread",
+    ) as HTMLElement;
+    Object.defineProperties(secondExpandedThread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 900 },
+    });
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+    expect(secondExpandedThread.scrollTop).toBe(300);
+    expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+    expect(onChatScroll).toHaveBeenCalledTimes(2);
+  });
+
   it("does not expand the history render window for bottom auto-scrolls inside the top threshold", () => {
     const messages = Array.from({ length: 80 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
