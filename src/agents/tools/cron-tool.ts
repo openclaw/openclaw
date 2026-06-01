@@ -64,11 +64,13 @@ function isMissingOrEmptyObject(value: unknown): boolean {
 }
 
 function nullableStringSchema(description: string) {
-  return Type.Optional(Type.Union([Type.String(), Type.Null()], { description }));
+  // Plain optional string for OpenAPI 3.0 compat; null semantics handled at runtime.
+  return Type.Optional(Type.String({ description }));
 }
 
 function nullableStringArraySchema(description: string) {
-  return Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()], { description }));
+  // Plain optional array for OpenAPI 3.0 compat; null semantics handled at runtime.
+  return Type.Optional(Type.Array(Type.String(), { description }));
 }
 
 function deliveryStringSchema(params: { description: string; nullableClears: boolean }) {
