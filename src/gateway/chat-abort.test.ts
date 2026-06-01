@@ -360,6 +360,7 @@ describe("resolveInFlightRunSnapshot", () => {
       aborted?: boolean;
       projectSessionActive?: boolean;
       startedAtMs?: number;
+      kind?: ChatAbortControllerEntry["kind"];
     },
   ): ChatAbortControllerEntry => {
     const now = Date.now();
@@ -376,6 +377,7 @@ describe("resolveInFlightRunSnapshot", () => {
       startedAtMs,
       expiresAtMs: startedAtMs + 10_000,
       projectSessionActive: opts?.projectSessionActive ?? true,
+      kind: opts?.kind,
     };
   };
 
@@ -444,6 +446,18 @@ describe("resolveInFlightRunSnapshot", () => {
         }),
       ).toBeUndefined();
     }
+  });
+
+  it("ignores hidden agent runs that are not visible chat sends", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([
+          ["run-agent", inFlightEntry("agent:main:s", { kind: "agent" })],
+        ]),
+        chatRunBuffers: new Map([["run-agent", "hidden partial"]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toBeUndefined();
   });
 
   it("treats an entry with undefined projectSessionActive as active (sessions.list contract)", () => {

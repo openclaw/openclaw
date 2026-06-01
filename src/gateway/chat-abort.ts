@@ -175,9 +175,10 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
  * key, so accept a match on EITHER `requestedSessionKey` or `canonicalSessionKey`,
  * scoping the shared "global" session by agent. Only runs still projected active
  * (`projectSessionActive !== false`, matching sessions.list; the terminal lifecycle
- * flips it to false) and not aborted are returned, so a finalized run — already in
- * persisted history — is not duplicated and a stale run cannot leave the client
- * stuck in `streaming`.
+ * flips it to false), not aborted, and visible chat-send runs are returned, so a
+ * finalized run — already in persisted history — is not duplicated and hidden
+ * agent runs cannot be adopted by chat clients that will not receive their final
+ * events.
  */
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -218,7 +219,11 @@ export function resolveInFlightRunSnapshot(params: {
     // Active unless explicitly projected inactive — mirrors sessions.list's
     // collectTrackedActiveSessionRuns (`projectSessionActive !== false`), so a run
     // that indicator shows active is never silently dropped here.
-    if (entry.projectSessionActive === false || entry.controller.signal.aborted) {
+    if (
+      entry.projectSessionActive === false ||
+      entry.controller.signal.aborted ||
+      entry.kind === "agent"
+    ) {
       continue;
     }
     if (
