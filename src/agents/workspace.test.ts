@@ -37,6 +37,7 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  readWorkspaceFileWithGuards,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   WORKSPACE_VANISHED_ERROR_CODE,
@@ -54,6 +55,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();
   resetLegacyWorkspaceStateCheckForTest();
   await testState?.cleanup();
@@ -1131,6 +1134,74 @@ describe("loadWorkspaceBootstrapFiles", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+});
+
+describe("readWorkspaceFileWithGuards", () => {
+  it("reads workspace file content through the async fd path", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "workspace rules", "utf-8");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "workspace rules" });
+  });
+
+  it("returns cached content when the file identity still matches", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-cache-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "cached rules", "utf-8");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "cached rules" });
+    const readSpy = vi.spyOn(syncFs, "read");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "cached rules" });
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("closes the fd when an async read fails", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-error-");
+    const filePath = path.join(tempDir, DEFAULT_TOOLS_FILENAME);
+    await fs.writeFile(filePath, "tool notes", "utf-8");
+    const readError = new Error("read failed");
+    vi.spyOn(syncFs, "read").mockImplementation(((
+      fd,
+      buffer,
+      offset,
+      length,
+      position,
+      callback,
+    ) => {
+      void fd;
+      void buffer;
+      void offset;
+      void length;
+      void position;
+      callback(readError, 0, buffer);
+    }) as typeof syncFs.read);
+    const closeSpy = vi.spyOn(syncFs, "close");
+
+    const result = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: tempDir,
+    });
+
+    expect(result).toStrictEqual({ ok: false, reason: "io", error: readError });
+    expect(closeSpy).toHaveBeenCalled();
   });
 });
 

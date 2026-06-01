@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -62,6 +63,20 @@ const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
+const EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES = new Set([
+  ".git",
+  "node_modules",
+  ".openclaw",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  "__pycache__",
+  ".cache",
+]);
+const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
+const EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT = 20_000;
+const EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT = 128;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -77,7 +92,19 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
-async function readWorkspaceFileWithGuards(params: {
+async function closeFdAsync(fd: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    syncFs.close(fd, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
@@ -85,9 +112,11 @@ async function readWorkspaceFileWithGuards(params: {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
     // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
-    // each attempt uses a fresh fd (retrying readFileSync on the same fd could
+    // each attempt uses a fresh fd (retrying the read on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
+    // Use the async fd read/close helpers so the bootstrap reader never blocks
+    // the event loop during embedded_run bootstrap-context.
     return await retryAsync(
       async () => {
         const opened = await openRootFile({
@@ -110,7 +139,7 @@ async function readWorkspaceFileWithGuards(params: {
         const identity = workspaceFileIdentity(opened.stat, opened.path);
         const cached = workspaceFileCache.get(params.filePath);
         if (cached && cached.identity === identity) {
-          syncFs.closeSync(opened.fd);
+          await closeFdAsync(opened.fd).catch(() => {});
           return { ok: true, content: cached.content };
         }
 
@@ -119,7 +148,9 @@ async function readWorkspaceFileWithGuards(params: {
           workspaceFileCache.set(params.filePath, { content, identity });
           return { ok: true, content };
         } finally {
-          syncFs.closeSync(opened.fd);
+          // Suppress close errors to avoid masking the original read error
+          // or causing unhandled rejections on NFS/FUSE filesystems.
+          await closeFdAsync(opened.fd).catch(() => {});
         }
       },
       {
@@ -965,30 +996,30 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    if (
-      entry.name === DEFAULT_MEMORY_FILENAME &&
-      !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
-    ) {
-      continue;
-    }
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
-    if (loaded.ok) {
-      result.push({
-        name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
+  const results = await Promise.all(
+    entries.map(async (entry): Promise<WorkspaceBootstrapFile | null> => {
+      if (
+        entry.name === DEFAULT_MEMORY_FILENAME &&
+        !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
+      ) {
+        return null;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
       });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
-    }
-  }
-  return result;
+      if (loaded.ok) {
+        return {
+          name: entry.name,
+          path: entry.filePath,
+          content: loaded.content,
+          missing: false,
+        };
+      }
+      return { name: entry.name, path: entry.filePath, missing: true };
+    }),
+  );
+  return results.filter((file): file is WorkspaceBootstrapFile => file !== null);
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
@@ -1039,13 +1070,23 @@ function resolveGlobWalkRoot(pattern: string): string {
   return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
 }
 
+function hasIgnoredExtraBootstrapDir(relativePath: string): boolean {
+  return normalizeWorkspacePatternPath(relativePath)
+    .split("/")
+    .some((segment) => EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(segment));
+}
+
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
 ): AsyncGenerator<string> {
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
+  let visitedEntries = 0;
   while (stack.length > 0) {
     const currentRelativeDir = stack.pop() ?? "";
+    if (hasIgnoredExtraBootstrapDir(currentRelativeDir)) {
+      continue;
+    }
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
     const relativeToWorkspace = path.relative(workspaceDir, currentDir);
     if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
@@ -1060,10 +1101,20 @@ async function* walkWorkspaceFiles(
     }
 
     for (const entry of entries) {
+      visitedEntries += 1;
+      if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
+        await yieldImmediate();
+      }
+      if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+        return;
+      }
       const childRelativePath = currentRelativeDir
         ? path.join(currentRelativeDir, entry.name)
         : entry.name;
       if (entry.isDirectory()) {
+        if (EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(entry.name)) {
+          continue;
+        }
         stack.push(childRelativePath);
         continue;
       }
@@ -1081,8 +1132,27 @@ async function resolveExtraBootstrapPatternPaths(
   if (typeof fs.glob === "function") {
     try {
       const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+      let visitedEntries = 0;
+      for await (const match of fs.glob(pattern, {
+        cwd: workspaceDir,
+        exclude: (candidate) => hasIgnoredExtraBootstrapDir(candidate),
+      })) {
+        visitedEntries += 1;
+        if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
+          await yieldImmediate();
+        }
+        if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+          break;
+        }
+        // Belt-and-suspenders: fs.glob exclude support varies by Node version,
+        // so re-check ignored dirs on each yielded match.
+        if (hasIgnoredExtraBootstrapDir(match)) {
+          continue;
+        }
         matches.push(match);
+        if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
+          break;
+        }
       }
       return matches;
     } catch {
@@ -1100,6 +1170,9 @@ async function resolveExtraBootstrapPatternPaths(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
   )) {
+    if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
+      break;
+    }
     if (path.matchesGlob(candidate, normalizedPattern)) {
       matches.push(candidate);
     }
