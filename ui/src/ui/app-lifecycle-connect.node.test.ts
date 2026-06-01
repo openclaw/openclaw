@@ -1,11 +1,14 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatQueueItem } from "./ui-types.ts";
 
-const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock } = vi.hoisted(() => ({
-  applySettingsFromUrlMock: vi.fn(),
-  connectGatewayMock: vi.fn(),
-  loadBootstrapMock: vi.fn(),
-}));
+const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock, restoreComposerMock } =
+  vi.hoisted(() => ({
+    applySettingsFromUrlMock: vi.fn(),
+    connectGatewayMock: vi.fn(),
+    loadBootstrapMock: vi.fn(),
+    restoreComposerMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
+  }));
 
 vi.mock("./app-gateway.ts", () => ({
   connectGateway: connectGatewayMock,
@@ -13,6 +16,11 @@ vi.mock("./app-gateway.ts", () => ({
 
 vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadBootstrapMock,
+}));
+
+vi.mock("./chat/composer-persistence.ts", () => ({
+  persistChatComposerState: vi.fn(),
+  restoreChatComposerState: restoreComposerMock,
 }));
 
 vi.mock("./app-settings.ts", () => ({
@@ -70,6 +78,15 @@ function createHost() {
     serverVersion: null,
     chatHasAutoScrolled: false,
     chatManualRefreshInFlight: false,
+    sessionKey: "main",
+    chatMessage: "",
+    chatQueue: [] as ChatQueueItem[],
+    pendingGatewayUrl: null as string | null,
+    chatComposerProvisionalRestore: null as {
+      sessionKey: string;
+      chatMessage: string;
+      chatQueue: ChatQueueItem[];
+    } | null,
     chatLoading: false,
     chatMessages: [],
     chatToolMessages: [],
@@ -87,6 +104,8 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    restoreComposerMock.mockReset();
+    restoreComposerMock.mockReturnValue(false);
     startNodesPollingMock.mockReset();
     scheduleChatScrollMock.mockReset();
     vi.stubGlobal("window", {
@@ -140,6 +159,43 @@ describe("handleConnected", () => {
     expect(
       (host as typeof host & { controlUiBootstrapReady?: Promise<void> }).controlUiBootstrapReady,
     ).toBe(bootstrap);
+  });
+
+  it("restores the local composer before starting the gateway connect", () => {
+    loadBootstrapMock.mockResolvedValue(undefined);
+    restoreComposerMock.mockImplementationOnce((target: unknown) => {
+      const hostTarget = target as ReturnType<typeof createHost>;
+      hostTarget.chatMessage = "offline draft";
+      hostTarget.chatQueue = [{ id: "queued-1", text: "retry me", createdAt: 1 }];
+      return true;
+    });
+    const host = createHost();
+
+    handleConnected(host as never);
+
+    expect(restoreComposerMock).toHaveBeenCalledWith(host, { preserveCurrent: true });
+    expect(restoreComposerMock.mock.invocationCallOrder[0]).toBeLessThan(
+      connectGatewayMock.mock.invocationCallOrder[0],
+    );
+    expect(host.chatComposerProvisionalRestore).toEqual({
+      sessionKey: "main",
+      chatMessage: "offline draft",
+      chatQueue: [{ id: "queued-1", text: "retry me", createdAt: 1 }],
+    });
+  });
+
+  it("does not restore old-gateway composer state during a pending gateway switch", () => {
+    loadBootstrapMock.mockResolvedValue(undefined);
+    applySettingsFromUrlMock.mockImplementationOnce((target: ReturnType<typeof createHost>) => {
+      target.pendingGatewayUrl = "ws://new-gateway.test/control";
+    });
+    const host = createHost();
+
+    handleConnected(host as never);
+
+    expect(restoreComposerMock).not.toHaveBeenCalled();
+    expect(host.chatComposerProvisionalRestore).toBeNull();
+    expect(connectGatewayMock).toHaveBeenCalledWith(host);
   });
 
   it("starts Nodes polling only when the Nodes tab is active on connect", () => {

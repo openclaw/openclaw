@@ -20,7 +20,7 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
-import { persistChatComposerState } from "./chat/composer-persistence.ts";
+import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
@@ -56,6 +56,11 @@ type LifecycleHost = {
   sessionKey: string;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
+  chatComposerProvisionalRestore?: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null;
   chatComposerPersistTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   chatComposerPersistSnapshot?: PendingChatComposerPersistSnapshot | null;
   pendingGatewayUrl?: string | null;
@@ -97,6 +102,17 @@ export function handleConnected(host: LifecycleHost) {
     { applyIdentity: false },
   );
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
+  const hasPendingGatewaySwitch =
+    typeof host.pendingGatewayUrl === "string" && host.pendingGatewayUrl.trim();
+  if (!hasPendingGatewaySwitch && restoreChatComposerState(host, { preserveCurrent: true })) {
+    host.chatComposerProvisionalRestore = {
+      sessionKey: host.sessionKey,
+      chatMessage: host.chatMessage,
+      chatQueue: [...host.chatQueue],
+    };
+  } else {
+    host.chatComposerProvisionalRestore = null;
+  }
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   if (host.connectGeneration === connectGeneration) {

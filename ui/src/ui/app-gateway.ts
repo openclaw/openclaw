@@ -32,7 +32,7 @@ import {
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
-import { restoreChatComposerState } from "./chat/composer-persistence.ts";
+import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -95,7 +95,7 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
-import type { ChatSessionRefreshTarget } from "./ui-types.ts";
+import type { ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
@@ -137,6 +137,13 @@ type GatewayHost = {
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   sessionsLoading?: boolean;
+  chatMessage: string;
+  chatQueue: ChatQueueItem[];
+  chatComposerProvisionalRestore?: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
@@ -604,6 +611,44 @@ function normalizeStartupRefreshError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function chatQueueMatches(left: ChatQueueItem[], right: ChatQueueItem[]): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((item, index) => item === right[index]);
+}
+
+function prepareHelloScopedComposerRestore(host: GatewayHost) {
+  const provisional = host.chatComposerProvisionalRestore;
+  host.chatComposerProvisionalRestore = null;
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const provisionalSessionKey = provisional
+    ? normalizeSessionKeyForDefaults(provisional.sessionKey, snapshot?.sessionDefaults ?? {})
+    : "";
+  if (!provisional || !areUiSessionKeysEquivalent(provisionalSessionKey, host.sessionKey)) {
+    return;
+  }
+  if (
+    host.chatMessage !== provisional.chatMessage ||
+    !chatQueueMatches(host.chatQueue, provisional.chatQueue)
+  ) {
+    return;
+  }
+  if (!loadChatComposerSnapshot(host, host.sessionKey)) {
+    return;
+  }
+  // The pre-hello restore used fallback agent scope for offline recovery.
+  // Once hello resolves the real scope, clear only an untouched provisional
+  // draft so the scoped restore can replace it without clobbering user edits.
+  host.chatMessage = "";
+  host.chatQueue = [];
+}
+
 async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
@@ -699,6 +744,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.chatError = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
         preserveCurrent: true,
       });
