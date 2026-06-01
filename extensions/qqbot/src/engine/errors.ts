@@ -24,7 +24,7 @@ export function formatQqbotNotConfiguredError(accountId?: string | null): string
 
 export function formatQqbotTokenError(details: string): string {
   return [
-    "Failed to get QQBot access token. Check that QQBOT_APP_ID and QQBOT_CLIENT_SECRET are correct.",
+    "Failed to get QQBot access token. Check the QQBot app ID and client secret configured for this account.",
     `Get credentials at: ${QQBOT_OPEN_PLATFORM_URL}`,
     `Docs: ${QQBOT_DOCS_URL}`,
     `Response: ${details}`,

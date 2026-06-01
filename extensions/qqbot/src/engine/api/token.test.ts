@@ -83,9 +83,11 @@ describe("QQBot token manager", () => {
       headers: { "content-type": "application/json" },
     });
 
-    await expect(new TokenManager().getAccessToken("app-id", "secret")).rejects.toThrow(
-      /Failed to get QQBot access token.*QQBOT_APP_ID.*QQBOT_CLIENT_SECRET.*https:\/\/q\.qq\.com\/.*https:\/\/docs\.openclaw\.ai\/channels\/qqbot.*invalid app secret/,
+    const tokenPromise = new TokenManager().getAccessToken("app-id", "secret");
+    await expect(tokenPromise).rejects.toThrow(
+      /Failed to get QQBot access token.*QQBot app ID and client secret configured for this account.*https:\/\/q\.qq\.com\/.*https:\/\/docs\.openclaw\.ai\/channels\/qqbot.*invalid app secret/,
     );
+    await expect(tokenPromise).rejects.not.toThrow(/QQBOT_APP_ID|QQBOT_CLIENT_SECRET/);
   });
 
   it("does not cache access tokens forever when expires_in is unsafe", async () => {
