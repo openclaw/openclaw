@@ -61,7 +61,7 @@ describe("gateway memory watch config warnings", () => {
     expect(result.warnings).toContainEqual(
       expect.objectContaining({
         path: "agents.defaults.memorySearch.sync.watch",
-        message: expect.stringContaining("file-descriptor pressure"),
+        message: expect.stringContaining("too many files open"),
       }),
     );
   });
@@ -113,7 +113,7 @@ describe("gateway memory watch config warnings", () => {
     expect(result.warnings).toContainEqual(
       expect.objectContaining({
         path: "agents.list.1.memorySearch.sync.watch",
-        message: expect.stringContaining("multi-agent gateways"),
+        message: expect.stringContaining("many agents"),
       }),
     );
   });

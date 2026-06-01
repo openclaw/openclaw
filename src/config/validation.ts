@@ -918,7 +918,7 @@ function hasConfiguredMemoryWatchFdPressureSurface(
 }
 
 function memoryWatchFdPressureWarningMessage(): string {
-  return "memorySearch.sync.watch is enabled in gateway mode; large memory/ trees, extraPaths, QMD collections, session-memory indexing, or multi-agent gateways can create file-descriptor pressure. If FD usage grows, set memorySearch.sync.watch: false for the affected default or agent and use manual indexing or sync.intervalMinutes for freshness.";
+  return "Memory file watching is on for this Gateway. This keeps memory search up to date, but large memory folders, extraPaths, QMD collections, session memory, or many agents can make the Gateway keep too many files open. If you see open-file or watcher errors, set memorySearch.sync.watch: false for the affected default or agent, then use manual indexing or sync.intervalMinutes to refresh memory.";
 }
 
 function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
