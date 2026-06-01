@@ -84,17 +84,25 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
 }
 
 async function readFdToString(fd: number, maxBytes: number): Promise<string> {
-  const buffer = Buffer.allocUnsafe(Math.min(maxBytes, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES));
-  const { bytesRead } = await new Promise<{ bytesRead: number }>((resolve, reject) => {
-    syncFs.read(fd, buffer, 0, buffer.length, 0, (error, bytesRead) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve({ bytesRead });
+  const capacity = Math.min(maxBytes, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+  const buffer = Buffer.allocUnsafe(capacity);
+  let totalRead = 0;
+  while (totalRead < capacity) {
+    const { bytesRead } = await new Promise<{ bytesRead: number }>((resolve, reject) => {
+      syncFs.read(fd, buffer, totalRead, capacity - totalRead, totalRead, (error, bytesRead) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({ bytesRead });
+      });
     });
-  });
-  return buffer.subarray(0, bytesRead).toString("utf-8");
+    if (bytesRead === 0) {
+      break;
+    }
+    totalRead += bytesRead;
+  }
+  return buffer.subarray(0, totalRead).toString("utf-8");
 }
 
 async function closeFdAsync(fd: number): Promise<void> {
