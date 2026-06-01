@@ -16,7 +16,7 @@ describe("formatAuthProfileFailureMessage", () => {
         allInCooldown: true,
       });
       expect(message).toBe(
-        "Every auth profile for openai-codex is currently failing authentication; sessions look expired or credentials were rejected. Run `openclaw models auth login --provider openai-codex`.",
+        "Couldn't sign in to openai-codex. Your saved login looks expired or no longer works. Run `openclaw models auth login --provider openai-codex`.",
       );
     });
 
@@ -27,7 +27,7 @@ describe("formatAuthProfileFailureMessage", () => {
         allInCooldown: true,
       });
       expect(message).toBe(
-        "Every auth profile for anthropic is blocked for billing on the provider account. Run `openclaw models auth login --provider anthropic`.",
+        "anthropic rejected the request — looks like a billing issue on the account. Run `openclaw models auth login --provider anthropic`.",
       );
     });
 
@@ -38,18 +38,18 @@ describe("formatAuthProfileFailureMessage", () => {
         allInCooldown: true,
       });
       expect(message).toBe(
-        "Every auth profile for openai-codex is cooling down after recent rate-limit responses.",
+        "openai-codex is asking us to slow down. Please wait a moment before trying again.",
       );
     });
 
-    it("falls back to a generic cooldown sentence for unknown reasons", () => {
+    it("falls back to a generic sentence for unknown reasons", () => {
       const message = formatAuthProfileFailureMessage({
         reason: "unknown",
         provider: "openai-codex",
         allInCooldown: true,
       });
       expect(message).toBe(
-        "No openai-codex auth profile is currently available; all are in cooldown or blocked. Run `openclaw models auth login --provider openai-codex`.",
+        "Couldn't reach openai-codex with any of your saved logins right now. Run `openclaw models auth login --provider openai-codex`.",
       );
     });
   });
@@ -63,7 +63,7 @@ describe("formatAuthProfileFailureMessage", () => {
         cause: new Error("invalid_grant"),
       });
       expect(message).toBe(
-        "Authentication with openai-codex did not succeed. Run `openclaw models auth login --provider openai-codex`. (invalid_grant)",
+        "Couldn't sign in to openai-codex. Your saved login looks expired or no longer works. Run `openclaw models auth login --provider openai-codex`. (invalid_grant)",
       );
     });
 
@@ -77,15 +77,13 @@ describe("formatAuthProfileFailureMessage", () => {
       expect(message).toBe("upstream provider returned 502");
     });
 
-    it("returns the generic cooldown sentence when no reason and no cause apply", () => {
+    it("returns the generic sentence when no reason and no cause apply", () => {
       const message = formatAuthProfileFailureMessage({
         reason: "unknown",
         provider: "openai-codex",
         allInCooldown: false,
       });
-      expect(message).toBe(
-        "No openai-codex auth profile is currently available; all are in cooldown or blocked.",
-      );
+      expect(message).toBe("Couldn't reach openai-codex with any of your saved logins right now.");
     });
 
     it("does not duplicate the cause text when it already appears in the description", () => {
@@ -93,10 +91,12 @@ describe("formatAuthProfileFailureMessage", () => {
         reason: "auth",
         provider: "openai-codex",
         allInCooldown: false,
-        cause: new Error("Authentication with openai-codex did not succeed"),
+        cause: new Error(
+          "Couldn't sign in to openai-codex. Your saved login looks expired or no longer works",
+        ),
       });
       expect(message).toBe(
-        "Authentication with openai-codex did not succeed. Run `openclaw models auth login --provider openai-codex`.",
+        "Couldn't sign in to openai-codex. Your saved login looks expired or no longer works. Run `openclaw models auth login --provider openai-codex`.",
       );
     });
   });

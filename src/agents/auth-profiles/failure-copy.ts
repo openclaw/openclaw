@@ -34,33 +34,33 @@ function describeReason(
     switch (reason) {
       case "auth":
       case "session_expired":
-        return `Every auth profile for ${provider} is currently failing authentication; sessions look expired or credentials were rejected.`;
+        return `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`;
       case "auth_permanent":
-        return `Every auth profile for ${provider} has been permanently denied by the provider.`;
+        return `${provider} isn't accepting your saved login anymore.`;
       case "billing":
-        return `Every auth profile for ${provider} is blocked for billing on the provider account.`;
+        return `${provider} rejected the request — looks like a billing issue on the account.`;
       case "rate_limit":
-        return `Every auth profile for ${provider} is cooling down after recent rate-limit responses.`;
+        return `${provider} is asking us to slow down. Please wait a moment before trying again.`;
       case "overloaded":
-        return `Every auth profile for ${provider} is cooling down while the provider is reporting overload.`;
+        return `${provider} is overloaded right now. Please wait a moment before trying again.`;
       case "timeout":
-        return `Every auth profile for ${provider} is cooling down after recent requests timed out.`;
+        return `${provider} hasn't been responding. Please wait a moment before trying again.`;
       case "model_not_found":
-        return `Every auth profile for ${provider} was rejected with a model-not-found error.`;
+        return `${provider} can't find the model you're using right now.`;
       case "server_error":
-        return `Every auth profile for ${provider} is cooling down after recent provider server errors.`;
+        return `${provider} is having issues right now. Please wait a moment before trying again.`;
       default:
-        return `No ${provider} auth profile is currently available; all are in cooldown or blocked.`;
+        return `Couldn't reach ${provider} with any of your saved logins right now.`;
     }
   }
   switch (reason) {
     case "auth":
     case "session_expired":
-      return `Authentication with ${provider} did not succeed.`;
+      return `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`;
     case "auth_permanent":
-      return `Authentication with ${provider} was permanently denied.`;
+      return `${provider} isn't accepting your saved login.`;
     case "billing":
-      return `Provider ${provider} reported a billing problem on this account.`;
+      return `${provider} rejected the request — looks like a billing issue on the account.`;
     default:
       return null;
   }
@@ -110,7 +110,7 @@ export function formatAuthProfileFailureMessage(params: AuthProfileFailureCopyPa
     if (causeText) {
       return causeText;
     }
-    return `No ${params.provider} auth profile is currently available; all are in cooldown or blocked.`;
+    return `Couldn't reach ${params.provider} with any of your saved logins right now.`;
   }
   const hint = shouldIncludeRecoveryHint(params.reason)
     ? buildProviderAuthRecoveryHint({
