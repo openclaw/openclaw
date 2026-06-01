@@ -49,7 +49,7 @@ export function buildContextEngineRuntimeSettings(params: {
 
   const fallbackReason = normalizeNullableString(params.fallbackReason);
   const degradedReason = normalizeNullableString(params.degradedReason);
-  const fallbackActive = params.fallbackActive ?? Boolean(fallbackReason);
+  const fallbackActive = Boolean(fallbackReason) || params.fallbackActive === true;
   const mode =
     params.mode ?? (degradedReason ? "degraded" : fallbackActive ? "fallback" : "normal");
 
