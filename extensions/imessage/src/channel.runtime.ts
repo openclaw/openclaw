@@ -19,6 +19,7 @@ export async function sendIMessageOutbound(params: {
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  replyRequesterSender?: string | null;
 }) {
   const send =
     resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
@@ -38,6 +39,7 @@ export async function sendIMessageOutbound(params: {
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
+    replyRequesterSender: params.replyRequesterSender ?? undefined,
   });
 }
 

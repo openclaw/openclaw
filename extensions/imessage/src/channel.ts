@@ -100,6 +100,7 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        replyRequesterSender: ctx.requesterSenderId ?? undefined,
       });
       return toIMessageMessageSendResult(result, "text", ctx.replyToId);
     },
@@ -115,6 +116,7 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        replyRequesterSender: ctx.requesterSenderId ?? undefined,
       });
       return toIMessageMessageSendResult(result, "media", ctx.replyToId);
     },
@@ -344,7 +346,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       attachedResults: {
         channel: "imessage",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
+        sendText: async ({ cfg, to, text, accountId, deps, replyToId, requesterSenderId }) =>
           await (
             await loadIMessageChannelRuntime()
           ).sendIMessageOutbound({
@@ -354,6 +356,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            replyRequesterSender: requesterSenderId ?? undefined,
           }),
         sendMedia: async ({
           cfg,
@@ -364,6 +367,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           accountId,
           deps,
           replyToId,
+          requesterSenderId,
         }) =>
           await (
             await loadIMessageChannelRuntime()
@@ -376,6 +380,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            replyRequesterSender: requesterSenderId ?? undefined,
           }),
       },
     },

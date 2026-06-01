@@ -1061,12 +1061,13 @@ export async function sendMessageIMessage(
     dbPath,
     remoteHost: account.config.remoteHost,
   });
+  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   await assertIMessageOutboundAllowed({
     cfg,
     account,
     target,
-    replyRequesterSender: opts.replyToId ? opts.replyRequesterSender : undefined,
+    replyRequesterSender: resolvedReplyToId ? opts.replyRequesterSender : undefined,
   });
   const service =
     opts.service ??
@@ -1121,7 +1122,6 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
-  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
