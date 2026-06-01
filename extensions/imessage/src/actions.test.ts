@@ -690,6 +690,54 @@ describe("imessage message actions", () => {
     expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
   });
 
+  it("does not trust inferred-target markers when the delivered alias differs", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          target: "chat_identifier:team-thread",
+          to: "chat_identifier:blocked-thread",
+          __openclawInferredTargetFromCurrentChannel: true,
+          messageId: "message-guid",
+          text: "reply",
+        },
+        toolContext: { currentChannelId: "chat_identifier:team-thread" },
+        requesterSenderId: "+15551230000",
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not trust gateway-supplied requester sender for group reply authorization", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          messageId: "message-guid",
+          text: "reply",
+        },
+        toolContext: { currentChannelId: "chat_identifier:team-thread" },
+        requesterSenderId: "+15551230000",
+        gatewayClientScopes: ["operator.write"],
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
+
   it("does not use trusted requester sender for explicit group reply targets", async () => {
     await expect(
       imessageMessageActions.handleAction?.({
