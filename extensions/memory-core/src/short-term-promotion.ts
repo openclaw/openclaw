@@ -1665,6 +1665,9 @@ function buildListMarkerFreeMatchSnippet(
   startLine: number,
   listMarkerFreeSnippet: string,
 ): string {
+  if (!listMarkerFreeSnippet) {
+    return listMarkerFreeSnippet;
+  }
   const heading = findRelocatedDailyHeading(lines, startLine);
   return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
 }
