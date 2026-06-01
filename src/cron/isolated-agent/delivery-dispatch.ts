@@ -953,6 +953,7 @@ export async function dispatchCronDelivery(
           deps: createOutboundSendDeps(params.deps),
           signal: params.abortSignal,
           onError,
+          targetWritebackAuthority: "internal",
           onPayload: (payload) => {
             attemptedPayloadsForMirror.push(payload);
           },

@@ -147,6 +147,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   resolvedChatId: string;
   verbose?: boolean;
   gatewayClientScopes?: readonly string[];
+  targetWritebackAuthority?: "internal";
 }): Promise<void> {
   const raw = params.rawTarget.trim();
   if (!raw) {
@@ -160,12 +161,8 @@ export async function maybePersistResolvedTelegramTarget(params: {
     return;
   }
   const { matchKey, resolvedTarget } = rewrite;
-  // Gateway callers must prove admin scope before mutating config or cron state.
-  // Internal/non-gateway owners leave scopes absent and keep their existing writeback path.
-  if (
-    Array.isArray(params.gatewayClientScopes) &&
-    !params.gatewayClientScopes.includes(TELEGRAM_ADMIN_SCOPE)
-  ) {
+  const hasGatewayAdminScope = params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) === true;
+  if (!hasGatewayAdminScope && params.targetWritebackAuthority !== "internal") {
     writebackLogger.warn(
       `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
     );

@@ -35,6 +35,7 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  targetWritebackAuthority?: "internal";
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
