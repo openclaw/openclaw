@@ -410,9 +410,9 @@ export async function startOrResumeThread(params: {
   if (binding?.threadId) {
     if (
       binding.dynamicToolsFingerprint &&
+      params.dynamicTools.length > 0 &&
       binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
-      (binding.dynamicToolsContainDeferred !== undefined ||
-        (!dynamicToolsContainDeferred && params.dynamicTools.length > 0))
+      (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
     ) {
       embeddedAgentLog.debug(
         "codex app-server dynamic tool loading changed; starting a new thread",

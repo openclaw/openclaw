@@ -535,7 +535,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       client: { request } as never,
       params,
       cwd: workspaceDir,
-      dynamicTools: [createMessageDynamicTool("Send and manage messages.")],
+      dynamicTools: [createDeferredNamedDynamicTool("message")],
       appServer,
     });
     const fingerprint = (await readCodexAppServerBinding(sessionFile))?.dynamicToolsFingerprint;
@@ -550,12 +550,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
       client: { request } as never,
       params,
       cwd: workspaceDir,
-      dynamicTools: [createMessageDynamicTool("Send and manage messages.")],
+      dynamicTools: [createDeferredNamedDynamicTool("message")],
       appServer,
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.dynamicToolsFingerprint).toBe(fingerprint);
+    expect(binding?.dynamicToolsContainDeferred).toBe(true);
     expect(binding?.threadId).toBe("thread-1");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
