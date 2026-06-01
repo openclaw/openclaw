@@ -222,12 +222,16 @@ describe("CronToolSchema", () => {
     const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
-    const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
+    const jobProps = root?.job?.properties as
+      | Record<string, { type?: unknown; description?: string }>
+      | undefined;
 
     // Provider projection must be plain "string" rather than a nullable union.
     // The raw runtime schema remains nullable so local validation accepts clears.
     expect(jobProps?.agentId?.type).toBe("string");
+    expect(jobProps?.agentId?.description).toMatch(/null to keep it unset/i);
     expect(jobProps?.sessionKey?.type).toBe("string");
+    expect(jobProps?.sessionKey?.description).toMatch(/null to clear it/i);
   });
 
   it("patch.payload.toolsAllow projects to plain array type for OpenAPI 3.0 compat", () => {
