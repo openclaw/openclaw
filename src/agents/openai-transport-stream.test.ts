@@ -1081,6 +1081,7 @@ describe("openai transport stream", () => {
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
     expect(testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
+      maxRetries: 0,
       signal,
       timeout: 900_000,
     });
@@ -1089,7 +1090,7 @@ describe("openai transport stream", () => {
         { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
         undefined,
       ),
-    ).toBeUndefined();
+    ).toEqual({ maxRetries: 0 });
   });
 
   it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {

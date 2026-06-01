@@ -165,7 +165,7 @@ export const streamOpenAICompletions: StreamFunction<
       const requestOptions = {
         ...(options?.signal ? { signal: options.signal } : {}),
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+        maxRetries: options?.maxRetries ?? 0,
       };
       const { data: openaiStream, response } = await client.chat.completions
         .create(

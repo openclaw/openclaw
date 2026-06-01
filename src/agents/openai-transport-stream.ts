@@ -1875,12 +1875,10 @@ function buildOpenAISdkClientOptions(model: Model): { timeout?: number } {
 function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-): { signal?: AbortSignal; timeout?: number } | undefined {
+): { signal?: AbortSignal; timeout?: number; maxRetries: 0 } {
   const timeout = resolveOpenAISdkTimeoutMs(model);
-  if (timeout === undefined && !signal) {
-    return undefined;
-  }
   return {
+    maxRetries: 0,
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
   };
