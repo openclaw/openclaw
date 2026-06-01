@@ -1,0 +1,23 @@
+{
+  "id": "context-capsule",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "minMessages": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Minimum session length (messages) before compression is applied. Default: 20."
+      },
+      "keepRecentMessages": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Number of most-recent messages kept verbatim after compression. Default: 10."
+      }
+    }
+  }
+}

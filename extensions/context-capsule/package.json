@@ -1,0 +1,17 @@
+{
+  "name": "@parad0x_labs/openclaw-context-capsule",
+  "version": "0.1.0",
+  "description": "context-capsule ContextEngine for OpenClaw — 99.3% token reduction with recovery-score gate",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "dependencies": {
+    "@parad0x_labs/context-capsule": "^0.1.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  }
+}
