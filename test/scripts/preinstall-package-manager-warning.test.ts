@@ -99,10 +99,22 @@ describe("local install pressure guard", () => {
     load1: 12,
   };
 
-  it("refuses source-checkout installs when the host is already pressured", () => {
+  it("stays compatible by default when the host is already pressured", () => {
     expect(
       shouldRefuseLocalInstallForPressure(
         {
+          npm_config_user_agent: "pnpm/10.32.1 npm/? node/v22.20.0 linux arm64",
+        },
+        pressuredHost,
+      ),
+    ).toEqual({ refuse: false, reasons: [] });
+  });
+
+  it("refuses source-checkout installs when the pressure guard is explicitly enabled", () => {
+    expect(
+      shouldRefuseLocalInstallForPressure(
+        {
+          OPENCLAW_INSTALL_PRESSURE_GUARD: "1",
           npm_config_user_agent: "pnpm/10.32.1 npm/? node/v22.20.0 linux arm64",
         },
         pressuredHost,
@@ -114,7 +126,12 @@ describe("local install pressure guard", () => {
   });
 
   it("allows CI and explicit pressure-guard opt-out installs", () => {
-    expect(shouldRefuseLocalInstallForPressure({ CI: "true" }, pressuredHost).refuse).toBe(false);
+    expect(
+      shouldRefuseLocalInstallForPressure(
+        { CI: "true", OPENCLAW_INSTALL_PRESSURE_GUARD: "1" },
+        pressuredHost,
+      ).refuse,
+    ).toBe(false);
     expect(
       shouldRefuseLocalInstallForPressure({ OPENCLAW_INSTALL_PRESSURE_GUARD: "0" }, pressuredHost)
         .refuse,

@@ -80,6 +80,9 @@ export function shouldRefuseLocalInstallForPressure(
   env = process.env,
   hostPressure = readHostPressure(),
 ) {
+  if (env.OPENCLAW_INSTALL_PRESSURE_GUARD !== "1") {
+    return { refuse: false, reasons: [] };
+  }
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
     return { refuse: false, reasons: [] };
   }
@@ -165,7 +168,7 @@ export function createLocalInstallPressureRefusalMessage(result) {
   return [
     "[openclaw] refusing local package install under host pressure.",
     ...result.reasons.map((reason) => `[openclaw] - ${reason}`),
-    "[openclaw] retry when the box settles, or set OPENCLAW_INSTALL_PRESSURE_GUARD=0 to override deliberately.",
+    "[openclaw] retry when the box settles, or unset OPENCLAW_INSTALL_PRESSURE_GUARD to override deliberately.",
   ].join("\n");
 }
 
