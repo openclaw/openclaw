@@ -290,7 +290,9 @@ function hasRenderableNormalizedMessage(message: unknown): boolean {
   if (!normalized) {
     return false;
   }
-  return normalized.content.length > 0 || Boolean(normalized.replyTarget);
+  const role = normalizeRoleForGrouping(normalized.role);
+  const hasVisibleSenderLabel = role === "assistant" && Boolean(normalized.senderLabel?.trim());
+  return normalized.content.length > 0 || Boolean(normalized.replyTarget) || hasVisibleSenderLabel;
 }
 
 function sanitizeStreamText(text: string): string {

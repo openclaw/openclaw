@@ -787,6 +787,11 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       continue;
     }
 
+    if (record.role === "user" && isSessionsSendInterSessionUserMessage(record)) {
+      next.push(message);
+      continue;
+    }
+
     if (record.role === "user") {
       clearPending();
       next.push(message);
@@ -828,8 +833,11 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
-  const entry = message as { role?: unknown };
+  const entry = message as Record<string, unknown> & { role?: unknown };
   if (entry.role !== "assistant") {
+    return false;
+  }
+  if (isProjectedSessionsSendForwardedMessage(entry)) {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
@@ -1093,6 +1101,14 @@ function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>)
   );
 }
 
+function isProjectedSessionsSendForwardedMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
   if (message.display === false) {
     return true;
@@ -1234,7 +1250,8 @@ function extractPromptPrefixField(text: string, field: string): string | undefin
   }
   const lineEnd = text.indexOf("\n", prefixIndex);
   const header = lineEnd === -1 ? text.slice(prefixIndex) : text.slice(prefixIndex, lineEnd);
-  const match = new RegExp(`(?:^|\\s)${field}=([^\\s]+)`).exec(header);
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(?:^|\\s)${escapedField}=([^\\s]+)`).exec(header);
   return normalizeOptionalString(match?.[1]);
 }
 
@@ -1278,9 +1295,9 @@ export function projectChatDisplayMessages(
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
-  const projectedForwarded = projectSessionsSendInterSessionMessages(
-    mergeTtsSupplementMessages(
-      filterVisibleProjectedHistoryMessages(
+  const projectedForwarded = mergeTtsSupplementMessages(
+    filterVisibleProjectedHistoryMessages(
+      projectSessionsSendInterSessionMessages(
         toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
       ),
     ),
