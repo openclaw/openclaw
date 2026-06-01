@@ -97,6 +97,8 @@ describe("lazy protocol validators", () => {
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
+        resumeSession: true,
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
