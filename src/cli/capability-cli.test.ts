@@ -2224,6 +2224,41 @@ describe("capability cli", () => {
     });
   });
 
+  it("hydrates local TTS channel direct provider config from API-key auth profiles", async () => {
+    const rawConfig = {
+      channels: {
+        discord: {
+          tts: {
+            openai: { speakerVoice: "nova" },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "tts", "convert", "--text", "hello", "--channel", "discord", "--json"],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      channels?: {
+        discord?: { tts?: { openai?: { apiKey?: string; speakerVoice?: string } } };
+      };
+      messages?: { tts?: { providers?: { openai?: { apiKey?: string } } } };
+    };
+    expect(cfg.channels?.discord?.tts?.openai).toMatchObject({
+      apiKey: "profile-openai-key",
+      speakerVoice: "nova",
+    });
+    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+  });
+
   it("does not hydrate local TTS provider config from token auth profiles", async () => {
     const rawConfig = { messages: { tts: { provider: "openai" } } };
     mocks.loadConfig.mockReturnValue(rawConfig);
