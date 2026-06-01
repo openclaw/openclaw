@@ -2403,6 +2403,211 @@ describe("createFollowupRunner compaction", () => {
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
+  it("routes queued notifyUser compaction notices to the origin without block replies", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { notifyUser: true },
+        },
+      },
+    };
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "whatsapp",
+        originatingReplyToId: "msg-1",
+        run: { config: runtimeConfig },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    const routeArg = requireMockCallArg(routeReplyMock, 0);
+    expect(routeArg).toEqual(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "channel:C1",
+        mirror: false,
+        replyKind: "block",
+      }),
+    );
+    expect(routeArg.payload).toEqual(
+      expect.objectContaining({
+        text: "🧹 Compaction complete",
+        replyToId: "msg-1",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      }),
+    );
+  });
+
+  it("does not duplicate queued notifyUser notices with verbose compaction summaries", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { notifyUser: true },
+        },
+      },
+    };
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "whatsapp",
+        originatingReplyToId: "msg-1",
+        run: {
+          config: runtimeConfig,
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    const routedTexts = routeReplyMock.mock.calls.map((call) => {
+      const routeArg = requireRecord(call[0], "route reply");
+      return String(requireRecord(routeArg.payload, "route payload").text);
+    });
+    expect(routedTexts).toEqual(["🧹 Compaction complete", "final"]);
+    expect(routedTexts.some((text) => text.includes("Auto-compaction complete"))).toBe(false);
+    expect(requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload")).toEqual(
+      expect.objectContaining({ replyToId: "msg-1" }),
+    );
+  });
+
+  it("routes metadata-only notifyUser completion notices without final payloads", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { notifyUser: true },
+        },
+      },
+    };
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "whatsapp",
+        originatingReplyToId: "msg-1",
+        run: { config: runtimeConfig },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    expect(requireMockCallArg(routeReplyMock, 0)).toEqual(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "channel:C1",
+        mirror: false,
+        replyKind: "block",
+      }),
+    );
+    expect(requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload")).toEqual(
+      expect.objectContaining({
+        text: "🧹 Compaction complete",
+        replyToId: "msg-1",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      }),
+    );
+  });
+
+  it("honors replyToMode off for queued notifyUser compaction notices", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: { notifyUser: true },
+        },
+      },
+      channels: {
+        whatsapp: { replyToMode: "off" },
+      },
+    };
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "whatsapp",
+        originatingReplyToId: "msg-1",
+        run: { config: runtimeConfig },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload");
+    expect(payload).toEqual(
+      expect.objectContaining({
+        text: "🧹 Compaction complete",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      }),
+    );
+    expect(payload.replyToId).toBeUndefined();
+  });
+
   it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-meta-")),

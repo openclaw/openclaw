@@ -1647,8 +1647,11 @@ export async function runAgentTurnWithFallback(params: {
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0);
   };
-  const sendCompactionHookMessages = async (messages: string[]) => {
-    if (!params.opts?.onBlockReply || messages.length === 0) {
+  const sendCompactionHookMessages = async (
+    messages: string[],
+    phase: "start" | "end" | "incomplete",
+  ) => {
+    if (messages.length === 0) {
       return;
     }
     const noticePayload = params.applyReplyToMode({
@@ -1658,7 +1661,11 @@ export async function runAgentTurnWithFallback(params: {
       isCompactionNotice: true,
     });
     try {
-      await params.opts.onBlockReply(noticePayload);
+      if (params.opts?.onBlockReply) {
+        await params.opts.onBlockReply(noticePayload);
+      } else {
+        await routeCompactionNotice(noticePayload, phase);
+      }
     } catch (err) {
       logVerbose(`compaction hook notice delivery failed (non-fatal): ${String(err)}`);
     }
@@ -2564,7 +2571,7 @@ export async function runAgentTurnWithFallback(params: {
                             await params.opts.onCompactionStart();
                           }
                           if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
+                            await sendCompactionHookMessages(hookMessages, "start");
                           } else if (shouldNotifyUserAboutCompaction) {
                             // Send directly via opts.onBlockReply (bypassing the
                             // pipeline) so the notice does not cause final payloads
@@ -2580,12 +2587,12 @@ export async function runAgentTurnWithFallback(params: {
                               await params.opts.onCompactionEnd();
                             }
                             if (hookMessages.length > 0) {
-                              await sendCompactionHookMessages(hookMessages);
+                              await sendCompactionHookMessages(hookMessages, "end");
                             } else if (shouldNotifyUserAboutCompaction) {
                               await sendCompactionNotice("end");
                             }
                           } else if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
+                            await sendCompactionHookMessages(hookMessages, "incomplete");
                           } else if (shouldNotifyUserAboutCompaction) {
                             await sendCompactionNotice("incomplete");
                           }

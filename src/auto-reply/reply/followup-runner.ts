@@ -67,6 +67,7 @@ import type { TypingController } from "./typing.js";
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
+type CompactionNoticePhase = "start" | "end" | "incomplete";
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
@@ -76,6 +77,29 @@ function filterStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : undefined;
+}
+
+function readCompactionNoticeMessages(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+    : [];
+}
+
+function createDefaultCompactionNoticePayload(phase: CompactionNoticePhase): ReplyPayload {
+  const text =
+    phase === "start"
+      ? "🧹 Compacting context..."
+      : phase === "end"
+        ? "🧹 Compaction complete"
+        : "🧹 Compaction incomplete";
+  return {
+    text,
+    replyToCurrent: true,
+    isCompactionNotice: true,
+  };
 }
 
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
@@ -114,6 +138,7 @@ async function forwardFollowupProgressEvent(params: {
   detailMode?: "explain" | "raw";
   emitChannelProgress?: boolean;
   onCompactionComplete?: () => void;
+  sendCompactionNotice?: (phase: CompactionNoticePhase, messages: string[]) => Promise<void>;
 }) {
   const { evt, opts } = params;
   const emitChannelProgress = params.emitChannelProgress !== false;
@@ -219,14 +244,22 @@ async function forwardFollowupProgressEvent(params: {
 
   if (evt.stream === "compaction") {
     const phase = readStringValue(evt.data.phase) ?? "";
+    const messages = readCompactionNoticeMessages(evt.data.messages);
     if (phase === "start" && emitChannelProgress) {
       await opts?.onCompactionStart?.();
     }
-    if (phase === "end" && evt.data?.completed === true) {
-      params.onCompactionComplete?.();
-      if (emitChannelProgress) {
-        await opts?.onCompactionEnd?.();
+    if (phase === "start") {
+      await params.sendCompactionNotice?.("start", messages);
+    }
+    if (phase === "end") {
+      const completed = evt.data?.completed === true;
+      if (completed) {
+        params.onCompactionComplete?.();
+        if (emitChannelProgress) {
+          await opts?.onCompactionEnd?.();
+        }
       }
+      await params.sendCompactionNotice?.(completed ? "end" : "incomplete", messages);
     }
   }
 }
@@ -472,7 +505,10 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+      const shouldNotifyUserAboutCompaction = () =>
+        runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
       let observedVisibleToolErrorProgress = false;
+      let sentQueuedCompactionCompletionNotice = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
           observedVisibleToolErrorProgress = true;
@@ -503,6 +539,46 @@ export function createFollowupRunner(params: {
         while (pendingProgressDeliveries.size > 0) {
           await Promise.all(pendingProgressDeliveries);
         }
+      };
+      const runId = crypto.randomUUID();
+      const sendQueuedCompactionNotice = async (
+        phase: CompactionNoticePhase,
+        messages: string[],
+        resolvedRun: { provider: string; modelId: string },
+      ) => {
+        const hasHookMessages = messages.length > 0;
+        if (!hasHookMessages && !shouldNotifyUserAboutCompaction()) {
+          return;
+        }
+        const payload: ReplyPayload = hasHookMessages
+          ? {
+              text: messages.join("\n\n"),
+              replyToCurrent: true,
+              isCompactionNotice: true,
+            }
+          : createDefaultCompactionNoticePayload(phase);
+        const replyToId = effectiveQueued.originatingReplyToId ?? effectiveQueued.messageId;
+        if (replyToId) {
+          payload.replyToId = replyToId;
+        }
+        if (phase !== "start") {
+          sentQueuedCompactionCompletionNotice = true;
+        }
+        const deliveryPayloads = resolveFollowupDeliveryPayloads({
+          cfg: runtimeConfig,
+          payloads: [payload],
+          messageProvider: effectiveQueued.run.messageProvider,
+          originatingAccountId:
+            effectiveQueued.originatingAccountId ?? effectiveQueued.run.agentAccountId,
+          originatingChannel: effectiveQueued.originatingChannel,
+          originatingChatType: effectiveQueued.originatingChatType,
+          originatingTo: effectiveQueued.originatingTo,
+        });
+        await sendFollowupPayloads(deliveryPayloads, effectiveQueued, resolvedRun, {
+          kind: "block",
+          mirror: false,
+          runId,
+        });
       };
       const admission = await admitReplyTurn({
         sessionId: run.sessionId,
@@ -537,7 +613,6 @@ export function createFollowupRunner(params: {
           }
         }
       }
-      const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
@@ -977,6 +1052,11 @@ export function createFollowupRunner(params: {
                       onCompactionComplete: () => {
                         attemptCompactionCount += 1;
                       },
+                      sendCompactionNotice: (phase, messages) =>
+                        sendQueuedCompactionNotice(phase, messages, {
+                          provider,
+                          modelId: model,
+                        }),
                     });
                     if (
                       hasFailedFollowupProgressEvent(evt) &&
@@ -1084,28 +1164,7 @@ export function createFollowupRunner(params: {
         });
       }
 
-      const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) {
-        return;
-      }
-      const finalPayloads = resolveFollowupDeliveryPayloads({
-        cfg: runtimeConfig,
-        payloads: payloadArray,
-        messageProvider: run.messageProvider,
-        originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
-        originatingChannel: queued.originatingChannel,
-        originatingChatType: queued.originatingChatType,
-        originatingTo: queued.originatingTo,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls,
-        sentTargets: runResult.messagingToolSentTargets,
-        sentTexts: runResult.messagingToolSentTexts,
-      });
-
-      if (finalPayloads.length === 0) {
-        return;
-      }
-
-      let deliveryPayloads = finalPayloads;
+      let verboseCompactionNoticePayload: ReplyPayload | undefined;
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
@@ -1134,16 +1193,44 @@ export function createFollowupRunner(params: {
             });
           }
         }
-        if (shouldEmitVerboseProgress()) {
+        if (shouldNotifyUserAboutCompaction() && !sentQueuedCompactionCompletionNotice) {
+          await sendQueuedCompactionNotice("end", [], {
+            provider: providerUsed,
+            modelId: modelUsed,
+          });
+        }
+        if (shouldEmitVerboseProgress() && !sentQueuedCompactionCompletionNotice) {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          deliveryPayloads = [
-            {
-              text: `🧹 Auto-compaction complete${suffix}.`,
-            },
-            ...finalPayloads,
-          ];
+          verboseCompactionNoticePayload = {
+            text: `🧹 Auto-compaction complete${suffix}.`,
+          };
         }
       }
+
+      const payloadArray = runResult.payloads ?? [];
+      if (payloadArray.length === 0) {
+        return;
+      }
+      const finalPayloads = resolveFollowupDeliveryPayloads({
+        cfg: runtimeConfig,
+        payloads: payloadArray,
+        messageProvider: run.messageProvider,
+        originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
+        originatingChannel: queued.originatingChannel,
+        originatingChatType: queued.originatingChatType,
+        originatingTo: queued.originatingTo,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls,
+        sentTargets: runResult.messagingToolSentTargets,
+        sentTexts: runResult.messagingToolSentTexts,
+      });
+
+      if (finalPayloads.length === 0) {
+        return;
+      }
+
+      const deliveryPayloads = verboseCompactionNoticePayload
+        ? [verboseCompactionNoticePayload, ...finalPayloads]
+        : finalPayloads;
 
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
         logVerbose(
