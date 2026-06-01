@@ -2409,6 +2409,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
+      removeRemovedSessionTrajectoryArtifacts,
     } = await loadSessionsRuntimeModule();
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
@@ -2455,6 +2456,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             reason: "deleted",
           })
         : [];
+    if (deleted && sessionId) {
+      const referencedSessionIds = new Set(
+        Object.values(loadSessionStore(storePath))
+          .map((storeEntry) => storeEntry?.sessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      await removeRemovedSessionTrajectoryArtifacts({
+        removedSessionFiles: new Map([[sessionId, entry?.sessionFile]]),
+        referencedSessionIds,
+        storePath,
+        restrictToStoreDir: true,
+      });
+    }
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
     if (deleted) {
       emitGatewaySessionEndPluginHook({

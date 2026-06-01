@@ -1,3 +1,5 @@
+export { removeRemovedSessionTrajectoryArtifacts } from "../../trajectory/cleanup.js";
+
 export {
   archiveSessionTranscriptsForSessionDetailed,
   cleanupSessionBeforeMutation,
