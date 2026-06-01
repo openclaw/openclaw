@@ -58,6 +58,7 @@ function resolveBindingForRequester(
   return null;
 }
 
+/** Creates a router that resolves task-completion delivery through active session bindings. */
 export function createBoundDeliveryRouter(
   service: SessionBindingService = getSessionBindingService(),
 ): BoundDeliveryRouter {
