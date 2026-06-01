@@ -236,7 +236,7 @@ function buildUserInputInteractive(
   token: string,
 ): MessagePresentation | undefined {
   const question = questions.length === 1 ? questions[0] : undefined;
-  if (!question || question.isSecret || question.isOther || !question.options?.length) {
+  if (!question || question.isSecret || !question.options?.length) {
     return undefined;
   }
   const buttons = question.options.slice(0, 8).map((option, index) => ({

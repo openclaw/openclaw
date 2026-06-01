@@ -1417,7 +1417,7 @@ describe("codex conversation binding", () => {
                   id: "q1",
                   header: "Mode",
                   question: "Pick one",
-                  isOther: false,
+                  isOther: true,
                   isSecret: false,
                   options: [
                     { label: "Plan", description: "Stay in plan" },
@@ -1493,6 +1493,16 @@ describe("codex conversation binding", () => {
       expect.objectContaining({
         payload: expect.objectContaining({
           text: expect.stringContaining("Codex needs input:"),
+          presentation: expect.objectContaining({
+            blocks: [
+              expect.objectContaining({
+                buttons: [
+                  expect.objectContaining({ label: "Plan" }),
+                  expect.objectContaining({ label: "Execute" }),
+                ],
+              }),
+            ],
+          }),
         }),
       }),
     );

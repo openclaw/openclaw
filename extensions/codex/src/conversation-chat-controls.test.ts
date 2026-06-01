@@ -124,7 +124,46 @@ describe("codex conversation chat controls", () => {
     await expect(answered).resolves.toBe("2");
   });
 
-  it("omits buttons for secret, freeform, or multi-question prompts", () => {
+  it("creates option buttons when a single question also allows an other reply", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const reply = createCodexUserInputPrompt({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "target",
+          header: "Plan Target",
+          question: "Which OpenManager plan should we grill first?",
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: "Next implementation", description: "Use current alpha plan" },
+            { label: "OpenClaw runtime", description: "Focus on runtime isolation" },
+            { label: "Email connectors", description: "Focus on email strategy" },
+          ],
+        },
+      ],
+    });
+    const buttons = readButtons(reply);
+
+    expect(reply.text).toContain("Other: reply with your own answer.");
+    expect(buttons.map((button) => button.label)).toEqual([
+      "Next implementation",
+      "OpenClaw runtime",
+      "Email connectors",
+    ]);
+    expect(normalizeMessagePresentation(reply.presentation)).toBeDefined();
+
+    expect(answerCodexUserInputCallback({ payload: buttons[2]?.value?.slice(6) ?? "", ctx })).toBe(
+      "Sent answer to Codex.",
+    );
+    await expect(answered).resolves.toBe("3");
+  });
+
+  it("omits buttons for secret, freeform-only, or multi-question prompts", () => {
     const secret = createCodexUserInputPrompt({
       scope,
       resolveText: () => undefined,
@@ -149,7 +188,7 @@ describe("codex conversation chat controls", () => {
           question: "Type something",
           isOther: true,
           isSecret: false,
-          options: [{ label: "Yes", description: "" }],
+          options: null,
         },
       ],
     });

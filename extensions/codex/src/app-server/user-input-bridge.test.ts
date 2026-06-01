@@ -67,7 +67,7 @@ describe("Codex app-server user input bridge", () => {
             id: "choice",
             header: "Mode",
             question: "Pick a mode",
-            isOther: false,
+            isOther: true,
             isSecret: false,
             options: [
               { label: "Fast", description: "Use less reasoning" },
@@ -79,7 +79,9 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(expectFirstBlockReplyText(params)).toContain("Pick a mode");
+    const promptText = expectFirstBlockReplyText(params);
+    expect(promptText).toContain("Pick a mode");
+    expect(promptText).toContain("Other: reply with your own answer.");
     const values = expectFirstBlockReplyValues(params);
     expect(values.map((value) => value.split(":").at(-1))).toEqual(["1", "2"]);
     expect(
