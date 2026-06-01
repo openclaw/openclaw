@@ -464,7 +464,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(qmd.sessions.retentionDays).toBeUndefined();
     expect(qmd.update.commandTimeoutMs).toBe(30_000);
     expect(qmd.update.updateTimeoutMs).toBe(120_000);
-    expect(qmd.update.embedTimeoutMs).toBe(120_000);
+    expect(qmd.update.embedTimeoutMs).toBe(600_000);
     expect(qmd.limits).toMatchObject({
       maxResults: 4,
       maxSnippetChars: 450,
