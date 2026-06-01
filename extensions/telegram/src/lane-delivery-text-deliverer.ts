@@ -302,6 +302,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const finalizeDeliveredPrefix = async (
       deliveredStreamText: string,
       messageId: number,
+      suffixSourceText = activeFullText,
     ): Promise<LaneDeliveryResult> => {
       lane.finalized = true;
       params.markDelivered();
@@ -320,7 +321,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
         }
       }
-      const suffix = activeFullText.slice(deliveredStreamText.length);
+      const suffix = suffixSourceText.slice(deliveredStreamText.length);
       if (suffix.trim().length > 0) {
         for (const chunk of compactChunks(params.splitFinalTextForStream?.(suffix) ?? [])) {
           if (chunk.trim().length === 0) {
@@ -418,6 +419,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       await params.flushDraftLane(lane);
     }
     const activeChunkIndexAfterStop = isFinal ? clampActiveChunkIndex() : activeChunkIndex;
+    const activeChunkAfterStop = chunks[activeChunkIndexAfterStop] ?? firstChunk;
     const remainingChunksAfterStop = chunks.slice(activeChunkIndexAfterStop + 1);
 
     const messageId = stream.messageId();
@@ -431,14 +433,19 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
+    const activeChunkTextAfterStop = activeChunkAfterStop.trimEnd();
+    const retainedFirstChunkAfterStop =
+      activeChunkIndexAfterStop !== activeChunkIndex &&
+      deliveredStreamTextAfterStop === firstChunk.trimEnd();
     if (
       isFinal &&
       deliveredStreamTextAfterStop !== undefined &&
-      deliveredStreamTextAfterStop !== firstChunk.trimEnd()
+      deliveredStreamTextAfterStop !== activeChunkTextAfterStop &&
+      !retainedFirstChunkAfterStop
     ) {
       if (
         isDeliveredPrefix({ deliveredText: deliveredStreamTextAfterStop, finalText }) &&
-        deliveredStreamTextAfterStop.length > firstChunk.trimEnd().length
+        deliveredStreamTextAfterStop.length > activeChunkTextAfterStop.length
       ) {
         return await finalizeDeliveredPrefix(deliveredStreamTextAfterStop, messageId);
       }
@@ -453,7 +460,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     let buttonsAttached = false;
     if (buttons) {
       try {
-        await params.editStreamMessage({ laneName, messageId, text: firstChunk, buttons });
+        await params.editStreamMessage({
+          laneName,
+          messageId,
+          text: activeChunkAfterStop,
+          buttons,
+        });
         buttonsAttached = true;
       } catch (err) {
         params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
@@ -470,7 +482,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       return result("preview-finalized", {
         content: text,
-        promptContextContent: firstChunk,
+        promptContextContent: activeChunkAfterStop,
         messageId,
         buttonsAttached,
       });

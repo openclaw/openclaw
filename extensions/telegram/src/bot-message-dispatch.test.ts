@@ -3663,6 +3663,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), { buttons });
   });
 
+  it("finalizes a duplicate text-only block when no final follows", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "partial answer" });
+        await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "partial answer",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      text: "partial answer",
+      messageId: 2001,
+    });
+  });
+
+  it("materializes a pending duplicate text-only block before finalizing it", async () => {
+    const { answerDraftStream } = setupDraftStreams();
+    answerDraftStream.stop.mockImplementation(async () => {
+      answerDraftStream.setMessageId(2001);
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "pending answer" });
+        await dispatcherOptions.deliver({ text: "pending answer" }, { kind: "block" });
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "pending answer",
+      messageId: 2001,
+    });
+  });
+
   it("keeps queued room events abortable after their source dispatch returns", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);
