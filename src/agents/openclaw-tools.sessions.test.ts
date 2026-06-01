@@ -641,6 +641,7 @@ describe("sessions tools", () => {
           totalTokens: undefined,
           estimatedCostUsd: undefined,
           status: undefined,
+          resumable: undefined,
           startedAt: undefined,
           endedAt: undefined,
           runtimeMs: undefined,

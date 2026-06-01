@@ -315,6 +315,7 @@ export function createSessionsListTool(opts?: {
           estimatedCostUsd:
             typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
           status: readSessionRunStatus(entry.status),
+          resumable: typeof entry.resumable === "boolean" ? entry.resumable : undefined,
           startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
           endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
           runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,

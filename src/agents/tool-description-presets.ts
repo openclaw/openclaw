@@ -16,6 +16,7 @@ export function describeSessionsListTool(): string {
   return [
     "List visible sessions; filter by kind, label, agentId, search, activity.",
     "Use before sessions_history or sessions_send target selection.",
+    "Note: status values (done, failed, timeout, killed) reflect last-turn communication state only, not session lifecycle; sessions in these states are still resumable via sessions_send (see resumable field).",
   ].join(" ");
 }
 

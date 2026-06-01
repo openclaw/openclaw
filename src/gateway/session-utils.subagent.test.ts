@@ -187,6 +187,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const parent = result.sessions.find((session) => session.key === "agent:main:subagent:parent");
     expect(parent?.status).toBe("running");
+    expect(parent?.resumable).toBeUndefined();
     expect(parent?.startedAt).toBe(now - 9_000);
     expect(parent?.endedAt).toBeUndefined();
     expect(parent?.runtimeMs).toBeGreaterThanOrEqual(9_000);
@@ -194,6 +195,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const child = result.sessions.find((session) => session.key === "agent:main:subagent:child");
     expect(child?.status).toBe("done");
+    expect(child?.resumable).toBe(true);
     expect(child?.startedAt).toBe(now - 7_500);
     expect(child?.endedAt).toBe(now - 2_500);
     expect(child?.runtimeMs).toBe(5_000);
@@ -207,6 +209,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
+    expect(failed?.resumable).toBe(true);
     expect(failed?.runtimeMs).toBe(5_000);
   });
 
@@ -1213,6 +1216,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       (session) => session.key === "agent:main:subagent:timeout",
     );
     expect(timeout?.status).toBe("timeout");
+    expect(timeout?.resumable).toBe(true);
     expect(timeout?.runtimeMs).toBe(0);
   });
 

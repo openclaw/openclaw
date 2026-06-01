@@ -78,6 +78,8 @@ export type GatewaySessionRow = {
   goal?: SessionGoal;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  /** Whether this session can still receive `sessions_send` despite a terminal-looking status. */
+  resumable?: boolean;
   hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;

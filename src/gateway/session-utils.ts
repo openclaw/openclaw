@@ -2140,6 +2140,18 @@ export function buildGatewaySessionRow(params: {
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
+  const resolvedStatus = (subagentRun ? subagentStatus : entry?.status) as
+    | SessionRunStatus
+    | undefined;
+  /**
+   * Sessions in any non-running status (done, failed, timeout, killed) remain
+   * resumable via sessions_send. This field makes that explicit so agents do not
+   * misinterpret the status as a session-lifecycle terminal state.
+   * Running sessions omit resumable because they are obviously active.
+   */
+  const resolvedResumable =
+    resolvedStatus != null && resolvedStatus !== "running" ? true : undefined;
+
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -2180,7 +2192,8 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     goal,
     estimatedCostUsd,
-    status: subagentRun ? subagentStatus : entry?.status,
+    status: resolvedStatus,
+    resumable: resolvedResumable,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
