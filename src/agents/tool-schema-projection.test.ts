@@ -82,6 +82,56 @@ describe("runtime tool input schema projection", () => {
     ).toEqual([]);
   });
 
+  it("projects nullable and literal unions to OpenAPI-friendly provider schemas", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          agentId: {
+            anyOf: [{ type: "string" }, { type: "null" }],
+            description: "Agent id, or null to clear",
+          },
+          toolsAllow: {
+            anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+            description: "Allowed tools, or null to clear",
+          },
+          mode: {
+            anyOf: [
+              { type: "string", const: "announce" },
+              { type: "string", const: "webhook" },
+              { type: "null" },
+            ],
+          },
+          threadId: {
+            anyOf: [{ type: "string" }, { type: "number" }, { type: "null" }],
+            description: "Thread/topic id",
+          },
+        },
+      }).schema,
+    ).toEqual({
+      type: "object",
+      properties: {
+        agentId: {
+          type: "string",
+          description: "Agent id, or null to clear",
+        },
+        toolsAllow: {
+          type: "array",
+          items: { type: "string" },
+          description: "Allowed tools, or null to clear",
+        },
+        mode: {
+          type: "string",
+          enum: ["announce", "webhook"],
+        },
+        threadId: {
+          type: "string",
+          description: "Thread/topic id",
+        },
+      },
+    });
+  });
+
   it("filters unsupported schemas without dropping healthy tools", () => {
     const healthy = {
       name: "healthy",

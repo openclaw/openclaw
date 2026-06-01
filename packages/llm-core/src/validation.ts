@@ -205,6 +205,13 @@ function applySchemaArrayCoercion(value: unknown[], schema: JsonSchemaObject): v
 
 function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unknown {
   for (const schema of schemas) {
+    const validator = getSubSchemaValidator(schema);
+    if (validator?.Check(value)) {
+      return value;
+    }
+  }
+
+  for (const schema of schemas) {
     const candidate = structuredClone(value);
     const coerced = coerceWithJsonSchema(candidate, schema);
     const validator = getSubSchemaValidator(schema);

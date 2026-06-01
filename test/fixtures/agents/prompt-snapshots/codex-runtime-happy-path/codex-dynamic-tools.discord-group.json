@@ -208,9 +208,11 @@
                   "additionalProperties": true,
                   "properties": {
                     "accountId": {
+                      "description": "Failure delivery account",
                       "type": "string"
                     },
                     "channel": {
+                      "description": "Failure delivery channel",
                       "type": "string"
                     },
                     "mode": {
@@ -218,6 +220,7 @@
                       "type": "string"
                     },
                     "to": {
+                      "description": "Failure delivery target",
                       "type": "string"
                     }
                   },
@@ -229,15 +232,8 @@
                   "type": "string"
                 },
                 "threadId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "number"
-                    }
-                  ],
-                  "description": "Thread/topic id"
+                  "description": "Thread/topic id",
+                  "type": "string"
                 },
                 "to": {
                   "description": "Delivery target",
@@ -431,11 +427,14 @@
                 },
                 "failureDestination": {
                   "additionalProperties": true,
+                  "description": "Failure destination, or null to clear",
                   "properties": {
                     "accountId": {
+                      "description": "Failure delivery account",
                       "type": "string"
                     },
                     "channel": {
+                      "description": "Failure delivery channel",
                       "type": "string"
                     },
                     "mode": {
@@ -443,6 +442,7 @@
                       "type": "string"
                     },
                     "to": {
+                      "description": "Failure delivery target",
                       "type": "string"
                     }
                   },
@@ -454,15 +454,8 @@
                   "type": "string"
                 },
                 "threadId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "number"
-                    }
-                  ],
-                  "description": "Thread/topic id"
+                  "description": "Thread/topic id",
+                  "type": "string"
                 },
                 "to": {
                   "description": "Delivery target",

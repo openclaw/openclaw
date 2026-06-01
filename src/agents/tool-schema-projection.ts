@@ -132,9 +132,85 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
     };
   }
   return {
-    schema: parsed,
+    schema: normalizeProviderToolInputSchema(parsed),
     violations: [],
   };
+}
+
+function isNullSchema(schema: RuntimeToolInputSchemaJson): boolean {
+  return isJsonObject(schema) && schema.type === "null";
+}
+
+function isStringConstSchema(
+  schema: RuntimeToolInputSchemaJson,
+): schema is { type: "string"; const: string } {
+  return isJsonObject(schema) && schema.type === "string" && typeof schema.const === "string";
+}
+
+function mergeCompositionWrapper(
+  wrapper: { [key: string]: RuntimeToolInputSchemaJson },
+  replacement: { [key: string]: RuntimeToolInputSchemaJson },
+  keyword: "anyOf" | "oneOf",
+): { [key: string]: RuntimeToolInputSchemaJson } {
+  const { [keyword]: _composition, ...metadata } = wrapper;
+  return {
+    ...replacement,
+    ...metadata,
+  };
+}
+
+function normalizeSchemaComposition(
+  schema: { [key: string]: RuntimeToolInputSchemaJson },
+  keyword: "anyOf" | "oneOf",
+): { [key: string]: RuntimeToolInputSchemaJson } | undefined {
+  const variants = schema[keyword];
+  if (!Array.isArray(variants)) {
+    return undefined;
+  }
+  const hasNullVariant = variants.some(isNullSchema);
+  const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
+  if (nonNullVariants.length === 0) {
+    return undefined;
+  }
+  if (hasNullVariant && nonNullVariants.length === 1 && isJsonObject(nonNullVariants[0])) {
+    return mergeCompositionWrapper(schema, nonNullVariants[0], keyword);
+  }
+  if (nonNullVariants.every(isStringConstSchema)) {
+    return mergeCompositionWrapper(
+      schema,
+      {
+        type: "string",
+        enum: nonNullVariants.map((variant) => variant.const),
+      },
+      keyword,
+    );
+  }
+  const stringVariant = nonNullVariants.find(
+    (variant) => isJsonObject(variant) && variant.type === "string",
+  );
+  if (stringVariant !== undefined && isJsonObject(stringVariant)) {
+    return mergeCompositionWrapper(schema, stringVariant, keyword);
+  }
+  return undefined;
+}
+
+function normalizeProviderToolInputSchema(
+  schema: RuntimeToolInputSchemaJson,
+): RuntimeToolInputSchemaJson {
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeProviderToolInputSchema);
+  }
+  if (!isJsonObject(schema)) {
+    return schema;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [key, normalizeProviderToolInputSchema(value)]),
+  );
+  return (
+    normalizeSchemaComposition(normalized, "anyOf") ??
+    normalizeSchemaComposition(normalized, "oneOf") ??
+    normalized
+  );
 }
 
 function findDynamicSchemaKeywordViolations(

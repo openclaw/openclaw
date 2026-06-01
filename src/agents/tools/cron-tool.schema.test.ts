@@ -1,4 +1,6 @@
+import { validateToolArguments, type Tool } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { projectRuntimeToolInputSchema } from "../tool-schema-projection.js";
 import { CronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -25,7 +27,13 @@ function propertyAt(
 }
 
 describe("CronToolSchema", () => {
-  const schemaRecord = CronToolSchema as unknown as Record<string, unknown>;
+  const schemaRecord = projectRuntimeToolInputSchema(CronToolSchema, "cron.parameters")
+    .schema as Record<string, unknown>;
+  const cronTool = {
+    name: "cron",
+    description: "Manage scheduled jobs",
+    parameters: CronToolSchema,
+  } satisfies Tool;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -221,13 +229,51 @@ describe("CronToolSchema", () => {
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
   });
 
+  it("raw validation preserves null clear sentinels before provider projection", () => {
+    const validated = validateToolArguments(cronTool, {
+      type: "toolCall",
+      id: "call-1",
+      name: "cron",
+      arguments: {
+        action: "update",
+        id: "job-1",
+        patch: {
+          agentId: null,
+          sessionKey: null,
+          payload: {
+            kind: "agentTurn",
+            message: "refresh status",
+            toolsAllow: null,
+          },
+        },
+      },
+    }) as {
+      patch: {
+        agentId: unknown;
+        sessionKey: unknown;
+        payload: { toolsAllow: unknown };
+      };
+    };
+
+    expect(validated.patch.agentId).toBeNull();
+    expect(validated.patch.sessionKey).toBeNull();
+    expect(validated.patch.payload.toolsAllow).toBeNull();
+  });
+
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
   // serialized cron tool schema.  This catches future regressions at the source.
-  it("serialized schema contains no type-array or not/const keywords", () => {
-    const json = JSON.stringify(CronToolSchema);
+  it("projected schema contains no OpenAPI 3.0 incompatible composition/null keywords", () => {
+    const json = JSON.stringify(schemaRecord);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
+    // null-type composition is also rejected by strict OpenAPI 3.0 tool adapters.
+    expect(json).not.toMatch(/"type"\s*:\s*"null"/);
+    expect(json).not.toMatch(/"anyOf"\s*:/);
+    expect(json).not.toMatch(/"oneOf"\s*:/);
+    expect(json).not.toMatch(/"allOf"\s*:/);
     // "not" composition keyword is not supported by OpenAPI 3.0
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
+    // "const" is not part of the OpenAPI 3.0 schema subset.
+    expect(json).not.toMatch(/"const"\s*:/);
   });
 });
