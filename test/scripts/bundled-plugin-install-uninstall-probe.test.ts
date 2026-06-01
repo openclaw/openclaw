@@ -1140,6 +1140,28 @@ describe("bundled plugin install/uninstall probe", () => {
     );
   });
 
+  it("treats channel env vars as runtime smoke config requirements", () => {
+    const root = makePackageRoot();
+    writePluginManifest(root, "dist-runtime/extensions/clickclack", {
+      id: "clickclack",
+      channelEnvVars: { clickclack: ["CLICKCLACK_BOT_TOKEN"] },
+    });
+    writePluginsList(root, [
+      {
+        id: "clickclack",
+        origin: "bundled",
+        rootDir: path.join(root, "dist-runtime", "extensions", "clickclack"),
+      },
+    ]);
+
+    const result = runProbe(root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      `clickclack\tclickclack\t1\t${path.join(root, "dist-runtime", "extensions", "clickclack")}`,
+    );
+  });
+
   it("does not select source-only bundled plugins for package-backed sweeps", () => {
     const root = makePackageRoot();
     writePluginManifest(root, "extensions/qa-channel", {

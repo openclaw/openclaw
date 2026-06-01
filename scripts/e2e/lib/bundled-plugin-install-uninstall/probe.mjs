@@ -113,7 +113,16 @@ function pluginRequiresConfig(pluginDir) {
   }
   const manifest = readJson(manifestPath);
   const required = manifest.configSchema?.required;
-  return Array.isArray(required) && required.some((value) => typeof value === "string");
+  if (Array.isArray(required) && required.some((value) => typeof value === "string")) {
+    return true;
+  }
+  const channelEnvVars =
+    manifest.channelEnvVars && typeof manifest.channelEnvVars === "object"
+      ? Object.values(manifest.channelEnvVars)
+      : [];
+  return channelEnvVars.some(
+    (envVars) => Array.isArray(envVars) && envVars.some((value) => typeof value === "string"),
+  );
 }
 
 async function loadPackagedBundledEntries() {
