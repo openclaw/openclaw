@@ -58,6 +58,7 @@ type DiscoveredModel = {
   reasoning?: boolean;
   input?: ModelInputType[];
   compat?: ModelCatalogEntry["compat"];
+  baseUrl?: string;
 };
 
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
@@ -559,7 +560,8 @@ export async function loadModelCatalog(params?: {
         const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, {
           manifestPlugins: getManifestPlugins(),
         });
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        const baseUrl = normalizeOptionalString(entry?.baseUrl);
+        if (shouldSuppressBuiltInModel({ provider, id, baseUrl })) {
           continue;
         }
         const name = normalizeOptionalString(entry?.name ?? id) || id;
