@@ -64,7 +64,6 @@ import {
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
-  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -631,7 +630,6 @@ async function loadReferenceAssets(params: {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
-            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
           });
     if (media.kind !== params.expectedKind) {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
