@@ -154,6 +154,117 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  it("allows group reply targets when group allowlist names sender handles", async () => {
+    const client = createClient({ guid: "p:0/group-reply" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["+15551230000"],
+          },
+        },
+      },
+      client,
+      replyToId: "inbound-1",
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps fresh group sends blocked when group allowlist only names sender handles", async () => {
+    const client = createClient({ guid: "p:0/group-fresh" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15551230000"],
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("treats direct chat identifiers as DM allowlist targets", async () => {
+    const client = createClient({ guid: "p:0/direct-chat" });
+
+    await sendMessageIMessage("chat_identifier:iMessage;-;+15551230000", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+1 (555) 123-0000"],
+            groupPolicy: "disabled",
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_identifier: "iMessage;-;+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
+  it("honors wildcard iMessage DM allowlist entries for outbound sends", async () => {
+    const client = createClient({ guid: "p:0/wildcard-dm" });
+
+    await sendMessageIMessage("+15559999999", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["*"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ to: "+15559999999" }),
+      expect.any(Object),
+    );
+  });
+
+  it("honors wildcard iMessage group allowlist entries for outbound sends", async () => {
+    const client = createClient({ guid: "p:0/wildcard-group" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["*"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
   it("allows outbound handles listed by allowlist policy", async () => {
     const client = createClient({ guid: "p:0/allowed" });
 
