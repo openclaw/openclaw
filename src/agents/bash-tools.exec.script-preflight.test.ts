@@ -26,6 +26,7 @@ const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 const parseOpenClawChannelsLoginShellCommand = testing.parseOpenClawChannelsLoginShellCommand;
 const validateExecScriptPreflight = testing.validateScriptFileForShellBleed;
+const shouldSkipExecScriptPreflight = testing.shouldSkipExecScriptPreflight;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
 
@@ -625,5 +626,37 @@ describe("exec interpreter heuristics ReDoS guard", () => {
     await validateExecScriptPreflight({ command, workdir: process.cwd() });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(5000);
+  });
+});
+
+describe("shouldSkipExecScriptPreflight", () => {
+  it("skips preflight for gateway host when security is full regardless of ask level", () => {
+    expect(shouldSkipExecScriptPreflight({ host: "gateway", security: "full", ask: "off" })).toBe(
+      true,
+    );
+    expect(
+      shouldSkipExecScriptPreflight({ host: "gateway", security: "full", ask: "on-miss" }),
+    ).toBe(true);
+    expect(
+      shouldSkipExecScriptPreflight({ host: "gateway", security: "full", ask: "always" }),
+    ).toBe(true);
+  });
+
+  it("does not skip preflight for non-gateway hosts even when security is full", () => {
+    expect(shouldSkipExecScriptPreflight({ host: "node", security: "full", ask: "off" })).toBe(
+      false,
+    );
+    expect(shouldSkipExecScriptPreflight({ host: "sandbox", security: "full", ask: "off" })).toBe(
+      false,
+    );
+  });
+
+  it("does not skip preflight when security is not full", () => {
+    expect(
+      shouldSkipExecScriptPreflight({ host: "gateway", security: "allowlist", ask: "off" }),
+    ).toBe(false);
+    expect(shouldSkipExecScriptPreflight({ host: "gateway", security: "deny", ask: "off" })).toBe(
+      false,
+    );
   });
 });
