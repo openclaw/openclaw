@@ -223,16 +223,9 @@
                       "type": "string"
                     },
                     "mode": {
-                      "anyOf": [
-                        {
-                          "const": "announce",
-                          "type": "string"
-                        },
-                        {
-                          "const": "webhook",
-                          "type": "string"
-                        }
-                      ]
+                      "description": "Failure destination mode",
+                      "enum": ["announce", "webhook"],
+                      "type": "string"
                     },
                     "to": {
                       "description": "Failure delivery target",
@@ -255,7 +248,7 @@
                       "type": "number"
                     }
                   ],
-                  "description": "Thread/topic id"
+                  "description": "Thread/topic id as a string or number"
                 },
                 "to": {
                   "description": "Delivery target",
@@ -476,66 +469,56 @@
                   "description": "Delivery channel, or null to clear"
                 },
                 "failureDestination": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": true,
-                      "properties": {
-                        "accountId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery account, or null to clear"
+                  "additionalProperties": true,
+                  "description": "Failure destination, or null to clear",
+                  "properties": {
+                    "accountId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
                         },
-                        "channel": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery channel, or null to clear"
-                        },
-                        "mode": {
-                          "anyOf": [
-                            {
-                              "const": "announce",
-                              "type": "string"
-                            },
-                            {
-                              "const": "webhook",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "to": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery target, or null to clear"
+                        {
+                          "type": "null"
                         }
-                      },
-                      "type": "object"
+                      ],
+                      "description": "Failure delivery account, or null to clear"
                     },
-                    {
-                      "type": "null"
+                    "channel": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Failure delivery channel, or null to clear"
+                    },
+                    "mode": {
+                      "anyOf": [
+                        {
+                          "enum": ["announce", "webhook"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Failure destination mode, or null to clear"
+                    },
+                    "to": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Failure delivery target, or null to clear"
                     }
-                  ],
-                  "description": "Failure destination, or null to clear"
+                  },
+                  "type": ["object", "null"]
                 },
                 "mode": {
                   "description": "Delivery mode",
@@ -554,7 +537,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Thread/topic id"
+                  "description": "Thread/topic id as a string or number, or null to clear"
                 },
                 "to": {
                   "anyOf": [

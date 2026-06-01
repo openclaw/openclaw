@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ZIP=${1:?"Usage: $0 OpenClaw-<ver>.zip"}
-FEED_URL=${2:-"https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"}
 PRIVATE_KEY_FILE=${SPARKLE_PRIVATE_KEY_FILE:-}
 
 find_generate_appcast() {
@@ -38,6 +37,19 @@ if [[ -z "$VERSION" ]]; then
   fi
 fi
 
+APPCAST_PATH=${SPARKLE_APPCAST_PATH:-}
+if [[ -z "$APPCAST_PATH" ]]; then
+  APPCAST_PATH="appcast.xml"
+  if [[ "$VERSION" =~ -(alpha|beta)\.[0-9]+$ ]]; then
+    APPCAST_PATH="appcast-${BASH_REMATCH[1]}.xml"
+  fi
+fi
+if [[ "$APPCAST_PATH" == /* || "$APPCAST_PATH" == *".."* ]]; then
+  echo "SPARKLE_APPCAST_PATH must be a relative appcast path without '..': $APPCAST_PATH" >&2
+  exit 1
+fi
+FEED_URL=${2:-"https://raw.githubusercontent.com/openclaw/openclaw/main/${APPCAST_PATH}"}
+
 TMP_DIR="$(mktemp -d)"
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -47,8 +59,8 @@ cleanup() {
 }
 trap cleanup EXIT
 cp -f "$ZIP" "$TMP_DIR/$ZIP_NAME"
-if [[ -f "$ROOT/appcast.xml" ]]; then
-  cp -f "$ROOT/appcast.xml" "$TMP_DIR/appcast.xml"
+if [[ -f "$ROOT/$APPCAST_PATH" ]]; then
+  cp -f "$ROOT/$APPCAST_PATH" "$TMP_DIR/appcast.xml"
 fi
 
 NOTES_HTML="${ZIP_DIR}/${ZIP_BASE}.html"
@@ -75,6 +87,7 @@ fi
   --link "$FEED_URL" \
   "$TMP_DIR"
 
-cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"
+mkdir -p "$(dirname "$ROOT/$APPCAST_PATH")"
+cp -f "$TMP_DIR/appcast.xml" "$ROOT/$APPCAST_PATH"
 
-echo "Appcast generated (appcast.xml). Upload alongside $ZIP at $FEED_URL"
+echo "Appcast generated ($APPCAST_PATH). Upload alongside $ZIP at $FEED_URL"

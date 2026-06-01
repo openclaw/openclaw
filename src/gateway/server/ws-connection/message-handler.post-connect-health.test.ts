@@ -542,6 +542,24 @@ describe("resolvePinnedClientMetadata", () => {
     },
   );
 
+  it("allows local CLI probe darwin metadata against a paired macOS desktop identity", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "cli",
+        clientMode: "probe",
+        claimedPlatform: "darwin",
+        claimedDeviceFamily: undefined,
+        pairedPlatform: "macOS 26.6.0",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.6.0",
+      pinnedDeviceFamily: "Mac",
+    });
+  });
+
   it.each([
     ["openclaw-ios", "iOS 26.5.0", "iOS 26.4.2", "iPhone"],
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],

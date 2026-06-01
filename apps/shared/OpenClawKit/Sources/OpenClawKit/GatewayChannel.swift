@@ -490,6 +490,8 @@ public actor GatewayChannelActor {
                 auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
             }
             params["auth"] = ProtoAnyCodable(auth)
+        } else if let authDeviceToken = selectedAuth.authDeviceToken {
+            params["auth"] = ProtoAnyCodable(["deviceToken": ProtoAnyCodable(authDeviceToken)])
         } else if let authBootstrapToken = selectedAuth.authBootstrapToken {
             params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
         } else if let password = selectedAuth.authPassword {
@@ -569,17 +571,19 @@ public actor GatewayChannelActor {
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
-        let authToken =
-            explicitToken ??
-            // A freshly scanned setup code should force the bootstrap pairing path instead of
-            // silently reusing an older stored device token.
-            (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
-                ? storedToken
-                : nil)
+        let authToken = explicitToken
         let authBootstrapToken =
             authToken == nil && explicitPassword == nil ? explicitBootstrapToken : nil
-        let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
-        let authSource: GatewayAuthSource = if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
+        let shouldUseStoredDeviceToken =
+            includeDeviceIdentity &&
+            storedToken != nil &&
+            explicitToken == nil &&
+            explicitPassword == nil &&
+            // A freshly scanned setup code should force the bootstrap pairing path instead of
+            // silently reusing an older stored device token.
+            explicitBootstrapToken == nil
+        let authDeviceToken = (shouldUseDeviceRetryToken || shouldUseStoredDeviceToken) ? storedToken : nil
+        let authSource: GatewayAuthSource = if authDeviceToken != nil {
             .deviceToken
         } else if authToken != nil {
             .sharedToken
@@ -595,7 +599,7 @@ public actor GatewayChannelActor {
             authBootstrapToken: authBootstrapToken,
             authDeviceToken: authDeviceToken,
             authPassword: explicitPassword,
-            signatureToken: authToken ?? authBootstrapToken,
+            signatureToken: authToken ?? authBootstrapToken ?? authDeviceToken,
             storedToken: storedToken,
             storedScopes: storedEntry?.scopes,
             authSource: authSource)

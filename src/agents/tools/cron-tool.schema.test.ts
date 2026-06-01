@@ -216,6 +216,50 @@ describe("CronToolSchema", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      Value.Check(CronToolSchema, {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          delivery: {
+            threadId: null,
+            failureDestination: null,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(CronToolSchema, {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          delivery: {
+            failureDestination: {
+              mode: null,
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts numeric delivery thread ids in the runtime schema", () => {
+    expect(
+      Value.Check(CronToolSchema, {
+        action: "add",
+        job: {
+          name: "topic reminder",
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-100123",
+            threadId: 42,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("job.agentId and job.sessionKey project to plain string type for OpenAPI 3.0 compat", () => {
@@ -250,11 +294,16 @@ describe("CronToolSchema", () => {
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
   // serialized provider-facing cron tool schema.
-  it("serialized provider schema contains no type-array or not/const keywords", () => {
+  it("serialized provider schema contains no anyOf/type-array/not/const keywords", () => {
     const json = JSON.stringify(providerSchemaRecord);
+    // Some providers reject anyOf in tool schemas; descriptions carry nullable
+    // affordances and runtime normalization keeps accepting null.
+    expect(json).not.toMatch(/"anyOf"\s*:/);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
     // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
+    // The "const" keyword is also outside the conservative provider subset.
+    expect(json).not.toMatch(/"const"\s*:/);
   });
 });

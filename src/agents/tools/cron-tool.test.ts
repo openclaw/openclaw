@@ -22,10 +22,11 @@ import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
   type SchemaLike = {
-    anyOf?: Array<{ type?: string }>;
+    anyOf?: Array<{ enum?: unknown[]; type?: string }>;
     description?: string;
+    enum?: unknown[];
     properties?: Record<string, SchemaLike>;
-    type?: string;
+    type?: string | string[];
   };
 
   type TestDelivery = {
@@ -459,10 +460,13 @@ describe("cron tool", () => {
     const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
     const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
 
-    expect(jobThreadId?.description).toContain("Thread/topic id");
     expect(jobThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
-    expect(patchThreadId?.description).toContain("Thread/topic id");
+    expect(jobThreadId?.type).toBeUndefined();
+    expect(jobThreadId?.description).toContain("string or number");
     expect(patchThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number", "null"]);
+    expect(patchThreadId?.type).toBeUndefined();
+    expect(patchThreadId?.description).toContain("string or number");
+    expect(patchThreadId?.description).toContain("null to clear");
   });
 
   it("advertises nullable cron update clears in the tool schema", () => {
@@ -477,6 +481,11 @@ describe("cron tool", () => {
     expect(jobDelivery?.properties?.channel?.type).toBe("string");
     expect(jobDelivery?.properties?.failureDestination?.anyOf).toBeUndefined();
     expect(jobDelivery?.properties?.failureDestination?.type).toBe("object");
+    expect(jobDelivery?.properties?.failureDestination?.properties?.mode?.type).toBe("string");
+    expect(jobDelivery?.properties?.failureDestination?.properties?.mode?.enum).toEqual([
+      "announce",
+      "webhook",
+    ]);
     expect(patch?.properties?.agentId?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
@@ -501,9 +510,15 @@ describe("cron tool", () => {
     ]);
     expect(delivery?.properties?.channel?.type).toBeUndefined();
     expect(delivery?.properties?.channel?.description).toContain("null to clear");
-    expect(delivery?.properties?.failureDestination?.anyOf?.map((entry) => entry.type)).toEqual([
-      "object",
-      "null",
+    expect(delivery?.properties?.failureDestination?.anyOf).toBeUndefined();
+    expect(delivery?.properties?.failureDestination?.type).toEqual(["object", "null"]);
+    expect(delivery?.properties?.failureDestination?.description).toContain("null to clear");
+    expect(
+      delivery?.properties?.failureDestination?.properties?.mode?.anyOf?.map((entry) => entry.type),
+    ).toEqual(["string", "null"]);
+    expect(delivery?.properties?.failureDestination?.properties?.mode?.anyOf?.[0]?.enum).toEqual([
+      "announce",
+      "webhook",
     ]);
   });
 
