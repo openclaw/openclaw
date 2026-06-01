@@ -7,7 +7,17 @@ import type {
   EmbeddedAgentExecutionContract,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
-import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type {
+  AgentEmbeddedHarnessConfig,
+  AgentModelConfig,
+  AgentRuntimePolicyConfig,
+  AgentSandboxConfig,
+} from "./types.agents-shared.js";
+import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
+
+export type AgentProviderConfig = {
+  request?: ConfiguredModelProviderRequest;
+};
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
@@ -148,6 +158,8 @@ export type AgentConfig = {
     /** Optional per-agent execution contract override. */
     executionContract?: EmbeddedAgentExecutionContract;
   };
+  /** Optional per-agent provider request overrides. */
+  providers?: Record<string, AgentProviderConfig>;
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */

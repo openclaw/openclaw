@@ -6,6 +6,7 @@ import {
   buildProviderRequestDispatcherPolicy,
   mergeModelProviderRequestOverrides,
   mergeProviderRequestOverrides,
+  resolveAgentProviderRequest,
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
@@ -646,5 +647,112 @@ describe("provider request config", () => {
 
     expect(resolved.policy.endpointClass).toBe(entry.expectedEndpointClass);
     expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+  });
+
+  describe("resolveAgentProviderRequest", () => {
+    it("returns undefined when config is missing", () => {
+      expect(resolveAgentProviderRequest(undefined, "my-agent", "openai")).toBeUndefined();
+    });
+
+    it("returns undefined when agentId is missing", () => {
+      expect(
+        resolveAgentProviderRequest(
+          { agents: { list: [{ id: "a", providers: {} }] } },
+          undefined,
+          "openai",
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined when agent is not found", () => {
+      expect(
+        resolveAgentProviderRequest(
+          { agents: { list: [{ id: "other", providers: {} }] } },
+          "my-agent",
+          "openai",
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined when provider is not configured on agent", () => {
+      expect(
+        resolveAgentProviderRequest(
+          { agents: { list: [{ id: "a", providers: { anthropic: {} } }] } },
+          "a",
+          "openai",
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns sanitized headers from agent provider config", () => {
+      const result = resolveAgentProviderRequest(
+        {
+          agents: {
+            list: [
+              {
+                id: "my-agent",
+                providers: {
+                  openai: {
+                    request: {
+                      headers: { "X-Custom": "value" },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        "my-agent",
+        "openai",
+      );
+      expect(result).toEqual({ headers: { "X-Custom": "value" } });
+    });
+
+    it("returns allowPrivateNetwork from agent provider config", () => {
+      const result = resolveAgentProviderRequest(
+        {
+          agents: {
+            list: [
+              {
+                id: "a",
+                providers: {
+                  local: {
+                    request: { allowPrivateNetwork: true },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        "a",
+        "local",
+      );
+      expect(result).toEqual({ allowPrivateNetwork: true });
+    });
+
+    it("returns combined headers and allowPrivateNetwork", () => {
+      const result = resolveAgentProviderRequest(
+        {
+          agents: {
+            list: [
+              {
+                id: "a",
+                providers: {
+                  local: {
+                    request: {
+                      headers: { "X-Beta": "v2" },
+                      allowPrivateNetwork: true,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        "a",
+        "local",
+      );
+      expect(result).toEqual({ headers: { "X-Beta": "v2" }, allowPrivateNetwork: true });
+    });
   });
 });

@@ -2,8 +2,16 @@
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
+
+/** Cron job-scoped provider overrides are restricted to custom headers only.
+ * Auth, proxy, TLS, and allowPrivateNetwork are not exposed through mutable
+ * cron payloads to prevent scheduled jobs from overriding transport policy. */
+export type CronJobProviderRequest = {
+  headers?: Record<string, SecretInput>;
+};
 
 /** Supported schedule forms persisted in cron job specs. */
 export type CronSchedule =
@@ -248,6 +256,8 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Per-job provider request overrides (headers only); merged over agent/global config. */
+  providers?: Record<string, { request?: CronJobProviderRequest }>;
 };
 
 type CronAgentTurnPayload = {
@@ -256,9 +266,10 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "toolsAllow" | "providers">> & {
     model?: string | null;
     toolsAllow?: string[] | null;
+    providers?: Record<string, { request?: CronJobProviderRequest }> | null;
   };
 
 type CronCommandPayloadFields = {

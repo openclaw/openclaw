@@ -14,6 +14,7 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
+  ConfiguredModelProviderRequestSchema,
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
@@ -1090,6 +1091,12 @@ export const AgentEntrySchema = z
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
+    providers: z
+      .record(
+        z.string(),
+        z.object({ request: ConfiguredModelProviderRequestSchema }).strict().optional(),
+      )
+      .optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })
