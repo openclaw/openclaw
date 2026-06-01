@@ -684,8 +684,12 @@ const INBOUND_META_SENTINELS = [
   "Conversation info (untrusted metadata):",
   "Sender (untrusted metadata):",
   "Thread starter (untrusted, for context):",
+  "Reply target of current user message (untrusted, for context):",
   "Replied message (untrusted, for context):",
   "Forwarded message context (untrusted metadata):",
+  "Conversation context (untrusted, chronological, selected for current message):",
+  "Current local chat window (untrusted, chronological, before current message):",
+  "Nearby reply target window (untrusted, chronological, around replied-to message):",
   "Chat history since last reply (untrusted, for context):",
 ] as const;
 
@@ -707,9 +711,12 @@ const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
  * pathological inputs.
  */
 const INBOUND_META_LABEL_RE =
-  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first)\):[ \t]*$/m;
+  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*$/m;
 const INBOUND_META_LABEL_JSON_BLOCK_RE =
-  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first)\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
+  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
+const LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE =
+  /^[^\n]{1,100}\(untrusted, chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
+const BRACKETED_LINE_PREFIX_RE = /^\[[^\]\n]{1,500}\]\s/gm;
 
 const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
 
@@ -908,6 +915,51 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
   return body;
 }
 
+function stripLeadingInboundEnvelope(text: string): string {
+  const envelopePrefixMatch =
+    text.match(INBOUND_ENVELOPE_PREFIX_RE) ??
+    (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE
+      ? text.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE)
+      : null);
+  if (!envelopePrefixMatch) {
+    return text;
+  }
+  const headerInside = envelopePrefixMatch[1] ?? "";
+  const afterBracket = text.slice(envelopePrefixMatch[0].length);
+  return stripEnvelopeBodySenderPrefix(afterBracket, headerInside);
+}
+
+function findFirstInboundEnvelopeLineIndex(text: string): number {
+  for (const match of text.matchAll(BRACKETED_LINE_PREFIX_RE)) {
+    const index = match.index;
+    const candidate = text.slice(index);
+    if (
+      INBOUND_ENVELOPE_PREFIX_RE.test(candidate) ||
+      INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.test(candidate)
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function stripLeadingChronologicalContextBlocks(text: string): string {
+  let cleaned = text;
+  for (let pass = 0; pass < INBOUND_META_SENTINELS.length; pass += 1) {
+    const match = cleaned.match(LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE);
+    if (!match) {
+      return cleaned;
+    }
+    const afterLabel = cleaned.slice(match[0].length);
+    const envelopeIndex = findFirstInboundEnvelopeLineIndex(afterLabel);
+    cleaned = envelopeIndex === -1 ? "" : afterLabel.slice(envelopeIndex);
+    if (!cleaned) {
+      return "";
+    }
+  }
+  return cleaned;
+}
+
 /**
  * Strips OpenClaw-injected envelope metadata from a user message so that only
  * the user's actual intent text remains. Returns empty string if nothing
@@ -924,25 +976,6 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Strip leading timestamp prefix
   cleaned = cleaned.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
-
-  // Strip the leading inbound-envelope bracket emitted by formatInboundEnvelope
-  // (src/auto-reply/envelope.ts). The bracket precedes the user's body text;
-  // for non-direct envelopes the body is prefixed with `<Sender>: ` and for
-  // direct fromMe with `(self): `, so strip that too -- but only when the
-  // surviving label matches the formatter contract (see
-  // `stripEnvelopeBodySenderPrefix`). Try the marker-aware regex first, then
-  // fall back to the known-channel regex so marker-free envelopes
-  // (`[telegram alice] hi`) are also sanitized cleanly.
-  const envelopePrefixMatch =
-    cleaned.match(INBOUND_ENVELOPE_PREFIX_RE) ??
-    (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE
-      ? cleaned.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE)
-      : null);
-  if (envelopePrefixMatch) {
-    const headerInside = envelopePrefixMatch[1] ?? "";
-    const afterBracket = cleaned.slice(envelopePrefixMatch[0].length);
-    cleaned = stripEnvelopeBodySenderPrefix(afterBracket, headerInside);
-  }
 
   // Strip inbound metadata blocks: generic label line + optional ```json +
   // content + ```. This deliberately mirrors `looksLikeEnvelopeSludge`'s
@@ -962,6 +995,10 @@ export function sanitizeForMemoryCapture(text: string): string {
     );
     cleaned = cleaned.replace(blockRe, "");
   }
+  // Plain chat-window context blocks are untrusted history lines rather than
+  // JSON metadata. When they lead the prompt, keep only the following real
+  // inbound envelope; if no envelope follows, drop the context block entirely.
+  cleaned = stripLeadingChronologicalContextBlocks(cleaned);
   // For labels/sentinels that survived the code-fence strip (plain-text body,
   // no JSON fence), act on the earliest line-anchored metadata header each
   // pass. A bounded retry cap rules out pathological input from spinning
@@ -1011,6 +1048,14 @@ export function sanitizeForMemoryCapture(text: string): string {
   if (untrustedLineMatch) {
     cleaned = cleaned.slice(0, untrustedLineMatch.index);
   }
+
+  // Strip the leading inbound-envelope bracket emitted by formatInboundEnvelope
+  // (src/auto-reply/envelope.ts) after context metadata is removed. Real prompt
+  // bodies often arrive as currentInboundContext followed by `[Channel ...]`.
+  // The bracket precedes the user's body text; for non-direct envelopes the
+  // body is prefixed with `<Sender>: ` and for direct fromMe with `(self): `,
+  // so strip that too when the surviving label matches the formatter contract.
+  cleaned = stripLeadingInboundEnvelope(cleaned);
 
   // Strip [media attached: ...] and [media attached N/M: ...] annotations
   cleaned = cleaned.replace(MEDIA_ATTACHED_PATTERN, "");

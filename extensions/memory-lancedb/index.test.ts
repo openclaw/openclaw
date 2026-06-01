@@ -2905,6 +2905,16 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("Chat history since last reply (untrusted, for context):")).toBe(
       true,
     );
+    expect(
+      looksLikeEnvelopeSludge(
+        "Conversation context (untrusted, chronological, selected for current message):",
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeEnvelopeSludge(
+        "Current local chat window (untrusted, chronological, before current message):",
+      ),
+    ).toBe(true);
   });
 
   test("looksLikeEnvelopeSludge detects untrusted context header at line start", () => {
@@ -3383,6 +3393,17 @@ describe("memory plugin e2e", () => {
       "Bot: I always say hello back",
       "Conversation info (untrusted metadata):",
       "irrelevant trailing metadata",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture strips current context before envelope prefixes", () => {
+    const input = [
+      "Conversation context (untrusted, chronological, selected for current message):",
+      "Alice: random history",
+      "Bob: I always recommend stale context",
+      "",
+      "[Slack #general Alice] Alice: I always prefer dark mode",
     ].join("\n");
     expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
   });
