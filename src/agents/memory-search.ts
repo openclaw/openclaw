@@ -5,6 +5,10 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
@@ -126,6 +130,29 @@ const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
+const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
+
+function resolveRemoteBatchPollIntervalMs(
+  overrideValue: number | undefined,
+  defaultValue: number | undefined,
+): number {
+  return resolvePositiveTimerTimeoutMs(
+    overrideValue ?? defaultValue,
+    DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS,
+  );
+}
+
+function resolveRemoteBatchTimeoutMinutes(
+  overrideValue: number | undefined,
+  defaultValue: number | undefined,
+): number {
+  const value = overrideValue ?? defaultValue;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? clampInt(value, 1, MAX_REMOTE_BATCH_TIMEOUT_MINUTES)
+    : DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES;
+}
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -221,10 +248,14 @@ function mergeConfig(
       1,
       overrideRemote?.batch?.concurrency ?? defaultRemote?.batch?.concurrency ?? 2,
     ),
-    pollIntervalMs:
-      overrideRemote?.batch?.pollIntervalMs ?? defaultRemote?.batch?.pollIntervalMs ?? 2000,
-    timeoutMinutes:
-      overrideRemote?.batch?.timeoutMinutes ?? defaultRemote?.batch?.timeoutMinutes ?? 60,
+    pollIntervalMs: resolveRemoteBatchPollIntervalMs(
+      overrideRemote?.batch?.pollIntervalMs,
+      defaultRemote?.batch?.pollIntervalMs,
+    ),
+    timeoutMinutes: resolveRemoteBatchTimeoutMinutes(
+      overrideRemote?.batch?.timeoutMinutes,
+      defaultRemote?.batch?.timeoutMinutes,
+    ),
   };
   const remote = includeRemote
     ? {

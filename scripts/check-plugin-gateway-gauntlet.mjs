@@ -6,12 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   parseNonNegativeInt,
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -1005,8 +1005,10 @@ async function main() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
 }

@@ -320,6 +320,39 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });
 
+  it("removes CLI startup metadata during default tsdown clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-default-");
+    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
+    await fsPromises.mkdir(path.dirname(metadataFile), { recursive: true });
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+
+    cleanTsdownOutputRoots({ cwd: rootDir });
+
+    await expectPathMissing(metadataFile);
+  });
+
+  it("preserves CLI startup metadata across opted-in build-all tsdown clean", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-metadata-");
+    const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
+    const staleFile = path.join(rootDir, "dist", "stale.js");
+    const nestedStaleFile = path.join(rootDir, "dist", "nested", "stale.js");
+    await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
+    await fsPromises.writeFile(metadataFile, '{"generatedBy":"test"}\n');
+    await fsPromises.writeFile(staleFile, "stale\n");
+    await fsPromises.writeFile(nestedStaleFile, "stale\n");
+
+    cleanTsdownOutputRoots({
+      cwd: rootDir,
+      env: { OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1" },
+    });
+
+    await expect(fsPromises.readFile(metadataFile, "utf8")).resolves.toBe(
+      '{"generatedBy":"test"}\n',
+    );
+    await expectPathMissing(staleFile);
+    await expectPathMissing(nestedStaleFile);
+  });
+
   it("preserves existing package declarations when tsdown DTS output is skipped", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-skip-dts-");
     const declarationFile = path.join(

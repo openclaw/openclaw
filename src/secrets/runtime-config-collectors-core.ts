@@ -135,12 +135,12 @@ function collectAgentMemorySearchAssignments(params: {
     if (memorySearch?.enabled === false) {
       continue;
     }
-    if (!memorySearch || !Object.prototype.hasOwnProperty.call(memorySearch, "remote")) {
+    if (!memorySearch || !Object.hasOwn(memorySearch, "remote")) {
       hasEnabledAgentWithoutOverride = true;
       continue;
     }
     const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
+    if (!remote || !Object.hasOwn(remote, "apiKey")) {
       hasEnabledAgentWithoutOverride = true;
       continue;
     }
@@ -173,7 +173,7 @@ function collectAgentMemorySearchAssignments(params: {
       return;
     }
     const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
+    if (!remote || !Object.hasOwn(remote, "apiKey")) {
       return;
     }
     const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
@@ -591,7 +591,7 @@ function collectSandboxSshAssignments(params: {
     const active =
       normalizeOptionalLowercaseString(effectiveBackend) === "ssh" && effectiveMode !== "off";
     for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-      if (ssh && Object.prototype.hasOwnProperty.call(ssh, key)) {
+      if (ssh && Object.hasOwn(ssh, key)) {
         collectSecretInputAssignment({
           value: ssh[key],
           path: `agents.list.${index}.sandbox.ssh.${key}`,

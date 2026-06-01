@@ -42,6 +42,7 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
@@ -237,9 +238,6 @@ function validateMusicGenerationCapabilities(params: {
         `${provider.id} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
       );
     }
-  }
-  if (!caps) {
-    return;
   }
 }
 
@@ -727,7 +725,9 @@ export function createMusicGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id ?? selectedModelRef?.provider,
       });
-      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
+      const shouldDetach = Boolean(
+        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+      );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({

@@ -97,9 +97,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.prototype.hasOwnProperty.call(typed, "value");
-    const hasRef = Object.prototype.hasOwnProperty.call(typed, "ref");
-    const hasProvider = Object.prototype.hasOwnProperty.call(typed, "provider");
+    const hasValue = Object.hasOwn(typed, "value");
+    const hasRef = Object.hasOwn(typed, "ref");
+    const hasProvider = Object.hasOwn(typed, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(

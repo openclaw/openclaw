@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, repairJsonFilePermissions, saveJsonFile } from "../../infra/json-file.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
@@ -39,7 +40,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
-import { savePersistedAuthProfileState } from "./state.js";
+import { loadPersistedAuthProfileState, savePersistedAuthProfileState } from "./state.js";
 import {
   clearLoadedAuthStoreCache,
   readCachedAuthProfileStore,
@@ -59,6 +60,8 @@ type LoadAuthProfileStoreOptions = {
 
 type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
+  preserveOrderProfileIds?: Iterable<string>;
+  pruneOrderProfileIds?: Iterable<string>;
   syncExternalCli?: boolean;
 };
 
@@ -186,10 +189,12 @@ function shouldUseMainOwnerForLocalOAuthCredential(params: {
   if (isDeepStrictEqual(params.local, params.main)) {
     return true;
   }
-  return (
-    Number.isFinite(params.main.expires) &&
-    (!Number.isFinite(params.local.expires) || params.main.expires >= params.local.expires)
-  );
+  const mainExpires = asDateTimestampMs(params.main.expires);
+  if (mainExpires === undefined) {
+    return false;
+  }
+  const localExpires = asDateTimestampMs(params.local.expires);
+  return localExpires === undefined || mainExpires >= localExpires;
 }
 
 function resolveRuntimeAuthProfileStore(
@@ -471,13 +476,14 @@ function shouldKeepProfileInLocalStore(params: {
 function pruneAuthProfileStoreReferences(
   store: AuthProfileStore,
   keptProfileIds: Set<string>,
+  keptOrderProfileIds = keptProfileIds,
 ): void {
   store.order = store.order
     ? Object.fromEntries(
         Object.entries(store.order)
           .map(([provider, profileIds]) => [
             provider,
-            profileIds.filter((profileId) => keptProfileIds.has(profileId)),
+            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
           ])
           .filter(([, profileIds]) => profileIds.length > 0),
       )
@@ -531,7 +537,31 @@ function buildLocalAuthProfileStoreForSave(params: {
     ),
   );
   const keptProfileIds = new Set(Object.keys(localStore.profiles));
-  pruneAuthProfileStoreReferences(localStore, keptProfileIds);
+  const keptOrderProfileIds = new Set(keptProfileIds);
+  for (const profileIds of Object.values(
+    loadPersistedAuthProfileState(params.agentDir).order ?? {},
+  )) {
+    for (const profileId of profileIds) {
+      keptOrderProfileIds.add(profileId);
+    }
+  }
+  for (const profileId of params.options?.preserveOrderProfileIds ?? []) {
+    const normalizedProfileId = profileId.trim();
+    if (normalizedProfileId) {
+      keptOrderProfileIds.add(normalizedProfileId);
+    }
+  }
+  const prunedOrderProfileIds = new Set<string>();
+  for (const profileId of params.options?.pruneOrderProfileIds ?? []) {
+    const normalizedProfileId = profileId.trim();
+    if (normalizedProfileId) {
+      prunedOrderProfileIds.add(normalizedProfileId);
+    }
+  }
+  for (const profileId of prunedOrderProfileIds) {
+    keptOrderProfileIds.delete(profileId);
+  }
+  pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);
   if (params.options?.filterExternalAuthProfiles !== false) {
     localStore.runtimeExternalProfileIds = undefined;
     localStore.runtimeExternalProfileIdsAuthoritative = undefined;

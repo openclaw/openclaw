@@ -8,7 +8,7 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
-import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
+import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -92,7 +92,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (!normalized) {
     return null;
   }
-  const cards = extractToolCards(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage, "preview");
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {

@@ -313,8 +313,8 @@ setInterval(() => {}, 1000);
 
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
       detached: undefined,
-      timeoutKillGraceMs: 50,
-      timeoutMs: 1000,
+      timeoutKillGraceMs: 25,
+      timeoutMs: 500,
     });
 
     try {
@@ -323,7 +323,7 @@ setInterval(() => {}, 1000);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 1000ms");
+      await expect(runPromise).rejects.toThrow("timed out after 500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -364,7 +364,7 @@ setInterval(() => {}, 1000);
     expect(samples[0]).toMatchObject({
       aggregateRssMiB: 640,
       label: "plugins install",
-      processId: seenPids[0]! + 1,
+      processId: seenPids[0] + 1,
       rssMiB: 512,
     });
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
@@ -779,7 +779,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: () => new Promise(() => undefined),
+      text: () => new Promise(() => {}),
     });
 
     const result = fetchJson("http://127.0.0.1:19680/readyz", {

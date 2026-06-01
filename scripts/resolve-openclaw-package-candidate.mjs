@@ -269,7 +269,7 @@ async function findSingleTarball(dir) {
 
 export async function readArtifactPackageCandidateMetadata(dir) {
   const metadataPath = path.join(path.resolve(ROOT_DIR, dir), "package-candidate.json");
-  let raw = "";
+  let raw;
   try {
     raw = await fs.readFile(metadataPath, "utf8");
   } catch (error) {
@@ -900,18 +900,20 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     );
     request.on("error", reject);
     request.end();
-  }).catch((error) => {
-    clearTimeout(timeout);
-    if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-      throw new Error(
-        `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-        {
-          cause: error,
-        },
-      );
-    }
-    throw error;
-  });
+  }).catch(
+    /** @param {unknown} error */ (error) => {
+      clearTimeout(timeout);
+      if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
+        throw new Error(
+          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      throw error;
+    },
+  );
   return {
     close: async () => closeResponseBody(response.body),
     response,
@@ -1197,9 +1199,11 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    console.error(usage());
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      console.error(usage());
+      process.exit(1);
+    },
+  );
 }

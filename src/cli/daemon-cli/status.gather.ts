@@ -154,10 +154,7 @@ function coerceStatusConfig(value: unknown): OpenClawConfig {
 
 function hasOwnKey(value: unknown, key: string): boolean {
   return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.prototype.hasOwnProperty.call(value, key),
+    value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, key),
   );
 }
 
@@ -508,7 +505,9 @@ export async function gatherDaemonStatus(
     : process.env;
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env: serviceEnv }).catch(() => false),
-    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service
+      .readRuntime(serviceEnv)
+      .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
   ]);
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
@@ -556,7 +555,9 @@ export async function gatherDaemonStatus(
   const staleUpdateLaunchdJobs =
     opts.deep && process.platform === "darwin"
       ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
+            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
+          )
           .catch(() => [])
       : [];
 

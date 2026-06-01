@@ -86,11 +86,7 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
   const [segment, ...rest] = path;
   const properties = asObjectRecord(node.properties);
-  if (
-    segment !== ACCOUNT_SCHEMA_WILDCARD &&
-    properties &&
-    Object.prototype.hasOwnProperty.call(properties, segment)
-  ) {
+  if (segment !== ACCOUNT_SCHEMA_WILDCARD && properties && Object.hasOwn(properties, segment)) {
     return schemaAllowsConfigPath(properties[segment], rest);
   }
 

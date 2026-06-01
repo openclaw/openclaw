@@ -261,7 +261,7 @@ function normalizeChannelConfigMap(value: unknown): Record<string, unknown> | nu
 
 function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string, unknown> | null {
   const channels = normalizeChannelConfigMap(value);
-  if (!channels || Object.prototype.hasOwnProperty.call(channels, "$include")) {
+  if (!channels || Object.hasOwn(channels, "$include")) {
     return null;
   }
   return channels;
@@ -3558,7 +3558,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   let restartScriptPath: string | null = null;
-  let refreshGatewayServiceEnv = false;
+  let refreshGatewayServiceEnvLocal = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayPort = resolveUpdatedGatewayRestartPort({
     config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
@@ -3587,7 +3587,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           serviceEnv: gatewayServiceEnv,
         });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
-        refreshGatewayServiceEnv = true;
+        refreshGatewayServiceEnvLocal = true;
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
@@ -3610,7 +3610,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     shouldRestart,
     result: resultWithPostUpdate,
     opts,
-    refreshServiceEnv: refreshGatewayServiceEnv,
+    refreshServiceEnv: refreshGatewayServiceEnvLocal,
     serviceEnv: gatewayServiceEnv,
     gatewayPort,
     restartScriptPath,

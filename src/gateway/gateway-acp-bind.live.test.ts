@@ -370,7 +370,7 @@ async function bindConversationAndWait(params: {
         logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);
       } else {
         if (runtime?.doctor && (attempt === 1 || attempt % 6 === 0)) {
-          const report = await runtime.doctor().catch((error) => ({
+          const report = await runtime.doctor().catch((error: unknown) => ({
             message: error instanceof Error ? error.message : String(error),
             details: [],
           }));

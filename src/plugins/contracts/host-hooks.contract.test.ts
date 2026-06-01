@@ -45,7 +45,9 @@ import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function requireFirstCommandRegistration(

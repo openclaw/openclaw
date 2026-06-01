@@ -216,8 +216,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
   const targetPort = 443;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
-  for (let i = 0; i < noProxyEntries.length; i++) {
-    const entry = noProxyEntries[i];
+  for (const entry of noProxyEntries) {
     if (!entry) {
       continue;
     }

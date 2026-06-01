@@ -137,7 +137,7 @@ async function readSessionLogMentions(params: {
     tool_search_code: 0,
     [params.targetTool]: 0,
   };
-  let files: string[] = [];
+  let files: string[];
   try {
     files = await fs.readdir(sessionsDir);
   } catch {

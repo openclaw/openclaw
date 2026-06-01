@@ -434,6 +434,17 @@ describe("buildQaRuntimeEnv", () => {
     ).rejects.toThrow("qa gateway child did not reach restart boundary");
   });
 
+  it("keeps oversized restart-boundary poll intervals within the timeout", async () => {
+    await expect(
+      testing.waitForQaGatewayRestartBoundary({
+        logs: () => "signal SIGUSR1 received\n",
+        offset: 0,
+        pollMs: Number.MAX_SAFE_INTEGER,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow("qa gateway child did not reach restart boundary");
+  });
+
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-setup-token-state-"));
     cleanups.push(async () => {

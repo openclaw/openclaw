@@ -25,6 +25,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -194,6 +195,36 @@ describe("gateway session utils", () => {
     expect(listed.offset).toBe(2);
     expect(listed.nextOffset).toBe(4);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session list search includes direct-session origin display labels", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const store = {
+      "agent:main:telegram:direct:42": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "openclaw-tui" },
+        updatedAt: 2,
+      } as SessionEntry,
+      "agent:main:telegram:direct:99": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "other-direct" },
+        updatedAt: 1,
+      } as SessionEntry,
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "openclaw-tui" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "agent:main:telegram:direct:42",
+    ]);
+    expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
   });
 
   test("session lists mark the final offset page without hasMore", () => {
@@ -702,6 +733,60 @@ describe("gateway session utils", () => {
     expect(classifySessionKey("main", entry)).toBe("group");
   });
 
+  test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:42": entry },
+      key: "agent:main:telegram:direct:42",
+      entry,
+    });
+    expect(row.displayName).toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "group",
+      channel: "telegram",
+      subject: "Engineering",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": entry },
+      key: "agent:main:telegram:group:99",
+      entry,
+    });
+    expect(row.displayName).toMatch(/^telegram:/);
+    expect(row.displayName).not.toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      label: "Alice",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:42": entry },
+      key: "agent:main:telegram:direct:42",
+      entry,
+    });
+    expect(row.displayName).toBe("Alice");
+  });
+
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
     const cfg = {
       session: { mainKey: "work" },
@@ -990,6 +1075,35 @@ describe("gateway session utils", () => {
         const borrowedStore = loadSessionStore(loaded.storePath, { clone: false });
 
         expect(loaded.entry).toBe(borrowedStore["agent:main:main"]);
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("resolveGatewaySessionStoreTargetWithStore returns the caller-provided store", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-target-store-", async ({ stateDir }) => {
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        const store: Record<string, SessionEntry> = {
+          "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
+        };
+
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key: "agent:main:main",
+          store,
+        });
+
+        expect(target.store).toBe(store);
+        expect(target.storeKeys).toContain("agent:main:main");
       });
     } finally {
       resetConfigRuntimeState();
@@ -1451,6 +1565,56 @@ describe("gateway session utils", () => {
     const ops = result.agents.find((agent) => agent.id === "ops");
     expect(ops?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
   });
+
+  test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: { primary: "minimax/MiniMax-M2.7" },
+          thinkingDefault: "off",
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "investment-master",
+            model: { primary: "deepseek/deepseek-v4-flash" },
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    const agent = result.agents.find((row) => row.id === "investment-master");
+
+    expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
+    expect(agent?.thinkingDefault).toBe("xhigh");
+    expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual(
+      expect.arrayContaining(["off", "minimal", "low", "medium", "high", "xhigh"]),
+    );
+    expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
+  });
+
+  test("listAgentsForGateway uses the model catalog for per-agent thinking metadata", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: { primary: "local/custom-reasoner" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg, [
+      { provider: "local", id: "custom-reasoner", name: "Custom Reasoner", reasoning: true },
+    ]);
+    const agent = result.agents.find((row) => row.id === "main");
+
+    expect(agent?.thinkingDefault).toBe("medium");
+    expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+  });
 });
 
 describe("resolveSessionModelRef", () => {
@@ -1750,6 +1914,21 @@ describe("listSessionsFromStore selected model display", () => {
       modelProvider: "anthropic",
       model: "claude-opus-4-6",
     });
+  });
+
+  test("filters phantom agent store placeholder rows from session lists", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:sessions": {} as SessionEntry,
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
   });
 
   test("shows the selected override model even when a fallback runtime model exists", () => {

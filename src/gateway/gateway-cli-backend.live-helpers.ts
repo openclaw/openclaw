@@ -254,7 +254,9 @@ export async function createBootstrapWorkspace(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
@@ -360,7 +362,6 @@ async function connectClientOnce(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
-    let client: GatewayClient | undefined;
     const abortStart = new AbortController();
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
@@ -405,7 +406,7 @@ async function connectClientOnce(params: {
       clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
     }
 
-    client = new GatewayClient(clientOptions);
+    const client: GatewayClient | undefined = new GatewayClient(clientOptions);
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),
@@ -421,7 +422,7 @@ async function connectClientOnce(params: {
           finish({ error: new Error("gateway event loop readiness timeout") });
         }
       },
-      (error) => {
+      (error: unknown) => {
         finish({ error: error instanceof Error ? error : new Error(String(error)) });
       },
     );

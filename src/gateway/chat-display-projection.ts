@@ -32,15 +32,9 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
-export function resolveEffectiveChatHistoryMaxChars(
-  cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
-  maxChars?: number,
-): number {
+export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
-  }
-  if (typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number") {
-    return cfg.gateway.webchat.chatHistoryMaxChars;
   }
   return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
 }
@@ -784,8 +778,7 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
+  for (const message of messages) {
     const record = readRecord(message);
     if (!record) {
       next.push(message);

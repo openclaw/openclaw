@@ -1,4 +1,4 @@
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -11,8 +11,8 @@ import type {
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
-  resolveAvailableAgentHarnessPolicy,
   resolveAgentHarnessPolicy,
+  resolveAvailableAgentHarnessPolicy,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";

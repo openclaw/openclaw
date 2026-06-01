@@ -72,7 +72,10 @@ export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): b
   if (err === signal.reason) {
     return true;
   }
-  return err instanceof Error && err.name === "AbortError";
+  return (
+    err instanceof Error &&
+    (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))
+  );
 }
 
 export type HookContext = {
@@ -409,7 +412,7 @@ function notifyPluginApprovalResolution(
     return;
   }
   try {
-    void Promise.resolve(onResolution(resolution)).catch((err) => {
+    void Promise.resolve(onResolution(resolution)).catch((err: unknown) => {
       log.warn(`plugin onResolution callback failed: ${String(err)}`);
     });
   } catch (err) {
@@ -465,10 +468,7 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
-      requestResult ?? {},
-      "decision",
-    );
+    const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
     let decision: string | null | undefined;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
@@ -500,10 +500,10 @@ async function requestPluginToolApproval(params: {
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
           if (params.signal!.aborted) {
-            reject(params.signal!.reason);
+            reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
             return;
           }
-          onAbort = () => reject(params.signal!.reason);
+          onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
           params.signal!.addEventListener("abort", onAbort, { once: true });
         });
         try {
@@ -1335,3 +1335,17 @@ export const testing = {
   isPlainObject,
 };
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value, { cause: value });
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

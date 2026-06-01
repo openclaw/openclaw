@@ -10,9 +10,8 @@ import {
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
-  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   resolvePluginApprovalRequestAllowedDecisions,
+  resolvePluginApprovalTimeoutMs,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -67,10 +66,7 @@ export function createPluginApprovalHandlers(
         twoPhase?: boolean;
       };
       const twoPhase = p.twoPhase === true;
-      const timeoutMs = Math.min(
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-        MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-      );
+      const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
@@ -129,10 +125,14 @@ export function createPluginApprovalHandlers(
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
             return false;
           }
-          return opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err) => {
-            context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
-            return false;
-          });
+          return opts.forwarder
+            .handlePluginApprovalRequested(requestEvent)
+            .catch((err: unknown) => {
+              context.logGateway?.error?.(
+                `plugin approvals: forward request failed: ${String(err)}`,
+              );
+              return false;
+            });
         },
       });
     },
@@ -175,9 +175,15 @@ export function createPluginApprovalHandlers(
                 },
               },
         resolvedEventName: "plugin.approval.resolved",
-        buildResolvedEvent: ({ approvalId, decision, resolvedBy, snapshot, nowMs }) => ({
+        buildResolvedEvent: ({
+          approvalId,
+          decision: decisionLocal,
+          resolvedBy,
+          snapshot,
+          nowMs,
+        }) => ({
           id: approvalId,
-          decision,
+          decision: decisionLocal,
           resolvedBy,
           ts: nowMs,
           request: snapshot.request,

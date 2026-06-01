@@ -1013,8 +1013,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
     await waitForLaneStartSlot();
     reserve(poolLane);
     activeLanes.set(poolLane.name, { name: poolLane.name, startedAt: Date.now() });
-    let promise;
-    promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
+    const promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
       .then((result) => ({ lane: poolLane, promise, result }))
       .finally(() => {
         activeLanes.delete(poolLane.name);
@@ -1458,8 +1457,10 @@ async function main() {
 }
 
 if (IS_MAIN) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

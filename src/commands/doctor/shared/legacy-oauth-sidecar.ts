@@ -156,7 +156,7 @@ function encryptLegacyOAuthMaterialForTest(params: {
 function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean {
   const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 

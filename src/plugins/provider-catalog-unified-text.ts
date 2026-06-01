@@ -14,6 +14,8 @@ export function projectProviderCatalogResultToUnifiedTextRows(params: {
       ? { [params.providerId]: params.result.provider }
       : params.result.providers;
   const rows: UnifiedModelCatalogEntry[] = [];
+  // Doctor owns malformed plugin catalog diagnostics; runtime projection stays on
+  // the typed provider catalog contract instead of carrying fallback semantics.
   for (const [providerId, providerConfig] of Object.entries(providers)) {
     for (const model of providerConfig.models ?? []) {
       rows.push({

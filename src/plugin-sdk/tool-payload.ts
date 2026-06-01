@@ -39,7 +39,7 @@ export type ToolPayloadCarrier = {
 
 function isToolPayloadTextBlock(block: unknown): block is ToolPayloadTextBlock {
   return (
-    !!block &&
+    Boolean(block) &&
     typeof block === "object" &&
     (block as { type?: unknown }).type === "text" &&
     typeof (block as { text?: unknown }).text === "string"

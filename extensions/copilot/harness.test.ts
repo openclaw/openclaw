@@ -55,7 +55,9 @@ function createDeferred<T>() {
 }
 
 async function flushAsyncWork() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe("createCopilotAgentHarness", () => {
@@ -280,7 +282,7 @@ describe("createCopilotAgentHarness", () => {
 
     await expect(firstDispose).resolves.toBeUndefined();
     await expect(secondDispose).resolves.toBeUndefined();
-    expect(pool.dispose).toHaveBeenCalledTimes(1);
+    expect(pool["dispose"]).toHaveBeenCalledTimes(1);
   });
 
   it("dispose waits for in-flight runAttempt before disposing", async () => {
@@ -301,14 +303,14 @@ describe("createCopilotAgentHarness", () => {
 
     await flushAsyncWork();
 
-    expect(pool.dispose).not.toHaveBeenCalled();
+    expect(pool["dispose"]).not.toHaveBeenCalled();
     expect(disposeSettled).toBe(false);
 
     deferred.resolve(ATTEMPT_RESULT);
 
     await expect(attemptPromise).resolves.toBe(ATTEMPT_RESULT);
     await expect(disposePromise).resolves.toBeUndefined();
-    expect(pool.dispose).toHaveBeenCalledTimes(1);
+    expect(pool["dispose"]).toHaveBeenCalledTimes(1);
   });
 
   it("runAttempt after dispose rejects without creating a new pool", async () => {
@@ -348,7 +350,7 @@ describe("createCopilotAgentHarness", () => {
     await harness.runAttempt(ATTEMPT_PARAMS);
     await expect(harness.dispose?.()).resolves.toBeUndefined();
 
-    expect(pool.dispose).not.toHaveBeenCalled();
+    expect(pool["dispose"]).not.toHaveBeenCalled();
   });
 
   it("uses options.pool when supplied", async () => {
@@ -1170,7 +1172,7 @@ describe("createCopilotAgentHarness", () => {
   describe("runSideQuestion", () => {
     it("is not implemented; /btw falls through to the in-tree PI fallback path", () => {
       const harness = createCopilotAgentHarness({ pool: makePoolMock() });
-      expect(harness.runSideQuestion).toBeUndefined();
+      expect(harness["runSideQuestion"]).toBeUndefined();
     });
   });
 });

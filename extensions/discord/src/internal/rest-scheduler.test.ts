@@ -1,4 +1,4 @@
-import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./rest-errors.js";
 import { RestScheduler, type RestSchedulerOptions } from "./rest-scheduler.js";
@@ -16,6 +16,20 @@ function createOptions(overrides: Partial<RestSchedulerOptions> = {}): RestSched
     maxRateLimitRetries: 1,
     ...overrides,
   };
+}
+
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("RestScheduler", () => {
@@ -132,4 +146,56 @@ describe("RestScheduler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("caps oversized route rate-limit drain waits before scheduling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const first = createDeferred<unknown>();
+      const executor = vi.fn(async () => await first.promise);
+      const scheduler = new RestScheduler(createOptions({ maxConcurrency: 1 }), executor);
+
+      const active = scheduler.enqueue({
+        method: "POST",
+        path: "/channels/c1/messages",
+        priority: "standard",
+      });
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledTimes(1));
+      scheduler.recordResponse(
+        "POST /channels/c1/messages",
+        "/channels/c1/messages",
+        createJsonResponse(
+          { message: "Rate limited", retry_after: 0, global: false },
+          {
+            status: 429,
+            headers: {
+              "X-RateLimit-Bucket": "bucket-1",
+              "X-RateLimit-Remaining": "0",
+              "X-RateLimit-Reset-After": String((MAX_TIMER_TIMEOUT_MS + 1_000_000) / 1000),
+            },
+          },
+        ),
+        { message: "Rate limited", retry_after: 0, global: false },
+      );
+
+      const queued = scheduler.enqueue({
+        method: "POST",
+        path: "/channels/c1/messages",
+        priority: "standard",
+      });
+      first.resolve({ ok: true });
+      await expect(active).resolves.toEqual({ ok: true });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      queued.catch(() => undefined);
+    } finally {
+      schedulerCleanup(timeoutSpy);
+      vi.useRealTimers();
+    }
+  });
 });
+
+function schedulerCleanup(timeoutSpy: ReturnType<typeof vi.spyOn>): void {
+  timeoutSpy.mockRestore();
+}

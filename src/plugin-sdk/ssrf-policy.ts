@@ -64,7 +64,7 @@ export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
 
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
   const entry = asNullableRecord(value);
-  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
+  return Boolean(entry && Object.hasOwn(entry, "allowPrivateNetwork"));
 }
 
 export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {

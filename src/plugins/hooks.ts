@@ -5,6 +5,7 @@
  * error handling and priority ordering.
  */
 
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -535,10 +536,7 @@ export function createHookRunner(
   };
 
   const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
-    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      return undefined;
-    }
-    return Math.floor(timeoutMs);
+    return clampPositiveTimerTimeoutMs(timeoutMs);
   };
 
   const getVoidHookTimeoutMs = (
@@ -565,14 +563,14 @@ export function createHookRunner(
   const withHookTimeout = async <T>(
     promise: Promise<T>,
     timeoutMs: number,
-    options: { unref?: boolean } = {},
+    optionsResult: { unref?: boolean } = {},
   ): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         reject(new Error(`timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      if (options.unref) {
+      if (optionsResult.unref) {
         timer.unref?.();
       }
     });
@@ -603,7 +601,7 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
-    options: VoidHookRunOptions = {},
+    optionsValue: VoidHookRunOptions = {},
   ): Promise<void> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -619,7 +617,7 @@ export function createHookRunner(
         );
         const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
         if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: options.unrefTimeout ?? true });
+          await withHookTimeout(promise, timeoutMs, { unref: optionsValue.unrefTimeout ?? true });
         } else {
           await promise;
         }
@@ -933,9 +931,9 @@ export function createHookRunner(
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
-    options?: VoidHookRunOptions,
+    optionsLocal?: VoidHookRunOptions,
   ): Promise<void> {
-    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx, options);
+    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx, optionsLocal);
   }
 
   /**

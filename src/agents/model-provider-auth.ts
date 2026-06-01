@@ -199,7 +199,9 @@ export async function hasAuthForModelProvider(params: {
       return preparedAnswer;
     }
   }
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   if (
     hasRuntimeAvailableProviderAuth({
       provider,
@@ -585,8 +587,6 @@ function runProviderAuthWarmWorker(params: {
   currentProviderAuthWarmWorker = handle;
   return new Promise<ProviderAuthWarmSnapshot>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelTimer: ReturnType<typeof setInterval> | undefined;
     const finish = (complete: () => void) => {
       if (settled) {
         return;
@@ -608,13 +608,13 @@ function runProviderAuthWarmWorker(params: {
       void worker.terminate();
       finish(() => resolve({ agents: [] }));
     };
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       handle.cancelled = true;
       void worker.terminate();
       finish(() => reject(new Error("provider auth warm worker timed out")));
     }, params.timeoutMs);
     timer.unref?.();
-    cancelTimer = setInterval(() => {
+    const cancelTimer: ReturnType<typeof setInterval> | undefined = setInterval(() => {
       if (params.isCancelled()) {
         cancelWorker();
       }
@@ -644,7 +644,7 @@ function runProviderAuthWarmWorker(params: {
           resolve({ agents: [] });
           return;
         }
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       });
     });
     worker.once("exit", (code) => {
@@ -699,4 +699,18 @@ export async function warmCurrentProviderAuthStateOffMainThread(
     return;
   }
   publishProviderAuthWarmSnapshot(snapshot);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

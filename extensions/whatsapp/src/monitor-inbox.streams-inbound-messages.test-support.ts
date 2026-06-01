@@ -345,9 +345,7 @@ describe("web monitor inbox", () => {
 
   it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
-    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {
-      return;
-    });
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
 
     const firstSock = getSock();
     firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
@@ -463,9 +461,7 @@ describe("web monitor inbox", () => {
       resolveHydration = () => resolve({});
     });
     sock.groupFetchAllParticipating.mockImplementationOnce(() => pendingHydration);
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.ev.emit(
@@ -813,9 +809,7 @@ describe("web monitor inbox", () => {
   });
 
   it("deduplicates redelivered messages by id", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const upsert = buildNotifyMessageUpsert({
@@ -867,9 +861,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves LID JIDs using Baileys LID mapping store", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
@@ -895,9 +887,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves LID JIDs via authDir mapping files", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
     fsSync.writeFileSync(
       path.join(getAuthDir(), "lid-mapping-555_reverse.json"),
       JSON.stringify("1555"),
@@ -926,9 +916,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves group participant LID JIDs via Baileys mapping", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");

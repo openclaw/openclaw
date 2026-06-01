@@ -1,10 +1,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
 
 export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   anthropic: "Claude",
+  deepseek: "DeepSeek",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
   minimax: "MiniMax",
@@ -16,6 +18,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
 
 export const usageProviders: UsageProviderId[] = [
   "anthropic",
+  "deepseek",
   "github-copilot",
   "google-gemini-cli",
   "minimax",
@@ -71,11 +74,12 @@ export const clampPercent = (value: number) =>
 
 export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
+  const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {
     return await Promise.race([
       work,
       new Promise<T>((resolve) => {
-        timeout = setTimeout(() => resolve(fallback), ms);
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
       }),
     ]);
   } finally {

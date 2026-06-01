@@ -30,20 +30,32 @@ import {
   requestChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
+  type ChatHistoryResult,
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
 import {
+  applyChatHistorySessionInfo,
   loadSessions,
   type LoadSessionsOverrides,
   type SessionsState,
 } from "./controllers/sessions.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, GatewaySessionRow, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -59,6 +71,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatRunId: string | null;
   chatSending: boolean;
   lastError?: string | null;
+  chatError?: string | null;
   basePath: string;
   settings?: { token?: string | null };
   password?: string | null;
@@ -74,6 +87,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  sessionsError?: string | null;
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
@@ -85,6 +99,11 @@ export type ChatHost = ChatInputHistoryState & {
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
 };
+
+function setChatError(host: ChatHost, error: string | null) {
+  host.lastError = error;
+  host.chatError = error;
+}
 
 export type ChatSendOptions = {
   confirmReset?: boolean;
@@ -205,10 +224,6 @@ function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
-function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
-  return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
-}
-
 function readHelloDefaultAgentId(host: Pick<ChatHost, "hello">): string | undefined {
   const snapshot = host.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -216,50 +231,10 @@ function readHelloDefaultAgentId(host: Pick<ChatHost, "hello">): string | undefi
   return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
 }
 
-function readHelloMainKey(host: Pick<ChatHost, "hello">): string | undefined {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  return snapshot?.sessionDefaults?.mainKey?.trim() || undefined;
-}
-
-function resolveGlobalAliasAgentId(
-  host: Pick<ChatHost, "agentsList" | "hello">,
-  sessionKey: string | undefined | null,
-): string | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return undefined;
-  }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  const configuredMainKey = normalizeLowercaseStringOrEmpty(
-    host.agentsList?.mainKey ?? readHelloMainKey(host) ?? "main",
-  );
-  return rest === "main" || rest === configuredMainKey
-    ? normalizeAgentId(parsed.agentId)
-    : undefined;
-}
-
-function resolveSelectedGlobalAgentId(
-  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
-): string | undefined {
-  const agentId =
-    host.assistantAgentId?.trim() ||
-    host.agentsList?.defaultId?.trim() ||
-    readHelloDefaultAgentId(host);
-  return agentId ? normalizeAgentId(agentId) : undefined;
-}
-
-function resolveDefaultAgentIdForList(host: Pick<ChatHost, "agentsList" | "hello">): string {
-  return normalizeAgentId(
-    host.agentsList?.defaultId ?? readHelloDefaultAgentId(host) ?? DEFAULT_AGENT_ID,
-  );
-}
-
 function scopedAgentIdForSession(host: ChatHost, sessionKey: string | undefined | null) {
-  return isGlobalSessionKey(sessionKey)
-    ? resolveSelectedGlobalAgentId(host)
-    : resolveGlobalAliasAgentId(host, sessionKey);
+  return isUiGlobalSessionKey(sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : (resolveUiGlobalAliasAgentId(host, sessionKey) ?? undefined);
 }
 
 function visibleSessionMatches(
@@ -268,8 +243,8 @@ function visibleSessionMatches(
   agentId: string | undefined,
 ): boolean {
   if (host.sessionKey !== sessionKey) {
-    const hostAliasAgentId = resolveGlobalAliasAgentId(host, host.sessionKey);
-    if (!hostAliasAgentId || !isGlobalSessionKey(sessionKey)) {
+    const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
+    if (!hostAliasAgentId || !isUiGlobalSessionKey(sessionKey)) {
       return false;
     }
     const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
@@ -277,10 +252,10 @@ function visibleSessionMatches(
       ? hostAliasAgentId === normalizeAgentId(expectedAgentId)
       : hostAliasAgentId === normalizeAgentId("main");
   }
-  if (!isGlobalSessionKey(sessionKey)) {
+  if (!isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const selectedAgentId = resolveSelectedGlobalAgentId(host);
+  const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(host);
   const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
   return expectedAgentId
     ? selectedAgentId === normalizeAgentId(expectedAgentId)
@@ -291,9 +266,9 @@ export function scopedAgentParamsForSession(
   host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
   sessionKey: string,
 ) {
-  const agentId = isGlobalSessionKey(sessionKey)
-    ? resolveSelectedGlobalAgentId(host)
-    : resolveGlobalAliasAgentId(host, sessionKey);
+  const agentId = isUiGlobalSessionKey(sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : resolveUiGlobalAliasAgentId(host, sessionKey);
   return agentId ? { agentId } : {};
 }
 
@@ -306,10 +281,10 @@ export function scopedAgentListParamsForSession(
   const agentId =
     parsed?.agentId ??
     (normalizedSessionKey === "global"
-      ? resolveSelectedGlobalAgentId(host)
+      ? resolveUiKnownSelectedGlobalAgentId(host)
       : normalizedSessionKey === "unknown"
         ? undefined
-        : resolveDefaultAgentIdForList(host));
+        : resolveUiDefaultAgentId(host));
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 
@@ -580,7 +555,7 @@ async function sendQueuedChatMessage(
   host.chatSending = true;
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   if (isVisibleSession()) {
-    host.lastError = null;
+    setChatError(host, null);
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       clearRunStatus: true,
     });
@@ -649,7 +624,7 @@ async function sendQueuedChatMessage(
         sendState: "waiting-reconnect",
       }));
       if (isVisibleSession()) {
-        host.lastError = "Message will send when the Gateway reconnects.";
+        setChatError(host, "Message will send when the Gateway reconnects.");
       }
       return "pending";
     }
@@ -659,7 +634,7 @@ async function sendQueuedChatMessage(
       sendState: "failed",
     }));
     if (isVisibleSession()) {
-      host.lastError = error;
+      setChatError(host, error);
       restoreComposerAfterFailedSend(host, opts ?? {});
     }
     return "failed";
@@ -942,7 +917,7 @@ async function flushChatQueue(host: ChatHost) {
       });
     }
   } catch (err) {
-    host.lastError = String(err);
+    setChatError(host, String(err));
   }
   if (!ok && next.localCommandName) {
     host.chatQueue = [next, ...host.chatQueue];
@@ -950,6 +925,120 @@ async function flushChatQueue(host: ChatHost) {
     // Continue draining — local commands don't block on server response
     void flushChatQueue(host);
   }
+}
+
+function isSelectedSessionKnownIdle(
+  sessionsResult: SessionsListResult,
+  sessionKey: string,
+): boolean {
+  const row = sessionsResult.sessions.find((session) =>
+    areUiSessionKeysEquivalent(session.key, sessionKey),
+  );
+  return Boolean(row && !isSessionRunActive(row));
+}
+
+function isHistorySessionInfoForRequestedSession(
+  host: ChatHost,
+  historySessionKey: string | undefined,
+  requestedSessionKey: string,
+): boolean {
+  if (areUiSessionKeysEquivalent(historySessionKey, requestedSessionKey)) {
+    return true;
+  }
+  return Boolean(
+    historySessionKey &&
+    isUiGlobalSessionKey(historySessionKey) &&
+    resolveUiGlobalAliasAgentId(host, requestedSessionKey),
+  );
+}
+
+function findSelectedSessionRow(
+  host: ChatHost,
+  sessionsResult: SessionsListResult | null | undefined,
+  sessionKey: string,
+  historySessionKey: string | undefined,
+): GatewaySessionRow | undefined {
+  const requestedGlobalAgentId =
+    historySessionKey && isUiGlobalSessionKey(historySessionKey)
+      ? resolveUiGlobalAliasAgentId(host, sessionKey)
+      : undefined;
+  return sessionsResult?.sessions.find((session) => {
+    if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
+      return true;
+    }
+    return (
+      requestedGlobalAgentId != null &&
+      resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+    );
+  });
+}
+
+function historyIdleProofIsStaleForSelectedRow(
+  historySessionInfo: GatewaySessionRow,
+  selectedRow: GatewaySessionRow | undefined,
+): boolean {
+  if (!selectedRow || !isSessionRunActive(selectedRow) || isSessionRunActive(historySessionInfo)) {
+    return false;
+  }
+  const historyUpdatedAt =
+    typeof historySessionInfo.updatedAt === "number" ? historySessionInfo.updatedAt : null;
+  if (historyUpdatedAt == null) {
+    return true;
+  }
+  const selectedUpdatedAt = typeof selectedRow.updatedAt === "number" ? selectedRow.updatedAt : 0;
+  if (selectedUpdatedAt >= historyUpdatedAt) {
+    return true;
+  }
+  const selectedStartedAt = typeof selectedRow.startedAt === "number" ? selectedRow.startedAt : 0;
+  return selectedStartedAt >= historyUpdatedAt;
+}
+
+function flushChatQueueAfterIdleSessionReconciliation(
+  host: ChatHost,
+  sessionKey: string,
+  historyRefresh: Promise<ChatHistoryResult | undefined>,
+  sessionsRefresh: Promise<unknown>,
+  previousSessionsResult: SessionsListResult | null | undefined,
+) {
+  if (host.chatQueue.length === 0) {
+    return;
+  }
+  void Promise.allSettled([historyRefresh, sessionsRefresh]).then((results) => {
+    const historyRefreshSettled = results[0];
+    const sessionsRefreshSettled = results[1];
+    const freshSessionsResult = host.sessionsResult;
+    const historySessionInfo =
+      historyRefreshSettled.status === "fulfilled"
+        ? historyRefreshSettled.value?.sessionInfo
+        : null;
+    const selectedSessionRow = findSelectedSessionRow(
+      host,
+      freshSessionsResult,
+      sessionKey,
+      historySessionInfo?.key,
+    );
+    const historySessionKnownIdle = Boolean(
+      historySessionInfo &&
+      isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&
+      !isSessionRunActive(historySessionInfo) &&
+      !historyIdleProofIsStaleForSelectedRow(historySessionInfo, selectedSessionRow),
+    );
+    const sessionsResultKnownIdle = freshSessionsResult
+      ? isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
+      : false;
+    if (
+      sessionsRefreshSettled.status !== "fulfilled" ||
+      host.chatQueue.length === 0 ||
+      !areUiSessionKeysEquivalent(host.sessionKey, sessionKey) ||
+      (!freshSessionsResult && !historySessionKnownIdle) ||
+      (freshSessionsResult === previousSessionsResult && !historySessionKnownIdle) ||
+      (host.sessionsError && !historySessionKnownIdle) ||
+      !(historySessionKnownIdle || sessionsResultKnownIdle)
+    ) {
+      return;
+    }
+    void flushChatQueue(host);
+  });
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
@@ -1187,7 +1276,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session", "steer", "redirect", "new"].includes(name);
+  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -1204,7 +1293,7 @@ async function dispatchSlashCommand(
       return;
     case "new":
       if (!host.onSlashAction) {
-        host.lastError = "New Chat is unavailable.";
+        setChatError(host, "New Chat is unavailable.");
         return;
       }
       await host.onSlashAction("new-session");
@@ -1219,16 +1308,13 @@ async function dispatchSlashCommand(
     case "clear":
       await clearChatHistory(host);
       return;
-    case "focus":
-      await host.onSlashAction?.("toggle-focus");
-      return;
     case "export-session":
       await host.onSlashAction?.("export");
       return;
   }
 
   if (!host.client || !host.connected) {
-    host.lastError = "Gateway not connected";
+    setChatError(host, "Gateway not connected");
     injectCommandResult(
       host,
       `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
@@ -1246,7 +1332,7 @@ async function dispatchSlashCommand(
       agentId: scopedAgentIdForSession(host, targetSessionKey),
     });
   } catch (err) {
-    host.lastError = String(err);
+    setChatError(host, String(err));
     injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
@@ -1306,7 +1392,7 @@ async function clearChatHistory(host: ChatHost) {
     });
     await loadChatHistory(host as unknown as ChatState);
   } catch (err) {
-    host.lastError = String(err);
+    setChatError(host, String(err));
   }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
@@ -1326,22 +1412,43 @@ export async function refreshChat(
   host: ChatHost,
   opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
 ) {
+  const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
-  const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
+  const previousSessionsResult = host.sessionsResult;
+  const historyLoad = loadChatHistory(host as unknown as ChatState);
+  const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     }
     requestUpdate();
   });
-  const secondaryRefresh = Promise.allSettled([
-    loadSessions(host as unknown as SessionsState, {
-      ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentListParamsForSession(host, host.sessionKey),
-    }),
-    refreshChatAvatar(host),
-    refreshChatModels(host),
-    refreshChatCommands(host),
-  ]).finally(requestUpdate);
+  const sessionsRefresh = historyLoad.then((history) => {
+    if (history?.sessionInfo) {
+      applyChatHistorySessionInfo(
+        host as unknown as SessionsState,
+        history.sessionInfo,
+        history.defaults,
+      );
+    }
+  });
+  flushChatQueueAfterIdleSessionReconciliation(
+    host,
+    refreshedSessionKey,
+    historyRefresh,
+    sessionsRefresh,
+    previousSessionsResult,
+  );
+  const secondaryRefresh = Promise.allSettled([sessionsRefresh]).finally(requestUpdate);
+  scheduleChatMetadataRefresh(() => {
+    if (host.sessionKey !== refreshedSessionKey || !host.connected) {
+      return;
+    }
+    void Promise.allSettled([
+      refreshChatAvatar(host),
+      refreshChatModels(host),
+      refreshChatCommands(host),
+    ]).finally(requestUpdate);
+  });
   void historyRefresh;
   void secondaryRefresh;
   if (opts?.awaitHistory === true) {
@@ -1349,6 +1456,16 @@ export async function refreshChat(
     return;
   }
   await Promise.resolve();
+}
+
+function scheduleChatMetadataRefresh(callback: () => void) {
+  const requestIdleCallback =
+    typeof globalThis.requestIdleCallback === "function" ? globalThis.requestIdleCallback : null;
+  if (requestIdleCallback) {
+    requestIdleCallback(callback, { timeout: 750 });
+    return;
+  }
+  globalThis.setTimeout(callback, 50);
 }
 
 async function refreshChatModels(host: ChatHost) {
@@ -1384,9 +1501,16 @@ function beginChatAvatarRequest(host: ChatHost): number {
   return nextVersion;
 }
 
-function shouldApplyChatAvatarResult(host: ChatHost, version: number, sessionKey: string): boolean {
+function shouldApplyChatAvatarResult(
+  host: ChatHost,
+  version: number,
+  sessionKey: string,
+  agentId: string | null,
+): boolean {
   return (
-    chatAvatarRequestVersions.get(host as object) === version && host.sessionKey === sessionKey
+    chatAvatarRequestVersions.get(host as object) === version &&
+    host.sessionKey === sessionKey &&
+    resolveAgentIdForSession(host) === agentId
   );
 }
 
@@ -1394,6 +1518,9 @@ function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
+  }
+  if (isUiGlobalSessionKey(host.sessionKey)) {
+    return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
   }
   return readHelloDefaultAgentId(host) || DEFAULT_AGENT_ID;
 }
@@ -1477,7 +1604,7 @@ export async function refreshChatAvatar(host: ChatHost) {
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
     return;
@@ -1488,7 +1615,7 @@ export async function refreshChatAvatar(host: ChatHost) {
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
     const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
     if (!res.ok) {
@@ -1501,7 +1628,7 @@ export async function refreshChatAvatar(host: ChatHost) {
       avatarStatus?: unknown;
       avatarReason?: unknown;
     };
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
     setChatAvatarMeta(host, data);
@@ -1519,19 +1646,19 @@ export async function refreshChatAvatar(host: ChatHost) {
       ...(headers ? { headers } : {}),
     });
     if (!avatarRes.ok) {
-      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
         clearChatAvatarUrl(host);
       }
       return;
     }
     const blobUrl = URL.createObjectURL(await avatarRes.blob());
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       URL.revokeObjectURL(blobUrl);
       return;
     }
     setChatAvatarUrl(host, blobUrl);
   } catch {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
   }

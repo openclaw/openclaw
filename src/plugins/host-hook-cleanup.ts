@@ -159,7 +159,7 @@ function hasPromotedSessionEntrySlot(
   }
   const entryRecord = entry as Record<string, unknown>;
   for (const slotKey of slotKeys) {
-    if (Object.prototype.hasOwnProperty.call(entryRecord, slotKey)) {
+    if (Object.hasOwn(entryRecord, slotKey)) {
       return true;
     }
   }

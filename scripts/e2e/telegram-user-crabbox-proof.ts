@@ -231,7 +231,8 @@ function parsePositiveInteger(value: string, label: string) {
   return parsed;
 }
 
-function parseArgs(argv: string[]): Options {
+function parseArgs(argvInput: string[]): Options {
+  let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
     "finish",
@@ -724,9 +725,7 @@ function killPidTree(pid: number | undefined) {
   } catch {
     try {
       process.kill(pid, "SIGTERM");
-    } catch {
-      return;
-    }
+    } catch {}
   }
 }
 
@@ -766,7 +765,7 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
   const buffer = Buffer.alloc(bytesToRead);
   const fd = fs.openSync(logPath, "r");
-  let bytesRead = 0;
+  let bytesRead;
   try {
     bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
   } finally {
@@ -787,7 +786,9 @@ export async function waitForLog(
     if (pattern.test(text)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
@@ -1221,7 +1222,9 @@ async function runRemoteCommand(params: {
       if (attempt === 4 || !isTransientSshFailure(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 3000);
+      });
     }
   }
   throw lastError;
@@ -2426,9 +2429,13 @@ async function main() {
       ],
       { cwd: root, stdio: "inherit" },
     );
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 3_000);
+    });
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
-    const recordCode = await new Promise<number | null>((resolve) => recording.on("exit", resolve));
+    const recordCode = await new Promise<number | null>((resolve) => {
+      recording.on("exit", resolve);
+    });
     if (recordCode !== 0) {
       throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
     }

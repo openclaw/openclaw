@@ -39,7 +39,7 @@ export function resolveSandboxedSessionToolContext(params: {
   const restrictToSpawned =
     params.sandboxed === true &&
     visibility === "spawned" &&
-    !!requesterInternalKey &&
+    Boolean(requesterInternalKey) &&
     !isSubagentSessionKey(requesterInternalKey);
   return {
     mainKey,

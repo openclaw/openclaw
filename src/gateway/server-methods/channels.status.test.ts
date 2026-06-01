@@ -288,7 +288,7 @@ describe("channelsHandlers channels.status", () => {
     vi.useFakeTimers();
     try {
       const autoEnabledConfig = { autoEnabled: true };
-      const probeAccount = vi.fn(() => new Promise(() => undefined));
+      const probeAccount = vi.fn(() => new Promise(() => {}));
       mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
       mocks.listChannelPlugins.mockReturnValue([
         {

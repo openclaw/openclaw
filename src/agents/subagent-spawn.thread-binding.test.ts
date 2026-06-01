@@ -262,17 +262,17 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         context: "isolated",
       },
       {
-        agentSessionKey: "agent:main:telegram:default:direct:456",
+        agentSessionKey: "agent:main:matrix:default:room:456",
         completionOwnerKey: "agent:main:main",
-        agentChannel: "telegram",
+        agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "telegram:direct:456",
+        agentTo: "room:456",
       },
     );
 
     expect(result.status).toBe("accepted");
     const registeredRun = firstRegisteredSubagentRun();
-    expect(registeredRun.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registeredRun.controllerSessionKey).toBe("agent:main:matrix:default:room:456");
     expect(registeredRun.requesterSessionKey).toBe("agent:main:main");
     expect(registeredRun.requesterDisplayKey).toBe("agent:main:main");
   });

@@ -103,7 +103,10 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -118,7 +121,10 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -939,7 +945,10 @@ describe("before_tool_call requireApproval handling", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
+  async function runAbortDuringApprovalWait(options?: {
+    abortReason?: unknown;
+    onResolution?: ReturnType<typeof vi.fn>;
+  }) {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Abortable",
@@ -951,7 +960,7 @@ describe("before_tool_call requireApproval handling", () => {
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
     mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -1434,6 +1443,13 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies non-Error abort reasons as run abort cancellation", async () => {
+    const result = await runAbortDuringApprovalWait({ abortReason: "sessions_yield" });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
   });
 
   it("removes abort listener after waitDecision resolves", async () => {

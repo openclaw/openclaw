@@ -218,8 +218,8 @@ function countJsonlLines(filePath: string): number {
       return 0;
     }
     let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
+    for (const char of raw) {
+      if (char === "\n") {
         count += 1;
       }
     }
@@ -238,7 +238,7 @@ function findOtherStateDirs(stateDir: string): string[] {
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
   for (const root of roots) {
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
     } catch {

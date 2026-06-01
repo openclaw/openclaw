@@ -1,6 +1,6 @@
-import {
-  type PluginDoctorStateMigration,
-  type PluginDoctorStateMigrationContext,
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import type {
   PersistedWorkboardAttachment,

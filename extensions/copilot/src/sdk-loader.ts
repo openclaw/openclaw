@@ -30,7 +30,7 @@ export async function loadCopilotSdk(options: LoadCopilotSdkOptions = {}): Promi
 
   const promise = doLoad(options);
   if (useCache) {
-    cached = promise.catch((err) => {
+    cached = promise.catch((err: unknown) => {
       cached = undefined;
       throw err;
     });

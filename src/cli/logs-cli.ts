@@ -589,10 +589,8 @@ export function registerLogsCli(program: Command) {
             if (!emitJsonLine({ type: "log", ...parsed })) {
               return;
             }
-          } else {
-            if (!emitJsonLine({ type: "raw", raw: line })) {
-              return;
-            }
+          } else if (!emitJsonLine({ type: "raw", raw: line })) {
+            return;
           }
         }
         if (payload.truncated) {

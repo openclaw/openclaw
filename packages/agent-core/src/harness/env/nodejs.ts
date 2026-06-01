@@ -35,6 +35,7 @@ function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
+/** Convert user-facing timeout seconds into a positive, timer-safe millisecond delay. */
 export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
@@ -143,7 +144,7 @@ async function runCommand(
   args: string[],
   timeoutMs: number,
 ): Promise<{ stdout: string; status: number | null }> {
-  return await new Promise((resolve) => {
+  return await new Promise((resolveLocal) => {
     let stdout = "";
     let child: ReturnType<typeof spawn>;
     try {
@@ -152,7 +153,7 @@ async function runCommand(
         windowsHide: true,
       });
     } catch {
-      resolve({ stdout: "", status: null });
+      resolveLocal({ stdout: "", status: null });
       return;
     }
     const timeout = setTimeout(() => {
@@ -166,11 +167,11 @@ async function runCommand(
     });
     child.on("error", () => {
       clearTimeout(timeout);
-      resolve({ stdout: "", status: null });
+      resolveLocal({ stdout: "", status: null });
     });
     child.on("close", (status) => {
       clearTimeout(timeout);
-      resolve({ stdout, status });
+      resolveLocal({ stdout, status });
     });
   });
 }
@@ -241,6 +242,7 @@ function getShellEnv(
   };
 }
 
+/** Node-backed execution environment for agent harness filesystem and shell operations. */
 export class NodeExecutionEnv implements ExecutionEnv {
   cwd: string;
   private shellPath?: string;
@@ -288,7 +290,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let timedOut = false;
       let callbackError: ExecutionError | undefined;
       let child: ReturnType<typeof spawn> | undefined;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
 
       const onAbort = () => {
         if (child?.pid) {
@@ -299,8 +301,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
       const settle = (
         result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>,
       ) => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
         }
         if (options?.abortSignal) {
           options.abortSignal.removeEventListener("abort", onAbort);
@@ -327,7 +329,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       }
 
       const timeoutMs = resolveExecTimeoutMs(options?.timeout);
-      timeoutId =
+      timeoutRef.current =
         timeoutMs === undefined
           ? undefined
           : setTimeout(() => {
@@ -582,7 +584,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
     }
   }
 
-  async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+  async createTempDir(prefix = "tmp-"): Promise<Result<string, FileError>> {
     try {
       return ok(await mkdtemp(join(tmpdir(), prefix)));
     } catch (error) {

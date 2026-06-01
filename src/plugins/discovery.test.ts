@@ -103,7 +103,7 @@ function buildDiscoveryEnvWithOverrides(
   overrides: Partial<NodeJS.ProcessEnv> = {},
 ): NodeJS.ProcessEnv {
   const enablesBundledOverride =
-    Object.prototype.hasOwnProperty.call(overrides, "OPENCLAW_BUNDLED_PLUGINS_DIR") &&
+    Object.hasOwn(overrides, "OPENCLAW_BUNDLED_PLUGINS_DIR") &&
     overrides.OPENCLAW_BUNDLED_PLUGINS_DIR !== undefined;
   return {
     ...buildDiscoveryEnv(stateDir),

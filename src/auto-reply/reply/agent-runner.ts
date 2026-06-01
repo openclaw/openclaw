@@ -94,6 +94,10 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import {
+  shouldWarnAboutPrivateMessageToolFinal,
+  warnPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
@@ -106,6 +110,7 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -231,13 +236,25 @@ function hasSuccessfulSideEffectDelivery(params: {
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    hasSuccessfulSourceReplyDelivery(params) ||
+    (params.successfulCronAdds ?? 0) > 0 ||
+    params.didSendDeterministicApprovalPrompt === true
+  );
+}
+
+function hasSuccessfulSourceReplyDelivery(params: {
+  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  directlySentBlockKeys?: Set<string>;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+}): boolean {
+  return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
-    (params.successfulCronAdds ?? 0) > 0 ||
-    params.didSendDeterministicApprovalPrompt === true
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
   );
 }
 
@@ -993,7 +1010,7 @@ function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
   const text = payloads
     .filter((payload) => payload.isReasoning !== true)
     .map((payload) => payload.text)
-    .filter((text): text is string => Boolean(text))
+    .filter((textLocal): textLocal is string => Boolean(textLocal))
     .join("\n\n");
   return sanitizePendingFinalDeliveryText(text);
 }
@@ -1335,6 +1352,10 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  const replyRouteThreadId = resolveRoutedDeliveryThreadId({
+    ctx: sessionCtx,
+    sessionKey: replySessionKey,
+  });
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
@@ -1345,6 +1366,7 @@ export async function runReplyAgent(params: {
       sessionKey: replySessionKey ?? "",
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
+      routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
     if (admission.status === "skipped") {
@@ -1453,7 +1475,7 @@ export async function runReplyAgent(params: {
     }
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  let preflightCompactionApplied = false;
+  let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
@@ -1640,7 +1662,8 @@ export async function runReplyAgent(params: {
       fallbackAttempts,
       directlySentBlockKeys,
     } = runOutcome;
-    let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
+    const { autoCompactionCount } = runOutcome;
+    let { didLogHeartbeatStrip } = runOutcome;
 
     if (
       shouldInjectGroupIntro &&
@@ -1787,6 +1810,13 @@ export async function runReplyAgent(params: {
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+    });
+    const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
+      blockReplyPipeline,
+      directlySentBlockKeys,
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
@@ -2269,9 +2299,30 @@ export async function runReplyAgent(params: {
         runtimePolicySessionKey,
         opts,
       });
-      const pendingText = sourceReplyPolicy.suppressDelivery
-        ? ""
-        : buildPendingFinalDeliveryText(finalPayloads);
+      const finalDeliveryText = buildPendingFinalDeliveryText(finalPayloads);
+      // #85714: warn only for unusually substantive private final text. In
+      // message_tool_only, no tool call can be intentional silence, and
+      // finalDeliveryText also includes verbose/status/usage metadata.
+      const assistantFinalText = rawAssistantText ?? "";
+      if (
+        shouldWarnAboutPrivateMessageToolFinal({
+          sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+          sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+          successfulSourceReplyDelivery,
+          finalText: assistantFinalText,
+        })
+      ) {
+        warnPrivateMessageToolFinal({
+          sessionKey,
+          channel:
+            sessionCtx.OriginatingChannel ??
+            sessionCtx.Surface ??
+            sessionCtx.Provider ??
+            activeSessionEntry?.channel,
+          finalTextLength: assistantFinalText.trim().length,
+        });
+      }
+      const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
       const heartbeatAckMaxChars = Math.max(

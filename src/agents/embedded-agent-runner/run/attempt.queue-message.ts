@@ -110,8 +110,6 @@ export async function steerAndWaitForTranscriptCommit(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    let unsubscribe: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err?: unknown) => {
       if (settled) {
@@ -126,7 +124,7 @@ export async function steerAndWaitForTranscriptCommit(
       }
       unsubscribe?.();
       if (err) {
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -157,7 +155,7 @@ export async function steerAndWaitForTranscriptCommit(
       }, 0);
       terminalTimer.unref?.();
     };
-    timer = setTimeout(
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => {
         rejectAfterCancellation(
           "queued steering message was not committed to the transcript before timeout",
@@ -166,7 +164,7 @@ export async function steerAndWaitForTranscriptCommit(
       Math.max(1, timeoutMs),
     );
     timer.unref?.();
-    unsubscribe = activeSession.subscribe((event) => {
+    const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
         if (terminalTimer) {
           clearTimeout(terminalTimer);
@@ -205,4 +203,18 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

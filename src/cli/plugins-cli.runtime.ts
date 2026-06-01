@@ -176,7 +176,8 @@ function collectConfiguredRuntimePluginWarnings(params: {
   });
 }
 
-export async function runPluginsEnableCommand(id: string): Promise<void> {
+export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+  let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
   const { enablePluginInConfig } = await import("../plugins/enable.js");
@@ -219,7 +220,8 @@ export async function runPluginsEnableCommand(id: string): Promise<void> {
   );
 }
 
-export async function runPluginsDisableCommand(id: string): Promise<void> {
+export async function runPluginsDisableCommand(idInput: string): Promise<void> {
+  let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
   const { normalizePluginId } = await loadPluginsConfigState();

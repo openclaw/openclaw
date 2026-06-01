@@ -560,7 +560,6 @@ function copyExecApprovalsFallback(tempPath: string, filePath: string): void {
 function renameExecApprovalsWithFallback(tempPath: string, filePath: string): void {
   try {
     fs.renameSync(tempPath, filePath);
-    return;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     // Windows can reject rename-overwrite when another process has a transient
@@ -738,7 +737,7 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
     };
   }
   const raw = fs.readFileSync(filePath, "utf8");
-  let parsed: ExecApprovalsFile | null = null;
+  let parsed: ExecApprovalsFile | null;
   try {
     parsed = JSON.parse(raw) as ExecApprovalsFile;
   } catch {

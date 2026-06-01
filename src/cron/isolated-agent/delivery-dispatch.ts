@@ -1,3 +1,4 @@
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -31,7 +32,6 @@ import {
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   isCronSessionKey,
@@ -530,7 +530,7 @@ function isTtsAudioMirrorOnly(params: {
   mediaUrl: string;
 }): boolean {
   return (
-    (params.payload.audioAsVoice === true || !!params.payload.hookContent) &&
+    (params.payload.audioAsVoice === true || Boolean(params.payload.hookContent)) &&
     isAudioFileName(params.mediaUrl)
   );
 }
@@ -725,16 +725,14 @@ async function retryTransientDirectCronDelivery<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  let retryIndex = 0;
-  for (;;) {
+  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
     if (params.signal?.aborted) {
       throw new Error("cron delivery aborted");
     }
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
+      if (!isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
@@ -742,10 +740,13 @@ async function retryTransientDirectCronDelivery<T>(params: {
       await logCronDeliveryWarn(
         `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
       );
-      retryIndex += 1;
       await sleepWithAbort(delayMs, params.signal);
     }
   }
+  if (params.signal?.aborted) {
+    throw new Error("cron delivery aborted");
+  }
+  return await params.run();
 }
 
 export async function dispatchCronDelivery(
@@ -995,7 +996,9 @@ export async function dispatchCronDelivery(
           })
         : undefined;
       const deliveryWillReachAwarenessMainSession =
-        mirrorTargetsAwarenessMainSession && shouldQueueAwarenessForDelivery && !!awarenessText;
+        mirrorTargetsAwarenessMainSession &&
+        shouldQueueAwarenessForDelivery &&
+        Boolean(awarenessText);
       // Implicit/default isolated delivery must not create main-session awareness.
       const mirrorWouldBypassIsolatedAwarenessPolicy =
         mirrorTargetsAwarenessMainSession &&
