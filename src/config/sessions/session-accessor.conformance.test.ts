@@ -293,21 +293,20 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       const legacyStorePath = path.join(
         paths.stateDir,
         "agents",
-        "main",
+        "voice",
         "sessions",
         "sessions.json",
       );
       const sqlitePath = path.join(
         paths.stateDir,
         "agents",
-        "main",
+        "voice",
         "agent",
         "openclaw-agent.sqlite",
       );
       const scope = {
-        agentId: "main",
         env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
-        sessionKey: "agent:main:main",
+        sessionKey: "voice:123",
         storePath: legacyStorePath,
       };
 
@@ -317,7 +316,9 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
         updatedAt: 10,
       });
 
-      expect(loadSqliteSessionEntry({ ...scope, storePath: sqlitePath })).toMatchObject({
+      expect(
+        loadSqliteSessionEntry({ ...scope, agentId: "voice", storePath: sqlitePath }),
+      ).toMatchObject({
         model: "gpt-5.5",
         sessionId: "session-1",
       });
