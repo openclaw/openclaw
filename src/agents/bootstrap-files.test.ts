@@ -296,6 +296,7 @@ describe("resolveBootstrapFilesForRun", () => {
       [
         ["AGENTS.md", "project rules"],
         ["TOOLS.md", "tool rules"],
+        ["TOOLS_SHARED.md", "shared tool rules"],
         ["SOUL.md", "persona"],
         ["IDENTITY.md", "identity"],
         ["USER.md", "user profile"],
@@ -312,7 +313,11 @@ describe("resolveBootstrapFilesForRun", () => {
       sessionKey: "agent:main:subagent:worker",
     });
 
-    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(files.map((file) => file.name)).toStrictEqual([
+      "AGENTS.md",
+      "TOOLS.md",
+      "TOOLS_SHARED.md",
+    ]);
   });
 
   it("keeps cron sessions on their existing minimal bootstrap files", async () => {
@@ -321,6 +326,7 @@ describe("resolveBootstrapFilesForRun", () => {
       [
         ["AGENTS.md", "project rules"],
         ["TOOLS.md", "tool rules"],
+        ["TOOLS_SHARED.md", "shared tool rules"],
         ["SOUL.md", "persona"],
         ["IDENTITY.md", "identity"],
         ["USER.md", "user profile"],
@@ -341,6 +347,7 @@ describe("resolveBootstrapFilesForRun", () => {
       "AGENTS.md",
       "SOUL.md",
       "TOOLS.md",
+      "TOOLS_SHARED.md",
       "IDENTITY.md",
       "USER.md",
     ]);

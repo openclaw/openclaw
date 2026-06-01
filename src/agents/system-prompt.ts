@@ -1019,7 +1019,7 @@ export function buildAgentSystemPrompt(params: {
             execToolName,
             processToolName,
           }),
-      "TOOLS.md is usage guidance, not availability.",
+      "TOOLS.md and TOOLS_SHARED.md are usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
             `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
