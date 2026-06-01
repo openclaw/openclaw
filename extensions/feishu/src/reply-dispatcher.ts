@@ -247,6 +247,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
+  let finalReplyCommitted = false;
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
@@ -305,6 +306,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!nextText) {
       return;
     }
+    // Skip updates after final is committed to preserve the committed card
+    if (finalReplyCommitted) {
+      return;
+    }
     if (options?.dedupeWithLastPartial && nextText === lastPartial) {
       return;
     }
@@ -335,6 +340,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const queueReasoningUpdate = (nextThinking: string) => {
     if (!nextThinking) {
+      return;
+    }
+    // Skip updates after final is committed to preserve the committed card
+    if (finalReplyCommitted) {
       return;
     }
     reasoningText = nextThinking;
@@ -396,6 +405,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = "";
     snapshotBaseText = "";
     lastSnapshotTextLength = 0;
+    finalReplyCommitted = false;
   };
 
   const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
@@ -408,6 +418,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        params.runtime.log?.(
+          `feishu[${account.accountId}] [PROOF] Closing streaming card (length=${text.length}, hasReasoning=${reasoningText.length > 0})`,
+        );
         const contentVisible = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
@@ -446,6 +459,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     options?: { startIfNeeded?: boolean },
   ) => {
     statusLine = nextStatusLine;
+    // Skip updates after final is committed to preserve the committed card
+    if (finalReplyCommitted) {
+      return;
+    }
     const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
     if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
       return;
@@ -643,12 +660,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText &&
           streamingEnabled &&
           !finalTextExceedsStreamingLimit &&
-          (info?.kind === "final" || useStaticCard);
+          (info?.kind === "final" || useStaticCard) &&
+          !(info?.kind === "final" && finalReplyCommitted);
         const finalTextWouldUseStreamingCard =
           info?.kind === "final" && hasText && streamingEnabled;
         const useCard = useStaticCard || useStreamingCard;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+        if (skipTextForDuplicateFinal) {
+          params.runtime.log?.(
+            `feishu[${account.accountId}] [PROOF] Duplicate final detected, skipping (length=${text.length})`,
+          );
+        }
         const skipTextForClosedStreamingFinal =
           info?.kind === "final" &&
           hasText &&
@@ -662,6 +685,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           !skipTextForClosedStreamingFinal;
         const shouldDiscardStreamingPreview =
           info?.kind === "final" &&
+          !finalReplyCommitted &&
           (finalTextExceedsStreamingLimit ||
             (hasMedia && ((hasVoiceMedia && !shouldDeliverText) || skipTextForDuplicateFinal)));
 
@@ -677,7 +701,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
-            if (!useStreamingCard) {
+            if (!useStreamingCard || finalReplyCommitted) {
               return;
             }
             startStreaming();
@@ -693,15 +717,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          const shouldStreamText = info?.kind === "block" || info?.kind === "final";
+          const shouldStreamText =
+            info?.kind === "block" || (info?.kind === "final" && !finalReplyCommitted);
           if (streaming?.isActive() && shouldStreamText) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
               queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
-            if (info?.kind === "final") {
+            if (info?.kind === "final" && !finalReplyCommitted) {
               streamText = text;
+              finalReplyCommitted = true;
+              params.runtime.log?.(
+                `feishu[${account.accountId}] [PROOF] Final committed (length=${text.length})`,
+              );
               snapshotBaseText = "";
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
