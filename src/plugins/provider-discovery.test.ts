@@ -427,6 +427,32 @@ describe("normalizePluginDiscoveryResult", () => {
         },
       },
     },
+    {
+      name: "skips model rows with unreadable required fields",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [
+              Object.defineProperty(makeModel("broken-model"), "id", {
+                enumerable: true,
+                get() {
+                  throw new Error("model id read failed");
+                },
+              }),
+              makeModel("healthy-model"),
+            ],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
   ];
 
   it.each(cases)("$name", ({ provider, result, expected }) => {

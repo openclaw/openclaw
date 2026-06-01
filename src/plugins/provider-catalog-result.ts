@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,
   copyRecordEntries,
@@ -25,6 +25,24 @@ const MODEL_PROVIDER_CONFIG_KEYS = [
   "authHeader",
   "request",
 ] as const satisfies readonly (keyof ModelProviderConfig)[];
+
+const MODEL_DEFINITION_CONFIG_KEYS = [
+  "api",
+  "baseUrl",
+  "reasoning",
+  "input",
+  "cost",
+  "contextWindow",
+  "contextTokens",
+  "maxTokens",
+  "thinkingLevelMap",
+  "params",
+  "agentRuntime",
+  "headers",
+  "compat",
+  "mediaInput",
+  "metadataSource",
+] as const satisfies readonly (keyof ModelDefinitionConfig)[];
 
 export type ProviderCatalogResultProjection =
   | { kind: "provider"; provider: ModelProviderConfig }
@@ -62,9 +80,30 @@ export function copyProviderCatalogResultEntries(params: {
 export function copyProviderCatalogModels(
   providerConfig: ModelProviderConfig,
 ): ModelProviderConfig["models"] {
-  return copyArrayEntries(readRecordValue(providerConfig, "models")).filter(
-    (entry): entry is ModelProviderConfig["models"][number] => isRecord(entry),
-  );
+  return copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+    const copied = copyProviderCatalogModel(entry);
+    return copied ? [copied] : [];
+  });
+}
+
+function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
+  if (!isRecord(model)) {
+    return undefined;
+  }
+  const id = readRecordValue(model, "id");
+  const name = readRecordValue(model, "name");
+  if (typeof id !== "string" || typeof name !== "string") {
+    return undefined;
+  }
+
+  const copied: Partial<ModelDefinitionConfig> = { id, name };
+  for (const key of MODEL_DEFINITION_CONFIG_KEYS) {
+    const value = readRecordValue(model, key);
+    if (value !== undefined) {
+      (copied as Record<string, unknown>)[key] = value;
+    }
+  }
+  return copied as ModelDefinitionConfig;
 }
 
 export function copyProviderCatalogProviderConfig(
