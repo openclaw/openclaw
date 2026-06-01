@@ -99,6 +99,10 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // worst case at one minute, well below the multi-minute stall the original
 // comment warned against.
 const NARRATIVE_TIMEOUT_MS = 60_000;
+const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
+// A completed run can reach the session reader before the final assistant text
+// is visible, so retry briefly before falling back to synthetic diary text.
+const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300] as const;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -337,6 +341,32 @@ export function extractNarrativeText(messages: unknown[]): string | null {
       if (text.length > 0) {
         return text;
       }
+    }
+  }
+  return null;
+}
+
+function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+async function readSettledNarrativeText(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+}): Promise<string | null> {
+  for (let attempt = 0; attempt <= NARRATIVE_MESSAGE_SETTLE_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await waitForNarrativeMessagesToSettle(NARRATIVE_MESSAGE_SETTLE_DELAYS_MS[attempt - 1]);
+    }
+    const { messages } = await params.subagent.getSessionMessages({
+      sessionKey: params.sessionKey,
+      limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
+    });
+    const narrative = extractNarrativeText(messages);
+    if (narrative) {
+      return narrative;
     }
   }
   return null;
@@ -966,12 +996,10 @@ export async function generateAndAppendDreamNarrative(params: {
         return;
       }
 
-      const { messages } = await params.subagent.getSessionMessages({
+      const narrative = await readSettledNarrativeText({
+        subagent: params.subagent,
         sessionKey: successfulSessionKey,
-        limit: 5,
       });
-
-      const narrative = extractNarrativeText(messages);
       if (!narrative) {
         params.logger.warn(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,

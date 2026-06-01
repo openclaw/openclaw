@@ -683,6 +683,51 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(logger.info).toHaveBeenCalled();
   });
 
+  it("waits for persisted assistant text before falling back", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.getSessionMessages
+      .mockResolvedValueOnce({
+        messages: [{ role: "user", content: "prompt" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: "prompt" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "The delayed diary text finally settled." }],
+          },
+        ],
+      });
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["The narrative assistant persisted after the run completed."],
+      },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
+    expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
+      sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+      limit: 5,
+    });
+    expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
+      sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+      limit: 5,
+    });
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("The delayed diary text finally settled.");
+    expect(content).not.toContain("A memory trace surfaced");
+    expectLogExcludes(logger.warn, "produced no text");
+  });
+
   it("retries with the session default when the configured model cannot start", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("The default model carried the diary home.");
