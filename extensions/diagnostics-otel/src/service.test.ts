@@ -3395,7 +3395,9 @@ describe("diagnostics-otel service", () => {
     });
 
     await waitForDiagnosticEventsDrained();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     await waitForDiagnosticEventsDrained();
     await Promise.resolve();
     telemetryState.tracer.setSpanContext.mockClear();
