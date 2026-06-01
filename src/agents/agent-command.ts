@@ -99,9 +99,9 @@ import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { prepareInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
-import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
@@ -1350,7 +1350,12 @@ async function agentCommandInternal(
             )
           : parseAgentCommandModelRef(cfg, explicitModelOverride, provider, modelManifestContext)
         : explicitProviderOverride
-          ? normalizeAgentCommandModelRef(cfg, explicitProviderOverride, model, modelManifestContext)
+          ? normalizeAgentCommandModelRef(
+              cfg,
+              explicitProviderOverride,
+              model,
+              modelManifestContext,
+            )
           : null;
       if (!explicitRef) {
         throw new Error("Invalid model override.");
