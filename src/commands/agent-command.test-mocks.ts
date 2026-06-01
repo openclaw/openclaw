@@ -186,6 +186,7 @@ vi.mock("../agents/model-selection.js", () => {
     modelKey,
     normalizeModelRef,
     normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
