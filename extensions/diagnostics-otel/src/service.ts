@@ -1688,11 +1688,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metadata: DiagnosticEventMetadata,
       ) => {
         const traceContext = internalOrTrustedTraceContext(evt, metadata);
-        // OTel JS generates a new trace id for root spans. For root channel
-        // message diagnostics, use the diagnostic span id as a non-recording
-        // remote parent so exported spans keep the same trace id as file logs
-        // and diagnostic events; child spans are later parented to the actual
-        // exported message span through activeTrustedSpans.
         const parentSpanId = traceContext?.parentSpanId ?? traceContext?.spanId;
         if (!traceContext || !parentSpanId) {
           return undefined;
