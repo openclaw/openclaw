@@ -229,6 +229,7 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // logged and the run proceeds without its modifications.
   before_agent_start: 15_000,
   before_prompt_build: 15_000,
+  resolve_exec_env: 15_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -1599,7 +1600,7 @@ export function createHookRunner(
       event,
       ctx,
       {
-        mergeResults: (acc, next) => ({ ...(acc ?? {}), ...next }),
+        mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
       },
     );
     return result ?? {};

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks, addTestHook } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -12,6 +12,10 @@ const ctx: PluginHookResolveExecEnvContext = {
 };
 
 describe("resolve_exec_env hook", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns an empty env when no handlers are registered", async () => {
     const runner = createHookRunner(createEmptyPluginRegistry());
 
@@ -84,6 +88,38 @@ describe("resolve_exec_env hook", () => {
     ).resolves.toEqual({ HEALTHY_ENV: "ok" });
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("resolve_exec_env handler from crasher failed"),
+    );
+  });
+
+  it("skips handlers that exceed the default timeout", async () => {
+    vi.useFakeTimers();
+    const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const registry = createEmptyPluginRegistry();
+    addTestHook({
+      registry,
+      pluginId: "hanging",
+      hookName: "resolve_exec_env",
+      handler: () => new Promise<never>(() => {}),
+      priority: 100,
+    });
+    addTestHook({
+      registry,
+      pluginId: "healthy",
+      hookName: "resolve_exec_env",
+      handler: async () => ({ HEALTHY_ENV: "ok" }),
+      priority: 50,
+    });
+
+    const runner = createHookRunner(registry, { logger });
+    const resultPromise = runner.runResolveExecEnv(
+      { sessionKey: ctx.sessionKey, toolName: "exec", host: "gateway" },
+      ctx,
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(resultPromise).resolves.toEqual({ HEALTHY_ENV: "ok" });
+    expect(logger.error).toHaveBeenCalledWith(
+      "[hooks] resolve_exec_env handler from hanging failed: timed out after 15000ms",
     );
   });
 });
