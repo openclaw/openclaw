@@ -92,7 +92,7 @@ const sessionMetaMocks = vi.hoisted(() => ({
 }));
 
 const transcriptMocks = vi.hoisted(() => ({
-  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => ({ saveOutcome: "saved" })),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
@@ -344,7 +344,12 @@ type MockRunTurnInput = {
     success: boolean;
     durationMs: number;
     errorCode?: string;
-  }) => Promise<boolean | void> | boolean | void;
+  }) =>
+    | Promise<{ saveOutcome: "saved" } | { saveOutcome: "skipped"; saveSkipReason?: string }>
+    | { saveOutcome: "saved" }
+    | { saveOutcome: "skipped"; saveSkipReason?: string }
+    | boolean
+    | void;
 };
 
 async function completeMockAcpTurn(input: MockRunTurnInput, errorCode?: string): Promise<void> {
@@ -525,16 +530,17 @@ describe("tryDispatchAcpReply", () => {
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async () => {
       order.push("transcript");
+      return { saveOutcome: "saved" };
     });
     managerMocks.runTurn.mockImplementationOnce(async (input: MockRunTurnInput) => {
       await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
       await input.onEvent?.({ type: "done" });
-      const shouldEmitSave = await input.onBeforeTurnSaveHook?.({
+      const saveResult = await input.onBeforeTurnSaveHook?.({
         sessionKey,
         success: true,
         durationMs: 1,
       });
-      if (shouldEmitSave !== false) {
+      if (saveResult && typeof saveResult === "object" && saveResult.saveOutcome === "saved") {
         order.push("save-success");
       }
     });

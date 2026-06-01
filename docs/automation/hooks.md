@@ -140,9 +140,9 @@ reply channel and ignore pushed messages.
 **Agent turn events**:
 
 - `agent:turn:end` carries `context.sessionKey`, `context.success`, `context.durationMs`, and optional `context.errorCode` when the turn failed. For ACP turns, it is scheduled after the runtime emits the terminal turn event and the manager has awaited event delivery callbacks; it marks the turn lifecycle boundary and does not guarantee the completed turn has been written to durable session state.
-- `agent:turn:save` carries `context.sessionKey`, `context.success`, `context.turnSuccess`, `context.durationMs`, optional `context.turnErrorCode`, and optional `context.saveError`. Its `success` field describes the save phase outcome, while `turnSuccess` preserves the underlying runtime turn outcome. It is scheduled after the ACP turn save phase reaches an outcome, including save failure or a save layer declining the durable-readiness boundary.
+- `agent:turn:save` carries `context.sessionKey`, `context.success`, `context.saveOutcome`, `context.turnSuccess`, `context.durationMs`, optional `context.turnErrorCode`, optional `context.saveError`, and optional `context.saveSkipReason`. Its `saveOutcome` field is `saved`, `skipped`, or `failed`; `success` is true only for `saved`. `turnSuccess` preserves the underlying runtime turn outcome. It is scheduled after the ACP turn save phase reaches an outcome, including save failure or a save layer declining the durable-readiness boundary.
 
-Hooks that need to read completed durable turn state should require `agent:turn:save` with `context.success === true`. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. These events do not embed transcript text.
+Hooks that need to read completed durable turn state should require `agent:turn:save` with `context.saveOutcome === "saved"`. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. These events do not embed transcript text.
 
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 

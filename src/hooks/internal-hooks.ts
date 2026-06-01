@@ -198,6 +198,8 @@ export type AgentTurnSaveHookContext = {
   sessionKey: string;
   /** Whether the save phase completed successfully. */
   success: boolean;
+  /** Specific save phase outcome observed before this event was emitted. */
+  saveOutcome: "saved" | "skipped" | "failed";
   /** Whether the underlying ACP runtime turn completed successfully. */
   turnSuccess: boolean;
   /** Wall-clock duration of the turn in milliseconds. */
@@ -206,6 +208,8 @@ export type AgentTurnSaveHookContext = {
   turnErrorCode?: string;
   /** Error message when the save phase failed by throwing. */
   saveError?: string;
+  /** Reason the save phase skipped the durable-readiness boundary. */
+  saveSkipReason?: string;
 };
 
 /** Internal hook event emitted after each agent turn save phase reaches an outcome. */
@@ -528,10 +532,14 @@ export function isAgentTurnSaveEvent(event: InternalHookEvent): event is AgentTu
   return (
     hasStringContextField(context, "sessionKey") &&
     hasBooleanContextField(context, "success") &&
+    (context.saveOutcome === "saved" ||
+      context.saveOutcome === "skipped" ||
+      context.saveOutcome === "failed") &&
     hasBooleanContextField(context, "turnSuccess") &&
     hasNumberContextField(context, "durationMs") &&
     (context.turnErrorCode === undefined || typeof context.turnErrorCode === "string") &&
-    (context.saveError === undefined || typeof context.saveError === "string")
+    (context.saveError === undefined || typeof context.saveError === "string") &&
+    (context.saveSkipReason === undefined || typeof context.saveSkipReason === "string")
   );
 }
 

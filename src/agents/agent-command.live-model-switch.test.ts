@@ -850,7 +850,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         onBeforeTurnSaveHook?: (completion: {
           durationMs: number;
           success: boolean;
-        }) => boolean | Promise<boolean>;
+        }) =>
+          | { saveOutcome: "saved" }
+          | { saveOutcome: "skipped"; saveSkipReason?: string }
+          | boolean
+          | Promise<
+              | { saveOutcome: "saved" }
+              | { saveOutcome: "skipped"; saveSkipReason?: string }
+              | boolean
+            >;
         onEvent?: (event: unknown) => void;
       };
       const onEvent = runTurnParams.onEvent;

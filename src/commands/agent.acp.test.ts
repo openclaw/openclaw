@@ -193,7 +193,12 @@ type MockAcpRunTurnInput = {
     success: boolean;
     durationMs: number;
     errorCode?: string;
-  }) => Promise<boolean | void> | boolean | void;
+  }) =>
+    | Promise<{ saveOutcome: "saved" } | { saveOutcome: "skipped"; saveSkipReason?: string }>
+    | { saveOutcome: "saved" }
+    | { saveOutcome: "skipped"; saveSkipReason?: string }
+    | boolean
+    | void;
   sessionKey?: string;
   text?: string;
 };
@@ -416,7 +421,9 @@ describe("agentCommand ACP runtime routing", () => {
           success: true,
           durationMs: 1,
         });
-        order.push(`save:${String(result)}`);
+        order.push(
+          `save:${result && typeof result === "object" ? result.saveOutcome : String(result)}`,
+        );
       });
       attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(async (params) => {
         order.push("persist");
@@ -428,7 +435,7 @@ describe("agentCommand ACP runtime routing", () => {
 
       await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
 
-      expect(order).toEqual(["before-save", "persist", "save:true"]);
+      expect(order).toEqual(["before-save", "persist", "save:saved"]);
       expectPersistedAcpTranscript({
         userContent: "ping",
         assistantText: "saved",
@@ -472,7 +479,7 @@ describe("agentCommand ACP runtime routing", () => {
           durationMs: 1,
           errorCode: "ACP_TURN_FAILED",
         });
-        expect(result).toBe(false);
+        expect(result).toEqual({ saveOutcome: "skipped", saveSkipReason: "turn_failed" });
       });
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),

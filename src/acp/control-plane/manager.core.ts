@@ -45,6 +45,7 @@ import {
   type AcpRunTurnInput,
   type AcpSessionManagerDeps,
   type AcpTurnCompletionHookContext,
+  type AcpTurnSaveHookResult,
   type AcpTurnSaveHookContext,
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
@@ -425,7 +426,7 @@ export class AcpSessionManager {
     errorCode?: AcpRuntimeError["code"];
     beforeSaveHook?: (
       context: AcpTurnCompletionHookContext,
-    ) => Promise<boolean | void> | boolean | void;
+    ) => Promise<AcpTurnSaveHookResult | boolean | void> | AcpTurnSaveHookResult | boolean | void;
   }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
@@ -454,9 +455,11 @@ export class AcpSessionManager {
     };
     try {
       const beforeSaveResult = await params.beforeSaveHook(context);
+      const saveOutcome = this.normalizeTurnSaveHookResult(beforeSaveResult);
       this.emitTurnSaveHook({
         ...saveContextBase,
-        success: beforeSaveResult !== false,
+        success: saveOutcome.saveOutcome === "saved",
+        ...saveOutcome,
       });
     } catch (error) {
       const saveError = formatErrorMessage(error);
@@ -466,9 +469,22 @@ export class AcpSessionManager {
       this.emitTurnSaveHook({
         ...saveContextBase,
         success: false,
+        saveOutcome: "failed",
         saveError,
       });
     }
+  }
+
+  private normalizeTurnSaveHookResult(
+    result: AcpTurnSaveHookResult | boolean | void,
+  ): AcpTurnSaveHookResult {
+    if (result === false) {
+      return { saveOutcome: "skipped", saveSkipReason: "declined" };
+    }
+    if (result && typeof result === "object") {
+      return result;
+    }
+    return { saveOutcome: "saved" };
   }
 
   private emitTurnEndHook(context: AcpTurnCompletionHookContext): void {

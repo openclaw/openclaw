@@ -63,13 +63,26 @@ export type AcpTurnCompletionHookContext = {
 
 export type AcpTurnEndHookContext = AcpTurnCompletionHookContext;
 
+export type AcpTurnSaveOutcome = "saved" | "skipped" | "failed";
+
+export type AcpTurnSaveHookResult =
+  | {
+      saveOutcome: "saved";
+    }
+  | {
+      saveOutcome: "skipped";
+      saveSkipReason?: string;
+    };
+
 export type AcpTurnSaveHookContext = {
   sessionKey: string;
   success: boolean;
+  saveOutcome: AcpTurnSaveOutcome;
   turnSuccess: boolean;
   durationMs: number;
   turnErrorCode?: AcpRuntimeError["code"];
   saveError?: string;
+  saveSkipReason?: string;
 };
 
 export type AcpRunTurnInput = {
@@ -84,7 +97,7 @@ export type AcpRunTurnInput = {
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onBeforeTurnSaveHook?: (
     context: AcpTurnCompletionHookContext,
-  ) => Promise<boolean | void> | boolean | void;
+  ) => Promise<AcpTurnSaveHookResult | boolean | void> | AcpTurnSaveHookResult | boolean | void;
 };
 
 export type AcpTurnLifecycleEvent = {

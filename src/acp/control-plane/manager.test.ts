@@ -332,6 +332,7 @@ describe("AcpSessionManager", () => {
         context: expect.objectContaining({
           sessionKey: "agent:codex:acp:session-1",
           success: true,
+          saveOutcome: "saved",
           turnSuccess: true,
           durationMs: expect.any(Number),
         }),
@@ -421,6 +422,7 @@ describe("AcpSessionManager", () => {
         context: expect.objectContaining({
           sessionKey: "agent:codex:acp:session-1",
           success: false,
+          saveOutcome: "failed",
           turnSuccess: true,
           durationMs: expect.any(Number),
           saveError: "transcript write failed",
@@ -429,7 +431,7 @@ describe("AcpSessionManager", () => {
     );
   });
 
-  it("emits agent:turn:save with false success when the save step returns false", async () => {
+  it("emits agent:turn:save with skipped outcome when the save step returns false", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -468,6 +470,8 @@ describe("AcpSessionManager", () => {
         context: expect.objectContaining({
           sessionKey: "agent:codex:acp:session-1",
           success: false,
+          saveOutcome: "skipped",
+          saveSkipReason: "declined",
           turnSuccess: true,
           durationMs: expect.any(Number),
         }),
@@ -535,6 +539,8 @@ describe("AcpSessionManager", () => {
         context: expect.objectContaining({
           sessionKey: "agent:codex:acp:session-1",
           success: false,
+          saveOutcome: "skipped",
+          saveSkipReason: "declined",
           turnSuccess: false,
           durationMs: expect.any(Number),
           turnErrorCode: "ACP_TURN_FAILED",

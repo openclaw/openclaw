@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import type { AcpTurnSaveHookResult } from "../acp/control-plane/manager.types.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
@@ -908,8 +909,12 @@ async function agentCommandInternal(
 
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
-      const persistDirectAcpTurnTranscript = async () => {
+      const persistDirectAcpTurnTranscript = async (): Promise<AcpTurnSaveHookResult> => {
         const finalTextRaw = visibleTextAccumulator.finalizeRaw();
+        const promptText = transcriptBody ?? body;
+        if (!promptText && !finalTextRaw) {
+          return { saveOutcome: "skipped", saveSkipReason: "empty_turn" };
+        }
         try {
           const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
             loadAcpSessionIdentifiersRuntime(),
@@ -958,6 +963,7 @@ async function agentCommandInternal(
           if (internalSessionFile) {
             sessionEntry = prepared.sessionEntry;
           }
+          return { saveOutcome: "saved" };
         } catch (error) {
           log.warn(
             `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
@@ -1036,11 +1042,13 @@ async function agentCommandInternal(
             });
           },
           onBeforeTurnSaveHook: async (completion) => {
-            if (!completion.success || opts.abortSignal?.aborted) {
-              return false;
+            if (!completion.success) {
+              return { saveOutcome: "skipped", saveSkipReason: "turn_failed" };
             }
-            await persistDirectAcpTurnTranscript();
-            return true;
+            if (opts.abortSignal?.aborted) {
+              return { saveOutcome: "skipped", saveSkipReason: "aborted" };
+            }
+            return await persistDirectAcpTurnTranscript();
           },
         });
       } catch (error) {

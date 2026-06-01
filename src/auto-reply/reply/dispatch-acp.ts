@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AcpTurnSaveHookResult } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { type AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -589,12 +590,15 @@ export async function tryDispatchAcpReply(params: {
       onEvent: async (event) => await projector.onEvent(event),
       onBeforeTurnSaveHook: async (completion) => {
         await projector.flush(true);
-        if (!completion.success || params.abortSignal?.aborted) {
-          return false;
+        if (!completion.success) {
+          return { saveOutcome: "skipped", saveSkipReason: "turn_failed" };
+        }
+        if (params.abortSignal?.aborted) {
+          return { saveOutcome: "skipped", saveSkipReason: "aborted" };
         }
         try {
           const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
-          await persistAcpDispatchTranscript({
+          const saveResult: AcpTurnSaveHookResult = await persistAcpDispatchTranscript({
             cfg: params.cfg,
             sessionKey: canonicalSessionKey,
             promptText: turnPromptText,
@@ -602,7 +606,7 @@ export async function tryDispatchAcpReply(params: {
             meta: acpResolution.meta,
             threadId: params.ctx.MessageThreadId,
           });
-          return true;
+          return saveResult;
         } catch (error) {
           logVerbose(
             `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(

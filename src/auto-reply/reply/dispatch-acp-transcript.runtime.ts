@@ -1,4 +1,5 @@
 import { resolveAcpSessionCwd } from "@openclaw/acp-core/runtime/session-identifiers";
+import type { AcpTurnSaveHookResult } from "../../acp/control-plane/manager.types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { persistAcpTurnTranscript } from "../../agents/command/attempt-execution.js";
 import {
@@ -16,11 +17,11 @@ export async function persistAcpDispatchTranscript(params: {
   finalText: string;
   meta?: SessionAcpMeta;
   threadId?: string | number;
-}): Promise<void> {
+}): Promise<AcpTurnSaveHookResult> {
   const promptText = params.promptText.trim();
   const finalText = params.finalText.trim();
   if (!promptText && !finalText) {
-    return;
+    return { saveOutcome: "skipped", saveSkipReason: "empty_turn" };
   }
 
   const sessionAgentId = resolveSessionAgentId({
@@ -54,4 +55,5 @@ export async function persistAcpDispatchTranscript(params: {
     sessionCwd: resolveAcpSessionCwd(params.meta) ?? process.cwd(),
     config: params.cfg,
   });
+  return { saveOutcome: "saved" };
 }
