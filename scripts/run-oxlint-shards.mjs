@@ -152,7 +152,8 @@ export function shouldRunOxlintShardsSerial({
 
 function isRemoteChangedGateEnv(env) {
   return (
-    env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD === "1" || env.OPENCLAW_CHANGED_LANES_RAW_SYNC === "1"
+    env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD === "1" ||
+    env.OPENCLAW_CHANGED_LANES_RAW_SYNC === "1"
   );
 }
 
@@ -255,21 +256,20 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
         platform: process.platform,
         splitCore: shardArgs.splitCore,
       });
-      const results =
-        shardConcurrency <= 1
-          ? await runShardsSerial({
-              entries: selectedShards,
-              env,
-              extraArgs: shardArgs.oxlintArgs,
-              runner,
-            })
-          : await runShardsParallel({
-              concurrency: Math.min(shardConcurrency, selectedShards.length),
-              entries: selectedShards,
-              env,
-              extraArgs: shardArgs.oxlintArgs,
-              runner,
-            });
+      const results = shardConcurrency <= 1
+        ? await runShardsSerial({
+            entries: selectedShards,
+            env,
+            extraArgs: shardArgs.oxlintArgs,
+            runner,
+          })
+        : await runShardsParallel({
+            concurrency: Math.min(shardConcurrency, selectedShards.length),
+            entries: selectedShards,
+            env,
+            extraArgs: shardArgs.oxlintArgs,
+            runner,
+          });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
     }
   } finally {

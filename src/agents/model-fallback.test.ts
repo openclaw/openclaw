@@ -1781,9 +1781,9 @@ describe("runWithModelFallback", () => {
       { provider: "openai", model: "gpt-4.1-mini" },
       { provider: "tui-pty-mock", model: "gpt-5.5" },
     ]);
-    expect(
-      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
-    ).not.toHaveBeenCalledWith(expect.objectContaining({ provider: "tui-pty-mock" }));
+    expect(providerModelNormalizationMock.normalizeProviderModelIdWithRuntime).not.toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "tui-pty-mock" }),
+    );
   });
 
   it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {

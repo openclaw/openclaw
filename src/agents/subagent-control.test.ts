@@ -1372,7 +1372,9 @@ describe("steerControlledSubagentRun", () => {
     });
 
     setSubagentControlDepsForTest({
-      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+      callGateway: async <T = Record<string, unknown>>(
+        request: CallGatewayOptions,
+      ) => {
         if (request.method === "agent.wait") {
           return {} as T;
         }

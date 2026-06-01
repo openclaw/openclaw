@@ -1,8 +1,4 @@
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
-import {
-  normalizeOptionalString,
-  resolvePrimaryStringValue,
-} from "../../packages/normalization-core/src/string-coerce.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -30,6 +26,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   clearGatewayModelPricingFailures,

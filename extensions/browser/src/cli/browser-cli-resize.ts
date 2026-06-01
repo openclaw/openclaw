@@ -18,7 +18,9 @@ export async function runBrowserResizeWithOutput(params: {
     return;
   }
   if (width > ACT_MAX_VIEWPORT_DIMENSION || height > ACT_MAX_VIEWPORT_DIMENSION) {
-    defaultRuntime.error(danger(`width and height must not exceed ${ACT_MAX_VIEWPORT_DIMENSION}`));
+    defaultRuntime.error(
+      danger(`width and height must not exceed ${ACT_MAX_VIEWPORT_DIMENSION}`),
+    );
     defaultRuntime.exit(1);
     return;
   }

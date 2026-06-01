@@ -68,7 +68,9 @@ function signalHostCommandProcess(pid: number | undefined, signal: NodeJS.Signal
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ESRCH") {
       warn(
-        `failed to send ${signal} to timed host command process ${pid}: ${code ?? String(error)}`,
+        `failed to send ${signal} to timed host command process ${pid}: ${
+          code ?? String(error)
+        }`,
       );
     }
   }
@@ -277,20 +279,21 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
   const env = { ...process.env, ...options.env };
   const invocation = resolveHostCommandInvocation(command, args, { env });
   const usesPosixTimedWrapper = process.platform !== "win32" && options.timeoutMs !== undefined;
-  const result = usesPosixTimedWrapper
-    ? runPosixTimedCommandSync(invocation, env, options)
-    : spawnSync(invocation.command, invocation.args, {
-        cwd: options.cwd ?? repoRoot,
-        encoding: "utf8",
-        env: invocation.env ?? env,
-        input: options.input,
-        killSignal: "SIGKILL",
-        maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-        stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-        shell: invocation.shell,
-        timeout: options.timeoutMs,
-        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-      });
+  const result =
+    usesPosixTimedWrapper
+      ? runPosixTimedCommandSync(invocation, env, options)
+      : spawnSync(invocation.command, invocation.args, {
+          cwd: options.cwd ?? repoRoot,
+          encoding: "utf8",
+          env: invocation.env ?? env,
+          input: options.input,
+          killSignal: "SIGKILL",
+          maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+          stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+          shell: invocation.shell,
+          timeout: options.timeoutMs,
+          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+        });
 
   let wrapperTimedOut = false;
   if (usesPosixTimedWrapper) {

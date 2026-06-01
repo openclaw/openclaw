@@ -387,7 +387,9 @@ describe("installSessionToolResultGuard", () => {
     );
 
     const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
-    expect((messages[2] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe("call_1");
+    expect((messages[2] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
+      "call_1",
+    );
     expect((messages[2] as { isError?: boolean }).isError).toBe(false);
     expect(JSON.stringify(messages)).not.toContain("missing tool result");
     expect(guard.getPendingIds()).toStrictEqual(["call_2"]);

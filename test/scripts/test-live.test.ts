@@ -35,7 +35,13 @@ describe("scripts/test-live", () => {
   });
 
   it("preserves vitest flags after the passthrough separator", () => {
-    const args = parseTestLiveArgs(["--quiet", "--", "--help", "--no-quiet", "--codex-harness"]);
+    const args = parseTestLiveArgs([
+      "--quiet",
+      "--",
+      "--help",
+      "--no-quiet",
+      "--codex-harness",
+    ]);
 
     expect(args).toEqual({
       forceCodexHarness: false,
@@ -63,16 +69,18 @@ describe("scripts/test-live", () => {
 
   it("rejects loose heartbeat intervals instead of parsing prefixes", () => {
     expect(resolveTestLiveHeartbeatMs({})).toBe(20_000);
-    expect(resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "2500" })).toBe(2500);
-    expect(() => resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "1e3" })).toThrow(
-      "invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: 1e3",
+    expect(resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "2500" })).toBe(
+      2500,
     );
+    expect(() =>
+      resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "1e3" }),
+    ).toThrow("invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: 1e3");
     expect(() =>
       resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "1000ms" }),
     ).toThrow("invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: 1000ms");
-    expect(() => resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "0" })).toThrow(
-      "invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: 0",
-    );
+    expect(() =>
+      resolveTestLiveHeartbeatMs({ OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: "0" }),
+    ).toThrow("invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: 0");
   });
 
   it("prints help without spawning live Vitest", () => {

@@ -93,11 +93,15 @@ describe("runCodexAppServerAttempt steering", () => {
     const run = runCodexAppServerAttempt(params);
     await waitForMethod("turn/start");
 
-    await queueActiveRunMessageEventually(params.sessionId, "subagent complete", {
-      debounceMs: 1,
-      steeringMode: "all",
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+    await queueActiveRunMessageEventually(
+      params.sessionId,
+      "subagent complete",
+      {
+        debounceMs: 1,
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    );
 
     await vi.waitFor(
       () =>

@@ -1540,9 +1540,7 @@ function isWindowsRemoteTarget(commandArgs) {
 }
 
 function isNativeWindowsRemoteTarget(commandArgs) {
-  return (
-    isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2"
-  );
+  return isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2";
 }
 
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
@@ -1555,14 +1553,14 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
 
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
-    "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
-    "if ($openclawModulesDir) {",
+    '$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR',
+    'if ($openclawModulesDir) {',
     'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
     '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
     '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
     'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
     'if (-not (Test-Path $openclawWorkspaceModules)) { cmd /c mklink /J "$openclawWorkspaceModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link workspace node_modules" } }',
-    "}",
+    '}',
   ].join("; ");
 }
 
