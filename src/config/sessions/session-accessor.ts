@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { getRuntimeConfig } from "../io.js";
+import { resolveSessionTranscriptPathInDir, resolveStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import {
   getSessionEntry,
@@ -9,6 +10,7 @@ import {
   loadSessionStore,
   patchSessionEntry as patchFileSessionEntry,
   resolveSessionStoreEntry,
+  updateSessionStoreEntry as updateFileSessionStoreEntry,
 } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptEvent } from "./transcript-append.js";
@@ -37,6 +39,11 @@ export type SessionEntrySummary = {
 
 export type TranscriptEvent = unknown;
 
+export type SessionEntryUpdateOptions = {
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+};
+
 /** Loads one session entry through the storage-neutral accessor seam. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   return getSessionEntry(scope);
@@ -58,6 +65,23 @@ export async function upsertSessionEntry(
     ...scope,
     fallbackEntry: createFallbackSessionEntry(patch),
     update: () => patch,
+  });
+}
+
+/** Updates an existing session entry through the storage-neutral accessor seam. */
+export async function updateSessionEntry(
+  scope: SessionAccessScope,
+  update: (
+    entry: SessionEntry,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SessionEntryUpdateOptions = {},
+): Promise<SessionEntry | null> {
+  return await updateFileSessionStoreEntry({
+    storePath: resolveAccessStorePath(scope),
+    sessionKey: scope.sessionKey,
+    skipMaintenance: options.skipMaintenance,
+    takeCacheOwnership: options.takeCacheOwnership,
+    update,
   });
 }
 
@@ -92,6 +116,17 @@ function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry 
     updatedAt: patch.updatedAt ?? now,
     ...patch,
   };
+}
+
+function resolveAccessStorePath(scope: SessionAccessScope): string {
+  if (scope.storePath) {
+    return scope.storePath;
+  }
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  return resolveStorePath(getRuntimeConfig().session?.store, {
+    agentId,
+    env: scope.env,
+  });
 }
 
 async function resolveTranscriptAccess(scope: SessionTranscriptAccessScope): Promise<{

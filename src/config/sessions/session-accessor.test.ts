@@ -7,6 +7,7 @@ import {
   listSessionEntries,
   loadSessionEntry,
   loadTranscriptEvents,
+  updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
 
@@ -75,6 +76,34 @@ describe("session accessor file-backed seam", () => {
     );
     expect(inserted?.sessionId).not.toBe(scope.sessionKey);
     expect(loadSessionEntry(scope)?.sessionId).toBe(inserted?.sessionId);
+  });
+
+  it("updates existing entries without creating missing sessions", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await expect(updateSessionEntry(scope, () => ({ model: "gpt-5.5" }))).resolves.toBeNull();
+    expect(listSessionEntries({ storePath })).toEqual([]);
+
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+    const beforeNullUpdate = loadSessionEntry(scope);
+    await expect(updateSessionEntry(scope, () => null)).resolves.toEqual(beforeNullUpdate);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionId: "session-1",
+      updatedAt: beforeNullUpdate?.updatedAt,
+    });
+    await expect(
+      updateSessionEntry(scope, () => ({ model: "gpt-5.5", updatedAt: 20 })),
+    ).resolves.toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-1",
+      updatedAt: expect.any(Number),
+    });
   });
 
   it("loads and appends transcript events through a session scope", async () => {
