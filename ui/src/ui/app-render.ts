@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -752,6 +753,46 @@ function renderMeasured<T>(
     durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
   });
   return result;
+}
+
+function renderGuardedChatControls(state: AppViewState) {
+  return guard(
+    [
+      state.sessionKey,
+      state.connected,
+      state.client,
+      state.onboarding,
+      state.chatManualRefreshInFlight,
+      state.chatLoading,
+      state.chatSending,
+      state.chatStream,
+      state.chatRunId,
+      state.chatMobileControlsOpen,
+      state.sessionsHideCron ?? true,
+      state.sessionsResult,
+      state.sessionsShowArchived,
+      state.agentsList,
+      state.chatModelOverrides,
+      state.chatModelSwitchPromises,
+      state.chatModelsLoading,
+      state.chatModelCatalog,
+      state.settings.chatShowThinking,
+      state.settings.chatShowToolCalls,
+      state.settings.chatAutoScroll,
+      state.chatSessionPickerOpen,
+      state.chatSessionPickerSurface,
+      state.chatSessionPickerQuery,
+      state.chatSessionPickerAppliedQuery,
+      state.chatSessionPickerLoading,
+      state.chatSessionPickerError,
+      state.chatSessionPickerResult,
+      state.sessionSwitchNotice?.id ?? null,
+      state.sessionSwitchNotice?.text ?? null,
+      state.sessionSwitchFlashKey,
+      i18n.getLocale(),
+    ],
+    () => renderChatControls(state),
+  );
 }
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
@@ -3149,7 +3190,7 @@ export function renderApp(state: AppViewState) {
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
-                  composerControls: renderChatControls(state),
+                  composerControls: renderGuardedChatControls(state),
                   workspaceFiles: {
                     agentId: chatAgentId,
                     list:

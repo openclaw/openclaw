@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { ChatProps } from "./views/chat.ts";
 import type { QuickSettingsProps } from "./views/config-quick.ts";
@@ -13,6 +14,7 @@ const chatProps = vi.hoisted(() => ({
   current: null as ChatProps | null,
 }));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const renderChatControlsMock = vi.hoisted(() => vi.fn(() => "chat-controls"));
 
 vi.mock("../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -33,9 +35,17 @@ vi.mock("./views/config-quick.ts", () => ({
 vi.mock("./views/chat.ts", () => ({
   renderChat: (props: ChatProps) => {
     chatProps.current = props;
-    return html`<div data-testid="chat"></div>`;
+    return html`<div data-testid="chat">${props.composerControls}</div>`;
   },
 }));
+
+vi.mock("./app-render.helpers.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./app-render.helpers.ts")>();
+  return {
+    ...actual,
+    renderChatControls: renderChatControlsMock,
+  };
+});
 
 vi.mock("./icons.ts", () => ({
   icons: {},
@@ -218,10 +228,12 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   } as unknown as AppViewState;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.setLocale("en");
   localStorageValues.clear();
   quickSettingsProps.current = null;
   chatProps.current = null;
+  renderChatControlsMock.mockClear();
 });
 
 describe("renderApp assistant avatar routing", () => {
@@ -330,6 +342,35 @@ describe("renderApp assistant avatar routing", () => {
     );
 
     expect(chatProps.current?.error).toBe("gateway disconnected");
+  });
+
+  it("does not rebuild chat composer controls for draft-only rerenders", () => {
+    const container = document.createElement("div");
+    const state = createState({ tab: "chat", chatMessage: "" });
+
+    render(renderApp(state), container);
+    state.chatMessage = "h";
+    render(renderApp(state), container);
+    state.chatMessage = "hello";
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(1);
+
+    state.chatSending = true;
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds chat composer controls after locale changes", async () => {
+    const container = document.createElement("div");
+    const state = createState({ tab: "chat", chatMessage: "" });
+
+    render(renderApp(state), container);
+    await i18n.setLocale("zh-CN");
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(2);
   });
 
   it("passes security quick setting fields to Quick Settings", () => {

@@ -179,7 +179,7 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
-  composerControls?: TemplateResult | typeof nothing;
+  composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
   workspaceFiles?: {
     agentId: string;
     list: AgentsFilesListResult | null;
