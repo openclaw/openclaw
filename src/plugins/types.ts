@@ -1988,7 +1988,9 @@ export type VideoGenerationProviderPlugin = VideoGenerationProvider;
 export type MusicGenerationProviderPlugin = MusicGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
+  /** Gateway JSON-RPC method name exposed by the plugin. */
   method: string;
+  /** Handler invoked by the gateway after registry-level method dispatch. */
   handler: GatewayRequestHandler;
 };
 
@@ -2067,10 +2069,13 @@ export type PluginCommandContext = {
   diagnosticsPreviewOnly?: boolean;
   /** Internal diagnostics-only marker for owner-private routed confirmations. */
   diagnosticsPrivateRouted?: boolean;
+  /** Ask the host to bind the current channel conversation to an agent/session target. */
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
+  /** Remove the active conversation binding without requiring plugins to know storage details. */
   detachConversationBinding: () => Promise<{ removed: boolean }>;
+  /** Read the active conversation binding after channel/thread normalization. */
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
@@ -2102,7 +2107,9 @@ export const AGENT_PROMPT_SURFACE_KINDS = [
 export type AgentPromptSurfaceKind = (typeof AGENT_PROMPT_SURFACE_KINDS)[number];
 
 export type AgentPromptGuidanceEntry = {
+  /** Instruction text appended to generated agent guidance for matching surfaces. */
   text: string;
+  /** Optional surface filter; omitted guidance applies to every agent prompt surface. */
   surfaces?: readonly AgentPromptSurfaceKind[];
 };
 
@@ -2162,8 +2169,11 @@ export type PluginInteractiveRegistration<
   TChannel extends string = string,
   TResult = PluginInteractiveHandlerResult,
 > = {
+  /** Channel id whose interactive payloads should be routed to this handler. */
   channel: TChannel;
+  /** Plugin-owned namespace used to avoid callback/action id collisions. */
   namespace: string;
+  /** Handler invoked with the channel-specific interactive payload context. */
   handler: (ctx: TContext) => Promise<TResult> | TResult;
 };
 
@@ -2185,19 +2195,30 @@ export type OpenClawPluginHttpRouteUpgradeHandler = (
 ) => Promise<boolean | void> | boolean | void;
 
 export type OpenClawPluginHttpRouteParams = {
+  /** Absolute route path mounted under the gateway plugin route namespace. */
   path: string;
+  /** HTTP request handler; returning true marks the request as fully handled. */
   handler: OpenClawPluginHttpRouteHandler;
+  /** Optional WebSocket/upgrade handler for routes that own their upgrade flow. */
   handleUpgrade?: OpenClawPluginHttpRouteUpgradeHandler;
+  /** Authentication boundary for this route: gateway operator auth or plugin-owned auth. */
   auth: OpenClawPluginHttpRouteAuth;
+  /** Match mode for `path`; prefix routes must be intentionally opted in. */
   match?: OpenClawPluginHttpRouteMatch;
+  /** Extra trusted runtime scope required before exposing privileged gateway helpers. */
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  /** Node-control capability advertised for routes proxied to device/node surfaces. */
   nodeCapability?: {
+    /** Stable capability surface name shown to node/gateway policy. */
     surface: string;
+    /** Optional cache lifetime for node capability discovery metadata. */
     ttlMs?: number;
   };
+  /** Allow a plugin reload to replace an existing route registration with the same path. */
   replaceExisting?: boolean;
 };
 
+/** Resolves plugin-hosted media URLs to local or gateway-readable media locations. */
 export type OpenClawPluginHostedMediaResolver = (
   mediaUrl: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
@@ -2210,9 +2231,13 @@ export type OpenClawPluginCliContext = {
    * registrations it is the resolved parent command from `parentPath`.
    */
   program: Command;
+  /** Nested CLI path that the host resolved before invoking this registrar. */
   parentPath: readonly string[];
+  /** Current config snapshot available during CLI registration. */
   config: OpenClawConfig;
+  /** Workspace directory passed to command handlers that need repo-relative defaults. */
   workspaceDir?: string;
+  /** Plugin-scoped logger for CLI registration diagnostics. */
   logger: PluginLogger;
 };
 
@@ -2245,15 +2270,22 @@ export type OpenClawPluginNodeCliFeatureOptions = {
 };
 
 export type OpenClawPluginReloadRegistration = {
+  /** Config keys/path prefixes that require a process restart when changed. */
   restartPrefixes?: string[];
+  /** Config keys/path prefixes that can be hot-reloaded by the plugin. */
   hotPrefixes?: string[];
+  /** Config keys/path prefixes that should not trigger reload work. */
   noopPrefixes?: string[];
 };
 
 export type OpenClawPluginNodeHostCommand = {
+  /** Host-side node command name exposed through node invocation policy. */
   command: string;
+  /** Optional coarse capability label used by older node command policies. */
   cap?: string;
+  /** Marks commands that must never be default-allowlisted without explicit config. */
   dangerous?: boolean;
+  /** Executes with JSON-encoded params supplied by the node transport layer. */
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 
