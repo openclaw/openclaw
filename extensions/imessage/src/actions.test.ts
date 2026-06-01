@@ -467,6 +467,84 @@ describe("imessage message actions", () => {
     expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
   });
 
+  it("allows reply when sender-based group allowlist matches the trusted requester", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;team-thread");
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action: "reply",
+      cfg: cfg(undefined, {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15551230000"],
+      }),
+      params: {
+        messageId: "message-guid",
+        text: "reply",
+      },
+      toolContext: { currentChannelId: "chat_identifier:team-thread" },
+      requesterSenderId: "+15551230000",
+    } as never);
+
+    expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;team-thread",
+      text: "reply",
+      replyToMessageId: "message-guid",
+      partIndex: undefined,
+      attachment: undefined,
+      options: imsgOptions("iMessage;+;team-thread"),
+    });
+  });
+
+  it("does not use trusted requester sender for explicit group reply targets", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "reply",
+        },
+        requesterSenderId: "+15551230000",
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
+  it("blocks sender-based group replies without a trusted requester", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551230000"],
+        }),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "reply",
+        },
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
   describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
     // The core message-action runner hydrates path/media/filePath/etc.
     // through the outbound media resolver (mediaLocalRoots/sandbox/size)

@@ -858,6 +858,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             imessage: createIMessageEchoCachingSend({
               client: getActiveClient(),
               accountId: accountInfo.accountId,
+              replyRequesterSender: decision.sender,
               sentMessageCache,
             }),
           },
@@ -877,6 +878,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime,
           maxBytes: mediaMaxBytes,
           textLimit,
+          replyRequesterSender: decision.sender,
           sentMessageCache,
         });
       },

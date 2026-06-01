@@ -30,6 +30,7 @@ import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import {
   formatIMessageChatTarget,
+  isAllowedIMessageReplyContextSender,
   type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
@@ -45,6 +46,8 @@ type IMessageSendOpts = {
   region?: string;
   accountId?: string;
   replyToId?: string;
+  /** Trusted inbound sender for server-injected reply delivery; never source this from model params. */
+  replyRequesterSender?: string | null;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -868,41 +871,32 @@ function isIMessageOutboundDmTarget(target: ParsedIMessageTarget): boolean {
   return target.kind === "handle" || resolveIMessageDirectChatIdentifier(target) !== null;
 }
 
-function isIMessageConversationAllowEntry(normalized: string): boolean {
-  return (
-    normalized.startsWith("chat_id:") ||
-    normalized.startsWith("chat_guid:") ||
-    normalized.startsWith("chat_identifier:")
-  );
-}
-
-function hasIMessageSenderBasedAllowEntry(allowFrom: readonly (string | number)[]): boolean {
-  return allowFrom.some((entry) => {
-    const normalized = normalizeIMessageOutboundAllowValue(entry);
-    if (!normalized || normalized === "*") {
-      return false;
-    }
-    if (normalized.toLowerCase().startsWith("accessgroup:")) {
-      return false;
-    }
-    return !isIMessageConversationAllowEntry(normalized);
-  });
-}
-
 function isIMessageOutboundAllowlisted(params: {
   allowFrom: readonly (string | number)[];
   normalizedTarget: string;
-  allowSenderBasedGroupReply?: boolean;
 }): boolean {
   const allowed = new Set(
     params.allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean),
   );
-  if (allowed.has("*") || allowed.has(params.normalizedTarget)) {
-    return true;
+  return allowed.has("*") || allowed.has(params.normalizedTarget);
+}
+
+function getIMessageConversationFacts(
+  target: ParsedIMessageTarget,
+): Pick<
+  Parameters<typeof isAllowedIMessageReplyContextSender>[0],
+  "chatId" | "chatGuid" | "chatIdentifier"
+> {
+  if (target.kind === "chat_id") {
+    return { chatId: target.chatId };
   }
-  return (
-    params.allowSenderBasedGroupReply === true && hasIMessageSenderBasedAllowEntry(params.allowFrom)
-  );
+  if (target.kind === "chat_guid") {
+    return { chatGuid: target.chatGuid };
+  }
+  if (target.kind === "chat_identifier") {
+    return { chatIdentifier: target.chatIdentifier };
+  }
+  return {};
 }
 
 function isIMessageOutboundTargetAllowed(
@@ -929,11 +923,41 @@ async function expandIMessageOutboundAllowFrom(params: {
   });
 }
 
+async function isIMessageSenderBasedGroupReplyAllowed(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+  target: ParsedIMessageTarget;
+  allowFrom: Array<string | number>;
+  replyRequesterSender?: string | null;
+}): Promise<boolean> {
+  const sender = params.replyRequesterSender?.trim();
+  if (!sender) {
+    return false;
+  }
+  const normalizedSender = normalizeIMessageHandle(sender);
+  if (!normalizedSender) {
+    return false;
+  }
+  const senderAllowFrom = await expandAllowFromWithAccessGroups({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    channel: "imessage",
+    accountId: params.account.accountId,
+    senderId: normalizedSender,
+    isSenderAllowed: isIMessageOutboundTargetAllowed,
+  });
+  return isAllowedIMessageReplyContextSender({
+    allowFrom: senderAllowFrom,
+    sender: normalizedSender,
+    ...getIMessageConversationFacts(params.target),
+  });
+}
+
 export async function assertIMessageOutboundAllowed(params: {
   cfg: OpenClawConfig;
   account: ResolvedIMessageAccount;
   target: ParsedIMessageTarget;
-  replyContext?: boolean;
+  replyRequesterSender?: string | null;
 }): Promise<void> {
   const { cfg, account, target } = params;
   if (!isIMessageOutboundDmTarget(target)) {
@@ -944,22 +968,28 @@ export async function assertIMessageOutboundAllowed(params: {
       return;
     }
     const normalizedTarget = normalizeIMessageOutboundTarget(target);
+    const configuredGroupAllowFrom = account.config.groupAllowFrom ?? [];
     const allowFrom = await expandIMessageOutboundAllowFrom({
       cfg,
       account,
       target,
-      allowFrom: account.config.groupAllowFrom ?? [],
+      allowFrom: configuredGroupAllowFrom,
     });
-    if (allowFrom.length === 0) {
+    const targetAllowed = isIMessageOutboundAllowlisted({
+      allowFrom,
+      normalizedTarget,
+    });
+    const replyRequesterAllowed = await isIMessageSenderBasedGroupReplyAllowed({
+      cfg,
+      account,
+      target,
+      allowFrom: configuredGroupAllowFrom,
+      replyRequesterSender: params.replyRequesterSender,
+    });
+    if (allowFrom.length === 0 && !replyRequesterAllowed) {
       throw new Error("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
     }
-    if (
-      !isIMessageOutboundAllowlisted({
-        allowFrom,
-        normalizedTarget,
-        allowSenderBasedGroupReply: params.replyContext === true,
-      })
-    ) {
+    if (!targetAllowed && !replyRequesterAllowed) {
       throw new Error(
         "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
       );
@@ -1013,7 +1043,7 @@ export async function sendMessageIMessage(
     cfg,
     account,
     target,
-    replyContext: Boolean(opts.replyToId),
+    replyRequesterSender: opts.replyToId ? opts.replyRequesterSender : undefined,
   });
   const service =
     opts.service ??

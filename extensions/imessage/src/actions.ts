@@ -256,6 +256,16 @@ function readOutboundActionTarget(params: {
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
+function hasExplicitOutboundActionTarget(params: Record<string, unknown>): boolean {
+  return (
+    Boolean(readStringParam(params, "chatGuid")?.trim()) ||
+    typeof readPositiveIntegerParam(params, "chatId") === "number" ||
+    Boolean(readStringParam(params, "chatIdentifier")?.trim()) ||
+    Boolean(readStringParam(params, "to")?.trim()) ||
+    Boolean(readStringParam(params, "target")?.trim())
+  );
+}
+
 function mapTapbackReaction(emoji?: string): string | undefined {
   const value = normalizeOptionalLowercaseString(emoji)?.replace(/\ufe0f/g, "");
   if (!value) {
@@ -426,7 +436,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) => {
     const runtime = await loadIMessageActionsRuntime();
     const account = resolveIMessageAccount({
       cfg,
@@ -490,13 +500,23 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         },
       );
     };
-    const assertOutboundActionAllowed = async () => {
+    const assertOutboundActionAllowed = async (assertOpts?: {
+      replyRequesterSender?: string | null;
+    }) => {
       const target = readOutboundActionTarget({
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
       });
       if (target) {
-        await assertIMessageOutboundAllowed({ cfg, account, target });
+        const replyRequesterSender = hasExplicitOutboundActionTarget(params)
+          ? undefined
+          : assertOpts?.replyRequesterSender;
+        await assertIMessageOutboundAllowed({
+          cfg,
+          account,
+          target,
+          replyRequesterSender,
+        });
       }
     };
 
@@ -579,7 +599,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
       }
-      await assertOutboundActionAllowed();
+      await assertOutboundActionAllowed({ replyRequesterSender: requesterSenderId });
       await assertPrivateApiEnabled();
       const attachment = extractReplyAttachment(params);
       if (attachment) {
