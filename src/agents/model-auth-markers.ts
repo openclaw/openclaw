@@ -22,6 +22,7 @@ const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
+  "codex-app-server",
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;
 let knownNonSecretApiKeyMarkersCache: string[] | undefined;
