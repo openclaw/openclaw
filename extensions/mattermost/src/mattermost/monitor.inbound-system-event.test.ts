@@ -443,6 +443,77 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
+  it("keeps Mattermost progress callbacks active for message-tool-only source replies", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const draftStream = {
+      update: vi.fn(),
+      stop: vi.fn(async () => {}),
+    };
+    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+    const runtimeCore = createRuntimeCore(testConfig);
+    runtimeCore.channel.reply.createReplyDispatcherWithTyping = vi.fn(() => ({
+      dispatcher: {},
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" as const },
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    }));
+    mockState.runtimeCore = runtimeCore;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-progress",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "run a long task",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const dispatchParams = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0] as {
+      replyOptions?: {
+        allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+        onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+        sourceReplyDeliveryMode?: string;
+        suppressDefaultToolProgressMessages?: boolean;
+      };
+    };
+    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatchParams.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(
+      true,
+    );
+    expect(dispatchParams.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    await dispatchParams.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    expect(draftStream.update).toHaveBeenCalledWith("Working");
+  });
+
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();

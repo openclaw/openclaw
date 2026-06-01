@@ -1884,6 +1884,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }
                             : {}),
+                          ...(draftToolProgressEnabled
+                            ? { allowProgressCallbacksWhenSourceDeliverySuppressed: true }
+                            : {}),
                           onModelSelected,
                           onPartialReply: (payloadResult) => {
                             if (account.streamingMode !== "progress") {
