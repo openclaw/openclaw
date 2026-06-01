@@ -319,6 +319,7 @@ export class AcpSessionManager {
               sessionKey,
               startedAt: completionParams.startedAt,
               errorCode: completionParams.errorCode,
+              emitTurnEndHook: completionParams.emitTurnEndHook,
             }),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
@@ -420,6 +421,7 @@ export class AcpSessionManager {
     sessionKey: string;
     startedAt: number;
     errorCode?: AcpRuntimeError["code"];
+    emitTurnEndHook?: boolean;
   }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
@@ -436,7 +438,9 @@ export class AcpSessionManager {
       durationMs,
       ...(params.errorCode ? { errorCode: params.errorCode } : {}),
     } satisfies AcpTurnEndHookContext;
-    this.emitTurnEndHook(context);
+    if (params.emitTurnEndHook !== false) {
+      this.emitTurnEndHook(context);
+    }
   }
 
   private emitTurnEndHook(context: AcpTurnEndHookContext): void {
