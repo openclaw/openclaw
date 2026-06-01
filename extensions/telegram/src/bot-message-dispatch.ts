@@ -1767,9 +1767,11 @@ export const dispatchTelegramMessage = async ({
                       const skipTextOnlyBlock =
                         streamMode === "partial" &&
                         info.kind === "block" &&
+                        segment.lane === "answer" &&
                         !reply.hasMedia &&
                         !hasExecApprovalPayload(effectivePayload) &&
-                        answerLane.hasStreamedMessage;
+                        answerLane.hasStreamedMessage &&
+                        !activeAnswerDraftIsToolProgressOnly;
 
                       if (skipTextOnlyBlock) {
                         blockDelivered = true;
