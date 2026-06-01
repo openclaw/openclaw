@@ -93,6 +93,7 @@ export function handleConnected(host: LifecycleHost) {
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   void loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+    { applyIdentity: false },
   );
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);

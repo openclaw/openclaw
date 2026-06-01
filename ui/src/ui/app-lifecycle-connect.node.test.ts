@@ -135,6 +135,7 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
+    expect(loadBootstrapMock).toHaveBeenCalledWith(host, { applyIdentity: false });
   });
 
   it("starts Nodes polling only when the Nodes tab is active on connect", () => {
