@@ -612,4 +612,38 @@ describe("gateway probe endpoints", () => {
       },
     });
   });
+
+  // ClawSweeper #88908 review P3: each new shutdown cycle must emit the
+  // gateway.healthz.shutting_down_response signal at least once. The log
+  // dedupe was previously latched across the process lifetime and reset only
+  // by tests, so the second in-process restart's shutdown was silent. Now
+  // markGatewayShuttingDown resets the dedupe via gateway-shutdown-state.
+  it("resets the shutting-down probe log dedupe on each shutdown cycle", async () => {
+    await withGatewayServer({
+      prefix: "probe-healthz-strict-dedupe-cycles",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        // First shutdown cycle.
+        markGatewayShuttingDown();
+        const req1 = createRequest({ path: "/healthz?strict=1" });
+        const { res: res1 } = createResponse();
+        await dispatchRequest(server, req1, res1);
+        expect(res1.statusCode).toBe(503);
+
+        // Second probe in the SAME shutdown cycle should not emit again (dedupe).
+        const req1b = createRequest({ path: "/healthz?strict=1" });
+        const { res: res1b } = createResponse();
+        await dispatchRequest(server, req1b, res1b);
+        expect(res1b.statusCode).toBe(503);
+
+        // Simulate startup completing a new cycle, then a fresh shutdown.
+        resetGatewayShuttingDownForTest();
+        markGatewayShuttingDown();
+        const req2 = createRequest({ path: "/healthz?strict=1" });
+        const { res: res2 } = createResponse();
+        await dispatchRequest(server, req2, res2);
+        expect(res2.statusCode).toBe(503);
+      },
+    });
+  });
 });

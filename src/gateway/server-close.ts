@@ -52,32 +52,23 @@ const RESTART_MARKER_SLOW_WARNING_MS = 1_000;
 const DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS = 5_000;
 const POST_SHUTDOWN_EXIT_TIMEOUT_ENV = "OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS";
 
-// Tracks whether a shutdown is in progress so /healthz can flip to 503 before the
-// HTTP listener actually unbinds. Without this, a zombie node process that finished
-// shutdown but failed to exit still answers 200 on /healthz, which makes the
-// supervised lock-recovery path defer to it and leaves the bot offline. Module-level
-// because the close handler in this file is the canonical owner; readers (HTTP probe
-// handler) import the accessor below.
-let gatewayShuttingDownState: "running" | "shutting_down" = "running";
-
-export function markGatewayShuttingDown(): void {
-  gatewayShuttingDownState = "shutting_down";
-}
-
-export function isGatewayShuttingDown(): boolean {
-  return gatewayShuttingDownState === "shutting_down";
-}
-
-// Used by gateway startup (and in-process restart) to flip the state back to
-// running before /healthz starts answering 200 again. Tests use the same path
-// so isolation is guaranteed across runs.
-export function resetGatewayShuttingDownState(): void {
-  gatewayShuttingDownState = "running";
-}
-
-export function resetGatewayShuttingDownForTest(): void {
-  resetGatewayShuttingDownState();
-}
+// Shutdown lifecycle state lives in `gateway-shutdown-state.ts` so callers
+// that only need the running / shutting-down distinction (gateway startup,
+// HTTP probe handler) do not pull in this close-handler module's dependency
+// graph. Re-exported here for source compatibility with prior in-tree callers.
+// Per ClawSweeper review P2 on #88908.
+import {
+  isGatewayShuttingDown,
+  markGatewayShuttingDown,
+  resetGatewayShuttingDownForTest,
+  resetGatewayShuttingDownState,
+} from "./gateway-shutdown-state.js";
+export {
+  isGatewayShuttingDown,
+  markGatewayShuttingDown,
+  resetGatewayShuttingDownForTest,
+  resetGatewayShuttingDownState,
+};
 
 function resolvePostShutdownExitTimeoutMs(): number {
   const raw = process.env[POST_SHUTDOWN_EXIT_TIMEOUT_ENV]?.trim();
