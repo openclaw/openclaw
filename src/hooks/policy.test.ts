@@ -71,6 +71,24 @@ describe("hook policy", () => {
       });
     });
 
+    it("ignores defaultEnableMode metadata on workspace hooks", () => {
+      const entry = makeHookEntry("workspace-hook", "openclaw-workspace");
+      entry.metadata = { events: ["command:new"], defaultEnableMode: "default-on" };
+      expect(resolveHookEnableState({ entry })).toEqual({
+        enabled: false,
+        reason: "workspace hook (disabled by default)",
+      });
+    });
+
+    it("honors defaultEnableMode metadata on trusted managed hooks", () => {
+      const entry = makeHookEntry("managed-hook", "openclaw-managed");
+      entry.metadata = { events: ["command:new"], defaultEnableMode: "explicit-opt-in" };
+      expect(resolveHookEnableState({ entry })).toEqual({
+        enabled: false,
+        reason: "hook disabled by default (opt-in)",
+      });
+    });
+
     it("enables an opt-in bundled hook when explicitly turned on", () => {
       const entry = makeHookEntry("opt-in-hook", "openclaw-bundled");
       entry.metadata = { ...entry.metadata, events: ["session:aborted"] };

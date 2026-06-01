@@ -1,6 +1,9 @@
 import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
+
+const log = createSubsystemLogger("auto-continue");
 
 // Loop-guard: cap how often a single session may be auto-continued so a
 // pathological abort -> continue -> abort cycle can never run away. State is a
@@ -42,10 +45,13 @@ const handler: HookHandler = async (event) => {
       return;
     }
     if (!withinBudget(sessionKey, Date.now())) {
-      console.warn(
-        `[auto-continue] budget exhausted for session ${sessionKey} (>=${MAX_CONTINUES} continues / ${Math.round(
-          WINDOW_MS / 60000,
-        )}min) — not resuming to avoid an abort loop.`,
+      log.warn(
+        `auto-continue budget exhausted for session ${sessionKey} — not resuming to avoid an abort loop`,
+        {
+          sessionKey,
+          maxContinues: MAX_CONTINUES,
+          windowMinutes: Math.round(WINDOW_MS / 60000),
+        },
       );
       return;
     }
@@ -65,9 +71,7 @@ const handler: HookHandler = async (event) => {
       sessionKey,
     });
   } catch (error) {
-    console.warn(
-      `[auto-continue] failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    log.warn(`auto-continue failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
 
