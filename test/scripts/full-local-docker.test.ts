@@ -24,6 +24,7 @@ import {
   buildFullLocalContainerConfig,
   buildFullLocalMemorySeedScript,
   buildUpArgs,
+  chooseHostPublishPort,
   chooseSentinelPort,
   deriveFullLocalRuntime,
   dockerCommandShouldRetry,
@@ -32,6 +33,8 @@ import {
   evaluateSentinelModelProof,
   fetchJsonWithRetries,
   filterStaleFullLocalSmokeTickets,
+  parseDockerPublishHostPort,
+  parseWindowsNetstatListeningPorts,
   parseComposePublishedPort,
   parseComposePsJson,
   parseNvidiaPoolKeys,
@@ -68,6 +71,44 @@ describe("scripts/docker/full-local", () => {
     ]);
   });
 
+  it("keeps the default Sentinel NVIDIA vault ephemeral instead of host-seeding provider keys", async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-repo-"));
+    const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-full-local-"));
+    const localAgentsDir = path.join(cwd, ".agents");
+    try {
+      mkdirSync(localAgentsDir, { recursive: true });
+      const runtime = await deriveFullLocalRuntime({
+        config: {
+          gateway: { auth: { token: "gateway-secret" } },
+        },
+        cwd,
+        env: {
+          NVIDIA_API_KEYS: "pool-key-a,pool-key-b",
+          OPENCLAW_LOCAL_AGENTS_DIR: localAgentsDir,
+          OPENCLAW_SENTINEL_TOKEN: "sentinel-secret",
+        },
+        homeDir,
+        portAvailable: async () => true,
+        writeContainerConfigOverlay: true,
+      });
+
+      expect(runtime.env.OPENCLAW_NVIDIA_VAULT_PATH).toBe("/run/openclaw/sentinel/vault.json");
+      expect(runtime.facts.nvidiaVaultPathHost).toBeNull();
+      expect(runtime.facts.nvidiaVaultPersistent).toBe(false);
+      expect(seedNvidiaVaultFromRuntime(runtime)).toMatchObject({
+        keyCount: 0,
+        reason: "ephemeral-vault",
+        seeded: false,
+      });
+      expect(existsSync(path.join(homeDir, ".openclaw", "workspace_nvidia_key_sentinel"))).toBe(
+        false,
+      );
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+      rmSync(homeDir, { force: true, recursive: true });
+    }
+  });
+
   it("seeds the Sentinel NVIDIA vault once and preserves quarantined removals", async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-repo-"));
     const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-full-local-"));
@@ -81,6 +122,7 @@ describe("scripts/docker/full-local", () => {
         cwd,
         env: {
           NVIDIA_API_KEYS: "pool-key-a,pool-key-b",
+          OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH: "/home/node/.openclaw/sentinel-vault/vault.json",
           OPENCLAW_LOCAL_AGENTS_DIR: localAgentsDir,
           OPENCLAW_SENTINEL_TOKEN: "sentinel-secret",
         },
@@ -133,6 +175,7 @@ describe("scripts/docker/full-local", () => {
         cwd,
         env: {
           NVIDIA_API_KEYS: "pool-key-a,pool-key-b",
+          OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH: "/home/node/.openclaw/sentinel-vault/vault.json",
           OPENCLAW_LOCAL_AGENTS_DIR: localAgentsDir,
           OPENCLAW_SENTINEL_TOKEN: "sentinel-secret",
         },
@@ -173,6 +216,7 @@ describe("scripts/docker/full-local", () => {
         cwd,
         env: {
           NVIDIA_API_KEYS: "pool-key-new-a,pool-key-new-b",
+          OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH: "/home/node/.openclaw/sentinel-vault/vault.json",
           OPENCLAW_LOCAL_AGENTS_DIR: localAgentsDir,
           OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT: "1",
           OPENCLAW_SENTINEL_TOKEN: "sentinel-secret",
@@ -222,14 +266,21 @@ describe("scripts/docker/full-local", () => {
     expect(runtime.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
     expect(runtime.env.OPENCLAW_SENTINEL_TOKEN).toBe("nvidia-secret");
     expect(runtime.env.NVIDIA_API_KEY).toBe("nvidia-secret");
+    expect(runtime.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(runtime.env.OPENCLAW_BRIDGE_PORT).toBe("18790");
+    expect(runtime.env.OPENCLAW_MSTEAMS_PORT).toBe("3978");
     expect(runtime.env.OPENCLAW_SENTINEL_PORT).toBe("18889");
-    expect(runtime.env.OPENCLAW_NVIDIA_VAULT_PATH).toBe(
-      "/home/node/.openclaw/workspace_nvidia_key_sentinel/vault.json",
-    );
+    expect(runtime.env.OPENCLAW_NVIDIA_VAULT_PATH).toBe("/run/openclaw/sentinel/vault.json");
     expect(runtime.env.OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS).toBe("300000");
     expect(runtime.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS).toBe("1");
+    expect(runtime.env.SWARM_BLACKBOARD_DB_PATH).toBe(
+      "/home/node/.openclaw/full-local/swarm_blackboard.db",
+    );
     expect(runtime.env.SWARM_BLACKBOARD_BUSY_TIMEOUT_MS).toBe("10000");
     expect(runtime.env.SWARM_BLACKBOARD_JOURNAL_MODE).toBe("DELETE");
+    expect(runtime.facts.blackboardDbPathHost).toBe(
+      path.resolve("repo-root", "state", "full-local", "swarm_blackboard.db"),
+    );
     expect(runtime.facts.gatewayAuthConfigured).toBe(true);
     expect(runtime.facts.gatewayPasswordConfigured).toBe(false);
     expect(runtime.facts.gatewayTokenConfigured).toBe(true);
@@ -254,6 +305,30 @@ describe("scripts/docker/full-local", () => {
     });
 
     expect(runtime.env.SWARM_BLACKBOARD_JOURNAL_MODE).toBe("DELETE");
+  });
+
+  it("honors the documented full-local Blackboard database override", async () => {
+    const runtime = await deriveFullLocalRuntime({
+      config: {
+        gateway: { auth: { token: "gateway-secret" } },
+        models: { providers: { nvidia: { apiKey: "nvidia-secret" } } },
+      },
+      cwd: path.resolve("repo-root"),
+      env: {
+        OPENCLAW_CONFIG_DIR: "state",
+        OPENCLAW_WORKSPACE_DIR: "workspace",
+        SWARM_BLACKBOARD_DB_PATH: "/home/node/.openclaw/shared/swarm_blackboard.db",
+      },
+      homeDir: path.resolve("home"),
+      portAvailable: async () => true,
+    });
+
+    expect(runtime.env.SWARM_BLACKBOARD_DB_PATH).toBe(
+      "/home/node/.openclaw/shared/swarm_blackboard.db",
+    );
+    expect(runtime.facts.blackboardDbPathHost).toBe(
+      path.resolve("repo-root", "state", "shared", "swarm_blackboard.db"),
+    );
   });
 
   it("accepts password-authenticated Gateway configs for full-local startup", async () => {
@@ -472,6 +547,9 @@ describe("scripts/docker/full-local", () => {
       cwd: path.resolve("repo-root"),
       env: {
         NVIDIA_API_KEY: "env-nvidia",
+        OPENCLAW_BRIDGE_PORT: "19890",
+        OPENCLAW_GATEWAY_PORT: "19889",
+        OPENCLAW_MSTEAMS_PORT: "13978",
         OPENCLAW_SENTINEL_PORT: "19888",
         OPENCLAW_SENTINEL_TOKEN: "sentinel-secret",
       },
@@ -482,6 +560,9 @@ describe("scripts/docker/full-local", () => {
     });
 
     expect(runtime.env.NVIDIA_API_KEY).toBe("env-nvidia");
+    expect(runtime.env.OPENCLAW_BRIDGE_PORT).toBe("19890");
+    expect(runtime.env.OPENCLAW_GATEWAY_PORT).toBe("19889");
+    expect(runtime.env.OPENCLAW_MSTEAMS_PORT).toBe("13978");
     expect(runtime.env.OPENCLAW_SENTINEL_TOKEN).toBe("sentinel-secret");
     expect(runtime.env.OPENCLAW_SENTINEL_PORT).toBe("19888");
   });
@@ -490,6 +571,148 @@ describe("scripts/docker/full-local", () => {
     await expect(chooseSentinelPort({}, async () => false)).rejects.toThrow(
       "No available Sentinel port found in 18888-18907",
     );
+  });
+
+  it("chooses non-conflicting Gateway bridge and Teams host ports", async () => {
+    const unavailable = new Set(["18790:0.0.0.0", "3978:0.0.0.0"]);
+    const portAvailable = async (port: number, host = "127.0.0.1") =>
+      !unavailable.has(`${port}:${host}`);
+
+    await expect(
+      chooseHostPublishPort(
+        {},
+        {
+          defaultPort: 18790,
+          envKey: "OPENCLAW_BRIDGE_PORT",
+          label: "Gateway bridge port",
+        },
+        portAvailable,
+      ),
+    ).resolves.toBe("18791");
+    await expect(
+      chooseHostPublishPort(
+        {},
+        {
+          defaultPort: 3978,
+          envKey: "OPENCLAW_MSTEAMS_PORT",
+          label: "Microsoft Teams bot port",
+        },
+        portAvailable,
+      ),
+    ).resolves.toBe("3979");
+  });
+
+  it("reserves automatically selected full-local host publish ports", async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-repo-"));
+    const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-full-local-"));
+    const unavailablePorts = new Set([18789, 18790]);
+    try {
+      const runtime = await deriveFullLocalRuntime({
+        config: {},
+        cwd,
+        env: {},
+        homeDir,
+        portAvailable: async (port: number) => !unavailablePorts.has(port),
+      });
+
+      expect(runtime.env.OPENCLAW_GATEWAY_PORT).toBe("18791");
+      expect(runtime.env.OPENCLAW_BRIDGE_PORT).toBe("18792");
+      expect(runtime.env.OPENCLAW_MSTEAMS_PORT).toBe("3978");
+      expect(runtime.env.OPENCLAW_SENTINEL_PORT).toBe("18888");
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+      rmSync(homeDir, { force: true, recursive: true });
+    }
+  });
+
+  it("reserves full Docker publish override host ports before choosing defaults", async () => {
+    const runtime = await deriveFullLocalRuntime({
+      config: {},
+      cwd: path.resolve("repo-root"),
+      env: {
+        OPENCLAW_GATEWAY_PUBLISH: "127.0.0.1:18790:18789",
+      },
+      homeDir: path.resolve("home"),
+      portAvailable: async () => true,
+    });
+
+    expect(runtime.env.OPENCLAW_GATEWAY_PORT).toBe("18790");
+    expect(runtime.env.OPENCLAW_BRIDGE_PORT).toBe("18791");
+    expect(runtime.env.OPENCLAW_MSTEAMS_PORT).toBe("3978");
+    expect(runtime.facts.gatewayPortExplicit).toBe(true);
+    expect(runtime.facts.bridgePortExplicit).toBe(false);
+    expect(runtime.facts.msteamsPortExplicit).toBe(false);
+  });
+
+  it("rejects duplicate explicit full-local host publish ports", async () => {
+    await expect(
+      deriveFullLocalRuntime({
+        config: {},
+        cwd: path.resolve("repo-root"),
+        env: {
+          OPENCLAW_BRIDGE_PORT: "19889",
+          OPENCLAW_GATEWAY_PORT: "19889",
+        },
+        homeDir: path.resolve("home"),
+        portAvailable: async () => true,
+      }),
+    ).rejects.toThrow("OPENCLAW_BRIDGE_PORT must use a distinct host port");
+  });
+
+  it("rejects duplicate full Docker publish override host ports", async () => {
+    await expect(
+      deriveFullLocalRuntime({
+        config: {},
+        cwd: path.resolve("repo-root"),
+        env: {
+          OPENCLAW_BRIDGE_PORT: "19890",
+          OPENCLAW_GATEWAY_PUBLISH: "127.0.0.1:19890:18789",
+        },
+        homeDir: path.resolve("home"),
+        portAvailable: async () => true,
+      }),
+    ).rejects.toThrow("OPENCLAW_BRIDGE_PORT must use a distinct host port");
+  });
+
+  it("marks full Docker publish overrides as explicit ports for running-stack reuse", async () => {
+    const runtime = await deriveFullLocalRuntime({
+      config: {},
+      cwd: path.resolve("repo-root"),
+      env: {
+        OPENCLAW_BRIDGE_PUBLISH: "127.0.0.1:19890:18790",
+        OPENCLAW_GATEWAY_PUBLISH: "127.0.0.1:19889:18789",
+        OPENCLAW_MSTEAMS_PUBLISH: "127.0.0.1:13978:3978",
+      },
+      homeDir: path.resolve("home"),
+      portAvailable: async () => true,
+    });
+
+    expect(runtime.env.OPENCLAW_GATEWAY_PORT).toBe("19889");
+    expect(runtime.env.OPENCLAW_BRIDGE_PORT).toBe("19890");
+    expect(runtime.env.OPENCLAW_MSTEAMS_PORT).toBe("13978");
+    expect(runtime.facts.gatewayPortExplicit).toBe(true);
+    expect(runtime.facts.bridgePortExplicit).toBe(true);
+    expect(runtime.facts.msteamsPortExplicit).toBe(true);
+  });
+
+  it("parses Docker publish override host ports", () => {
+    expect(parseDockerPublishHostPort("127.0.0.1:19890:18789", "TEST_PUBLISH")).toBe("19890");
+    expect(parseDockerPublishHostPort("19890:18789", "TEST_PUBLISH")).toBe("19890");
+    expect(parseDockerPublishHostPort("[::1]:19890:18789/tcp", "TEST_PUBLISH")).toBe("19890");
+  });
+
+  it("parses Windows netstat listeners for Docker host publish probes", () => {
+    const stdout = `
+      Proto  Local Address          Foreign Address        State           PID
+      TCP    0.0.0.0:18789          0.0.0.0:0              LISTENING       35980
+      TCP    [::]:18790             [::]:0                 LISTENING       35980
+      TCP    127.0.0.1:3978         0.0.0.0:0              TIME_WAIT       0
+      TCP    [::1]:18888            [::]:0                 LISTENING       37860
+    `;
+
+    expect([...parseWindowsNetstatListeningPorts(stdout)].toSorted((a, b) => a - b)).toEqual([
+      18789, 18790, 18888,
+    ]);
   });
 
   it("probes Sentinel host ports on Docker publish and loopback interfaces", async () => {
@@ -589,9 +812,8 @@ describe("scripts/docker/full-local", () => {
       expect(runtime.facts.configPath).toBe(customConfigPath);
       expect(runtime.env.OPENCLAW_CONFIG_DIR).toBe(path.join(homeDir, ".openclaw"));
       expect(runtime.env.OPENCLAW_STATE_DIR).toBe(path.join(homeDir, ".openclaw"));
-      expect(runtime.facts.nvidiaVaultPathHost).toBe(
-        path.join(homeDir, ".openclaw", "workspace_nvidia_key_sentinel", "vault.json"),
-      );
+      expect(runtime.facts.nvidiaVaultPathHost).toBeNull();
+      expect(runtime.facts.nvidiaVaultPersistent).toBe(false);
       expect(runtime.env.OPENCLAW_CONFIG_SOURCE_DIR).toBe(customConfigRoot);
       expect(runtime.env.OPENCLAW_EXTRA_AGENT_ROOT_DIR).toBe(customConfigRoot);
       const overlay = JSON.parse(readFileSync(runtime.facts.containerConfigPathHost, "utf8")) as {
@@ -1800,6 +2022,7 @@ describe("scripts/docker/full-local", () => {
         cwd: path.resolve("repo-root"),
         env: {
           NVIDIA_API_KEYS: "raw-nvidia-key-a,raw-nvidia-key-b",
+          OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH: "/home/node/.openclaw/sentinel-vault/vault.json",
         },
         homeDir,
         portAvailable: async () => true,
@@ -1885,12 +2108,7 @@ describe("scripts/docker/full-local", () => {
     const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-full-local-"));
     const localAgentsDir = mkdtempSync(path.join(tmpdir(), "openclaw-agents-"));
     try {
-      const vaultPath = path.join(
-        homeDir,
-        ".openclaw",
-        "workspace_nvidia_key_sentinel",
-        "vault.json",
-      );
+      const vaultPath = path.join(homeDir, ".openclaw", "sentinel-vault", "vault.json");
       mkdirSync(path.dirname(vaultPath), { recursive: true });
       writeFileSync(vaultPath, JSON.stringify({ keys: ["nvapi-preseeded"], version: "1.0" }));
       const runtime = await deriveFullLocalRuntime({
@@ -1900,6 +2118,7 @@ describe("scripts/docker/full-local", () => {
         cwd: path.resolve("repo-root"),
         env: {
           OPENCLAW_LOCAL_AGENTS_DIR: localAgentsDir,
+          OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH: "/home/node/.openclaw/sentinel-vault/vault.json",
           OPENCLAW_SENTINEL_TOKEN: "sentinel-secret",
         },
         homeDir,
@@ -2212,6 +2431,12 @@ describe("scripts/docker/full-local", () => {
 
       expect(child.status, child.stderr).toBe(0);
       expect(JSON.parse(readFileSync(vaultPath, "utf8")).keys).toEqual(["nvapi-transientkey"]);
+      const validationState = JSON.parse(
+        readFileSync(path.join(homeDir, ".openclaw", "sentinel", "validation-state.json"), "utf8"),
+      );
+      const validationStateKeys = Object.keys(validationState.keys);
+      expect(validationStateKeys).toHaveLength(1);
+      expect(validationStateKeys[0]).not.toBe("nvapi-transientkey");
       expect(`${child.stdout}\n${child.stderr}`).toContain("validation deferred");
     } finally {
       rmSync(homeDir, { force: true, recursive: true });
@@ -2253,12 +2478,237 @@ describe("scripts/docker/full-local", () => {
     }
   });
 
+  it("repopulates an ephemeral Sentinel vault when validation state is still fresh", () => {
+    const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-validator-home-"));
+    const vaultPath = path.join(homeDir, "vault.json");
+    const script = path.resolve("scripts/docker/sidecars/nvidia-key-validator.cjs");
+    try {
+      const first = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          `global.fetch = async () => ({ ok: true, status: 200, text: async () => "" }); require(${JSON.stringify(script)});`,
+        ],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: homeDir,
+            NVIDIA_API_KEY: "",
+            NVIDIA_API_KEYS: "nvapi-ephem",
+            OPENCLAW_NVIDIA_VAULT_PATH: vaultPath,
+            OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT: "0",
+            OPENCLAW_SIGNAL_HUB_NVIDIA_API_KEYS: "",
+            USERPROFILE: homeDir,
+          },
+        },
+      );
+      expect(first.status, first.stderr).toBe(0);
+      rmSync(vaultPath, { force: true });
+      rmSync(`${vaultPath}.seeded-by-full-local`, { force: true });
+
+      const second = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          `global.fetch = async () => { throw new Error("should not validate fresh keys"); }; require(${JSON.stringify(script)});`,
+        ],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: homeDir,
+            NVIDIA_API_KEY: "",
+            NVIDIA_API_KEYS: "nvapi-ephem",
+            OPENCLAW_NVIDIA_VAULT_PATH: vaultPath,
+            OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT: "0",
+            OPENCLAW_SIGNAL_HUB_NVIDIA_API_KEYS: "",
+            USERPROFILE: homeDir,
+          },
+        },
+      );
+
+      expect(second.status, second.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(vaultPath, "utf8")).keys).toEqual(["nvapi-ephem"]);
+      expect(second.stdout).toContain("All keys audited within");
+    } finally {
+      rmSync(homeDir, { force: true, recursive: true });
+    }
+  });
+
+  it("drops legacy raw revoked NVIDIA keys from validator state", () => {
+    const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-validator-home-"));
+    const vaultPath = path.join(homeDir, "vault.json");
+    const stateDir = path.join(homeDir, ".openclaw", "sentinel");
+    const script = path.resolve("scripts/docker/sidecars/nvidia-key-validator.cjs");
+    try {
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(
+        path.join(stateDir, "validation-state.json"),
+        JSON.stringify({
+          keys: {
+            "REVOKED_nvapi-legacyrawsecret": {
+              lastChecked: 0,
+              status: "invalid",
+            },
+          },
+        }),
+      );
+
+      const child = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          `global.fetch = async () => ({ ok: true, status: 200, text: async () => "" }); require(${JSON.stringify(script)});`,
+        ],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: homeDir,
+            NVIDIA_API_KEY: "",
+            NVIDIA_API_KEYS: "nvapi-statecleanup",
+            OPENCLAW_NVIDIA_VAULT_PATH: vaultPath,
+            OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT: "0",
+            OPENCLAW_SIGNAL_HUB_NVIDIA_API_KEYS: "",
+            USERPROFILE: homeDir,
+          },
+        },
+      );
+
+      expect(child.status, child.stderr).toBe(0);
+      const validationState = JSON.parse(
+        readFileSync(path.join(stateDir, "validation-state.json"), "utf8"),
+      );
+      expect(Object.keys(validationState.keys).some((key) => key.includes("nvapi-"))).toBe(false);
+    } finally {
+      rmSync(homeDir, { force: true, recursive: true });
+    }
+  });
+
+  it("indexes Sentinel validator state by key fingerprint instead of raw NVIDIA keys", () => {
+    const validator = readFileSync("scripts/docker/sidecars/nvidia-key-validator.cjs", "utf8");
+
+    expect(validator).toContain('crypto.createHash("sha256")');
+    expect(validator).toContain("isLegacyRawKeyStateEntry");
+    expect(validator).toContain("keysByFingerprint");
+    expect(validator).toContain("activeFingerprints");
+    expect(validator).toContain("state.keys[fingerprint]");
+    expect(validator).not.toContain("state.keys[key]");
+    expect(validator).not.toContain("workspace_nvidia_key_sentinel");
+    expect(validator).toContain('path.join(STATE_DIR, "credentials", "nvidia-sentinel")');
+  });
+
+  it("migrates persisted Blackboard ticket status checks before updating approval states", () => {
+    const homeDir = mkdtempSync(path.join(tmpdir(), "openclaw-blackboard-migrate-"));
+    const dbPath = path.join(homeDir, ".openclaw", "swarm_blackboard.db");
+    const script = path.resolve("scripts/docker/sidecars/blackboard-cli.cjs");
+    const env = {
+      ...process.env,
+      HOME: homeDir,
+      NVIDIA_API_KEY: "",
+      NVIDIA_API_KEYS: "",
+      OPENCLAW_SIGNAL_HUB_NVIDIA_API_KEYS: "",
+      SWARM_BLACKBOARD_DB_PATH: dbPath,
+      USERPROFILE: homeDir,
+    };
+    try {
+      mkdirSync(path.dirname(dbPath), { recursive: true });
+      const setup = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          `
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(${JSON.stringify(dbPath)});
+            db.exec(\`
+              CREATE TABLE tickets (
+                id           TEXT PRIMARY KEY,
+                type         TEXT NOT NULL,
+                priority     INTEGER DEFAULT 0,
+                target_agent TEXT,
+                status       TEXT DEFAULT 'OPEN'
+                             CHECK(status IN ('OPEN','CLAIMED','IN_PROGRESS','DONE','FAILED','ARCHIVED')),
+                data         TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                claimed_by   TEXT,
+                claimed_at   TEXT,
+                ttl_minutes  INTEGER
+              );
+              INSERT INTO tickets (id, type, priority, target_agent, status, data, created_at, updated_at, ttl_minutes)
+              VALUES ('ticket-approval', 'security', 0, 'security_bouncer_agent', 'OPEN', '{}', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 60);
+              CREATE VIRTUAL TABLE tickets_fts USING fts5(id, type, data, content='tickets', content_rowid='rowid');
+            \`);
+            db.close();
+          `,
+        ],
+        { encoding: "utf8", env },
+      );
+      expect(setup.status, setup.stderr).toBe(0);
+
+      const waiting = spawnSync(
+        process.execPath,
+        [script, "update", "ticket-approval", "--status", "WAITING_APPROVAL", "--agent", "qa"],
+        { encoding: "utf8", env },
+      );
+      expect(waiting.status, waiting.stderr).toBe(0);
+
+      const blocked = spawnSync(
+        process.execPath,
+        [script, "update", "ticket-approval", "--status", "BLOCKED", "--agent", "qa"],
+        { encoding: "utf8", env },
+      );
+      expect(blocked.status, blocked.stderr).toBe(0);
+
+      const get = spawnSync(process.execPath, [script, "get", "ticket-approval"], {
+        encoding: "utf8",
+        env,
+      });
+      expect(get.status, get.stderr).toBe(0);
+      expect(JSON.parse(get.stdout)).toMatchObject({ id: "ticket-approval", status: "BLOCKED" });
+
+      const fts = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          `
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(${JSON.stringify(dbPath)});
+            const rows = db.prepare("SELECT id FROM tickets_fts WHERE tickets_fts MATCH 'security'").all();
+            console.log(JSON.stringify(rows));
+            db.close();
+          `,
+        ],
+        { encoding: "utf8", env },
+      );
+      expect(fts.status, fts.stderr).toBe(0);
+      expect(JSON.parse(fts.stdout)).toEqual([{ id: "ticket-approval" }]);
+    } finally {
+      rmSync(homeDir, { force: true, recursive: true });
+    }
+  });
+
   it("keeps signal-hub type fallback and claimed-ticket retry paths wired", () => {
     const signalHub = readFileSync("scripts/docker/sidecars/signal-hub.cjs", "utf8");
     const blackboard = readFileSync("scripts/docker/sidecars/blackboard-cli.cjs", "utf8");
+    const windowsNode = readFileSync("scripts/docker/sidecars/windows-node.cjs", "utf8");
 
     expect(signalHub).not.toContain("ZERO_EMBEDDING");
     expect(blackboard).not.toContain("ZERO_EMBEDDING");
+    for (const sidecar of [signalHub, blackboard, windowsNode]) {
+      expect(sidecar).toContain("AGENT_OS_TICKET_STATUS_SQL_LIST");
+      expect(sidecar).toContain("SWARM_BLACKBOARD_DB_PATH");
+      expect(sidecar).toContain("ticketStatusSchemaNeedsMigration");
+      expect(sidecar).toContain('exec("BEGIN IMMEDIATE;")');
+      expect(sidecar).toContain('exec("ROLLBACK;")');
+      expect(sidecar).toContain("DROP TABLE IF EXISTS tickets_fts");
+      expect(sidecar).toContain("INSERT INTO tickets_fts(tickets_fts) VALUES('rebuild')");
+    }
+    expect(signalHub).toContain("conn?.close?.()");
     expect(signalHub).toContain('require("../../lib/proof-events.cjs")');
     expect(signalHub).toContain("ensureProofEventsSchema(conn)");
     expect(signalHub).toContain('recordSignalProofEvent(ticket.id, "SIGNAL_ROUTE"');
@@ -2281,7 +2731,7 @@ describe("scripts/docker/full-local", () => {
     expect(signalHub).toContain("value.byteOffset");
     expect(signalHub).not.toContain("PRAGMA data_version");
     expect(signalHub).not.toContain("initEmbeddings().then");
-    expect(signalHub).toContain("void initEmbeddings().catch");
+    expect(signalHub).toContain("await initEmbeddings()");
     expect(signalHub).toContain('["autonomy_smoke", "main"]');
     expect(signalHub).toContain(
       'const BLACKBOARD_CLI_PATH = "/app/scripts/docker/sidecars/blackboard-cli.cjs"',
@@ -2346,6 +2796,9 @@ describe("scripts/docker/full-local", () => {
     expect(readFileSync("scripts/docker/full-local.mjs", "utf8")).toContain(
       "const windowsNodeStop = stopWindowsNativeNode(runtime, { cwd })",
     );
+    const memoryWikiCli = readFileSync("extensions/memory-wiki/src/cli.ts", "utf8");
+    expect(memoryWikiCli).toContain("OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS");
+    expect(memoryWikiCli).toContain("resolveWikiGatewayTimeoutMs()");
   });
 
   it("keeps the Windows native launcher on tracked repo scripts", () => {
@@ -2389,21 +2842,46 @@ describe("scripts/docker/full-local", () => {
     );
 
     expect(gatewayBlock).toContain(
-      '"${OPENCLAW_GATEWAY_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_GATEWAY_PORT:-18789}:18789"',
+      '"${OPENCLAW_GATEWAY_PUBLISH:-${OPENCLAW_GATEWAY_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_GATEWAY_PORT:-18789}:18789}"',
     );
     expect(gatewayBlock).toContain(
-      '"${OPENCLAW_BRIDGE_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_BRIDGE_PORT:-18790}:18790"',
+      '"${OPENCLAW_BRIDGE_PUBLISH:-${OPENCLAW_BRIDGE_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_BRIDGE_PORT:-18790}:18790}"',
     );
     expect(gatewayBlock).toContain(
-      '"${OPENCLAW_MSTEAMS_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_MSTEAMS_PORT:-3978}:3978"',
+      '"${OPENCLAW_MSTEAMS_PUBLISH:-${OPENCLAW_MSTEAMS_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_MSTEAMS_PORT:-3978}:3978}"',
+    );
+    expect(gatewayBlock).toContain(
+      "SWARM_BLACKBOARD_DB_PATH: ${SWARM_BLACKBOARD_DB_PATH:-/home/node/.openclaw/swarm_blackboard.db}",
     );
     expect(sentinelBlock).toContain(
       '"${OPENCLAW_SENTINEL_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_SENTINEL_PORT:-18888}:${OPENCLAW_SENTINEL_LISTEN_PORT:-18888}"',
     );
+    expect(sentinelBlock).toContain("- /run/openclaw/sentinel");
+    expect(sentinelBlock).toContain(
+      'legacy_dir="/home/node/.openclaw/workspace_nvidia_key_sentinel"',
+    );
+    expect(sentinelBlock).toContain("persistent_vault_target=1");
+    expect(sentinelBlock).toContain("/run/openclaw/sentinel/*) persistent_vault_target=0");
+    expect(sentinelBlock).toContain(
+      'if [ "$$persistent_vault_target" = "1" ] && [ -f "$$legacy_vault" ]',
+    );
+    expect(sentinelBlock).toContain('if [ -f "$$OPENCLAW_NVIDIA_VAULT_PATH" ]; then');
+    expect(sentinelBlock).toContain(
+      'rm -f "$$legacy_vault" "$$legacy_vault.seeded-by-full-local" "$$legacy_vault.seeded-by-validator"',
+    );
+    expect(sentinelBlock).toContain('rm -f "$$legacy_dir/validation-state.json"');
+    expect(sentinelBlock).not.toContain("ln -s");
     expect(sentinelBlock).toContain(
       "OPENCLAW_SENTINEL_REQUIRE_TOKEN: ${OPENCLAW_SENTINEL_REQUIRE_TOKEN:-1}",
     );
+    expect(sentinelBlock).toContain(
+      "OPENCLAW_SENTINEL_STATE_DIR: ${OPENCLAW_SENTINEL_STATE_DIR:-/run/openclaw/sentinel/state}",
+    );
     expect(sentinelBlock).not.toContain("OPENCLAW_AUTH_PROFILE_SECRET_DIR");
+    expect(signalHubBlock).toContain(
+      "SWARM_BLACKBOARD_DB_PATH: ${SWARM_BLACKBOARD_DB_PATH:-/home/node/.openclaw/swarm_blackboard.db}",
+    );
+    expect(signalHubBlock).toContain("process.env.SWARM_BLACKBOARD_DB_PATH");
     expect(signalHubBlock).toContain(
       "SWARM_BLACKBOARD_JOURNAL_MODE: ${SWARM_BLACKBOARD_JOURNAL_MODE:-DELETE}",
     );

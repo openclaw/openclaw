@@ -2,14 +2,18 @@
 "use strict";
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 
 const STATE_DIR = path.join(os.homedir(), ".openclaw");
-const WORKSPACE_DIR = path.join(STATE_DIR, "workspace_nvidia_key_sentinel");
-const STATE_FILE = path.join(WORKSPACE_DIR, "validation-state.json");
+const VALIDATION_STATE_DIR =
+  process.env.OPENCLAW_SENTINEL_STATE_DIR || path.join(STATE_DIR, "sentinel");
+const CREDENTIALS_DIR = path.join(STATE_DIR, "credentials", "nvidia-sentinel");
+const STATE_FILE = path.join(VALIDATION_STATE_DIR, "validation-state.json");
 const STATE_TMP = `${STATE_FILE}.tmp`;
-const VAULT_FILE = process.env.OPENCLAW_NVIDIA_VAULT_PATH || path.join(WORKSPACE_DIR, "vault.json");
+const VAULT_FILE =
+  process.env.OPENCLAW_NVIDIA_VAULT_PATH || path.join(CREDENTIALS_DIR, "vault.json");
 const VAULT_TMP = `${VAULT_FILE}.tmp`;
 const VAULT_SEED_MARKERS = [
   `${VAULT_FILE}.seeded-by-full-local`,
@@ -48,6 +52,14 @@ function parseApiKeyPool(...values) {
     }
   }
   return keys;
+}
+
+function keyFingerprint(key) {
+  return crypto.createHash("sha256").update(String(key)).digest("hex");
+}
+
+function isLegacyRawKeyStateEntry(key) {
+  return /^REVOKED_nvapi-[A-Za-z0-9_-]+$/u.test(String(key));
 }
 
 function readJson(filePath, fallback) {
@@ -200,7 +212,7 @@ function quarantineKey(key) {
 }
 
 async function run() {
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  fs.mkdirSync(VALIDATION_STATE_DIR, { recursive: true });
   fs.mkdirSync(path.dirname(VAULT_FILE), { recursive: true });
   const keys = findKeys();
   if (keys.length === 0) {
@@ -208,18 +220,23 @@ async function run() {
   }
   const state = loadState();
   const now = Date.now();
+  const keysByFingerprint = new Map(keys.map((key) => [keyFingerprint(key), key]));
+  const activeFingerprints = new Set(keysByFingerprint.keys());
   for (const key of keys) {
-    state.keys[key] ||= { lastChecked: 0, status: "unknown" };
+    state.keys[keyFingerprint(key)] ||= { lastChecked: 0, status: "unknown" };
   }
-  for (const key of Object.keys(state.keys)) {
-    if (!keys.includes(key) && !key.startsWith("REVOKED_")) {
-      delete state.keys[key];
+  for (const fingerprint of Object.keys(state.keys)) {
+    if (
+      isLegacyRawKeyStateEntry(fingerprint) ||
+      (!activeFingerprints.has(fingerprint) && !fingerprint.startsWith("REVOKED_"))
+    ) {
+      delete state.keys[fingerprint];
     }
   }
   const candidates = Object.entries(state.keys)
     .filter(
-      ([key, info]) =>
-        keys.includes(key) &&
+      ([fingerprint, info]) =>
+        activeFingerprints.has(fingerprint) &&
         (info.status === "unknown" || now - info.lastChecked >= CHECK_INTERVAL_MS),
     )
     .toSorted((left, right) => left[1].lastChecked - right[1].lastChecked)
@@ -230,9 +247,10 @@ async function run() {
     return;
   }
   console.log(`[Sentinel] Validating ${candidates.length}/${keys.length} NVIDIA key(s).`);
-  for (const [key] of candidates) {
+  for (const [fingerprint] of candidates) {
+    const key = keysByFingerprint.get(fingerprint);
     const result = await validateKey(key);
-    state.keys[key] = {
+    state.keys[fingerprint] = {
       error: result.error,
       lastChecked: result.status === "transient" ? 0 : now,
       status: result.status === "transient" ? "unknown" : result.status,
@@ -249,7 +267,12 @@ async function run() {
   saveState(state);
 }
 
-run().catch((error) => {
-  console.error(`[Sentinel] Fatal validator error: ${error.message}`);
-  process.exit(1);
-});
+void (async () => {
+  try {
+    await run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[Sentinel] Fatal validator error: ${message}`);
+    process.exit(1);
+  }
+})();

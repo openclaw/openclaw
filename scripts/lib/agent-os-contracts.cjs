@@ -8,7 +8,7 @@ const AGENT_OS_SCHEMA_VERSIONS = Object.freeze({
   ticket: "agent-os.ticket.v1",
 });
 
-const AGENT_OS_TICKET_STATUSES = new Set([
+const AGENT_OS_TICKET_STATUS_LIST = Object.freeze([
   "OPEN",
   "CLAIMED",
   "IN_PROGRESS",
@@ -18,6 +18,10 @@ const AGENT_OS_TICKET_STATUSES = new Set([
   "FAILED",
   "ARCHIVED",
 ]);
+const AGENT_OS_TICKET_STATUSES = new Set(AGENT_OS_TICKET_STATUS_LIST);
+const AGENT_OS_TICKET_STATUS_SQL_LIST = AGENT_OS_TICKET_STATUS_LIST.map(
+  (status) => `'${status}'`,
+).join(",");
 
 const AGENT_OS_TICKET_STATUS_ALIASES = Object.freeze({
   RUNNING: "IN_PROGRESS",
@@ -355,6 +359,8 @@ module.exports = {
   AGENT_OS_SANDBOX_MODES,
   AGENT_OS_SCHEMA_VERSIONS,
   AGENT_OS_SECRET_POLICIES,
+  AGENT_OS_TICKET_STATUS_LIST,
+  AGENT_OS_TICKET_STATUS_SQL_LIST,
   AGENT_OS_TICKET_STATUSES,
   assertAgentOsArtifactContract: (input) => assertContract(validateAgentOsArtifactContract(input)),
   assertAgentOsCapabilityManifest: (input) =>

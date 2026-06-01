@@ -21,6 +21,7 @@ services:
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      SWARM_BLACKBOARD_DB_PATH: ${SWARM_BLACKBOARD_DB_PATH:-/home/node/.openclaw/swarm_blackboard.db}
       # Empty means auto: Bonjour disables itself in detected containers.
       # Set 0 only on host/macvlan/mDNS-capable networks; set 1 to force off.
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-}
@@ -61,9 +62,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${OPENCLAW_GATEWAY_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-      - "${OPENCLAW_MSTEAMS_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
+      - "${OPENCLAW_GATEWAY_PUBLISH:-${OPENCLAW_GATEWAY_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_GATEWAY_PORT:-18789}:18789}"
+      - "${OPENCLAW_BRIDGE_PUBLISH:-${OPENCLAW_BRIDGE_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_BRIDGE_PORT:-18790}:18790}"
+      - "${OPENCLAW_MSTEAMS_PUBLISH:-${OPENCLAW_MSTEAMS_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_MSTEAMS_PORT:-3978}:3978}"
     init: true
     restart: unless-stopped
     command:
@@ -112,6 +113,7 @@ services:
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      SWARM_BLACKBOARD_DB_PATH: ${SWARM_BLACKBOARD_DB_PATH:-/home/node/.openclaw/swarm_blackboard.db}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}

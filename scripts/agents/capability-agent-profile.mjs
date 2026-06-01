@@ -9,6 +9,7 @@ import JSON5 from "json5";
 const require = createRequire(import.meta.url);
 const {
   normalizeAgentOsCapabilityManifest,
+  normalizeStringList,
   validateAgentOsCapabilityManifest,
 } = require("../lib/agent-os-contracts.cjs");
 
@@ -155,6 +156,21 @@ function readConfig(configPath) {
   return JSON5.parse(readFileSync(configPath, "utf8").replace(/^\uFEFF/u, ""));
 }
 
+function mergeSkillLists(existingSkills, profileSkills) {
+  const merged = [];
+  const seen = new Set();
+  for (const skill of [
+    ...normalizeStringList(existingSkills),
+    ...normalizeStringList(profileSkills),
+  ]) {
+    if (!seen.has(skill)) {
+      seen.add(skill);
+      merged.push(skill);
+    }
+  }
+  return merged;
+}
+
 export function mergeCapabilityAgents(config) {
   const next = {
     ...config,
@@ -187,7 +203,7 @@ export function mergeCapabilityAgents(config) {
         ...profile.params,
         agentOsCapability: capabilityManifestForProfile(profile),
       },
-      skills: profile.skills,
+      skills: mergeSkillLists(previous.skills, profile.skills),
       contextInjection: profile.contextInjection,
     };
     delete merged.systemPromptOverride;

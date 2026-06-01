@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 const require = createRequire(import.meta.url);
 const {
   AGENT_OS_SCHEMA_VERSIONS,
+  AGENT_OS_TICKET_STATUS_LIST,
+  AGENT_OS_TICKET_STATUS_SQL_LIST,
   normalizeAgentOsArtifactContract,
   normalizeAgentOsCapabilityManifest,
   normalizeAgentOsProofEvent,
@@ -15,6 +17,8 @@ const {
   validateAgentOsTicket,
 } = require("../../scripts/lib/agent-os-contracts.cjs") as {
   AGENT_OS_SCHEMA_VERSIONS: Record<string, string>;
+  AGENT_OS_TICKET_STATUS_LIST: string[];
+  AGENT_OS_TICKET_STATUS_SQL_LIST: string;
   normalizeAgentOsArtifactContract: (input: unknown) => Record<string, unknown>;
   normalizeAgentOsCapabilityManifest: (input: unknown) => {
     capabilityFamilies: string[];
@@ -67,6 +71,21 @@ describe("agent OS contracts", () => {
     });
     expect(validateAgentOsTicket(ticket)).toMatchObject({ ok: true });
     expect(normalizeAgentOsTicketStatus("running")).toBe("IN_PROGRESS");
+  });
+
+  it("keeps persisted ticket status checks aligned with the contract", () => {
+    expect(AGENT_OS_TICKET_STATUS_LIST).toEqual([
+      "OPEN",
+      "CLAIMED",
+      "IN_PROGRESS",
+      "WAITING_APPROVAL",
+      "BLOCKED",
+      "DONE",
+      "FAILED",
+      "ARCHIVED",
+    ]);
+    expect(AGENT_OS_TICKET_STATUS_SQL_LIST).toContain("'WAITING_APPROVAL'");
+    expect(AGENT_OS_TICKET_STATUS_SQL_LIST).toContain("'BLOCKED'");
   });
 
   it("normalizes native capability profiles into stable capability manifests", () => {

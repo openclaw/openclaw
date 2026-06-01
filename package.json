@@ -136,6 +136,8 @@
     "start_windows_node.bat",
     "src/agents/templates/",
     "scripts/crabbox-wrapper.mjs",
+    "docker-compose.yml",
+    "docker-compose.sidecars.yml",
     "scripts/docker/full-local.mjs",
     "scripts/docker/sidecars/",
     "patches/",

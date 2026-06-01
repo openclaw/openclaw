@@ -14,6 +14,8 @@ const {
   summarizeProofEvents,
 } = require("../../lib/proof-events.cjs");
 const {
+  AGENT_OS_TICKET_STATUS_LIST,
+  AGENT_OS_TICKET_STATUS_SQL_LIST,
   assertAgentOsTicket,
   normalizeAgentOsTicketStatus,
 } = require("../../lib/agent-os-contracts.cjs");
@@ -23,7 +25,15 @@ try {
   sqliteVec = require("sqlite-vec");
 } catch {}
 
-const DB_PATH = path.join(os.homedir(), ".openclaw", "swarm_blackboard.db");
+function resolveBlackboardDbPath() {
+  const explicit = process.env.SWARM_BLACKBOARD_DB_PATH || process.env.SWARM_BLACKBOARD_DB;
+  if (!explicit) {
+    return path.join(os.homedir(), ".openclaw", "swarm_blackboard.db");
+  }
+  return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+}
+
+const DB_PATH = resolveBlackboardDbPath();
 const EMBEDDING_DIM = 4096;
 const EMBEDDING_MODEL = "nvidia/nv-embed-v1";
 const NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/embeddings";
@@ -78,6 +88,82 @@ function configureBlackboardConnection(db) {
   if (String(current || "").toUpperCase() !== journalMode) {
     db.prepare(`PRAGMA journal_mode = ${journalMode};`).get();
   }
+}
+
+function ticketsTableSql(ifNotExists = true) {
+  const ifNotExistsClause = ifNotExists ? "IF NOT EXISTS " : "";
+  return `
+      CREATE TABLE ${ifNotExistsClause}tickets (
+        id           TEXT PRIMARY KEY,
+        type         TEXT NOT NULL,
+        priority     INTEGER DEFAULT 0,
+        target_agent TEXT,
+        status       TEXT DEFAULT 'OPEN'
+                     CHECK(status IN (${AGENT_OS_TICKET_STATUS_SQL_LIST})),
+        data         TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        claimed_by   TEXT,
+        claimed_at   TEXT,
+        ttl_minutes  INTEGER
+      );
+`;
+}
+
+function ticketStatusSchemaNeedsMigration(db) {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'")
+    .get();
+  const sql = String(row?.sql || "");
+  return Boolean(sql) && AGENT_OS_TICKET_STATUS_LIST.some((status) => !sql.includes(`'${status}'`));
+}
+
+function ensureTicketStatusSchema(db) {
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    if (!ticketStatusSchemaNeedsMigration(db)) {
+      db.exec("COMMIT;");
+      return;
+    }
+    db.exec(`
+      DROP TABLE IF EXISTS tickets_fts;
+      ALTER TABLE tickets RENAME TO tickets_status_contract_migration;
+    `);
+    db.exec(ticketsTableSql(false));
+    db.exec(`
+      INSERT INTO tickets (
+        rowid, id, type, priority, target_agent, status, data, created_at, updated_at,
+        claimed_by, claimed_at, ttl_minutes
+      )
+      SELECT
+        rowid, id, type, priority, target_agent, status, data, created_at, updated_at,
+        claimed_by, claimed_at, ttl_minutes
+      FROM tickets_status_contract_migration;
+      DROP TABLE tickets_status_contract_migration;
+    `);
+    rebuildTicketsFts(db);
+    db.exec("COMMIT;");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK;");
+    } catch {}
+    throw error;
+  }
+}
+
+function ticketsFtsSql() {
+  return `
+      CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
+        id, type, data, content=tickets
+      );
+`;
+}
+
+function rebuildTicketsFts(db) {
+  db.exec(`
+    ${ticketsFtsSql()}
+    INSERT INTO tickets_fts(tickets_fts) VALUES('rebuild');
+  `);
 }
 
 function parseJsonMaybe(value) {
@@ -141,21 +227,9 @@ class SwarmBlackboard {
 
   initDb() {
     configureBlackboardConnection(this.db);
+    ensureTicketStatusSchema(this.db);
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS tickets (
-        id           TEXT PRIMARY KEY,
-        type         TEXT NOT NULL,
-        priority     INTEGER DEFAULT 0,
-        target_agent TEXT,
-        status       TEXT DEFAULT 'OPEN'
-                     CHECK(status IN ('OPEN','CLAIMED','IN_PROGRESS','DONE','FAILED','ARCHIVED')),
-        data         TEXT,
-        created_at   TEXT NOT NULL,
-        updated_at   TEXT NOT NULL,
-        claimed_by   TEXT,
-        claimed_at   TEXT,
-        ttl_minutes  INTEGER
-      );
+      ${ticketsTableSql()}
 
       CREATE TABLE IF NOT EXISTS ticket_events (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,9 +241,7 @@ class SwarmBlackboard {
         timestamp  TEXT NOT NULL
       );
 
-      CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
-        id, type, data, content=tickets
-      );
+      ${ticketsFtsSql()}
     `);
     ensureProofEventsSchema(this.db);
     if (this.vectorEnabled) {

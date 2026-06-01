@@ -36,6 +36,8 @@ export const FULL_LOCAL_COMPOSE_FILES = ["docker-compose.yml", "docker-compose.s
 export const FULL_LOCAL_PROFILE = "local-sidecars";
 
 const DEFAULT_GATEWAY_PORT = 18789;
+const DEFAULT_BRIDGE_PORT = 18790;
+const DEFAULT_MSTEAMS_PORT = 3978;
 const DEFAULT_SENTINEL_PORT = 18888;
 export const DEFAULT_READY_TIMEOUT_MS = 300_000;
 export const DEFAULT_SMOKE_TIMEOUT_MS = 240_000;
@@ -55,7 +57,7 @@ const DEFAULT_FULL_LOCAL_BLACKBOARD_BUSY_TIMEOUT_MS = 10_000;
 const BLACKBOARD_CLI_CONTAINER_PATH = "/app/scripts/docker/sidecars/blackboard-cli.cjs";
 const NODE_MCP_LAUNCHER_CONTAINER_PATH = "/app/scripts/docker/sidecars/node-mcp-launcher.cjs";
 const PYTHON_MCP_LAUNCHER_CONTAINER_PATH = "/app/scripts/docker/sidecars/python-mcp-launcher.cjs";
-const SENTINEL_PUBLISH_PROBE_HOSTS = ["0.0.0.0", "127.0.0.1"];
+const HOST_PUBLISH_PROBE_HOSTS = ["0.0.0.0", "127.0.0.1"];
 const FULL_LOCAL_SMOKE_CREATED_BY = "scripts/docker/full-local.mjs";
 const FULL_LOCAL_SMOKE_NONCE_PREFIX = "full-local-smoke-";
 const FULL_LOCAL_GOLDEN_E2E_RUN_ID_PREFIX = "full-local-golden-e2e-";
@@ -77,7 +79,8 @@ const EXTRA_AGENT_ROOT_CONTAINER_DIRS = [
 ];
 const DEFAULT_CONTAINER_CONFIG_PATH = `${CONTAINER_OPENCLAW_DIR}/full-local/openclaw.json`;
 const DEFAULT_FULL_LOCAL_PATH_MAP = `${CONTAINER_OPENCLAW_DIR}/full-local/path-map.json`;
-const CONTAINER_NVIDIA_VAULT_PATH = "/home/node/.openclaw/workspace_nvidia_key_sentinel/vault.json";
+const DEFAULT_FULL_LOCAL_BLACKBOARD_DB_PATH = `${CONTAINER_OPENCLAW_DIR}/full-local/swarm_blackboard.db`;
+const CONTAINER_NVIDIA_VAULT_PATH = "/run/openclaw/sentinel/vault.json";
 const CONTAINER_PYTHON_BIN = "/usr/bin/python3";
 const CONTAINER_AGENT_VENV_ROOT = `${CONTAINER_OPENCLAW_DIR}/python-venvs`;
 const CONTAINER_PATH_DELIMITER = ":";
@@ -183,7 +186,7 @@ function readNvidiaVaultKeyCount(vaultPath) {
 export function seedNvidiaVaultFromRuntime(runtime) {
   const vaultPath = cleanString(runtime?.facts?.nvidiaVaultPathHost);
   if (!vaultPath) {
-    return { keyCount: 0, reason: "missing-vault-path", seeded: false };
+    return { keyCount: 0, reason: "ephemeral-vault", seeded: false };
   }
 
   const env = runtime.env ?? {};
@@ -1458,7 +1461,7 @@ function classifyPythonLaunchScriptForMcp(launchScript) {
   if (!launchScript?.hostPath || !launchScript.hostPath.endsWith(".py")) {
     return { compatible: true };
   }
-  let source = "";
+  let source;
   try {
     source = readFileSync(launchScript.hostPath, "utf8").slice(0, 128 * 1024);
   } catch {
@@ -1503,7 +1506,7 @@ function normalizeFullLocalMcpServer(server, params) {
   }
 
   const commandPath = mapHostAbsolutePathForContainer(command, params.mappings, params);
-  let nextCommand = command;
+  let nextCommand;
   if (commandPath.pathLike) {
     if (commandPath.visible) {
       if (isWindowsAbsolutePath(command) && commandName(command).endsWith(".exe")) {
@@ -2095,25 +2098,64 @@ function resolveCustomSwarmDir(env, cwd, homeDir) {
 }
 
 export async function isPortAvailable(port, host = "127.0.0.1") {
+  if (process.platform === "win32" && windowsTcpPortIsListening(port)) {
+    return false;
+  }
+
   return await new Promise((resolve) => {
     const server = net.createServer();
     server.once("error", () => resolve(false));
     server.once("listening", () => {
       server.close(() => resolve(true));
     });
-    server.listen(port, host);
+    server.listen({ exclusive: true, host, port });
   });
 }
 
-export async function chooseSentinelPort(env = process.env, portAvailable = isPortAvailable) {
-  const explicitPort = cleanString(env.OPENCLAW_SENTINEL_PORT);
-  if (explicitPort) {
-    return parseTcpPortString(explicitPort, "OPENCLAW_SENTINEL_PORT");
+export function parseWindowsNetstatListeningPorts(stdout) {
+  const ports = new Set();
+  for (const line of String(stdout ?? "").split(/\r?\n/u)) {
+    const parts = line.trim().split(/\s+/u);
+    if (parts[0]?.toUpperCase() !== "TCP" || parts[3]?.toUpperCase() !== "LISTENING") {
+      continue;
+    }
+
+    const localAddress = parts[1] ?? "";
+    const match = /:(\d+)$/u.exec(localAddress);
+    if (match) {
+      ports.add(Number.parseInt(match[1], 10));
+    }
+  }
+  return ports;
+}
+
+function windowsTcpPortIsListening(port) {
+  const result = spawnSync("netstat", ["-ano", "-p", "tcp"], {
+    encoding: "utf8",
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 || result.error) {
+    return false;
   }
 
-  for (let port = DEFAULT_SENTINEL_PORT; port < DEFAULT_SENTINEL_PORT + 20; port += 1) {
+  return parseWindowsNetstatListeningPorts(result.stdout).has(port);
+}
+
+export async function chooseHostPublishPort(
+  env = process.env,
+  options = {},
+  portAvailable = isPortAvailable,
+) {
+  const { defaultPort, envKey, label = envKey, portWindow = 20 } = options;
+  const explicitPort = cleanString(env[envKey]);
+  if (explicitPort) {
+    return parseTcpPortString(explicitPort, envKey);
+  }
+
+  for (let port = defaultPort; port < defaultPort + portWindow; port += 1) {
     let available = true;
-    for (const host of SENTINEL_PUBLISH_PROBE_HOSTS) {
+    for (const host of HOST_PUBLISH_PROBE_HOSTS) {
       if (!(await portAvailable(port, host))) {
         available = false;
         break;
@@ -2125,9 +2167,60 @@ export async function chooseSentinelPort(env = process.env, portAvailable = isPo
   }
 
   throw new Error(
-    `No available Sentinel port found in ${DEFAULT_SENTINEL_PORT}-${
-      DEFAULT_SENTINEL_PORT + 19
-    }. Set OPENCLAW_SENTINEL_PORT to a free port.`,
+    `No available ${label} found in ${defaultPort}-${
+      defaultPort + portWindow - 1
+    }. Set ${envKey} to a free port.`,
+  );
+}
+
+export function parseDockerPublishHostPort(value, envKey = "OPENCLAW_PUBLISH") {
+  const raw = cleanString(value);
+  if (!raw) {
+    return null;
+  }
+  const publish = raw.split("/")[0].trim();
+  if (publish.startsWith("[")) {
+    const closeBracketIndex = publish.indexOf("]");
+    if (closeBracketIndex < 0) {
+      throw new Error(`${envKey} must use [host]:hostPort:containerPort syntax.`);
+    }
+    const rest = publish.slice(closeBracketIndex + 1);
+    const parts = rest.startsWith(":") ? rest.slice(1).split(":") : [];
+    if (parts.length !== 2) {
+      throw new Error(`${envKey} must use [host]:hostPort:containerPort syntax.`);
+    }
+    return parseTcpPortString(parts[0], envKey);
+  }
+
+  const parts = publish.split(":");
+  if (parts.length === 2) {
+    return parseTcpPortString(parts[0], envKey);
+  }
+  if (parts.length === 3) {
+    return parseTcpPortString(parts[1], envKey);
+  }
+  throw new Error(
+    `${envKey} must use hostPort:containerPort or host:hostPort:containerPort syntax.`,
+  );
+}
+
+async function chooseDockerPublishHostPort(env, options, portAvailable = isPortAvailable) {
+  const explicitPublish = cleanString(env[options.publishEnvKey]);
+  if (explicitPublish) {
+    return parseDockerPublishHostPort(explicitPublish, options.publishEnvKey);
+  }
+  return chooseHostPublishPort(env, options, portAvailable);
+}
+
+export async function chooseSentinelPort(env = process.env, portAvailable = isPortAvailable) {
+  return chooseHostPublishPort(
+    env,
+    {
+      defaultPort: DEFAULT_SENTINEL_PORT,
+      envKey: "OPENCLAW_SENTINEL_PORT",
+      label: "Sentinel port",
+    },
+    portAvailable,
   );
 }
 
@@ -2277,10 +2370,54 @@ export async function deriveFullLocalRuntime(options = {}) {
     nvidiaProviderUsesSentinel && nvidiaGatewayApiKey
       ? nvidiaGatewayApiKey
       : (explicitSentinelToken ?? configuredNvidiaApiKey ?? envNvidiaApiKey);
-  const sentinelPort = await chooseSentinelPort(env, options.portAvailable ?? isPortAvailable);
-  const gatewayPort = cleanString(env.OPENCLAW_GATEWAY_PORT) ?? String(DEFAULT_GATEWAY_PORT);
-  const containerNvidiaVaultPath =
-    cleanString(env.OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH) ?? CONTAINER_NVIDIA_VAULT_PATH;
+  const portAvailable = options.portAvailable ?? isPortAvailable;
+  const reservedHostPorts = new Set();
+  const reserveHostPort = (port, envKey) => {
+    const parsed = Number.parseInt(port, 10);
+    if (reservedHostPorts.has(parsed)) {
+      throw new Error(`${envKey} must use a distinct host port. ${port} is already selected.`);
+    }
+    reservedHostPorts.add(parsed);
+  };
+  const portAvailableWithReservations = async (port, host) =>
+    !reservedHostPorts.has(port) && (await portAvailable(port, host));
+  const sentinelPort = await chooseSentinelPort(env, portAvailableWithReservations);
+  reserveHostPort(sentinelPort, "OPENCLAW_SENTINEL_PORT");
+  const gatewayPort = await chooseDockerPublishHostPort(
+    env,
+    {
+      defaultPort: DEFAULT_GATEWAY_PORT,
+      envKey: "OPENCLAW_GATEWAY_PORT",
+      label: "Gateway port",
+      publishEnvKey: "OPENCLAW_GATEWAY_PUBLISH",
+    },
+    portAvailableWithReservations,
+  );
+  reserveHostPort(gatewayPort, "OPENCLAW_GATEWAY_PORT");
+  const bridgePort = await chooseDockerPublishHostPort(
+    env,
+    {
+      defaultPort: DEFAULT_BRIDGE_PORT,
+      envKey: "OPENCLAW_BRIDGE_PORT",
+      label: "Gateway bridge port",
+      publishEnvKey: "OPENCLAW_BRIDGE_PUBLISH",
+    },
+    portAvailableWithReservations,
+  );
+  reserveHostPort(bridgePort, "OPENCLAW_BRIDGE_PORT");
+  const msteamsPort = await chooseDockerPublishHostPort(
+    env,
+    {
+      defaultPort: DEFAULT_MSTEAMS_PORT,
+      envKey: "OPENCLAW_MSTEAMS_PORT",
+      label: "Microsoft Teams bot port",
+      publishEnvKey: "OPENCLAW_MSTEAMS_PUBLISH",
+    },
+    portAvailableWithReservations,
+  );
+  reserveHostPort(msteamsPort, "OPENCLAW_MSTEAMS_PORT");
+  const explicitContainerNvidiaVaultPath = cleanString(env.OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH);
+  const containerNvidiaVaultPath = explicitContainerNvidiaVaultPath ?? CONTAINER_NVIDIA_VAULT_PATH;
   const pathMappings = buildPathMappings({
     configDir,
     configSourceDir,
@@ -2290,12 +2427,34 @@ export async function deriveFullLocalRuntime(options = {}) {
     extraAgentRootDirs,
     workspaceDir,
   });
-  const hostNvidiaVaultPath = mapRequiredWritableContainerPathToHost(
-    containerNvidiaVaultPath,
+  const explicitFullLocalBlackboardDbPath = cleanString(env.OPENCLAW_FULL_LOCAL_BLACKBOARD_DB_PATH);
+  const explicitBlackboardDbPath = cleanString(env.SWARM_BLACKBOARD_DB_PATH);
+  const containerBlackboardDbPath =
+    explicitFullLocalBlackboardDbPath ??
+    explicitBlackboardDbPath ??
+    DEFAULT_FULL_LOCAL_BLACKBOARD_DB_PATH;
+  const blackboardDbPathEnvKey = explicitFullLocalBlackboardDbPath
+    ? "OPENCLAW_FULL_LOCAL_BLACKBOARD_DB_PATH"
+    : explicitBlackboardDbPath
+      ? "SWARM_BLACKBOARD_DB_PATH"
+      : "OPENCLAW_FULL_LOCAL_BLACKBOARD_DB_PATH";
+  const hostBlackboardDbPath = mapRequiredWritableContainerPathToHost(
+    containerBlackboardDbPath,
     pathMappings,
-    "OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH",
+    blackboardDbPathEnvKey,
+    DEFAULT_FULL_LOCAL_BLACKBOARD_DB_PATH,
   );
-  const nvidiaVaultKeyCount = readNvidiaVaultKeyCount(hostNvidiaVaultPath);
+  const hostNvidiaVaultPath = explicitContainerNvidiaVaultPath
+    ? mapRequiredWritableContainerPathToHost(
+        containerNvidiaVaultPath,
+        pathMappings,
+        "OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH",
+        "/home/node/.openclaw/sentinel-vault/vault.json",
+      )
+    : null;
+  const nvidiaVaultKeyCount = hostNvidiaVaultPath
+    ? readNvidiaVaultKeyCount(hostNvidiaVaultPath)
+    : 0;
   const containerIncludeRoots = includeRootDirs.map((includeRootDir) =>
     mapRequiredHostPathToContainer(includeRootDir, pathMappings, "OPENCLAW_INCLUDE_ROOTS"),
   );
@@ -2340,9 +2499,12 @@ export async function deriveFullLocalRuntime(options = {}) {
     OPENCLAW_EXTRA_AGENT_ROOT_DIR_6: extraAgentRootDirs[5] ?? workspaceDir,
     OPENCLAW_EXTRA_AGENT_ROOT_DIR_7: extraAgentRootDirs[6] ?? workspaceDir,
     OPENCLAW_EXTRA_AGENT_ROOT_DIR_8: extraAgentRootDirs[7] ?? workspaceDir,
+    OPENCLAW_BRIDGE_PORT: bridgePort,
     OPENCLAW_GATEWAY_PORT: gatewayPort,
+    OPENCLAW_MSTEAMS_PORT: msteamsPort,
     OPENCLAW_NATIVE_AGENT_IDS: nativeAgentIds.join(","),
     OPENCLAW_FULL_LOCAL_PATH_MAP: pathMap.containerPath,
+    SWARM_BLACKBOARD_DB_PATH: containerBlackboardDbPath,
     ...(containerIncludeRoots.length > 0
       ? { OPENCLAW_CONTAINER_INCLUDE_ROOTS: containerIncludeRoots.join(CONTAINER_PATH_DELIMITER) }
       : {}),
@@ -2389,26 +2551,39 @@ export async function deriveFullLocalRuntime(options = {}) {
 
   const facts = {
     authProfileSecretDir,
+    blackboardDbPath: containerBlackboardDbPath,
+    blackboardDbPathHost: hostBlackboardDbPath,
     configDir,
     configSourceDir,
     containerConfigOverlay: containerConfig.enabled,
     containerConfigPath: containerConfig.containerPath,
     containerConfigPathHost: containerConfig.hostPath,
+    bridgePort,
+    bridgePortExplicit: Boolean(
+      cleanString(env.OPENCLAW_BRIDGE_PORT) || cleanString(env.OPENCLAW_BRIDGE_PUBLISH),
+    ),
     configPath,
     customSwarmDir,
     extraAgentRootDir,
     extraAgentRootDirs,
     includeRootDirs,
     gatewayPort,
-    gatewayPortExplicit: Boolean(cleanString(env.OPENCLAW_GATEWAY_PORT)),
+    gatewayPortExplicit: Boolean(
+      cleanString(env.OPENCLAW_GATEWAY_PORT) || cleanString(env.OPENCLAW_GATEWAY_PUBLISH),
+    ),
     gatewayAuthMode: gatewayAuthModeNormalized,
     gatewayAuthConfigured:
       Boolean(gatewayToken || gatewayPassword) || gatewayAuthModeNormalized === "none",
     gatewayPasswordConfigured: Boolean(gatewayPassword),
     gatewayTokenConfigured: Boolean(gatewayToken),
+    msteamsPort,
+    msteamsPortExplicit: Boolean(
+      cleanString(env.OPENCLAW_MSTEAMS_PORT) || cleanString(env.OPENCLAW_MSTEAMS_PUBLISH),
+    ),
     nvidiaApiKeyConfigured: Boolean(nvidiaApiKey || envNvidiaApiKeys || nvidiaVaultKeyCount > 0),
     nvidiaProviderUsesSentinel,
     nvidiaSeedKeysConfigured: Boolean(nvidiaApiKey || envNvidiaApiKeys),
+    nvidiaVaultPersistent: Boolean(hostNvidiaVaultPath),
     nvidiaVaultPath: containerNvidiaVaultPath,
     nvidiaVaultPathHost: hostNvidiaVaultPath,
     nvidiaVaultKeyCount,
@@ -2532,7 +2707,6 @@ function rememberPathAndParent(target, recursive = false) {
 for (const target of [
   "/home/node/.openclaw",
   "/home/node/.openclaw/full-local",
-  "/home/node/.openclaw/workspace_nvidia_key_sentinel",
   "/home/node/.openclaw/workspace",
   "/home/node/.config/openclaw",
   "/home/node/custom-swarm",
@@ -2545,7 +2719,7 @@ for (const target of [
   "/home/node/openclaw-extra-agent-root-7",
   "/home/node/openclaw-extra-agent-root-8",
 ]) {
-  remember(target, target.includes("full-local") || target.includes("workspace_nvidia_key_sentinel"));
+  remember(target, target.includes("full-local"));
 }
 for (const envName of [
   "OPENCLAW_STATE_DIR",
@@ -2914,6 +3088,7 @@ function startWindowsNativeNode(runtime, options = {}) {
         OPENCLAW_CONFIG_PATH: runtime.facts.configPath,
         OPENCLAW_REPO_ROOT: cwd,
         OPENCLAW_STATE_DIR: runtime.facts.configDir,
+        SWARM_BLACKBOARD_DB_PATH: runtime.facts.blackboardDbPathHost,
       },
       stdio: "ignore",
       windowsHide: true,
@@ -3026,6 +3201,28 @@ function reuseExistingPublishedPorts(runtime, cwd) {
   if (gatewayPort && !runtime.facts.gatewayPortExplicit) {
     runtime.env.OPENCLAW_GATEWAY_PORT = gatewayPort;
     runtime.facts.gatewayPort = gatewayPort;
+  }
+
+  const bridgePort = resolveComposePublishedPort(
+    "openclaw-gateway",
+    DEFAULT_BRIDGE_PORT,
+    runtime,
+    cwd,
+  );
+  if (bridgePort && !runtime.facts.bridgePortExplicit) {
+    runtime.env.OPENCLAW_BRIDGE_PORT = bridgePort;
+    runtime.facts.bridgePort = bridgePort;
+  }
+
+  const msteamsPort = resolveComposePublishedPort(
+    "openclaw-gateway",
+    DEFAULT_MSTEAMS_PORT,
+    runtime,
+    cwd,
+  );
+  if (msteamsPort && !runtime.facts.msteamsPortExplicit) {
+    runtime.env.OPENCLAW_MSTEAMS_PORT = msteamsPort;
+    runtime.facts.msteamsPort = msteamsPort;
   }
 
   const sentinelPrivatePort = parsePositiveInteger(
@@ -3154,7 +3351,9 @@ export async function fetchJsonWithRetries(url, options = {}) {
       return result;
     }
     if (retryDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, retryDelayMs);
+      });
     }
   }
 
@@ -3247,7 +3446,9 @@ function proofEnvFacts(facts, publishedPorts = {}) {
             ? "none"
             : "missing";
   return {
+    blackboardDbPath: facts.blackboardDbPath,
     containerConfig: facts.containerConfigOverlay ? "overlay" : "raw",
+    bridgePort: publishedPorts.bridgePort ?? facts.bridgePort,
     customSwarmDirConfigured: existsSync(facts.customSwarmDir),
     gatewayAuth,
     gatewayPort: publishedPorts.gatewayPort ?? facts.gatewayPort,
@@ -3255,6 +3456,7 @@ function proofEnvFacts(facts, publishedPorts = {}) {
     gatewayToken: facts.gatewayTokenConfigured ? "set" : "missing",
     nvidiaApiKey: facts.nvidiaApiKeyConfigured ? "set" : "missing",
     nvidiaProviderUsesSentinel: facts.nvidiaProviderUsesSentinel,
+    msteamsPort: publishedPorts.msteamsPort ?? facts.msteamsPort,
     sentinelPort: publishedPorts.sentinelPort ?? facts.sentinelPort,
     sentinelToken: facts.sentinelTokenConfigured ? "set" : "missing",
     sentinelTokenMatchesNvidiaProvider: facts.sentinelTokenMatchesNvidiaProvider,
@@ -3382,7 +3584,9 @@ async function waitForProof(runtime, options = {}) {
     }
     const sleepMs = Math.min(2_500, Math.max(0, deadline - Date.now()));
     if (sleepMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, sleepMs);
+      });
     }
   }
 
@@ -3402,7 +3606,10 @@ function printRuntimeSummary(runtime) {
   const facts = proofEnvFacts(runtime.facts);
   console.log("Full local runtime:");
   console.log(`- Gateway port: ${facts.gatewayPort}`);
+  console.log(`- Gateway bridge port: ${facts.bridgePort}`);
+  console.log(`- Teams bot port: ${facts.msteamsPort}`);
   console.log(`- Sentinel port: ${facts.sentinelPort}`);
+  console.log(`- Blackboard DB: ${facts.blackboardDbPath}`);
   console.log(`- Container config: ${facts.containerConfig}`);
   console.log(`- Gateway auth: ${facts.gatewayAuth}`);
   console.log(`- Gateway token: ${facts.gatewayToken}`);
@@ -3537,7 +3744,9 @@ async function waitForBlackboardReady(runtime, options = {}) {
     }
     const sleepMs = Math.min(2_000, Math.max(0, deadline - Date.now()));
     if (sleepMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, sleepMs);
+      });
     }
   }
   return last ?? ensureBlackboardReady(runtime, { attempts: 1, cwd, timeoutMs: 1_000 });
@@ -3640,7 +3849,9 @@ async function runAutonomySmoke(runtime, options = {}) {
         break;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2_000);
+    });
   }
 
   writeJsonArtifact(cwd, artifactPath, smoke);
@@ -3736,7 +3947,9 @@ function checkpointHostBlackboardDb(runtime, options = {}) {
   const configDir =
     cleanString(runtime?.facts?.configDir) ??
     path.dirname(resolveOpenClawConfigPath(runtime?.env ?? {}, os.homedir(), cwd));
-  const dbPath = path.join(configDir, "swarm_blackboard.db");
+  const dbPath =
+    cleanString(runtime?.facts?.blackboardDbPathHost) ??
+    path.join(configDir, "swarm_blackboard.db");
   if (!existsSync(dbPath)) {
     return {
       database: "swarm_blackboard.db",
@@ -4328,10 +4541,16 @@ Commands:
 Useful env:
   OPENCLAW_GATEWAY_TOKEN                 Gateway shared-secret token.
   OPENCLAW_SENTINEL_TOKEN                Sentinel inbound token. Defaults to NVIDIA provider apiKey when present.
+  OPENCLAW_GATEWAY_PORT                  Host Gateway port. Defaults to 18789 or next free port.
+  OPENCLAW_BRIDGE_PORT                   Host Gateway bridge port. Defaults to 18790 or next free port.
+  OPENCLAW_MSTEAMS_PORT                  Host Teams bot port. Defaults to 3978 or next free port.
   OPENCLAW_SENTINEL_PORT                 Host Sentinel port. Defaults to 18888 or next free port.
   OPENCLAW_FULL_LOCAL_SKIP_BUILD=1       Do not pass --build to docker compose up.
   OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS Timeout for active memory-wiki Gateway calls.
-  OPENCLAW_FULL_LOCAL_RESEED_NVIDIA_VAULT=1 Replace the Sentinel vault from current NVIDIA env keys.
+  SWARM_BLACKBOARD_DB_PATH                Container path for a shared Blackboard DB override.
+  OPENCLAW_FULL_LOCAL_BLACKBOARD_DB_PATH  Container path for the isolated full-local Blackboard DB; overrides SWARM_BLACKBOARD_DB_PATH.
+  OPENCLAW_FULL_LOCAL_NVIDIA_VAULT_PATH   Opt in to a persistent Sentinel vault under a writable full-local mount.
+  OPENCLAW_FULL_LOCAL_RESEED_NVIDIA_VAULT=1 Replace an explicit persistent Sentinel vault from current NVIDIA env keys.
   OPENCLAW_FULL_LOCAL_SENTINEL_MODEL     Model for the live Sentinel model proof.
   OPENCLAW_FULL_LOCAL_SMOKE_AGENT=<id>   Force the autonomy smoke ticket target agent (default: main).
   OPENCLAW_FULL_LOCAL_SMOKE_TIMEOUT_MS   End-to-end autonomy smoke timeout (default: 240000).
@@ -4562,13 +4781,12 @@ async function main(argv = process.argv.slice(2)) {
 
 const entrypointUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
 if (entrypointUrl && import.meta.url === entrypointUrl) {
-  main().then(
-    (code) => {
-      process.exitCode = code;
-    },
-    (error) => {
+  void (async () => {
+    try {
+      process.exitCode = await main();
+    } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
-    },
-  );
+    }
+  })();
 }

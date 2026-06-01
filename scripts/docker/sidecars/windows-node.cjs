@@ -8,6 +8,10 @@ const { spawn } = require("node:child_process");
 const { DatabaseSync } = require("node:sqlite");
 const JSON5 = require("json5");
 const { ensureProofEventsSchema, recordProofEvent } = require("../../lib/proof-events.cjs");
+const {
+  AGENT_OS_TICKET_STATUS_LIST,
+  AGENT_OS_TICKET_STATUS_SQL_LIST,
+} = require("../../lib/agent-os-contracts.cjs");
 
 const DEFAULT_NATIVE_AGENT_IDS = ["uba_god_mode", "pipeline_guardian"];
 const DEFAULT_BLACKBOARD_JOURNAL_MODE = "WAL";
@@ -309,6 +313,76 @@ function configureBlackboardConnection(conn) {
   }
 }
 
+function ticketsTableSql(ifNotExists = true) {
+  const ifNotExistsClause = ifNotExists ? "IF NOT EXISTS " : "";
+  return `
+    CREATE TABLE ${ifNotExistsClause}tickets (
+      id           TEXT PRIMARY KEY,
+      type         TEXT NOT NULL,
+      priority     INTEGER DEFAULT 0,
+      target_agent TEXT,
+      status       TEXT DEFAULT 'OPEN'
+                   CHECK(status IN (${AGENT_OS_TICKET_STATUS_SQL_LIST})),
+      data         TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      claimed_by   TEXT,
+      claimed_at   TEXT,
+      ttl_minutes  INTEGER
+    );
+`;
+}
+
+function ticketStatusSchemaNeedsMigration(conn) {
+  const row = conn
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'")
+    .get();
+  const sql = String(row?.sql || "");
+  return Boolean(sql) && AGENT_OS_TICKET_STATUS_LIST.some((status) => !sql.includes(`'${status}'`));
+}
+
+function ensureTicketStatusSchema(conn) {
+  conn.exec("BEGIN IMMEDIATE;");
+  try {
+    if (!ticketStatusSchemaNeedsMigration(conn)) {
+      conn.exec("COMMIT;");
+      return;
+    }
+    conn.exec(`
+      DROP TABLE IF EXISTS tickets_fts;
+      ALTER TABLE tickets RENAME TO tickets_status_contract_migration;
+    `);
+    conn.exec(ticketsTableSql(false));
+    conn.exec(`
+      INSERT INTO tickets (
+        rowid, id, type, priority, target_agent, status, data, created_at, updated_at,
+        claimed_by, claimed_at, ttl_minutes
+      )
+      SELECT
+        rowid, id, type, priority, target_agent, status, data, created_at, updated_at,
+        claimed_by, claimed_at, ttl_minutes
+      FROM tickets_status_contract_migration;
+      DROP TABLE tickets_status_contract_migration;
+    `);
+    rebuildTicketsFts(conn);
+    conn.exec("COMMIT;");
+  } catch (error) {
+    try {
+      conn.exec("ROLLBACK;");
+    } catch {}
+    throw error;
+  }
+}
+
+function rebuildTicketsFts(conn) {
+  conn.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
+      id, type, data, content=tickets
+    );
+    INSERT INTO tickets_fts(tickets_fts) VALUES('rebuild');
+  `);
+}
+
 function readConfig() {
   try {
     const configPath = path.resolve(CONFIG_PATH);
@@ -329,21 +403,9 @@ function connectDb() {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   const conn = new DatabaseSync(DB_PATH);
   configureBlackboardConnection(conn);
+  ensureTicketStatusSchema(conn);
   conn.exec(`
-    CREATE TABLE IF NOT EXISTS tickets (
-      id           TEXT PRIMARY KEY,
-      type         TEXT NOT NULL,
-      priority     INTEGER DEFAULT 0,
-      target_agent TEXT,
-      status       TEXT DEFAULT 'OPEN'
-                   CHECK(status IN ('OPEN','CLAIMED','IN_PROGRESS','DONE','FAILED','ARCHIVED')),
-      data         TEXT,
-      created_at   TEXT NOT NULL,
-      updated_at   TEXT NOT NULL,
-      claimed_by   TEXT,
-      claimed_at   TEXT,
-      ttl_minutes  INTEGER
-    );
+    ${ticketsTableSql()}
 
     CREATE TABLE IF NOT EXISTS ticket_events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,

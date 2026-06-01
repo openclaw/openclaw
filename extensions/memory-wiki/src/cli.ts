@@ -50,7 +50,7 @@ import {
 } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const WIKI_GATEWAY_TIMEOUT_MS = "30000";
+const DEFAULT_WIKI_GATEWAY_TIMEOUT_MS = "30000";
 const GATEWAY_TERMINAL_STRING_MAX_CHARS = 2_000;
 const GATEWAY_RESPONSE_MAX_ARRAY_ITEMS = 10_000;
 const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
@@ -328,10 +328,20 @@ async function callWikiGateway(
   method: "wiki.bridge.import",
 ): Promise<MemoryWikiImportedSourceSyncResult>;
 async function callWikiGateway(method: "wiki.status" | "wiki.doctor" | "wiki.bridge.import") {
-  const result = await callGatewayFromCli(method, { timeout: WIKI_GATEWAY_TIMEOUT_MS }, undefined, {
-    progress: false,
-  });
+  const result = await callGatewayFromCli(
+    method,
+    { timeout: resolveWikiGatewayTimeoutMs() },
+    undefined,
+    {
+      progress: false,
+    },
+  );
   return validateWikiGatewayResult(method, result);
+}
+
+function resolveWikiGatewayTimeoutMs(env = process.env): string {
+  const parsed = parseStrictPositiveInteger(env.OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS);
+  return String(parsed ?? DEFAULT_WIKI_GATEWAY_TIMEOUT_MS);
 }
 
 function normalizeCliStringList(values?: string[]): string[] | undefined {

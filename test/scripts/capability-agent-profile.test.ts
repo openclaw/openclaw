@@ -45,6 +45,7 @@ describe("capability agent profile", () => {
             id: "research_agent",
             model: "nvidia/test-model",
             params: { custom: true },
+            skills: ["custom-research-skill", "semantic-code-retrieval"],
             systemPromptOverride: "legacy unsupported field",
             workspace: "/workspace/research",
           },
@@ -65,6 +66,8 @@ describe("capability agent profile", () => {
     expect(research?.contextInjection).toBe("never");
     expect(research?.params.custom).toBe(true);
     expect(research?.params.capabilityFamily).toBe("research");
+    expect(research?.skills).toContain("custom-research-skill");
+    expect(research?.skills).toContain("semantic-code-retrieval");
     expect(research).not.toHaveProperty("systemPromptOverride");
     expect(research?.params.agentOsCapability).toMatchObject({
       id: "research_agent",

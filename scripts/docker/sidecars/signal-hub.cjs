@@ -7,13 +7,25 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { DatabaseSync } = require("node:sqlite");
 const { ensureProofEventsSchema, recordProofEvent } = require("../../lib/proof-events.cjs");
+const {
+  AGENT_OS_TICKET_STATUS_LIST,
+  AGENT_OS_TICKET_STATUS_SQL_LIST,
+} = require("../../lib/agent-os-contracts.cjs");
 
 let sqliteVec = null;
 try {
   sqliteVec = require("sqlite-vec");
 } catch {}
 
-const DB_PATH = path.join(os.homedir(), ".openclaw", "swarm_blackboard.db");
+function resolveBlackboardDbPath() {
+  const explicit = process.env.SWARM_BLACKBOARD_DB_PATH || process.env.SWARM_BLACKBOARD_DB;
+  if (!explicit) {
+    return path.join(os.homedir(), ".openclaw", "swarm_blackboard.db");
+  }
+  return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+}
+
+const DB_PATH = resolveBlackboardDbPath();
 const CONFIG_PATH =
   process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), ".openclaw", "openclaw.json");
 const OPENCLAW_CLI_BIN = process.env.OPENCLAW_CLI_PATH || "/app/openclaw.mjs";
@@ -220,16 +232,16 @@ function configureBlackboardConnection(conn) {
   }
 }
 
-function ensureSchema(conn, vectorEnabled) {
-  configureBlackboardConnection(conn);
-  conn.exec(`
-    CREATE TABLE IF NOT EXISTS tickets (
+function ticketsTableSql(ifNotExists = true) {
+  const ifNotExistsClause = ifNotExists ? "IF NOT EXISTS " : "";
+  return `
+    CREATE TABLE ${ifNotExistsClause}tickets (
       id           TEXT PRIMARY KEY,
       type         TEXT NOT NULL,
       priority     INTEGER DEFAULT 0,
       target_agent TEXT,
       status       TEXT DEFAULT 'OPEN'
-                   CHECK(status IN ('OPEN','CLAIMED','IN_PROGRESS','DONE','FAILED','ARCHIVED')),
+                   CHECK(status IN (${AGENT_OS_TICKET_STATUS_SQL_LIST})),
       data         TEXT,
       created_at   TEXT NOT NULL,
       updated_at   TEXT NOT NULL,
@@ -237,6 +249,64 @@ function ensureSchema(conn, vectorEnabled) {
       claimed_at   TEXT,
       ttl_minutes  INTEGER
     );
+`;
+}
+
+function ticketStatusSchemaNeedsMigration(conn) {
+  const row = conn
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'")
+    .get();
+  const sql = String(row?.sql || "");
+  return Boolean(sql) && AGENT_OS_TICKET_STATUS_LIST.some((status) => !sql.includes(`'${status}'`));
+}
+
+function ensureTicketStatusSchema(conn) {
+  conn.exec("BEGIN IMMEDIATE;");
+  try {
+    if (!ticketStatusSchemaNeedsMigration(conn)) {
+      conn.exec("COMMIT;");
+      return;
+    }
+    conn.exec(`
+      DROP TABLE IF EXISTS tickets_fts;
+      ALTER TABLE tickets RENAME TO tickets_status_contract_migration;
+    `);
+    conn.exec(ticketsTableSql(false));
+    conn.exec(`
+      INSERT INTO tickets (
+        rowid, id, type, priority, target_agent, status, data, created_at, updated_at,
+        claimed_by, claimed_at, ttl_minutes
+      )
+      SELECT
+        rowid, id, type, priority, target_agent, status, data, created_at, updated_at,
+        claimed_by, claimed_at, ttl_minutes
+      FROM tickets_status_contract_migration;
+      DROP TABLE tickets_status_contract_migration;
+    `);
+    rebuildTicketsFts(conn);
+    conn.exec("COMMIT;");
+  } catch (error) {
+    try {
+      conn.exec("ROLLBACK;");
+    } catch {}
+    throw error;
+  }
+}
+
+function rebuildTicketsFts(conn) {
+  conn.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
+      id, type, data, content=tickets
+    );
+    INSERT INTO tickets_fts(tickets_fts) VALUES('rebuild');
+  `);
+}
+
+function ensureSchema(conn, vectorEnabled) {
+  configureBlackboardConnection(conn);
+  ensureTicketStatusSchema(conn);
+  conn.exec(`
+    ${ticketsTableSql()}
 
     CREATE TABLE IF NOT EXISTS ticket_events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,13 +349,17 @@ function recordSignalProofEvent(ticketId, eventType, status, summary, payload) {
 }
 
 function connectDb() {
+  let conn = null;
   try {
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    const conn = new DatabaseSync(DB_PATH, { allowExtension: true });
+    conn = new DatabaseSync(DB_PATH, { allowExtension: true });
     const vectorEnabled = loadSqliteVec(conn);
     ensureSchema(conn, vectorEnabled);
     return conn;
   } catch (error) {
+    try {
+      conn?.close?.();
+    } catch {}
     console.error("[Signal Hub] Failed to connect to DB:", error.message);
     return null;
   }
@@ -761,6 +835,11 @@ console.log("[Signal Hub] Polling active every 1s.");
 setInterval(pollDatabase, 1000);
 void processNewTickets();
 
-void initEmbeddings().catch((error) => {
-  console.warn(`[Signal Hub] Embedding warmup failed; semantic routing disabled: ${error.message}`);
-});
+void (async () => {
+  try {
+    await initEmbeddings();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[Signal Hub] Embedding warmup failed; semantic routing disabled: ${message}`);
+  }
+})();

@@ -75,7 +75,8 @@ services:
       OPENCLAW_SENTINEL_MAX_ATTEMPTS: ${OPENCLAW_SENTINEL_MAX_ATTEMPTS:-}
       OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT: ${OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT:-}
       OPENCLAW_FULL_LOCAL_RESEED_NVIDIA_VAULT: ${OPENCLAW_FULL_LOCAL_RESEED_NVIDIA_VAULT:-}
-      OPENCLAW_NVIDIA_VAULT_PATH: ${OPENCLAW_NVIDIA_VAULT_PATH:-/home/node/.openclaw/workspace_nvidia_key_sentinel/vault.json}
+      OPENCLAW_NVIDIA_VAULT_PATH: ${OPENCLAW_NVIDIA_VAULT_PATH:-/run/openclaw/sentinel/vault.json}
+      OPENCLAW_SENTINEL_STATE_DIR: ${OPENCLAW_SENTINEL_STATE_DIR:-/run/openclaw/sentinel/state}
       NVIDIA_API_KEYS: ${NVIDIA_API_KEYS:-${NVIDIA_API_KEY:-}}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
@@ -92,19 +93,33 @@ services:
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
     ports:
       - "${OPENCLAW_SENTINEL_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_SENTINEL_PORT:-18888}:${OPENCLAW_SENTINEL_LISTEN_PORT:-18888}"
+    tmpfs:
+      - /run/openclaw/sentinel
     init: true
     restart: unless-stopped
     entrypoint: ["sh", "-lc"]
     command:
       - |
-        default_vault="/home/node/.openclaw/workspace_nvidia_key_sentinel/vault.json"
-        if [ -n "$$OPENCLAW_NVIDIA_VAULT_PATH" ] && [ "$$OPENCLAW_NVIDIA_VAULT_PATH" != "$$default_vault" ]; then
-          mkdir -p "$$(dirname "$$OPENCLAW_NVIDIA_VAULT_PATH")" "$$(dirname "$$default_vault")"
-          if [ -f "$$default_vault" ] && [ ! -f "$$OPENCLAW_NVIDIA_VAULT_PATH" ]; then
-            cp "$$default_vault" "$$OPENCLAW_NVIDIA_VAULT_PATH"
+        legacy_dir="/home/node/.openclaw/workspace_nvidia_key_sentinel"
+        legacy_vault="$$legacy_dir/vault.json"
+        persistent_vault_target=1
+        case "$$OPENCLAW_NVIDIA_VAULT_PATH" in
+          /run/openclaw/sentinel/*) persistent_vault_target=0 ;;
+        esac
+        if [ "$$persistent_vault_target" = "1" ] && [ -f "$$legacy_vault" ] && [ "$$OPENCLAW_NVIDIA_VAULT_PATH" != "$$legacy_vault" ]; then
+          mkdir -p "$$(dirname "$$OPENCLAW_NVIDIA_VAULT_PATH")"
+          if [ ! -f "$$OPENCLAW_NVIDIA_VAULT_PATH" ]; then
+            cp "$$legacy_vault" "$$OPENCLAW_NVIDIA_VAULT_PATH"
           fi
-          rm -f "$$default_vault"
-          ln -s "$$OPENCLAW_NVIDIA_VAULT_PATH" "$$default_vault"
+          if [ -f "$$OPENCLAW_NVIDIA_VAULT_PATH" ]; then
+            rm -f "$$legacy_vault" "$$legacy_vault.seeded-by-full-local" "$$legacy_vault.seeded-by-validator"
+          fi
+        fi
+        if [ "$$OPENCLAW_NVIDIA_VAULT_PATH" != "$$legacy_vault" ]; then
+          rm -f "$$legacy_dir/validation-state.json" "$$legacy_dir/validation-state.json.tmp"
+          if [ "$$persistent_vault_target" = "1" ]; then
+            rmdir "$$legacy_dir" 2>/dev/null || true
+          fi
         fi
         validator="scripts/docker/sidecars/nvidia-key-validator.cjs"
         node "$$validator"
@@ -150,6 +165,7 @@ services:
       OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS: ${OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS:-300000}
       OPENCLAW_CLI_PATH: /app/openclaw.mjs
       SWARM_NODE_TYPE: ${SWARM_NODE_TYPE:-linux-container}
+      SWARM_BLACKBOARD_DB_PATH: ${SWARM_BLACKBOARD_DB_PATH:-/home/node/.openclaw/swarm_blackboard.db}
       SWARM_BLACKBOARD_JOURNAL_MODE: ${SWARM_BLACKBOARD_JOURNAL_MODE:-DELETE}
       SWARM_BLACKBOARD_BUSY_TIMEOUT_MS: ${SWARM_BLACKBOARD_BUSY_TIMEOUT_MS:-10000}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
@@ -178,7 +194,7 @@ services:
           "CMD",
           "node",
           "-e",
-          'const fs=require(''fs''),os=require(''os''),path=require(''path''); const {DatabaseSync}=require(''node:sqlite''); const dbPath=path.join(os.homedir(),''.openclaw'',''swarm_blackboard.db''); if(!fs.existsSync(dbPath)) process.exit(1); let db; try { db=new DatabaseSync(dbPath); db.exec(''PRAGMA busy_timeout=1000; PRAGMA query_only=ON;''); const rows=db.prepare("SELECT name FROM sqlite_master WHERE type=''table'' AND name IN (''tickets'',''ticket_events'')").all(); process.exit(rows.length===2?0:1); } catch (err) { console.error(err.message); process.exit(1); } finally { try { db?.close?.(); } catch {} }',
+          'const fs=require(''fs''),os=require(''os''),path=require(''path''); const {DatabaseSync}=require(''node:sqlite''); const dbPath=process.env.SWARM_BLACKBOARD_DB_PATH||path.join(os.homedir(),''.openclaw'',''swarm_blackboard.db''); if(!fs.existsSync(dbPath)) process.exit(1); let db; try { db=new DatabaseSync(dbPath); db.exec(''PRAGMA busy_timeout=1000; PRAGMA query_only=ON;''); const rows=db.prepare("SELECT name FROM sqlite_master WHERE type=''table'' AND name IN (''tickets'',''ticket_events'')").all(); process.exit(rows.length===2?0:1); } catch (err) { console.error(err.message); process.exit(1); } finally { try { db?.close?.(); } catch {} }',
         ]
       interval: 30s
       timeout: 10s

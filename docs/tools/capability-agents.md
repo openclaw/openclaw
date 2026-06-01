@@ -84,11 +84,13 @@ pnpm local:full:golden
 
 The command writes `.artifacts/full-local-agent-os-golden-e2e.json` with an `agent-os.artifact.v1` contract and check results.
 
-Inspect recent tickets:
+Inspect recent tickets for the default host Blackboard:
 
 ```bash
 node scripts/docker/sidecars/blackboard-cli.cjs list
 ```
+
+Full-local uses an isolated Blackboard database at `/home/node/.openclaw/full-local/swarm_blackboard.db` by default so boot proofs do not wake old host tickets. Set `SWARM_BLACKBOARD_DB_PATH` when you intentionally want the CLI, signal hub, or a native bridge to share a different ticket database.
 
 Inspect proof:
 
@@ -109,7 +111,9 @@ Before adding a new capability agent, decide these boundaries:
 - which proof bundle demonstrates success
 - how it recovers from restart or timeout
 
-Full-local defaults keep the Docker-published Gateway, bridge, Teams, and Sentinel host ports on `127.0.0.1`, require a Sentinel token for model proxy requests, and leave health endpoints unauthenticated for orchestration. The Windows native bridge only dispatches configured native agents and records host-native dispatch attempts into `proof_events` so native work has the same audit trail as container work.
+Full-local keeps the Sentinel, Gateway, bridge, and Teams host ports published on `127.0.0.1` by default, requires a Sentinel token for model proxy requests, and leaves health endpoints unauthenticated for orchestration.
+
+Set `OPENCLAW_GATEWAY_PUBLISH=0.0.0.0:18789:18789`, `OPENCLAW_BRIDGE_PUBLISH=0.0.0.0:18790:18790`, and `OPENCLAW_MSTEAMS_PUBLISH=0.0.0.0:3978:3978` only when you intentionally expose those ports beyond loopback. Existing host-only overrides such as `OPENCLAW_GATEWAY_PUBLISH_HOST=0.0.0.0` still work when the full publish mapping is unset. The Windows native bridge only dispatches configured native agents and records host-native dispatch attempts into `proof_events` so native work has the same audit trail as container work.
 
 Prefer a narrow native agent first. Add external framework adapters only after the native contract is stable.
 
