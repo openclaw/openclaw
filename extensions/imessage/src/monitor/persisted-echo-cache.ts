@@ -9,6 +9,7 @@ type PersistedEchoEntry = {
   text?: string;
   messageId?: string;
   timestamp: number;
+  expiresAt?: number;
 };
 
 // 12h comfortably outlives the inbound replay guard window
@@ -65,13 +66,24 @@ function remainingTtlMs(timestamp: number): number | undefined {
   return remaining > 0 ? remaining : undefined;
 }
 
+function resolveEntryTtlMs(entry: PersistedEchoEntry, ttlMs?: number): number | undefined {
+  if (typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0) {
+    return ttlMs;
+  }
+  return remainingTtlMs(entry.timestamp);
+}
+
+function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
+  const cutoff = now - IMESSAGE_SENT_ECHOES_TTL_MS;
+  return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
+}
+
 function loadMirrorFromStore(): void {
   try {
-    const cutoff = Date.now() - IMESSAGE_SENT_ECHOES_TTL_MS;
     mirror = openPersistedEchoStore()
       .entries()
       .map(({ value }) => value)
-      .filter((entry) => entry.timestamp >= cutoff)
+      .filter((entry) => isLiveEntry(entry))
       .toSorted((a, b) => a.timestamp - b.timestamp)
       .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
@@ -85,23 +97,29 @@ function readRecentEntries(): PersistedEchoEntry[] {
   return mirror ?? [];
 }
 
-function persistEntry(entry: PersistedEchoEntry): void {
-  const ttlMs = remainingTtlMs(entry.timestamp);
-  if (!ttlMs) {
-    return;
+function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undefined {
+  const effectiveTtlMs = resolveEntryTtlMs(entry, ttlMs);
+  if (!effectiveTtlMs) {
+    return undefined;
   }
+  const key = resolveIMessageSentEchoEntryKey(entry);
   try {
-    openPersistedEchoStore().register(resolveIMessageSentEchoEntryKey(entry), entry, { ttlMs });
+    openPersistedEchoStore().register(key, entry, {
+      ttlMs: effectiveTtlMs,
+    });
   } catch (err) {
     reportFailure("write", err);
+    return undefined;
   }
+  return key;
 }
 
 export function rememberPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
   messageId?: string;
-}): void {
+  ttlMs?: number;
+}): string | undefined {
   const text = normalizeText(params.text);
   const messageId = normalizeMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
@@ -110,15 +128,30 @@ export function rememberPersistedIMessageEcho(params: {
     ...(text ? { text } : {}),
     ...(messageId ? { messageId } : {}),
   };
+  if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
+    entry.expiresAt = entry.timestamp + params.ttlMs;
+  }
   if (!entry.text && !entry.messageId) {
-    return;
+    return undefined;
   }
   loadMirrorFromStore();
-  persistEntry(entry);
-  const cutoff = Date.now() - IMESSAGE_SENT_ECHOES_TTL_MS;
+  const key = persistEntry(entry, params.ttlMs);
   mirror = [...(mirror ?? []), entry]
-    .filter((candidate) => candidate.timestamp >= cutoff)
+    .filter((candidate) => isLiveEntry(candidate))
     .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
+  return key;
+}
+
+export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
+  if (!key) {
+    return;
+  }
+  try {
+    openPersistedEchoStore().delete(key);
+  } catch (err) {
+    reportFailure("delete", err);
+  }
+  mirror = (mirror ?? []).filter((entry) => resolveIMessageSentEchoEntryKey(entry) !== key);
 }
 
 export function hasPersistedIMessageEcho(params: {

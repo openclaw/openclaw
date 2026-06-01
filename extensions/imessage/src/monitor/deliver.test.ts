@@ -67,24 +67,24 @@ describe("deliverReplies", () => {
       [
         "chat_id:10",
         "first",
-        {
+        expect.objectContaining({
           config: IMESSAGE_TEST_CFG,
           maxBytes: 4096,
           client,
           accountId: "default",
           replyToId: "reply-1",
-        },
+        }),
       ],
       [
         "chat_id:10",
         "second",
-        {
+        expect.objectContaining({
           config: IMESSAGE_TEST_CFG,
           maxBytes: 4096,
           client,
           accountId: "default",
           replyToId: "reply-1",
-        },
+        }),
       ],
     ]);
   });
@@ -112,26 +112,26 @@ describe("deliverReplies", () => {
       [
         "chat_id:20",
         "caption",
-        {
+        expect.objectContaining({
           config: IMESSAGE_TEST_CFG,
           mediaUrl: "https://example.com/a.jpg",
           maxBytes: 8192,
           client,
           accountId: "acct-2",
           replyToId: "reply-2",
-        },
+        }),
       ],
       [
         "chat_id:20",
         "",
-        {
+        expect.objectContaining({
           config: IMESSAGE_TEST_CFG,
           mediaUrl: "https://example.com/b.jpg",
           maxBytes: 8192,
           client,
           accountId: "acct-2",
           replyToId: "reply-2",
-        },
+        }),
       ],
     ]);
   });
@@ -157,11 +157,11 @@ describe("deliverReplies", () => {
       [
         "chat_id:50",
         "durable hello",
-        {
+        expect.objectContaining({
           config: IMESSAGE_TEST_CFG,
           accountId: "acct-ignored",
           client,
-        },
+        }),
       ],
     ]);
     expect(remember).toHaveBeenCalledWith("acct-5:chat_id:50", {
@@ -191,11 +191,11 @@ describe("deliverReplies", () => {
       [
         "chat_id:60",
         "Visible reply",
-        {
+        expect.objectContaining({
           config: IMESSAGE_TEST_CFG,
           accountId: "acct-ignored",
           client,
-        },
+        }),
       ],
     ]);
     expect(remember).toHaveBeenCalledWith("acct-6:chat_id:60", {
@@ -204,15 +204,24 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("records outbound text and message ids in sent-message cache (post-send only)", async () => {
-    // Fix for #47830: remember() is called ONLY after each chunk is sent,
-    // never with the full un-chunked text before sending begins.
-    // Pre-send population widened the false-positive window in self-chat.
+  it("records per-chunk pre-send text and post-send message ids in sent-message cache", async () => {
+    // Fix for #47830: pre-send echo markers are per chunk, never the full
+    // un-chunked text before sending begins.
     const remember = vi.fn();
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
     sendMessageIMessageMock
-      .mockResolvedValueOnce({ messageId: "imsg-1", sentText: "first" })
-      .mockResolvedValueOnce({ messageId: "imsg-2", sentText: "second" });
+      .mockImplementationOnce(async (_target: string, message: string, opts?: unknown) => {
+        (opts as { onBeforeSendEcho?: (echoText: string) => void } | undefined)?.onBeforeSendEcho?.(
+          message,
+        );
+        return { messageId: "imsg-1", sentText: "first" };
+      })
+      .mockImplementationOnce(async (_target: string, message: string, opts?: unknown) => {
+        (opts as { onBeforeSendEcho?: (echoText: string) => void } | undefined)?.onBeforeSendEcho?.(
+          message,
+        );
+        return { messageId: "imsg-2", sentText: "second" };
+      });
 
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
@@ -226,15 +235,15 @@ describe("deliverReplies", () => {
       sentMessageCache: { remember },
     });
 
-    // Only the two per-chunk post-send calls — no pre-send full-text call.
-    expect(remember).toHaveBeenCalledTimes(2);
-    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
-      text: "first",
-      messageId: "imsg-1",
-    });
-    expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
-      text: "second",
-      messageId: "imsg-2",
+    expect(remember).toHaveBeenCalledTimes(4);
+    expect(remember.mock.calls).toStrictEqual([
+      ["acct-3:chat_id:30", { text: "first" }],
+      ["acct-3:chat_id:30", { text: "first", messageId: "imsg-1" }],
+      ["acct-3:chat_id:30", { text: "second" }],
+      ["acct-3:chat_id:30", { text: "second", messageId: "imsg-2" }],
+    ]);
+    expect(remember).not.toHaveBeenCalledWith("acct-3:chat_id:30", {
+      text: "first|second",
     });
   });
 

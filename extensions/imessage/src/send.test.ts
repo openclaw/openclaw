@@ -669,6 +669,35 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
+  it("persists an echo marker before awaiting the bridge send result", async () => {
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "hello",
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-1" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
+  });
+
   it("resolves numeric chat.db ROWIDs to GUIDs for approval reaction binding", async () => {
     const client = createClient({ message_id: 12345 });
     const resolveMessageGuidImpl = vi.fn(async () => "p:0/resolved-guid");

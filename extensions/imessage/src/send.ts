@@ -28,7 +28,10 @@ import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
-import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
+import {
+  forgetPersistedIMessageEchoKey,
+  rememberPersistedIMessageEcho,
+} from "./monitor/persisted-echo-cache.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -38,6 +41,7 @@ import {
 
 const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
+const PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -76,6 +80,7 @@ type IMessageSendOpts = {
     text: string;
     sentAfterMs?: number;
   }) => Promise<string | null> | string | null;
+  onBeforeSendEcho?: (echoText: string) => void;
 };
 
 export type IMessageSendResult = {
@@ -754,8 +759,20 @@ async function trySendAttachmentForTarget(params: {
     return null;
   }
 
+  const echoScope = resolveOutboundEchoScope({
+    accountId: params.accountId,
+    target: params.target,
+  });
   let result: Record<string, unknown>;
+  let pendingEchoKey: string | undefined;
   try {
+    if (echoScope) {
+      pendingEchoKey = rememberPersistedIMessageEcho({
+        scope: echoScope,
+        text: params.echoText,
+        ttlMs: PENDING_PERSISTED_ECHO_TTL_MS,
+      });
+    }
     result = await params.runCliJson([
       "send-attachment",
       "--chat",
@@ -768,6 +785,7 @@ async function trySendAttachmentForTarget(params: {
       "auto",
     ]);
   } catch (error) {
+    forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -776,6 +794,7 @@ async function trySendAttachmentForTarget(params: {
   const failure = resolveIMessageCliFailure(result);
   if (failure) {
     const error = new Error(failure);
+    forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -790,10 +809,6 @@ async function trySendAttachmentForTarget(params: {
     resolveMessageGuidImpl: params.resolveMessageGuidImpl,
   });
   const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
-  const echoScope = resolveOutboundEchoScope({
-    accountId: params.accountId,
-    target: params.target,
-  });
   if (echoScope) {
     rememberPersistedIMessageEcho({
       scope: echoScope,
@@ -985,6 +1000,8 @@ export async function sendMessageIMessage(
     params.to = target.to;
   }
 
+  const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
+
   const client =
     opts.client ??
     (opts.createClient
@@ -993,8 +1010,19 @@ export async function sendMessageIMessage(
   const shouldClose = !opts.client;
   let result: Record<string, unknown>;
   const sendStartedAtMs = Date.now();
+  let pendingEchoKey: string | undefined;
   try {
     try {
+      if (echoScope) {
+        pendingEchoKey = rememberPersistedIMessageEcho({
+          scope: echoScope,
+          text: echoText,
+          ttlMs: PENDING_PERSISTED_ECHO_TTL_MS,
+        });
+      }
+      if (echoText) {
+        opts.onBeforeSendEcho?.(echoText);
+      }
       result = await client.request<Record<string, unknown>>("send", params, {
         timeoutMs,
       });
@@ -1053,7 +1081,6 @@ export async function sendMessageIMessage(
         resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
       });
     }
-    const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
     if (echoScope) {
       rememberPersistedIMessageEcho({
         scope: echoScope,
@@ -1109,6 +1136,9 @@ export async function sendMessageIMessage(
         ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       }),
     };
+  } catch (error) {
+    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    throw error;
   } finally {
     if (shouldClose) {
       await client.stop();
