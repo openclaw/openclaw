@@ -67,6 +67,27 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
   });
 
+  it("keeps forwarded assistant display messages separate from local assistant replies", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: "local reply",
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: "forwarded report",
+          senderLabel: "Forwarded from main",
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.senderLabel)).toEqual([null, "Forwarded from main"]);
+  });
+
   it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
     const groups = messageGroups({
       messages: [

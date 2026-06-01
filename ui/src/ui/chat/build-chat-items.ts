@@ -191,13 +191,17 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const senderLabel =
+      role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
+        ? (normalized.senderLabel ?? null)
+        : null;
     const timestamp = normalized.timestamp || Date.now();
+    const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -253,7 +257,8 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   if (!text) {
     return null;
   }
-  const senderLabel = role === "user" ? (normalized.senderLabel ?? "").trim() : "";
+  const senderLabel =
+    role === "user" || role === "assistant" ? (normalized.senderLabel ?? "").trim() : "";
   return `${role}:${senderLabel}:${text}`;
 }
 
