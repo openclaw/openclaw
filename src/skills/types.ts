@@ -36,6 +36,7 @@ export type OpenClawSkillMetadata = {
   };
   install?: SkillInstallSpec[];
   setup?: SkillSetupSpec;
+  setupError?: string;
 };
 
 export type SkillInvocationPolicy = {

@@ -212,13 +212,15 @@ describe("runSkillSetupHook", () => {
     }
   });
 
-  it("rejects setup when script path contains ..", async () => {
+  it("fails when declared setup script path contains ..", async () => {
     const dir = await tempDirs.make("openclaw-setup-dotdot-");
     writeSkillMd(dir, setupSkillMd("../outside.sh"));
 
-    // resolveSetupSpec rejects ".." paths, so setup is treated as absent.
     const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
-    expect(result).toEqual({ ok: true });
+    expect(result).toMatchObject({ ok: false, failureKind: "setup-failed" });
+    if (!result.ok) {
+      expect(result.error).toContain("path traversal");
+    }
   });
 
   it("fails when setup script does not exist", async () => {

@@ -186,24 +186,38 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
-function resolveSetupSpec(raw: unknown): SkillSetupSpec | undefined {
+type ResolvedSetupSpec = {
+  spec?: SkillSetupSpec;
+  error?: string;
+};
+
+function resolveSetupSpec(raw: unknown): ResolvedSetupSpec {
   if (!raw || typeof raw !== "object") {
-    return undefined;
+    return {};
   }
   const obj = raw as Record<string, unknown>;
+  if (!("script" in obj)) {
+    return {};
+  }
   const script = readStringValue(obj.script);
   if (!script) {
-    return undefined;
+    return { error: "Invalid setup.script: expected a non-empty relative path" };
   }
   const normalized = script.trim();
-  if (!normalized || normalized.includes("..") || path.isAbsolute(normalized)) {
-    return undefined;
+  if (!normalized) {
+    return { error: "Invalid setup.script: expected a non-empty relative path" };
+  }
+  if (path.isAbsolute(normalized)) {
+    return { error: `Invalid setup.script: absolute paths are not allowed (${normalized})` };
+  }
+  if (normalized.includes("..")) {
+    return { error: `Invalid setup.script: path traversal is not allowed (${normalized})` };
   }
   const spec: SkillSetupSpec = { script: normalized };
   if (typeof obj.timeoutMs === "number" && obj.timeoutMs > 0) {
     spec.timeoutMs = obj.timeoutMs;
   }
-  return spec;
+  return { spec };
 }
 
 export function resolveOpenClawMetadata(
@@ -226,7 +240,8 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires,
     install: install.length > 0 ? install : undefined,
-    setup,
+    setup: setup.spec,
+    setupError: setup.error,
   };
 }
 

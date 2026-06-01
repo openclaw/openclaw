@@ -97,6 +97,13 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
   }
 
   const metadata = resolveOpenClawMetadata(frontmatter);
+  if (metadata?.setupError) {
+    return {
+      ok: false,
+      error: metadata.setupError,
+      failureKind: "setup-failed",
+    };
+  }
   const setup = metadata?.setup;
   if (!setup) {
     return { ok: true };

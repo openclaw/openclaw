@@ -152,25 +152,28 @@ describe("resolveOpenClawMetadata setup parsing", () => {
     expect(setup).toBeUndefined();
   });
 
-  it("rejects setup.script with .. path traversal", () => {
-    const setup = resolveSetup({
+  it("preserves setup.script path traversal as setupError", () => {
+    const metadata = resolveOpenClawMetadata({
       metadata: '{"openclaw":{"setup":{"script":"../outside.sh"}}}',
     });
-    expect(setup).toBeUndefined();
+    expect(metadata?.setup).toBeUndefined();
+    expect(metadata?.setupError).toContain("path traversal");
   });
 
-  it("rejects setup.script with absolute path", () => {
-    const setup = resolveSetup({
+  it("preserves absolute setup.script as setupError", () => {
+    const metadata = resolveOpenClawMetadata({
       metadata: '{"openclaw":{"setup":{"script":"/etc/passwd"}}}',
     });
-    expect(setup).toBeUndefined();
+    expect(metadata?.setup).toBeUndefined();
+    expect(metadata?.setupError).toContain("absolute paths");
   });
 
-  it("rejects empty setup.script", () => {
-    const setup = resolveSetup({
+  it("preserves empty setup.script as setupError", () => {
+    const metadata = resolveOpenClawMetadata({
       metadata: '{"openclaw":{"setup":{"script":""}}}',
     });
-    expect(setup).toBeUndefined();
+    expect(metadata?.setup).toBeUndefined();
+    expect(metadata?.setupError).toContain("non-empty relative path");
   });
 
   it("ignores non-numeric timeoutMs", () => {

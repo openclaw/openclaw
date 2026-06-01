@@ -282,6 +282,32 @@ describe("skill archive install", () => {
     });
   });
 
+  it("fails allowed archive setup hooks with invalid declared script paths", async () => {
+    const root = await tempDirs.make("openclaw-skill-archive-install-");
+    const extractedRoot = path.join(root, "source-skill");
+    const workspaceDir = path.join(root, "workspace");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      setupSkillFileContent("Setup Skill", "../outside.sh"),
+      "utf8",
+    );
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "setup-skill",
+      extractedRoot,
+      mode: "install",
+      scan: false,
+      allowSetupHooks: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, failureKind: "unavailable" });
+    if (!result.ok) {
+      expect(result.error).toContain("path traversal");
+    }
+  });
+
   it("runs archive setup hooks only when explicitly allowed", async () => {
     const root = await tempDirs.make("openclaw-skill-archive-install-");
     const extractedRoot = path.join(root, "source-skill");
