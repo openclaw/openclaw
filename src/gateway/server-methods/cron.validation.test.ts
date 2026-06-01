@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../../cron/types.js";
+import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -149,6 +149,21 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     payload: { kind: "agentTurn", message: "hello" },
     delivery: { mode: "none" },
     state: {},
+    ...overrides,
+  };
+}
+
+function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {}): CronDelivery {
+  return {
+    mode: "announce",
+    channel: "telegram",
+    to: "telegram:123",
+    failureDestination: {
+      mode: "announce",
+      channel: "slack",
+      to: "C123",
+      accountId: "bot-b",
+    },
     ...overrides,
   };
 }
@@ -569,19 +584,10 @@ describe("cron method validation", () => {
         },
       },
       createCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "telegram:123",
+        delivery: telegramDeliveryWithSlackFailure({
           threadId: "99",
           accountId: "bot-a",
-          failureDestination: {
-            mode: "announce",
-            channel: "slack",
-            to: "C123",
-            accountId: "bot-b",
-          },
-        },
+        }),
       }),
     );
 
@@ -614,17 +620,7 @@ describe("cron method validation", () => {
         },
       },
       createCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "telegram:123",
-          failureDestination: {
-            mode: "announce",
-            channel: "slack",
-            to: "C123",
-            accountId: "bot-b",
-          },
-        },
+        delivery: telegramDeliveryWithSlackFailure(),
       }),
     );
 

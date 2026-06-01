@@ -145,6 +145,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
 
       const prompt = "stream markdown through the GUI";
+      await gateway.deferNext("chat.send");
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 
@@ -171,6 +172,17 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
       expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await page.waitForFunction(() => {
+        const app = document.querySelector("openclaw-app") as
+          | (Element & { chatSending?: unknown })
+          | null;
+        return app?.chatSending === false;
+      });
+      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
+        timeout: 10_000,
+      });
 
       await gateway.emitChatFinal({
         runId,
@@ -441,6 +453,53 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
       );
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows a pending send while a model override save is still pending", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+      },
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
+      ],
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
+      await gateway.waitForRequest("sessions.patch");
+
+      const prompt = "send while the model save is pending";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await page.locator(".chat-queue").getByText("Waiting for model").waitFor({
+        timeout: 10_000,
+      });
+      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await gateway.resolveDeferred("sessions.patch", {});
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      expect(params.message).toBe(prompt);
+      expect(params.sessionKey).toBe("agent:main:session-a");
     } finally {
       await context.close();
     }

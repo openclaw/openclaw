@@ -180,6 +180,7 @@
   "channel-config-primitives",
   "channel-config-schema",
   "bundled-channel-config-schema",
+  "chat-channel-ids",
   "channel-config-schema-legacy",
   "channel-actions",
   "channel-plugin-common",

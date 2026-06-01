@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
-import { CronToolSchema } from "./cron-tool.js";
+import { createCronToolSchema, CronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -27,8 +27,8 @@ function propertyAt(
 }
 
 describe("CronToolSchema", () => {
-  const schemaRecord = CronToolSchema as unknown as Record<string, unknown>;
-  const providerSchemaRecord = normalizeToolParameterSchema(CronToolSchema, {
+  const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
+  const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
   }) as unknown as Record<string, unknown>;
 
@@ -222,12 +222,16 @@ describe("CronToolSchema", () => {
     const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
-    const jobProps = root?.job?.properties as Record<string, { type?: unknown }> | undefined;
+    const jobProps = root?.job?.properties as
+      | Record<string, { type?: unknown; description?: string }>
+      | undefined;
 
     // Provider projection must be plain "string" rather than a nullable union.
     // The raw runtime schema remains nullable so local validation accepts clears.
     expect(jobProps?.agentId?.type).toBe("string");
+    expect(jobProps?.agentId?.description).toMatch(/null to keep it unset/i);
     expect(jobProps?.sessionKey?.type).toBe("string");
+    expect(jobProps?.sessionKey?.description).toMatch(/null to clear it/i);
   });
 
   it("patch.payload.toolsAllow projects to plain array type for OpenAPI 3.0 compat", () => {
@@ -235,12 +239,13 @@ describe("CronToolSchema", () => {
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const patchProps = root?.patch?.properties as
-      | Record<string, { properties?: Record<string, { type?: unknown }> }>
+      | Record<string, { properties?: Record<string, { type?: unknown; description?: string }> }>
       | undefined;
 
     // Provider-facing schemas must be plain "array" rather than JSON Schema
     // unions so OpenAPI 3.0 subset validators accept them.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
+    expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the

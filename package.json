@@ -805,6 +805,10 @@
       "types": "./dist/plugin-sdk/bundled-channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/bundled-channel-config-schema.js"
     },
+    "./plugin-sdk/chat-channel-ids": {
+      "types": "./dist/plugin-sdk/chat-channel-ids.d.ts",
+      "default": "./dist/plugin-sdk/chat-channel-ids.js"
+    },
     "./plugin-sdk/channel-config-schema-legacy": {
       "types": "./dist/plugin-sdk/channel-config-schema-legacy.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema-legacy.js"

@@ -7,16 +7,22 @@ import { describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/install.sh";
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...env,
-      BASH_ENV: "",
-      ENV: "",
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
-    },
-  });
+  const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
+  try {
+    return spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        ...env,
+        BASH_ENV: "",
+        ENV: "",
+        OPENCLAW_INSTALL_SH_NO_RUN: "1",
+      },
+    });
+  } finally {
+    rmSync(home, { force: true, recursive: true });
+  }
 }
 
 function writeNpmFreshnessConflictFixture(path: string, argsLog: string) {
@@ -1006,6 +1012,8 @@ describe("install.sh", () => {
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           "set +e",
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "export PATH",
           "unset -f node 2>/dev/null || true",
           "unalias node 2>/dev/null || true",
           'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
