@@ -160,9 +160,12 @@ export async function maybePersistResolvedTelegramTarget(params: {
     return;
   }
   const { matchKey, resolvedTarget } = rewrite;
-  // Resolved targets rewrite user config and cron delivery state, so missing
-  // gateway scopes fail closed instead of being treated as an internal write.
-  if (params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) !== true) {
+  // Gateway callers must prove admin scope before mutating config or cron state.
+  // Internal/non-gateway owners leave scopes absent and keep their existing writeback path.
+  if (
+    Array.isArray(params.gatewayClientScopes) &&
+    !params.gatewayClientScopes.includes(TELEGRAM_ADMIN_SCOPE)
+  ) {
     writebackLogger.warn(
       `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
     );

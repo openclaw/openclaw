@@ -95,6 +95,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         cfg: {} as OpenClawConfig,
         rawTarget: "-100123",
         resolvedChatId: "-100123",
+        gatewayClientScopes: ["operator.admin"],
       });
 
       expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
@@ -134,19 +135,35 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         expect(saveCronStore).not.toHaveBeenCalled();
       });
 
-      it("skips config and cron writeback when gateway scopes are missing", async () => {
+      it("writes back for gateway callers with operator.admin", async () => {
+        readConfigFileSnapshotForWrite.mockResolvedValue({
+          snapshot: {
+            config: {
+              channels: {
+                telegram: {
+                  defaultTo: "t.me/mychannel",
+                },
+              },
+            },
+          },
+          writeOptions: {},
+        });
+        loadCronStore.mockResolvedValue({
+          version: 1,
+          jobs: [{ id: "a", delivery: { channel: "telegram", to: "t.me/mychannel" } }],
+        });
+
         await maybePersistResolvedTelegramTarget({
           cfg: {
             cron: { store: "/tmp/cron/jobs.json" },
           } as OpenClawConfig,
           rawTarget: "t.me/mychannel",
           resolvedChatId: "-100123",
+          gatewayClientScopes: ["operator.admin"],
         });
 
-        expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-        expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+        expect(writeConfigFile).toHaveBeenCalledTimes(1);
+        expect(saveCronStore).toHaveBeenCalledTimes(1);
       });
     }
 
