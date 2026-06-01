@@ -58,7 +58,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         const nextModel = Object.assign({}, model, {
           name: selectedModelCapabilities.modelName,
           api: selectedModelCapabilities.api,
-          reasoning: selectedModelCapabilities.reasoning || model.reasoning === true,
+          reasoning: selectedModelCapabilities.reasoning || model.reasoning,
           thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap ?? model.thinkingLevelMap,
           input: selectedModelCapabilities.input,
         });
@@ -69,7 +69,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
               : undefined;
           const preserveExplicitReasoningEffort =
             !selectedModelCapabilities.reasoning &&
-            model.reasoning === true &&
+            model.reasoning &&
             explicitSupportsReasoningEffort !== false;
           const explicitMaxTokensField =
             typeof model.compat?.maxTokensField === "string"
@@ -78,7 +78,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
                 ? "max_completion_tokens"
                 : undefined;
           nextModel.compat = {
-            ...(model.compat ?? {}),
+            ...model.compat,
             ...selectedModelCapabilities.compat,
             ...(explicitSupportsReasoningEffort !== undefined
               ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
@@ -138,7 +138,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         typeof model.compat?.supportsReasoningEffort === "boolean"
           ? model.compat.supportsReasoningEffort
           : undefined;
-      const preserveExplicitReasoningEffort = !capabilities.reasoning && model.reasoning === true;
+      const preserveExplicitReasoningEffort = !capabilities.reasoning && model.reasoning;
       const explicitMaxTokensField =
         typeof model.compat?.maxTokensField === "string"
           ? model.compat.maxTokensField
@@ -147,7 +147,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
             : undefined;
       const compat = capabilities.compat
         ? {
-            ...(model.compat ?? {}),
+            ...model.compat,
             ...capabilities.compat,
             ...(explicitSupportsReasoningEffort !== undefined
               ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
@@ -161,7 +161,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         ...model,
         name: capabilities.modelName,
         api: capabilities.api,
-        reasoning: capabilities.reasoning || model.reasoning === true,
+        reasoning: capabilities.reasoning || model.reasoning,
         thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
         input: capabilities.input,
         baseUrl: buildFoundryProviderBaseUrl(
