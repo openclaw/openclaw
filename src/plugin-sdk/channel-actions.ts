@@ -33,6 +33,46 @@ export {
   stringEnum,
 } from "../agents/schema/typebox.js";
 
+export type ChannelPagedActionResult<TItemsKey extends string = "items", TItem = unknown> = {
+  ok: true;
+  complete: boolean;
+  hasMore: boolean;
+  returnedCount: number;
+  source: string;
+  query?: Record<string, unknown>;
+  nextCursor?: string;
+} & {
+  [K in TItemsKey]: readonly TItem[];
+} & Record<string, unknown>;
+
+export function createChannelPagedActionResult<TItemsKey extends string, TItem>(params: {
+  itemsKey: TItemsKey;
+  items: readonly TItem[];
+  source: string;
+  hasMore?: boolean;
+  query?: Record<string, unknown>;
+  nextCursor?: string;
+  nextCursorKey?: string;
+  extra?: Record<string, unknown>;
+}): ChannelPagedActionResult<TItemsKey, TItem> {
+  const hasMore = params.hasMore === true;
+  const nextCursor = hasMore && params.nextCursor?.trim() ? params.nextCursor.trim() : undefined;
+  return {
+    ...params.extra,
+    ok: true,
+    [params.itemsKey]: params.items,
+    complete: !hasMore,
+    hasMore,
+    returnedCount: params.items.length,
+    source: params.source,
+    ...(params.query ? { query: params.query } : {}),
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(nextCursor && params.nextCursorKey && params.nextCursorKey !== "nextCursor"
+      ? { [params.nextCursorKey]: nextCursor }
+      : {}),
+  } as ChannelPagedActionResult<TItemsKey, TItem>;
+}
+
 /**
  * @deprecated Use semantic `presentation` capabilities instead of exposing
  * provider-native button schemas through the shared message tool.

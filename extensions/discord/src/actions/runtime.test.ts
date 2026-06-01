@@ -100,6 +100,7 @@ const {
   kickMemberDiscord,
   listGuildChannelsDiscord,
   listPinsDiscord,
+  listThreadsDiscord,
   moveChannelDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
@@ -268,6 +269,71 @@ describe("handleDiscordMessagingAction", () => {
       "✅",
       { cfg, accountId: "work" },
     ]);
+  });
+
+  it("surfaces incomplete archived thread pages at the action boundary", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [
+        {
+          id: "thread-1",
+          name: "Old project",
+          thread_metadata: {
+            archive_timestamp: "2026-05-25T17:00:00.000Z",
+          },
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        limit: 1,
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: false,
+      hasMore: true,
+      returnedCount: 1,
+      source: "discord.threadList.archived",
+      nextCursor: "2026-05-25T17:00:00.000Z",
+      nextBefore: "2026-05-25T17:00:00.000Z",
+      query: {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        limit: 1,
+      },
+    });
+    expect((result.details as { items?: unknown[] }).items).toEqual([
+      {
+        id: "thread-1",
+        name: "Old project",
+        thread_metadata: {
+          archive_timestamp: "2026-05-25T17:00:00.000Z",
+        },
+      },
+    ]);
+    expect((result.details as { threads?: unknown }).threads).toEqual({
+      threads: [
+        {
+          id: "thread-1",
+          name: "Old project",
+          thread_metadata: {
+            archive_timestamp: "2026-05-25T17:00:00.000Z",
+          },
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
   });
 
   it("resolves Discord DM targets for reaction adds", async () => {

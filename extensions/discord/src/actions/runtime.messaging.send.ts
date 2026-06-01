@@ -1,3 +1,4 @@
+import { createChannelPagedActionResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   assertMediaNotDataUrl,
@@ -21,6 +22,63 @@ function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, 
     !Array.isArray(value) &&
     Object.keys(value as Record<string, unknown>).length > 0,
   );
+}
+
+function readDiscordThreadArchiveCursor(thread: unknown): string | undefined {
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
+    return undefined;
+  }
+  const record = thread as Record<string, unknown>;
+  const metadata = record.thread_metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const archiveTimestamp = (metadata as Record<string, unknown>).archive_timestamp;
+    if (typeof archiveTimestamp === "string" && archiveTimestamp.trim()) {
+      return archiveTimestamp;
+    }
+  }
+  const id = record.id;
+  return typeof id === "string" && id.trim() ? id : undefined;
+}
+
+function normalizeDiscordThreadListActionResult(params: {
+  value: unknown;
+  includeArchived: boolean;
+  channelId?: string;
+  guildId: string;
+  limit?: number;
+  before?: string;
+}) {
+  const record =
+    params.value && typeof params.value === "object" && !Array.isArray(params.value)
+      ? (params.value as Record<string, unknown>)
+      : undefined;
+  const threads = Array.isArray(record?.threads) ? record.threads : [];
+  const members = Array.isArray(record?.members) ? record.members : [];
+  const hasMore = record?.has_more === true || record?.hasMore === true;
+  const nextBefore =
+    params.includeArchived && hasMore
+      ? readDiscordThreadArchiveCursor(threads[threads.length - 1])
+      : undefined;
+
+  return createChannelPagedActionResult({
+    itemsKey: "items",
+    items: threads,
+    extra: {
+      threads: params.value,
+      members,
+    },
+    hasMore,
+    nextCursor: nextBefore,
+    nextCursorKey: "nextBefore",
+    source: params.includeArchived ? "discord.threadList.archived" : "discord.threadList.active",
+    query: {
+      guildId: params.guildId,
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      includeArchived: params.includeArchived,
+      ...(params.before ? { before: params.before } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    },
+  });
 }
 
 async function appendDiscordThreadRenameResult(
@@ -305,7 +363,16 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         },
         ctx.withOpts(),
       );
-      return jsonResult({ ok: true, threads });
+      return jsonResult(
+        normalizeDiscordThreadListActionResult({
+          value: threads,
+          guildId,
+          channelId,
+          includeArchived: includeArchived === true,
+          before,
+          limit,
+        }),
+      );
     }
     case "threadReply": {
       if (!ctx.isActionEnabled("threads")) {
