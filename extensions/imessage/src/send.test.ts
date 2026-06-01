@@ -221,6 +221,52 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  it("treats SMS direct chat identifiers as DM allowlist targets", async () => {
+    const client = createClient({ guid: "p:0/direct-chat-sms" });
+
+    await sendMessageIMessage("chat_identifier:SMS;-;+15551230000", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+1 (555) 123-0000"],
+            groupPolicy: "disabled",
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_identifier: "SMS;-;+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
+  it("treats auto direct chat identifiers as DM allowlist targets", async () => {
+    const client = createClient({ guid: "p:0/direct-chat-auto" });
+
+    await sendMessageIMessage("chat_identifier:any;-;+15551230000", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+1 (555) 123-0000"],
+            groupPolicy: "disabled",
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_identifier: "any;-;+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
   it("honors wildcard iMessage DM allowlist entries for outbound sends", async () => {
     const client = createClient({ guid: "p:0/wildcard-dm" });
 

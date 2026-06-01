@@ -842,7 +842,7 @@ function resolveIMessageDirectChatIdentifier(target: ParsedIMessageTarget): stri
   if (target.kind !== "chat_identifier") {
     return null;
   }
-  const match = /^(?:iMessage|SMS);-;(.+)$/iu.exec(target.chatIdentifier.trim());
+  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(target.chatIdentifier.trim());
   const handle = match?.[1]?.trim();
   return handle || null;
 }
