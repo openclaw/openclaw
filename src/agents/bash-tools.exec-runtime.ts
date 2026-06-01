@@ -3,6 +3,7 @@
  * Spawns host/sandbox processes, manages session updates/backgrounding,
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -71,6 +72,43 @@ function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | u
     return undefined;
   }
   return resolveSafeTimeoutDelayMs(timeoutSec * 1000);
+}
+
+function stableStringEntries(record: Record<string, string> | undefined) {
+  return Object.entries(record ?? {}).toSorted(([left], [right]) => left.localeCompare(right));
+}
+
+export function buildExecSessionExecutionKey(params: {
+  command: string;
+  execCommand?: string;
+  workdir: string;
+  env: Record<string, string>;
+  pathPrepend?: string[];
+  sandbox?: BashSandboxConfig;
+  containerWorkdir?: string | null;
+  usePty: boolean;
+  timeoutSec: number | null;
+}) {
+  const payload = {
+    command: params.command,
+    execCommand: params.execCommand ?? params.command,
+    workdir: params.workdir,
+    env: stableStringEntries(params.env),
+    pathPrepend: params.pathPrepend ?? [],
+    sandbox: params.sandbox
+      ? {
+          containerName: params.sandbox.containerName,
+          workspaceDir: params.sandbox.workspaceDir,
+          containerWorkdir: params.sandbox.containerWorkdir,
+          env: stableStringEntries(params.sandbox.env),
+          customExecSpec: typeof params.sandbox.buildExecSpec === "function",
+        }
+      : null,
+    containerWorkdir: params.containerWorkdir ?? null,
+    usePty: params.usePty,
+    timeoutSec: params.timeoutSec,
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 /**
@@ -688,11 +726,14 @@ export async function runExecProcess(opts: {
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  executionKey?: string;
+  initialBackgrounded?: boolean;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
+  const executionKey = opts.executionKey ?? buildExecSessionExecutionKey(opts);
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
   const shellRuntimeEnv: Record<string, string> = {
@@ -703,6 +744,7 @@ export async function runExecProcess(opts: {
   const session: ProcessSession = {
     id: sessionId,
     command: opts.command,
+    executionKey,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     mainKey: opts.mainKey,
@@ -730,7 +772,9 @@ export async function runExecProcess(opts: {
     exitCode: undefined as number | null | undefined,
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
-    backgrounded: false,
+    // Explicit background requests become pollable at registration so overlapping retries reuse this session.
+    // Pre-spawn setup errors are marked failed below to avoid phantom process entries.
+    backgrounded: opts.initialBackgrounded === true,
     cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
@@ -801,7 +845,7 @@ export async function runExecProcess(opts: {
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
 
-  const spawnSpec:
+  type ExecSpawnSpec =
     | {
         mode: "child";
         argv: string[];
@@ -814,66 +858,86 @@ export async function runExecProcess(opts: {
         childFallbackArgv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open";
-      } = await (async () => {
-    if (opts.sandbox) {
-      const backendExecSpec = await opts.sandbox.buildExecSpec?.({
-        command: execCommand,
-        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+      };
+
+  let spawnSpec: ExecSpawnSpec;
+  try {
+    spawnSpec = await (async (): Promise<ExecSpawnSpec> => {
+      if (opts.sandbox) {
+        const backendExecSpec = await opts.sandbox.buildExecSpec?.({
+          command: execCommand,
+          workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+          env: shellRuntimeEnv,
+          usePty: opts.usePty,
+        });
+        sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+        return {
+          mode: "child" as const,
+          argv: backendExecSpec?.argv ?? [
+            "docker",
+            ...buildDockerExecArgs({
+              containerName: opts.sandbox.containerName,
+              command: execCommand,
+              workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+              env: shellRuntimeEnv,
+              tty: opts.usePty,
+            }),
+          ],
+          env: backendExecSpec?.env ?? process.env,
+          stdinMode:
+            backendExecSpec?.stdinMode ??
+            (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
+        };
+      }
+      const { shell, args: shellArgs } = getShellConfig();
+
+      // Wrap the command to enforce PATH prepend precedence over shell RC overrides.
+      const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(
+        execCommand,
+        shellRuntimeEnv,
+        opts.pathPrepend,
+      );
+      const commandWithShellSnapshot = await maybeWrapCommandWithShellSnapshot({
+        command: commandWithPathPrepend,
+        shell,
+        shellArgs,
+        cwd: opts.workdir,
         env: shellRuntimeEnv,
-        usePty: opts.usePty,
       });
-      sandboxFinalizeToken = backendExecSpec?.finalizeToken;
+
+      const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
+      if (opts.usePty) {
+        return {
+          mode: "pty" as const,
+          ptyCommand: commandWithShellSnapshot,
+          childFallbackArgv: childArgv,
+          env: shellRuntimeEnv,
+          stdinMode: "pipe-open" as const,
+        };
+      }
       return {
         mode: "child" as const,
-        argv: backendExecSpec?.argv ?? [
-          "docker",
-          ...buildDockerExecArgs({
-            containerName: opts.sandbox.containerName,
-            command: execCommand,
-            workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-            env: shellRuntimeEnv,
-            tty: opts.usePty,
-          }),
-        ],
-        env: backendExecSpec?.env ?? process.env,
-        stdinMode:
-          backendExecSpec?.stdinMode ??
-          (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
-      };
-    }
-    const { shell, args: shellArgs } = getShellConfig();
-
-    // Wrap the command to enforce PATH prepend precedence over shell RC overrides.
-    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(
-      execCommand,
-      shellRuntimeEnv,
-      opts.pathPrepend,
-    );
-    const commandWithShellSnapshot = await maybeWrapCommandWithShellSnapshot({
-      command: commandWithPathPrepend,
-      shell,
-      shellArgs,
-      cwd: opts.workdir,
-      env: shellRuntimeEnv,
-    });
-
-    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
-    if (opts.usePty) {
-      return {
-        mode: "pty" as const,
-        ptyCommand: commandWithShellSnapshot,
-        childFallbackArgv: childArgv,
+        argv: childArgv,
         env: shellRuntimeEnv,
-        stdinMode: "pipe-open" as const,
+        stdinMode: "pipe-closed" as const,
       };
-    }
-    return {
-      mode: "child" as const,
-      argv: childArgv,
-      env: shellRuntimeEnv,
-      stdinMode: "pipe-closed" as const,
-    };
-  })();
+    })();
+  } catch (err) {
+    markExited(session, null, null, "failed");
+    maybeNotifyOnExit(session, "failed");
+    emitExecProcessCompleted({
+      command: opts.command,
+      mode: opts.usePty ? "pty" : "child",
+      outcome: buildExecRuntimeErrorOutcome({
+        error: err,
+        aggregated: session.aggregated.trim(),
+        durationMs: Date.now() - startedAt,
+      }),
+      sessionKey: opts.sessionKey,
+      target: diagnosticTarget,
+    });
+    throw err;
+  }
 
   let managedRun: ManagedRun | null = null;
   let usingPty = spawnSpec.mode === "pty";

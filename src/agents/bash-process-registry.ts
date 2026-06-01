@@ -43,6 +43,8 @@ export type SessionStdin = {
 export interface ProcessSession {
   id: string;
   command: string;
+  /** Opaque hash of the resolved exec request that created this process. */
+  executionKey?: string;
   scopeKey?: string;
   sessionKey?: string;
   /** `session.mainKey` from the runtime config, snapshotted at exec start.
@@ -326,13 +328,15 @@ export function listFinishedSessions() {
 export function findMatchingRunningBackgroundSession(params: {
   command: string;
   cwd?: string;
+  executionKey?: string;
   scopeKey?: string;
   sessionKey?: string;
 }) {
+  const executionKey = params.executionKey?.trim() || undefined;
   const scopeKey = params.scopeKey?.trim() || undefined;
   const sessionKey = params.sessionKey?.trim() || undefined;
 
-  if (!scopeKey && !sessionKey) {
+  if (!executionKey || (!scopeKey && !sessionKey)) {
     return undefined;
   }
 
@@ -346,6 +350,9 @@ export function findMatchingRunningBackgroundSession(params: {
       continue;
     }
     if (session.cwd !== params.cwd) {
+      continue;
+    }
+    if ((session.executionKey?.trim() || undefined) !== executionKey) {
       continue;
     }
     if (scopeKey && (session.scopeKey?.trim() || undefined) !== scopeKey) {

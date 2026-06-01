@@ -27,6 +27,9 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
+let listFinishedSessions: typeof import("./bash-process-registry.js").listFinishedSessions;
+let listRunningSessions: typeof import("./bash-process-registry.js").listRunningSessions;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
@@ -36,7 +39,8 @@ let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExec
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 
 beforeAll(async () => {
-  ({ markBackgrounded } = await import("./bash-process-registry.js"));
+  ({ listFinishedSessions, listRunningSessions, markBackgrounded, resetProcessRegistryForTests } =
+    await import("./bash-process-registry.js"));
   ({
     buildExecExitOutcome,
     detectCursorKeyMode,
@@ -52,6 +56,7 @@ beforeEach(() => {
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
   supervisorMock.spawn.mockReset();
+  resetProcessRegistryForTests();
 });
 
 function expectExecTarget(
@@ -728,6 +733,82 @@ describe("buildExecExitOutcome", () => {
 });
 
 describe("runExecProcess POSIX command wrapper", () => {
+  it("can expose explicit background sessions before spawn resolves", async () => {
+    let releaseSpawn!: () => void;
+    supervisorMock.spawn.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          releaseSpawn = () =>
+            resolve({
+              runId: "mock-run",
+              startedAtMs: Date.now(),
+              wait: async () => ({
+                reason: "exit" as const,
+                exitCode: 0,
+                exitSignal: null,
+                durationMs: 0,
+                stdout: "",
+                stderr: "",
+                timedOut: false,
+                noOutputTimedOut: false,
+              }),
+              cancel: vi.fn(),
+            });
+        }),
+    );
+
+    const runPromise = runExecProcess({
+      command: "sleep 30",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+      initialBackgrounded: true,
+    });
+
+    await expect.poll(() => supervisorMock.spawn.mock.calls.length).toBe(1);
+    const [session] = listRunningSessions();
+    expect(session?.command).toBe("sleep 30");
+    expect(session?.backgrounded).toBe(true);
+
+    releaseSpawn();
+    const run = await runPromise;
+    await run.promise;
+  });
+
+  it("cleans up explicit background sessions when pre-spawn setup fails", async () => {
+    await expect(
+      runExecProcess({
+        command: "sleep 30",
+        workdir: "/tmp",
+        env: { PATH: "/usr/bin" },
+        sandbox: {
+          containerName: "test-container",
+          workspaceDir: "/tmp",
+          containerWorkdir: "/workspace",
+          buildExecSpec: async () => {
+            throw new Error("backend unavailable");
+          },
+        },
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+        initialBackgrounded: true,
+      }),
+    ).rejects.toThrow("backend unavailable");
+
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+    expect(listRunningSessions()).toEqual([]);
+    expect(listFinishedSessions()).toMatchObject([{ command: "sleep 30", status: "failed" }]);
+  });
+
   it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
     supervisorMock.spawn.mockResolvedValue({
       runId: "mock-run",

@@ -788,6 +788,60 @@ describe("exec tool backgrounding", () => {
     expect(hasSession(sessions, firstSessionId)).toBe(true);
   });
 
+  it("reuses an in-flight scoped background session for identical explicit background commands", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const [firstResult, secondResult] = await Promise.all([
+      executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, { background: true }),
+      executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, { background: true }),
+    ]);
+
+    expect(requireRunningSessionId(secondResult)).toBe(requireRunningSessionId(firstResult));
+  });
+
+  it("does not reuse a running background session for a foreground rerun", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND);
+
+    expect((secondResult.details as { sessionId?: string }).sessionId).not.toBe(firstSessionId);
+  });
+
+  it.each([
+    withLabel("env override changes", {
+      first: { env: { OPENCLAW_DUPLICATE_EXEC_TEST: "one" } },
+      second: { env: { OPENCLAW_DUPLICATE_EXEC_TEST: "two" } },
+    }),
+    withLabel("pty mode changes", {
+      first: {},
+      second: { pty: true },
+    }),
+    withLabel("timeout changes", {
+      first: { timeout: 30 },
+      second: { timeout: 31 },
+    }),
+  ])("starts a distinct scoped background session when $label", async ({ first, second }) => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+      ...first,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+      ...second,
+    });
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).not.toBe(firstSessionId);
+  });
+
   it("restarts a scoped background command once the previous run completes", async () => {
     const tool = createTestExecTool({ backgroundMs: 0, scopeKey: SCOPE_KEY_ALPHA });
 

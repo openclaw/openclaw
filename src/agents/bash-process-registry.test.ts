@@ -150,6 +150,7 @@ describe("bash process registry", () => {
     });
     session.command = "sleep 0.05";
     session.cwd = "/tmp/project";
+    session.executionKey = "exec-key-a";
     session.scopeKey = "scope-a";
     session.sessionKey = "session-a";
     addSession(session);
@@ -158,6 +159,7 @@ describe("bash process registry", () => {
       findMatchingRunningBackgroundSession({
         command: "sleep 0.05",
         cwd: "/tmp/project",
+        executionKey: "exec-key-a",
         scopeKey: "scope-a",
       }),
     ).toBe(session);
@@ -165,16 +167,44 @@ describe("bash process registry", () => {
       findMatchingRunningBackgroundSession({
         command: "sleep 0.05",
         cwd: "/tmp/project",
+        executionKey: "exec-key-a",
         sessionKey: "session-a",
       }),
     ).toBe(session);
 
     const misses = [
-      { command: "sleep 0.05", cwd: "/tmp/project" },
-      { command: "sleep 0.05", cwd: "/tmp/project", scopeKey: "scope-b" },
-      { command: "sleep 0.05", cwd: "/tmp/project", sessionKey: "session-b" },
-      { command: "sleep 0.1", cwd: "/tmp/project", scopeKey: "scope-a" },
-      { command: "sleep 0.05", cwd: "/tmp/other", scopeKey: "scope-a" },
+      { command: "sleep 0.05", cwd: "/tmp/project", executionKey: "exec-key-a" },
+      { command: "sleep 0.05", cwd: "/tmp/project", scopeKey: "scope-a" },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-b",
+        scopeKey: "scope-a",
+      },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-a",
+        scopeKey: "scope-b",
+      },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-a",
+        sessionKey: "session-b",
+      },
+      {
+        command: "sleep 0.1",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-a",
+        scopeKey: "scope-a",
+      },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/other",
+        executionKey: "exec-key-a",
+        scopeKey: "scope-a",
+      },
     ];
     for (const params of misses) {
       expect(findMatchingRunningBackgroundSession(params)).toBeUndefined();
@@ -189,6 +219,7 @@ describe("bash process registry", () => {
       backgrounded: false,
     });
     session.command = "sleep 0.05";
+    session.executionKey = "exec-key-a";
     session.scopeKey = "scope-a";
     addSession(session);
 
@@ -196,6 +227,7 @@ describe("bash process registry", () => {
       findMatchingRunningBackgroundSession({
         command: "sleep 0.05",
         cwd: session.cwd,
+        executionKey: "exec-key-a",
         scopeKey: "scope-a",
       }),
     ).toBeUndefined();
