@@ -17,10 +17,12 @@ export type MessagingTargetParseOptions = {
   ambiguousMessage?: string;
 };
 
+/** Build the canonical comparison key shared by channel target parsers and matchers. */
 export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
   return normalizeLowercaseStringOrEmpty(`${kind}:${id}`);
 }
 
+/** Preserve the user-entered token while carrying a normalized match key. */
 export function buildMessagingTarget(
   kind: MessagingTargetKind,
   id: string,
@@ -34,6 +36,7 @@ export function buildMessagingTarget(
   };
 }
 
+/** Validate a parsed target id with the channel-owned grammar before accepting it. */
 export function ensureTargetId(params: {
   candidate: string;
   pattern: RegExp;
@@ -45,6 +48,7 @@ export function ensureTargetId(params: {
   return params.candidate;
 }
 
+/** Parse a regex-backed mention token into a normalized messaging target. */
 export function parseTargetMention(params: {
   raw: string;
   mentionPattern: RegExp;
@@ -57,6 +61,7 @@ export function parseTargetMention(params: {
   return buildMessagingTarget(params.kind, match[1], params.raw);
 }
 
+/** Parse an explicit kind prefix such as `user:` or `channel:`. */
 export function parseTargetPrefix(params: {
   raw: string;
   prefix: string;
@@ -69,6 +74,7 @@ export function parseTargetPrefix(params: {
   return id ? buildMessagingTarget(params.kind, id, params.raw) : undefined;
 }
 
+/** Try configured target prefixes in order and return the first successful parse. */
 export function parseTargetPrefixes(params: {
   raw: string;
   prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
@@ -86,6 +92,7 @@ export function parseTargetPrefixes(params: {
   return undefined;
 }
 
+/** Accept legacy `@user` forms only after validating the post-`@` id. */
 export function parseAtUserTarget(params: {
   raw: string;
   pattern: RegExp;
@@ -103,6 +110,7 @@ export function parseAtUserTarget(params: {
   return buildMessagingTarget("user", id, params.raw);
 }
 
+/** Resolve the supported explicit target syntaxes from most specific to broadest. */
 export function parseMentionPrefixOrAtUserTarget(params: {
   raw: string;
   mentionPattern: RegExp;
@@ -132,6 +140,7 @@ export function parseMentionPrefixOrAtUserTarget(params: {
   });
 }
 
+/** Require a parsed target of the expected kind and return the provider-native id. */
 export function requireTargetKind(params: {
   platform: string;
   target: MessagingTarget | undefined;
