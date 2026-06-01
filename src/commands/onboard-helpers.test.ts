@@ -93,7 +93,10 @@ describe("handleReset", () => {
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
     fs.writeFileSync(profileConfigPath, "{}\n");
-    fs.writeFileSync(workspaceAttestationPath, new Date().toISOString());
+    fs.writeFileSync(
+      workspaceAttestationPath,
+      `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+    );
 
     vi.stubEnv("HOME", homeDir);
     vi.stubEnv("OPENCLAW_HOME", homeDir);

@@ -462,11 +462,7 @@ async function readWorkspaceAttestationMarkerStatus(
     if (raw.startsWith(`${WORKSPACE_ATTESTATION_HEADER}\n`)) {
       return "marker";
     }
-    const trimmed = raw.trim();
-    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(trimmed) &&
-      !Number.isNaN(Date.parse(trimmed))
-      ? "marker"
-      : "not-marker";
+    return "not-marker";
   } catch (err) {
     const anyErr = err as { code?: string };
     return anyErr.code === "ENOENT" ? "missing" : "unknown";

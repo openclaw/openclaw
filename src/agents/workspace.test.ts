@@ -231,18 +231,6 @@ describe("ensureAgentWorkspace", () => {
     ).resolves.toMatchObject({ dir: tempDir });
   });
 
-  it("keeps ISO-only attestation markers from the previous branch format effective", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    const legacyAttestationPath = `${tempDir}.attested`;
-    await fs.writeFile(legacyAttestationPath, `${new Date().toISOString()}\n`);
-    await fs.rm(tempDir, { recursive: true, force: true });
-
-    await expectWorkspaceVanished(
-      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
-      { attestationPath: legacyAttestationPath },
-    );
-  });
-
   it("allows a brand new workspace when the only attestation marker is stale", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
