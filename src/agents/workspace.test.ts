@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -173,6 +174,28 @@ describe("ensureAgentWorkspace", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
     await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
+  it("refuses to accept old generated bootstrap files recorded by the attestation marker", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const oldGeneratedAgents = "old generated agents\n";
+    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), oldGeneratedAgents);
+    const attestationPath = resolveWorkspaceAttestationPath(tempDir);
+    await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+    await fs.writeFile(
+      attestationPath,
+      [
+        "openclaw-workspace-attestation:v1",
+        new Date().toISOString(),
+        `generated:${DEFAULT_AGENTS_FILENAME}:${createHash("sha256").update(oldGeneratedAgents).digest("hex")}`,
+        "",
+      ].join("\n"),
+    );
 
     await expectWorkspaceVanished(
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),

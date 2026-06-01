@@ -38,7 +38,7 @@ const WORKSPACE_ATTESTATION_SUFFIX = ".attested";
 const WORKSPACE_ATTESTATION_DIRNAME = "workspace-attestations";
 const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 const WORKSPACE_ATTESTATION_HEADER = "openclaw-workspace-attestation:v1";
-const WORKSPACE_ATTESTATION_MAX_BYTES = 256;
+const WORKSPACE_ATTESTATION_MAX_BYTES = 2048;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -336,8 +336,30 @@ async function workspaceProfileLooksConfigured(params: {
   );
 }
 
-async function workspaceRequiredBootstrapLooksCustomized(dir: string): Promise<boolean> {
+async function workspaceRequiredBootstrapLooksCustomized(
+  dir: string,
+  opts?: { attestationPath?: string },
+): Promise<boolean> {
   const fileNames = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME, DEFAULT_HEARTBEAT_FILENAME];
+  const generatedHashes = opts?.attestationPath
+    ? await readWorkspaceAttestationGeneratedHashes(opts.attestationPath)
+    : undefined;
+  if (generatedHashes) {
+    for (const fileName of fileNames) {
+      const filePath = path.join(dir, fileName);
+      const generatedHash = generatedHashes.get(fileName);
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const contentHash = createHash("sha256").update(content).digest("hex");
+        if (!generatedHash || contentHash !== generatedHash) {
+          return true;
+        }
+      } catch {
+        // Missing generated files are not customization evidence.
+      }
+    }
+    return false;
+  }
   const fileDiffs = await Promise.all(
     fileNames.map(async (fileName) =>
       fileContentDiffersFromTemplate(path.join(dir, fileName), await loadTemplate(fileName)),
@@ -502,12 +524,71 @@ async function readWorkspaceAttestationMarkerStatus(
   }
 }
 
-async function writeWorkspaceAttestation(attestationPath: string): Promise<void> {
+async function readWorkspaceAttestationGeneratedHashes(
+  attestationPath: string,
+): Promise<Map<string, string> | undefined> {
+  try {
+    const stat = await fs.lstat(attestationPath);
+    if (!stat.isFile() || stat.size > WORKSPACE_ATTESTATION_MAX_BYTES) {
+      return undefined;
+    }
+    const raw = await fs.readFile(attestationPath, "utf-8");
+    if (!raw.startsWith(`${WORKSPACE_ATTESTATION_HEADER}\n`)) {
+      return undefined;
+    }
+    const hashes = new Map<string, string>();
+    for (const line of raw.split(/\r?\n/)) {
+      const match = /^generated:([^:]+):([a-f0-9]{64})$/.exec(line);
+      if (match?.[1] && match[2]) {
+        hashes.set(match[1], match[2]);
+      }
+    }
+    return hashes.size > 0 ? hashes : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>();
+  const fileNames = [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+  ];
+  for (const fileName of fileNames) {
+    try {
+      const content = await fs.readFile(path.join(dir, fileName), "utf-8");
+      if (content === (await loadTemplate(fileName))) {
+        hashes.set(fileName, createHash("sha256").update(content).digest("hex"));
+      }
+    } catch {
+      // Missing or unreadable files are not attested as generated.
+    }
+  }
+  return hashes;
+}
+
+async function buildWorkspaceAttestationContent(dir: string, now: Date): Promise<string> {
+  const hashes = await collectGeneratedBootstrapHashes(dir);
+  const lines = [`${WORKSPACE_ATTESTATION_HEADER}`, now.toISOString()];
+  for (const [fileName, hash] of [...hashes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    lines.push(`generated:${fileName}:${hash}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function writeWorkspaceAttestation(attestationPath: string, dir: string): Promise<void> {
   await fs.mkdir(path.dirname(attestationPath), { recursive: true });
   const now = new Date();
+  const content = await buildWorkspaceAttestationContent(dir, now);
   try {
     const status = await readWorkspaceAttestationMarkerStatus(attestationPath);
     if (status === "marker") {
+      await fs.writeFile(attestationPath, content, "utf-8");
       await fs.utimes(attestationPath, now, now);
       return;
     }
@@ -526,15 +607,15 @@ async function writeWorkspaceAttestation(attestationPath: string): Promise<void>
     0o600,
   );
   try {
-    await handle.writeFile(`${WORKSPACE_ATTESTATION_HEADER}\n${now.toISOString()}\n`, "utf-8");
+    await handle.writeFile(content, "utf-8");
   } finally {
     await handle.close();
   }
 }
 
-async function maybeWriteWorkspaceAttestation(attestationPath: string): Promise<void> {
+async function maybeWriteWorkspaceAttestation(attestationPath: string, dir: string): Promise<void> {
   try {
-    await writeWorkspaceAttestation(attestationPath);
+    await writeWorkspaceAttestation(attestationPath, dir);
   } catch {
     // The marker is a lifecycle guard; setup should not fail solely because it
     // could not refresh auxiliary disappearance evidence.
@@ -736,7 +817,7 @@ export async function ensureAgentWorkspace(params?: {
       });
     }
     if (hasContentEvidence) {
-      await maybeWriteWorkspaceAttestation(attestationPath);
+      await maybeWriteWorkspaceAttestation(attestationPath, dir);
     }
     return { dir };
   }
@@ -784,7 +865,9 @@ export async function ensureAgentWorkspace(params?: {
     const hasWorkspaceEvidence =
       hasSetupState ||
       bootstrapExists ||
-      (await workspaceRequiredBootstrapLooksCustomized(dir)) ||
+      (await workspaceRequiredBootstrapLooksCustomized(dir, {
+        attestationPath: recentAttestationPath,
+      })) ||
       (await workspaceProfileLooksConfigured({
         dir,
       }));
@@ -856,7 +939,10 @@ export async function ensureAgentWorkspace(params?: {
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
     if (
-      (Boolean(recentAttestationPath) && (await workspaceRequiredBootstrapLooksCustomized(dir))) ||
+      (Boolean(recentAttestationPath) &&
+        (await workspaceRequiredBootstrapLooksCustomized(dir, {
+          attestationPath: recentAttestationPath,
+        }))) ||
       (await workspaceProfileLooksConfigured({
         dir,
         includeGitEvidence: true,
@@ -881,7 +967,7 @@ export async function ensureAgentWorkspace(params?: {
     await writeWorkspaceSetupState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
-  await maybeWriteWorkspaceAttestation(attestationPath);
+  await maybeWriteWorkspaceAttestation(attestationPath, dir);
 
   return {
     dir,
