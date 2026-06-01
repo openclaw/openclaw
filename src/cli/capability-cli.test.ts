@@ -2167,6 +2167,7 @@ describe("capability cli", () => {
       apiKey: "profile-openai-key",
       voice: "coral",
     });
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
   });
 
   it("hydrates local TTS default provider config from API-key auth profiles", async () => {
@@ -2257,6 +2258,7 @@ describe("capability cli", () => {
       speakerVoice: "nova",
     });
     expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(cfg);
   });
 
   it("does not hydrate local TTS provider config from token auth profiles", async () => {

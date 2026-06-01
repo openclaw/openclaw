@@ -1420,6 +1420,9 @@ async function runTtsConvert(params: {
     provider: ttsProvider,
     channelId: params.channel,
   });
+  if (effectiveCfg !== cfg) {
+    pinRuntimeConfigSnapshot(effectiveCfg);
+  }
   const overrides = resolveExplicitTtsOverrides({
     cfg: effectiveCfg,
     provider: params.provider,
@@ -1876,7 +1879,6 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
   const cfg = params.config ?? getRuntimeConfig();
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,
@@ -1887,12 +1889,17 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
     runtime: defaultRuntime,
     autoEnable: true,
   });
-  if (sourceConfig) {
-    setRuntimeConfigSnapshot(effectiveConfig, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(effectiveConfig);
-  }
+  pinRuntimeConfigSnapshot(effectiveConfig);
   return effectiveConfig;
+}
+
+function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  if (sourceConfig) {
+    setRuntimeConfigSnapshot(config, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(config);
+  }
 }
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
