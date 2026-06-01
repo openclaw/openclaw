@@ -152,6 +152,12 @@ This matters because people often trust concrete lived examples more readily tha
 
 Installations should periodically verify that recall uses the PostgreSQL backend exclusively and has not fallen back to retired markdown memory files. If a `memory/` directory or markdown fallback route appears, the system should archive/import those files into PostgreSQL, remove the filesystem directory, restore DB-only routing, refresh recall/search surfaces, and record the repair in DB memory. Successful self-healing is silent; notify only when blocked or unsafe.
 
+## Root markdown DB-first policy
+
+Workspace root markdown files are bootstrap and recovery pointers, not the durable long-form rule store. Keep `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` small enough to point a future agent at backend DB repair and verification.
+
+Long-form operating rules, user/project history, and durable process context belong in structured DB recall, especially `zorg_logic_rules` and related recall surfaces. Before shrinking existing root markdown, sync the rules into structured recall, import the reduced markdown lines, refresh recall views, and verify natural-language recall finds the DB repair rule. See [`root-markdown-db-first.md`](root-markdown-db-first.md).
+
 ## Database recovery and tuning gate
 
 A DB-backed memory system should be treated as mission-critical state. Before any production schema/index/materialized-view/recall-routing/vector/weighted-memory change, create a full local PostgreSQL backup and push a full copy to a private recovery repository. Public distribution repos must never contain private database dumps or rows.

@@ -6,7 +6,7 @@ Main recall objects:
 
 - `zorg_memory` - durable memory and remembered context
 - `zorg_memory_file_archive` - archive of retired legacy `memory/` files before filesystem removal
-- `md_agents`, `md_soul`, `md_user`, `md_tools`, `md_identity`, `md_heartbeat` - line-imported core markdown context
+- `md_agents`, `md_soul`, `md_user`, `md_tools`, `md_identity`, `md_heartbeat` - line-imported bootstrap and backend-memory repair pointers. Long-form operating rules should be promoted into structured DB recall rather than duplicated in root markdown.
 - `memory_projects`, `memory_hosts`, `memory_services`, `memory_runbooks`, `memory_relationships` - structured operational context
 - `zorg_operational_facts` - promoted operational facts
 - `zorg_memory_search_mv` - unified search surface

@@ -14,6 +14,8 @@ When the add-on bootstrap is launched with `sudo`, it defaults to the invoking u
 
 The database package keeps rule tables, markdown import tables, source chunk tables, recall hint tables, entity and association tables, and the default LAN command chat message table. The public baseline does not ship private live memory rows, transcripts, credentials, uploaded files, contact data, or operator-only state.
 
+Root workspace markdown files are bootstrap pointers for backend DB repair, not the canonical long-form rule store. Current installs should keep durable rules in structured PostgreSQL recall and use [`../root-markdown-db-first.md`](../root-markdown-db-first.md) when reducing oversized root markdown.
+
 ## Coding And Install Rule Discipline
 
 Zorg MemoryDB install and package changes must be grounded in the product's own documentation, source patterns, package metadata, tests, runbooks, and existing implementation procedures before code is changed. Do not implement install, upgrade, plugin, or runtime behavior from generic coding memory or assumed API behavior.
