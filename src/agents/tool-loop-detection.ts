@@ -231,6 +231,86 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   return undefined;
 }
 
+// Delivery results carry fresh per-call ids (messageId/runId) in details and text, so
+// hashing them defeats no-progress loop blocking (#89090). Hash only id-stripped facts
+// for outbound-message actions; other `message` actions keep full hashing (real progress).
+const SEND_LIKE_MESSAGE_ACTIONS = new Set([
+  "send",
+  "broadcast",
+  "reply",
+  "thread-reply",
+  "sendWithEffect",
+  "sendAttachment",
+  "upload-file",
+  "sticker",
+  "poll",
+]);
+const VOLATILE_SEND_RESULT_KEYS = new Set([
+  "messageId",
+  "message_id",
+  "messageIds",
+  "fileId",
+  "file_id",
+  "fileKey",
+  "pollId",
+  "poll_id",
+  "receipt",
+  "runId",
+  "idempotencyKey",
+  "ts",
+  "timestamp",
+  "sentAt",
+  "deliveredAt",
+  "createdAt",
+]);
+
+// A message object's own `id` is its volatile per-send id; a bare `id` elsewhere
+// (route/conversation) is a stable fact, so only strip `id` on the message object.
+function isMessageDeliveryObject(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.id === "string" &&
+    typeof value.text === "string" &&
+    (typeof value.direction === "string" ||
+      typeof value.senderId === "string" ||
+      typeof value.accountId === "string" ||
+      isPlainObject(value.conversation))
+  );
+}
+
+function stripVolatileSendIds(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripVolatileSendIds);
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const dropMessageObjectId = isMessageDeliveryObject(value);
+  const stripped: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (VOLATILE_SEND_RESULT_KEYS.has(key) || (key === "id" && dropMessageObjectId)) {
+      continue;
+    }
+    stripped[key] = stripVolatileSendIds(nested);
+  }
+  return stripped;
+}
+
+function isVolatileSendResult(toolName: string, params: unknown): boolean {
+  if (toolName === "sessions_send") {
+    return true;
+  }
+  if (toolName !== "message" || !isPlainObject(params)) {
+    return false;
+  }
+  return typeof params.action === "string" && SEND_LIKE_MESSAGE_ACTIONS.has(params.action);
+}
+
+// Only the loop detector's own veto must not reset the streak; other blocked results
+// (plugin/approval vetoes) keep a hash so repeated identical denials still escalate.
+function isLoopVetoResult(details: Record<string, unknown>): boolean {
+  return details.status === "blocked" && details.deniedReason === "tool-loop";
+}
+
 function hashToolOutcome(
   toolName: string,
   params: unknown,
@@ -250,6 +330,11 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
+  // The loop detector's own veto is not real progress; giving it no result hash keeps a
+  // critical loop block sticky instead of letting the block reset the streak (#89090).
+  if (isLoopVetoResult(details)) {
+    return { resultHash: undefined };
+  }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
     if (execHash) {
@@ -284,6 +369,10 @@ function hashToolOutcome(
         }),
       };
     }
+  }
+
+  if (isVolatileSendResult(toolName, params)) {
+    return { resultHash: digestStable(stripVolatileSendIds(details)) };
   }
 
   return {
