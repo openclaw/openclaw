@@ -628,7 +628,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   // Dedup the zombie_detected signal across the recovery cycle. Cleared when
   // the cycle resolves (either the prior gateway becomes healthy and we defer,
   // or we time out and throw); a fresh recovery later starts a new cycle.
-  let zombieDetectedThisCycle = false;
+  const zombieDetection = { loggedThisCycle: false };
 
   for (;;) {
     try {
@@ -654,6 +654,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       }
 
       const elapsedMs = now() - startedAt;
+      const shouldRetry = elapsedMs < timeoutMs;
       // Probe came back unhealthy while the lock is held. Either the previous
       // gateway is mid-shutdown (now returns 503 from /healthz?strict=1 thanks
       // to the shutting-down flag) or it is a zombie that lost the close path
@@ -664,7 +665,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       // retry tick. A normally-draining previous gateway can otherwise inflate
       // telemetry with duplicate alerts during a 30s drain window. Per
       // ClawSweeper review on #88908.
-      if (!zombieDetectedThisCycle) {
+      if (!zombieDetection.loggedThisCycle) {
         recordGatewayRestartTrace("gateway.preflight.zombie_detected", elapsedMs, [
           ["supervisor", supervisor],
           ["port", params.port],
@@ -672,10 +673,11 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
         params.log.warn(
           `gateway.preflight.zombie_detected supervisor=${supervisor} port=${params.port}; lock held but /healthz reported unhealthy (likely zombie or draining)`,
         );
-        // oxlint-disable-next-line no-useless-assignment -- value is read on the next iteration of the supervisor for-loop
-        zombieDetectedThisCycle = true;
+        if (shouldRetry) {
+          zombieDetection.loggedThisCycle = true;
+        }
       }
-      if (elapsedMs >= timeoutMs) {
+      if (!shouldRetry) {
         throw new SupervisedGatewayLockError(
           `gateway already running under ${supervisor}; existing gateway did not become healthy after ${timeoutMs}ms`,
           err,
