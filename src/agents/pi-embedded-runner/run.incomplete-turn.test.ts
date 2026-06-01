@@ -69,6 +69,33 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     return call[0] as { prompt?: string };
   }
 
+  it("allows bundled static catalog fallback during skip-PI model resolution", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["ok"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "google-vertex",
+      model: "gemini-2.5-pro",
+      runId: "run-google-vertex-static-catalog-fallback",
+    });
+
+    expect(mockedResolveModelAsync).toHaveBeenCalledWith(
+      "google-vertex",
+      "gemini-2.5-pro",
+      expect.any(String),
+      undefined,
+      expect.objectContaining({
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+      }),
+    );
+  });
+
   it("emits the before_agent_run hook block message as the agent payload", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
