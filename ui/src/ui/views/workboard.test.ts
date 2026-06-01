@@ -635,27 +635,41 @@ describe("renderWorkboard", () => {
         createdAt: 1,
         updatedAt: 2,
         events: [
-          { id: "event-1", kind: "created", at: 1, toStatus: "todo" },
-          { id: "event-2", kind: "moved", at: 2, fromStatus: "todo", toStatus: "review" },
+          { id: "event-1", kind: "moved", at: 1, fromStatus: "triage", toStatus: "backlog" },
+          { id: "event-2", kind: "moved", at: 2, fromStatus: "backlog", toStatus: "todo" },
+          { id: "event-3", kind: "moved", at: 3, fromStatus: "todo", toStatus: "scheduled" },
+          { id: "event-4", kind: "moved", at: 4, fromStatus: "scheduled", toStatus: "ready" },
+          { id: "event-5", kind: "moved", at: 5, fromStatus: "ready", toStatus: "running" },
+          { id: "event-6", kind: "moved", at: 6, fromStatus: "running", toStatus: "review" },
+          { id: "event-7", kind: "moved", at: 7, fromStatus: "review", toStatus: "done" },
         ],
       },
     ];
     const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
 
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
+    render(renderWorkboard(props), container);
 
     expect(container.querySelector(".workboard-events")?.textContent).toContain("Moved to Review");
+
+    container
+      .querySelector<HTMLButtonElement>('button[title="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Done");
+    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain(
+      "Moved to Backlog",
+    );
   });
 
   it("renders card metadata badges and hides archived cards", () => {

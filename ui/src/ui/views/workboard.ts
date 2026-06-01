@@ -842,7 +842,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const attachments = card.metadata?.attachments ?? [];
   const diagnostics = card.metadata?.diagnostics ?? [];
   const workerLogs = card.metadata?.workerLogs ?? [];
-  const events = (card.events ?? []).toReversed();
+  const events = (card.events ?? []).slice(-6).toReversed();
   const busy = state.busyCardId === card.id;
   const showStartControls = writable && cardCanStart(state, props.sessions, card);
   return html`
