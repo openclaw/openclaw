@@ -581,6 +581,11 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  // Reset the shutting-down flag before any startup work so in-process restart
+  // (close handler already ran in the prior cycle, then we re-enter startup
+  // without process exit) starts answering /healthz as 200 again.
+  const { resetGatewayShuttingDownState } = await loadGatewayCloseModule();
+  resetGatewayShuttingDownState();
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,

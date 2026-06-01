@@ -10,6 +10,7 @@ import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -48,6 +49,122 @@ const RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS = 1_000;
 const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
 const RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS = 1_000;
 const RESTART_MARKER_SLOW_WARNING_MS = 1_000;
+const DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS = 5_000;
+const POST_SHUTDOWN_EXIT_TIMEOUT_ENV = "OPENCLAW_GATEWAY_POST_SHUTDOWN_EXIT_TIMEOUT_MS";
+
+// Tracks whether a shutdown is in progress so /healthz can flip to 503 before the
+// HTTP listener actually unbinds. Without this, a zombie node process that finished
+// shutdown but failed to exit still answers 200 on /healthz, which makes the
+// supervised lock-recovery path defer to it and leaves the bot offline. Module-level
+// because the close handler in this file is the canonical owner; readers (HTTP probe
+// handler) import the accessor below.
+let gatewayShuttingDownState: "running" | "shutting_down" = "running";
+
+export function markGatewayShuttingDown(): void {
+  gatewayShuttingDownState = "shutting_down";
+}
+
+export function isGatewayShuttingDown(): boolean {
+  return gatewayShuttingDownState === "shutting_down";
+}
+
+// Used by gateway startup (and in-process restart) to flip the state back to
+// running before /healthz starts answering 200 again. Tests use the same path
+// so isolation is guaranteed across runs.
+export function resetGatewayShuttingDownState(): void {
+  gatewayShuttingDownState = "running";
+}
+
+export function resetGatewayShuttingDownForTest(): void {
+  resetGatewayShuttingDownState();
+}
+
+function resolvePostShutdownExitTimeoutMs(): number {
+  const raw = process.env[POST_SHUTDOWN_EXIT_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  return parsed ?? DEFAULT_POST_SHUTDOWN_EXIT_TIMEOUT_MS;
+}
+
+function summarizeActiveHandlesForZombieReport(): string {
+  const processWithResourceAccess = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    getActiveResourcesInfo?: () => string[];
+  };
+  // Prefer constructor names from internal handles for actionable detail, then fall
+  // back to getActiveResourcesInfo for newer Node where _getActiveHandles is removed.
+  const handles = processWithResourceAccess["_getActiveHandles"]?.();
+  if (handles && handles.length > 0) {
+    const counts = new Map<string, number>();
+    for (const handle of handles) {
+      if (typeof handle !== "object" || handle === null) {
+        continue;
+      }
+      const name = (handle as { constructor?: { name?: string } }).constructor?.name ?? "Unknown";
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    const parts = Array.from(counts.entries())
+      .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([name, count]) => `${name}=${count}`);
+    return `handles[${handles.length}] ${parts.join(",")}`;
+  }
+  const resources = processWithResourceAccess.getActiveResourcesInfo?.();
+  if (resources && resources.length > 0) {
+    const counts = new Map<string, number>();
+    for (const name of resources) {
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    const parts = Array.from(counts.entries())
+      .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([name, count]) => `${name}=${count}`);
+    return `resources[${resources.length}] ${parts.join(",")}`;
+  }
+  return "no handle/resource detail available";
+}
+
+// Force the node process to exit after a clean shutdown if some library held a
+// stray handle (HTTP keep-alive, telegram fetch, plugin native handle). Without
+// this, the parent supervisor (launchd/systemd) sees the lock dropped but the
+// PID never reaps, the HTTP listener stays bound, and the next gateway probe
+// returns 200 from the zombie. Tests inject `exitProcess` to avoid killing the
+// vitest worker.
+export function armGatewayPostShutdownExitWatchdog(opts?: {
+  timeoutMs?: number;
+  exitProcess?: (code: number) => void;
+  reason?: string;
+  shutdownDurationMs?: number;
+}): { cancel: () => void } {
+  const timeoutMs = Math.max(0, Math.floor(opts?.timeoutMs ?? resolvePostShutdownExitTimeoutMs()));
+  const exit = opts?.exitProcess ?? ((code: number) => process.exit(code));
+  const reason = opts?.reason ?? "gateway stopping";
+  const shutdownDurationMs = opts?.shutdownDurationMs;
+  const timer = setTimeout(() => {
+    const handleSummary = summarizeActiveHandlesForZombieReport();
+    shutdownLog.warn(
+      `gateway shutdown completed but node process still alive after ${timeoutMs}ms; forcing process.exit(0). Likely an unreleased handle (HTTP keep-alive, telegram fetch, plugin native handle). ${handleSummary}`,
+    );
+    const metrics: Array<readonly [string, string | number]> = [
+      ["reason", reason],
+      ["forcedExitAfterMs", timeoutMs],
+      ["handleSummary", handleSummary],
+    ];
+    if (typeof shutdownDurationMs === "number" && Number.isFinite(shutdownDurationMs)) {
+      metrics.push(["shutdownDurationMs", shutdownDurationMs]);
+    }
+    recordGatewayRestartTrace("gateway.shutdown.zombie_detected", timeoutMs, metrics);
+    exit(0);
+  }, timeoutMs);
+  // unref so this watchdog never blocks a healthy natural exit; we only want
+  // it to fire when something else is keeping the loop alive.
+  timer.unref?.();
+  return {
+    cancel: () => {
+      clearTimeout(timer);
+    },
+  };
+}
 
 export type ShutdownResult = {
   durationMs: number;
@@ -708,6 +825,13 @@ export function createGatewayCloseHandler(
       reason: "shutdown" | "restart";
       totalTimeoutMs?: number;
     }) => Promise<{ emittedSessionIds: string[]; timedOut: boolean }>;
+    // Test seam: vitest workers replace this with a no-op so the watchdog
+    // cannot exit the worker mid-suite. Production callers leave it undefined
+    // so the canonical `armGatewayPostShutdownExitWatchdog` runs.
+    armPostShutdownExitWatchdog?: (opts: {
+      reason: string;
+      shutdownDurationMs: number;
+    }) => { cancel: () => void } | null;
   } & RestartRunAbortParams,
 ) {
   return async (opts?: {
@@ -725,6 +849,10 @@ export function createGatewayCloseHandler(
         : null;
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
+    // Flip the shutdown flag before any await so /healthz starts returning 503
+    // immediately. Lock-recovery preflight uses that 503 to distinguish "live"
+    // gateway from a zombie that still holds the port.
+    markGatewayShuttingDown();
     try {
       // Fence lane auto-resume timers before the first awaited shutdown step;
       // later teardown can stall long enough for a TTL callback to mutate queues.
@@ -1052,6 +1180,12 @@ export function createGatewayCloseHandler(
       ["restartExpectedMs", restartExpectedMs ?? "none"],
       ...collectGatewayProcessMemoryUsageMb(),
     ]);
+    // Arm a process-wide watchdog so a stray handle cannot keep the node
+    // process (and its HTTP listener) alive after every owned subsystem has
+    // closed. The unref'd timer is a no-op when natural exit wins, and exits
+    // with the canonical zombie warn + trace event when it does not.
+    const armWatchdog = params.armPostShutdownExitWatchdog ?? armGatewayPostShutdownExitWatchdog;
+    armWatchdog({ reason, shutdownDurationMs: durationMs });
     return { durationMs, warnings };
   };
 }
