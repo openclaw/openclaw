@@ -126,7 +126,13 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const runTimeoutMs = params?.runTimeoutMs;
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
   const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(agentTimeoutSeconds);
-  const timeoutBounds = [runTimeoutMs, agentTimeoutMs].filter(
+  const hasExplicitRunTimeout =
+    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
+  const runTimeoutIsNoTimeout = hasExplicitRunTimeout && runTimeoutMs >= MAX_TIMER_TIMEOUT_MS;
+  const timeoutBounds = [
+    runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
+    hasExplicitRunTimeout ? undefined : agentTimeoutMs,
+  ].filter(
     (value): value is number =>
       typeof value === "number" &&
       Number.isFinite(value) &&
