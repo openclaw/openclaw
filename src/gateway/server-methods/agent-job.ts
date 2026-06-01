@@ -1,5 +1,6 @@
 import {
   buildAgentRunTerminalOutcome,
+  isHardAgentRunTimeoutOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
@@ -88,6 +89,10 @@ function terminalOutcomeFromSnapshot(
     return undefined;
   }
   return buildAgentRunTerminalOutcome(snapshot);
+}
+
+function isHardAgentRunTimeoutSnapshot(snapshot: AgentRunSnapshot): boolean {
+  return isHardAgentRunTimeoutOutcome(terminalOutcomeFromSnapshot(snapshot));
 }
 
 function clearPendingAgentRunError(runId: string) {
@@ -474,7 +479,11 @@ export async function waitForAgentJob(params: {
         return;
       }
       const pendingTimeout = getPendingAgentRunTimeout(runId);
-      finish(pendingTimeout ? pendingTimeout.snapshot : null);
+      finish(
+        pendingTimeout && isHardAgentRunTimeoutSnapshot(pendingTimeout.snapshot)
+          ? pendingTimeout.snapshot
+          : null,
+      );
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });

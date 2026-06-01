@@ -626,6 +626,54 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("preserves retry grace for soft pending timeouts when outer timeout fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-soft-pending-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 3_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 3_000,
+          endedAt: 4_000,
+          aborted: true,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(waitPromise).resolves.toBeNull();
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 5_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 5_000, endedAt: 6_000 },
+      });
+
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(recovered, {
+        status: "ok",
+        startedAt: 5_000,
+        endedAt: 6_000,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
