@@ -106,6 +106,8 @@ function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: str
     targetKind === deliveryKind &&
     ["channel", "conversation", "group", "user"].includes(targetKind)
   ) {
+    // Some provider-owned ids are case-sensitive while Slack/Discord ids are
+    // compared case-insensitively; decide that before generic target normalization.
     const targetId = targetPrefixed?.[2]?.trim();
     const deliveryId = deliveryPrefixed?.[2]?.trim();
     if (caseSensitivePrefixedTargetProviders.has(channel)) {
