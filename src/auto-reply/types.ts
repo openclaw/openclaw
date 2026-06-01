@@ -7,6 +7,11 @@ export type BlockReplyContext = {
   timeoutMs?: number;
 };
 
+export type BlockReplyResult = {
+  /** Media URLs confirmed as delivered by the channel handler. */
+  sentMediaUrls?: readonly string[];
+};
+
 /** Context passed to onModelSelected callback with actual model used. */
 export type ModelSelectedContext = {
   provider: string;
@@ -51,7 +56,10 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
-  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<BlockReplyResult | void> | BlockReplyResult | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;

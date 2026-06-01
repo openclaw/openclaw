@@ -76,4 +76,45 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text" })).toBe(true);
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
+
+  it("does not mark mixed text and media as fully sent for legacy void callbacks", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "caption" })).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "caption", mediaUrl: "file:///a.ogg" })).toBe(false);
+  });
+
+  it("marks delivery-confirmed mixed text and media as fully sent", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {
+        return { sentMediaUrls: ["file:///a.ogg"] };
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ text: "caption", mediaUrl: "file:///a.ogg" })).toBe(true);
+  });
+
+  it("does not mark media as sent when callback confirms no media delivery", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {
+        return { sentMediaUrls: [] };
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ mediaUrl: "file:///a.ogg" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.hasSentPayload({ mediaUrl: "file:///a.ogg" })).toBe(false);
+  });
 });

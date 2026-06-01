@@ -41,7 +41,12 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
+import type {
+  BlockReplyContext,
+  BlockReplyResult,
+  GetReplyOptions,
+  ReplyPayload,
+} from "../types.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -688,7 +693,7 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
-          const run = async () => {
+          const run = async (): Promise<BlockReplyResult | void> => {
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -713,11 +718,15 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+            const reply = resolveSendableOutboundReplyParts(ttsPayload);
+            const confirmedMedia =
+              reply.mediaUrls.length > 0 ? { sentMediaUrls: reply.mediaUrls } : undefined;
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendBlockReply(ttsPayload);
             }
+            return confirmedMedia;
           };
           return run();
         },

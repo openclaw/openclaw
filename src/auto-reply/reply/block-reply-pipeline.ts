@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import type { ReplyPayload } from "../types.js";
+import type { BlockReplyResult, ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
@@ -13,6 +13,8 @@ export type BlockReplyPipeline = {
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
 };
+
+export type { BlockReplyResult } from "../types.js";
 
 export type BlockReplyBuffer = {
   shouldBuffer: (payload: ReplyPayload) => boolean;
@@ -52,6 +54,25 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
   return JSON.stringify({ text: reply.trimmedText, mediaList: reply.mediaUrls });
 }
 
+function createDeliveredBlockReplyContentKey(
+  payload: ReplyPayload,
+  callbackResult: true | BlockReplyResult,
+): string | undefined {
+  const reply = resolveSendableOutboundReplyParts(payload);
+  const confirmedMediaUrls =
+    typeof callbackResult === "object" && "sentMediaUrls" in callbackResult
+      ? Array.from(callbackResult.sentMediaUrls ?? [])
+          .map((url) => url.trim())
+          .filter(Boolean)
+      : undefined;
+  const deliveredMediaUrls =
+    confirmedMediaUrls ?? (reply.hasMedia && !reply.trimmedText ? reply.mediaUrls : []);
+  if (!reply.trimmedText && deliveredMediaUrls.length === 0) {
+    return undefined;
+  }
+  return JSON.stringify({ text: reply.trimmedText, mediaList: deliveredMediaUrls });
+}
+
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -77,7 +98,7 @@ export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<void> | void;
+  ) => Promise<BlockReplyResult | void> | BlockReplyResult | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
@@ -100,7 +121,6 @@ export function createBlockReplyPipeline(params: {
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
-    const contentKey = createBlockReplyContentKey(payload);
     if (!bypassSeenCheck) {
       if (seenKeys.has(payloadKey)) {
         return;
@@ -119,7 +139,7 @@ export function createBlockReplyPipeline(params: {
         if (aborted) {
           return false;
         }
-        await withTimeout(
+        const result = await withTimeout(
           Promise.resolve(
             onBlockReply(payload, {
               abortSignal: abortController.signal,
@@ -129,14 +149,17 @@ export function createBlockReplyPipeline(params: {
           timeoutMs,
           timeoutError,
         );
-        return true;
+        return result ?? true;
       })
-      .then((didSend) => {
-        if (!didSend) {
+      .then((callbackResult) => {
+        if (!callbackResult) {
           return;
         }
         sentKeys.add(payloadKey);
-        sentContentKeys.add(contentKey);
+        const deliveredContentKey = createDeliveredBlockReplyContentKey(payload, callbackResult);
+        if (deliveredContentKey) {
+          sentContentKeys.add(deliveredContentKey);
+        }
         didStream = true;
       })
       .catch((err) => {
