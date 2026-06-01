@@ -29,13 +29,13 @@ function unwrapMatchingLiteralQuotes(value: string): string {
 function isUnresolvedShellReference(value: string): boolean {
   const candidate = unwrapMatchingLiteralQuotes(value.trim());
   // Match only values whose entire content is a shell variable reference:
-  //   $VAR_NAME          (simple reference — must start with a letter or underscore)
+  //   $VAR_NAME          (simple reference, OpenClaw env-var style)
   //   ${VAR_NAME}        (brace-form reference)
   //   $(command)         (command substitution)
   // A real credential that merely contains a $ (e.g. "abc$2!", "$100") is NOT matched.
   return (
-    /^\$[A-Za-z_]\w*$/.test(candidate) ||
-    /^\$\{[^}]+\}$/.test(candidate) ||
+    /^\$[A-Z_][A-Z0-9_]*$/.test(candidate) ||
+    /^\$\{[A-Z_][A-Z0-9_]*(?:(?::[-=?+]?|[-=?+])[^}]*)?\}$/.test(candidate) ||
     /^\$\([^)]*\)$/.test(candidate)
   );
 }

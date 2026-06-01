@@ -56,6 +56,9 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       "PRICE=\\$100",
       "QUOTED_PASSWORD='\"abc$2!xyz\"'",
       "QUOTED_PRICE='\"$100\"'",
+      "LEADING_DOLLAR_PASSWORD=$ecret123",
+      "LEADING_DOLLAR_TOKEN=$token_1",
+      "LOWERCASE_BRACE=${lowercase_literal}",
       "PURE_REF=$SOME_VAR",
     ].join("\n");
 
@@ -66,6 +69,9 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       expect(result["PRICE"]).toBe("\\$100");
       expect(result["QUOTED_PASSWORD"]).toBe('"abc$2!xyz"');
       expect(result["QUOTED_PRICE"]).toBe('"$100"');
+      expect(result["LEADING_DOLLAR_PASSWORD"]).toBe("$ecret123");
+      expect(result["LEADING_DOLLAR_TOKEN"]).toBe("$token_1");
+      expect(result["LOWERCASE_BRACE"]).toBe("${lowercase_literal}");
       expect(Object.keys(result)).not.toContain("PURE_REF");
     });
   });
