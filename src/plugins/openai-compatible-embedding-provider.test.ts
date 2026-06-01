@@ -351,8 +351,16 @@ describe("openai-compatible generic embedding provider", () => {
     const server = await startBatchServer({
       createStatus: { id: "batch-1", status: "in_progress" },
       statusResponses: [
-        { id: "batch-1", status: "in_progress" },
-        { id: "batch-1", status: "in_progress" },
+        {
+          id: "batch-1",
+          status: "in_progress",
+          request_counts: { total: 2, completed: 0, failed: 0 },
+        },
+        {
+          id: "batch-1",
+          status: "in_progress",
+          request_counts: { total: 2, completed: 1, failed: 0 },
+        },
         { id: "batch-1", status: "completed", output_file_id: "file-output" },
       ],
     });
@@ -388,8 +396,8 @@ describe("openai-compatible generic embedding provider", () => {
     expect(debugMessages).toEqual(
       expect.arrayContaining([
         "openai-compatible batch batch-1 in_progress; waiting 1ms",
-        "openai-compatible batch batch-1 in_progress; waiting 2ms",
-        "openai-compatible batch batch-1 in_progress; waiting 4ms",
+        "openai-compatible batch batch-1 in_progress; progress 0/2 failed=0; waiting 2ms",
+        "openai-compatible batch batch-1 in_progress; progress 1/2 failed=0; waiting 4ms",
       ]),
     );
   });

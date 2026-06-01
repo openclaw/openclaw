@@ -553,6 +553,27 @@ describe("memory search config", () => {
     expect(resolved?.remote?.batch?.timeoutMinutes).toBe(Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000));
   });
 
+  it("preserves day-long remote batch timeout config", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              batch: {
+                timeoutMinutes: 1440,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.batch?.timeoutMinutes).toBe(1440);
+  });
+
   it("keeps the default remote batch poll delay for zero intervals", () => {
     const cfg = asConfig({
       agents: {

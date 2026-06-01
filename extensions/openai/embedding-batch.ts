@@ -38,7 +38,13 @@ type OpenAiBatchRequest = {
   };
 };
 
-type OpenAiBatchStatus = EmbeddingBatchStatus;
+type OpenAiBatchStatus = EmbeddingBatchStatus & {
+  request_counts?: {
+    total?: number;
+    completed?: number;
+    failed?: number;
+  };
+};
 type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
@@ -170,6 +176,16 @@ function createOpenAiBatchPollBackoff(params: { pollIntervalMs: number; timeoutM
   };
 }
 
+function formatOpenAiBatchProgress(status: OpenAiBatchStatus): string {
+  const counts = status.request_counts;
+  if (!counts || typeof counts.total !== "number") {
+    return "";
+  }
+  const completed = typeof counts.completed === "number" ? counts.completed : 0;
+  const failed = typeof counts.failed === "number" ? counts.failed : 0;
+  return `; progress ${completed}/${counts.total} failed=${failed}`;
+}
+
 async function waitForOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
   batchId: string;
@@ -213,7 +229,11 @@ async function waitForOpenAiBatch(params: {
       throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
     }
     const delayMs = pollBackoff.nextDelayMs();
-    params.debug?.(`openai batch ${params.batchId} ${state}; waiting ${delayMs}ms`);
+    params.debug?.(
+      `openai batch ${params.batchId} ${state}${formatOpenAiBatchProgress(
+        status,
+      )}; waiting ${delayMs}ms`,
+    );
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     current = undefined;
   }

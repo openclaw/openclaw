@@ -71,7 +71,13 @@ type OpenAICompatibleBatchRequest = {
   };
 };
 
-type OpenAICompatibleBatchStatus = EmbeddingBatchStatus;
+type OpenAICompatibleBatchStatus = EmbeddingBatchStatus & {
+  request_counts?: {
+    total?: number;
+    completed?: number;
+    failed?: number;
+  };
+};
 type OpenAICompatibleBatchOutputLine = ProviderBatchOutputLine;
 type OpenAICompatibleEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
   sourceWideBatchEmbed: true;
@@ -466,6 +472,16 @@ function createOpenAICompatibleBatchPollBackoff(params: {
   };
 }
 
+function formatOpenAICompatibleBatchProgress(status: OpenAICompatibleBatchStatus): string {
+  const counts = status.request_counts;
+  if (!counts || typeof counts.total !== "number") {
+    return "";
+  }
+  const completed = typeof counts.completed === "number" ? counts.completed : 0;
+  const failed = typeof counts.failed === "number" ? counts.failed : 0;
+  return `; progress ${completed}/${counts.total} failed=${failed}`;
+}
+
 async function waitForOpenAICompatibleBatch(params: {
   client: OpenAICompatibleEmbeddingClient;
   batchId: string;
@@ -511,7 +527,11 @@ async function waitForOpenAICompatibleBatch(params: {
       );
     }
     const delayMs = pollBackoff.nextDelayMs();
-    params.debug?.(`openai-compatible batch ${params.batchId} ${state}; waiting ${delayMs}ms`);
+    params.debug?.(
+      `openai-compatible batch ${params.batchId} ${state}${formatOpenAICompatibleBatchProgress(
+        status,
+      )}; waiting ${delayMs}ms`,
+    );
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     current = undefined;
   }
