@@ -1,6 +1,7 @@
 import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+const CONTROL_ESCAPE_CHARS = new Set(["b", "f", "n", "r", "t"]);
 
 function isControlCharacter(char: string): boolean {
   const codePoint = char.codePointAt(0);
@@ -24,6 +25,10 @@ function escapeControlCharacter(char: string): string {
   }
 }
 
+function isLikelyWindowsPathEscape(stringPrefix: string, nextChar: string): boolean {
+  return CONTROL_ESCAPE_CHARS.has(nextChar) && /(?:^|[^A-Za-z])[A-Za-z]:/.test(stringPrefix);
+}
+
 /**
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
@@ -32,6 +37,7 @@ function escapeControlCharacter(char: string): string {
 export function repairJson(json: string): string {
   let repaired = "";
   let inString = false;
+  let stringStart = -1;
 
   for (let index = 0; index < json.length; index++) {
     const char = json[index];
@@ -40,6 +46,7 @@ export function repairJson(json: string): string {
       repaired += char;
       if (char === '"') {
         inString = true;
+        stringStart = index;
       }
       continue;
     }
@@ -47,6 +54,7 @@ export function repairJson(json: string): string {
     if (char === '"') {
       repaired += char;
       inString = false;
+      stringStart = -1;
       continue;
     }
 
@@ -72,6 +80,11 @@ export function repairJson(json: string): string {
         continue;
       }
 
+      if (isLikelyWindowsPathEscape(json.slice(stringStart + 1, index), nextChar)) {
+        repaired += "\\\\";
+        continue;
+      }
+
       if (VALID_JSON_ESCAPES.has(nextChar)) {
         repaired += `\\${nextChar}`;
         index += 1;
@@ -89,13 +102,14 @@ export function repairJson(json: string): string {
 }
 
 export function parseJsonWithRepair(json: string): unknown {
+  const repairedJson = repairJson(json);
+  if (repairedJson !== json) {
+    return JSON.parse(repairedJson) as unknown;
+  }
+
   try {
     return JSON.parse(json) as unknown;
   } catch (error) {
-    const repairedJson = repairJson(json);
-    if (repairedJson !== json) {
-      return JSON.parse(repairedJson) as unknown;
-    }
     throw error;
   }
 }

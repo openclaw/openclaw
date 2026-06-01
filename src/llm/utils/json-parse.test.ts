@@ -18,4 +18,24 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     const args = '{"cmd":"\\underline{x}"}';
     expect(parseStreamingJson(args)).toEqual({ cmd: "\\underline{x}" });
   });
+
+  it("keeps control-escape letters literal in unescaped Windows paths", () => {
+    const cases = [
+      ['{"path":"C:\\bin\\app.exe"}', "C:\\bin\\app.exe"],
+      ['{"path":"C:\\temp\\x"}', "C:\\temp\\x"],
+      ['{"path":"C:\\new\\file"}', "C:\\new\\file"],
+      ['{"path":"D:\\reports\\q"}', "D:\\reports\\q"],
+      ['{"path":"C:\\users\\bob"}', "C:\\users\\bob"],
+    ];
+
+    for (const [args, path] of cases) {
+      expect(parseStreamingJson(args)).toEqual({ path });
+    }
+  });
+
+  it("preserves ordinary JSON control escapes outside Windows paths", () => {
+    expect(parseJsonWithRepair('{"message":"hello\\nworld"}')).toEqual({
+      message: "hello\nworld",
+    });
+  });
 });
