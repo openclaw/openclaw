@@ -11,6 +11,8 @@ import {
 const PENDING_CONTROL_TTL_MS = 10 * 60_000;
 const MAX_PENDING_CONTROLS = 200;
 const PROPOSED_PLAN_RE = /<proposed_plan>[\s\S]*?<\/proposed_plan>/i;
+const CODEX_INTERACTIVE_NAMESPACE = "codex";
+const CODEX_USER_INPUT_CALLBACK_PREFIX = "input:";
 
 type ControlScope = {
   sessionFile: string;
@@ -68,17 +70,17 @@ export function buildCodexPlanDecisionReply(params: {
           buttons: [
             {
               label: "Approve and execute",
-              action: { type: "command", command: `/codex plan approve ${token}` },
+              value: `/codex plan approve ${token}`,
               style: "success",
             },
             {
               label: "Approve and execute with clean context",
-              action: { type: "command", command: `/codex plan approve-clean ${token}` },
+              value: `/codex plan approve-clean ${token}`,
               style: "primary",
             },
             {
               label: "Stay in plan mode",
-              action: { type: "command", command: `/codex plan stay ${token}` },
+              value: `/codex plan stay ${token}`,
               style: "secondary",
             },
           ],
@@ -155,6 +157,37 @@ export function answerCodexUserInput(params: {
   return "Sent answer to Codex.";
 }
 
+export function answerCodexUserInputCallback(params: {
+  payload: string;
+  ctx: Pick<
+    PluginCommandContext,
+    "senderId" | "channel" | "accountId" | "sessionKey" | "messageThreadId"
+  >;
+  sessionFile?: string;
+  now?: number;
+}): string | undefined {
+  const parsed = parseCodexUserInputCallback(params.payload);
+  if (!parsed) {
+    return undefined;
+  }
+  return answerCodexUserInput({
+    token: parsed.token,
+    answerText: parsed.answerText,
+    ctx: params.ctx,
+    sessionFile: params.sessionFile,
+    now: params.now,
+  });
+}
+
+export function buildCodexUserInputCallbackValue(params: {
+  token: string;
+  answerIndex: number;
+}): string {
+  return `${CODEX_INTERACTIVE_NAMESPACE}:${CODEX_USER_INPUT_CALLBACK_PREFIX}${params.token}:${
+    params.answerIndex
+  }`;
+}
+
 function extractCodexProposedPlan(text: string): string | undefined {
   const match = PROPOSED_PLAN_RE.exec(text);
   const raw = match?.[0];
@@ -208,7 +241,7 @@ function buildUserInputInteractive(
   }
   const buttons = question.options.slice(0, 8).map((option, index) => ({
     label: option.label,
-    action: { type: "command" as const, command: `/codex input ${token} ${index + 1}` },
+    value: buildCodexUserInputCallbackValue({ token, answerIndex: index + 1 }),
     style: index === 0 ? ("primary" as const) : ("secondary" as const),
   }));
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
@@ -253,6 +286,22 @@ function readControlScopeMismatch(
     return "This Codex control belongs to a different thread.";
   }
   return undefined;
+}
+
+function parseCodexUserInputCallback(
+  payload: string,
+): { token: string; answerText: string } | undefined {
+  if (!payload.startsWith(CODEX_USER_INPUT_CALLBACK_PREFIX)) {
+    return undefined;
+  }
+  const remainder = payload.slice(CODEX_USER_INPUT_CALLBACK_PREFIX.length);
+  const separator = remainder.lastIndexOf(":");
+  if (separator <= 0 || separator === remainder.length - 1) {
+    return undefined;
+  }
+  const token = remainder.slice(0, separator);
+  const answerText = remainder.slice(separator + 1);
+  return token && answerText ? { token, answerText } : undefined;
 }
 
 function pruneExpiredControls(now = Date.now()): void {

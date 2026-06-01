@@ -747,7 +747,7 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
     const eventText = mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent");
     expect(eventText).toContain('"actionId":"openclaw:reply_button"');
     expectRecordFields(
@@ -780,6 +780,60 @@ describe("registerSlackInteractionEvents", () => {
       heartbeat: { target: "last" },
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches namespaced Slack reply button payloads to plugin interactive handlers", async () => {
+    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "Codex needs input",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "codex:input:token-1:2",
+        text: { type: "plain_text", text: "Plan" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      requireRecord(
+        mockCallArg(dispatchPluginInteractiveHandlerMock, 0, "plugin interactive dispatch"),
+        "plugin interactive dispatch",
+      ),
+      {
+        channel: "slack",
+        data: "codex:input:token-1:2",
+      },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("uses unique interaction ids for repeated Slack actions on the same message", async () => {

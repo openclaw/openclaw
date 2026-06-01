@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
+import {
+  createCodexUserInputPrompt,
+  resetCodexConversationChatControlsForTests,
+} from "./src/conversation-chat-controls.js";
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
@@ -23,6 +27,10 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
+  afterEach(() => {
+    resetCodexConversationChatControlsForTests();
+  });
+
   it("is opt-in by default", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
@@ -37,6 +45,7 @@ describe("codex plugin", () => {
     const registerMediaUnderstandingProvider = vi.fn();
     const registerMigrationProvider = vi.fn();
     const registerProvider = vi.fn();
+    const registerInteractiveHandler = vi.fn();
     const on = vi.fn();
     const onConversationBindingResolved = vi.fn();
 
@@ -53,6 +62,7 @@ describe("codex plugin", () => {
         registerMediaUnderstandingProvider,
         registerMigrationProvider,
         registerProvider,
+        registerInteractiveHandler,
         on,
         onConversationBindingResolved,
       }),
@@ -91,6 +101,16 @@ describe("codex plugin", () => {
       | undefined;
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
+    expect(registerInteractiveHandler.mock.calls.map((call) => call[0]?.channel)).toEqual([
+      "telegram",
+      "discord",
+      "slack",
+    ]);
+    expect(registerInteractiveHandler.mock.calls.map((call) => call[0]?.namespace)).toEqual([
+      "codex",
+      "codex",
+      "codex",
+    ]);
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
@@ -116,6 +136,72 @@ describe("codex plugin", () => {
     plugin.register(api);
     expect(registerProvider).toHaveBeenCalledTimes(1);
     expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
+  });
+
+  it("registers interactive handlers that resolve Codex user input callbacks", async () => {
+    const registerInteractiveHandler = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const prompt = createCodexUserInputPrompt({
+      scope: {
+        sessionFile: "/tmp/session.jsonl",
+        threadId: "thread-1",
+        channel: "telegram",
+        senderId: "user-1",
+        accountId: "default",
+      },
+      resolveText,
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Pick one",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Workspace", description: "" },
+            { label: "Runtime", description: "" },
+          ],
+        },
+      ],
+    });
+    const buttonValue = prompt.presentation?.blocks
+      .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+      .at(1)?.value;
+    const telegramRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "telegram");
+
+    const reply = vi.fn(async () => undefined);
+    await telegramRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      callback: { payload: buttonValue?.slice("codex:".length) },
+      respond: { reply },
+    });
+
+    expect(reply).toHaveBeenCalledWith({ text: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe("2");
   });
 
   it("claims the Codex routing providers by default", () => {

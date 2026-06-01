@@ -936,6 +936,23 @@ async function handleSlackBlockAction(params: {
     if (handledBindingApproval) {
       return;
     }
+    const isAuthorizedSender = await resolveSlackBlockActionCommandAuthorized({
+      ctx: params.ctx,
+      parsed,
+      auth,
+    });
+    const handled = await dispatchSlackPluginInteraction({
+      ctx: params.ctx,
+      parsed,
+      pluginInteractionData,
+      auth: {
+        isAuthorizedSender,
+      },
+      respond,
+    });
+    if (handled) {
+      return;
+    }
   } else if (pluginInteractionData) {
     const isAuthorizedSender = await resolveSlackBlockActionCommandAuthorized({
       ctx: params.ctx,

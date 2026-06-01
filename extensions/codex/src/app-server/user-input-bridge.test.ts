@@ -1,7 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  answerCodexUserInput,
+  answerCodexUserInputCallback,
   resetCodexConversationChatControlsForTests,
 } from "../conversation-chat-controls.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
@@ -31,17 +31,16 @@ function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
   return payload.text;
 }
 
-function expectFirstBlockReplyCommands(params: EmbeddedRunAttemptParams): string[] {
+function expectFirstBlockReplyValues(params: EmbeddedRunAttemptParams): string[] {
   const onBlockReply = params.onBlockReply;
   if (onBlockReply === undefined) {
     throw new Error("Expected onBlockReply callback");
   }
   const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
   const block = payload?.presentation?.blocks.find(
-    (entry): entry is { buttons: Array<{ action?: { command?: string } }> } =>
-      entry.type === "buttons",
+    (entry): entry is { buttons: Array<{ value?: string }> } => entry.type === "buttons",
   );
-  return block?.buttons.map((button) => button.action?.command ?? "") ?? [];
+  return block?.buttons.map((button) => button.value ?? "") ?? [];
 }
 
 describe("Codex app-server user input bridge", () => {
@@ -81,13 +80,11 @@ describe("Codex app-server user input bridge", () => {
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
     expect(expectFirstBlockReplyText(params)).toContain("Pick a mode");
-    const commands = expectFirstBlockReplyCommands(params);
-    expect(commands.map((command) => command.split(" ").at(-1))).toEqual(["1", "2"]);
-    const [token, answer] = commands[1]?.split(" ").slice(2) ?? [];
+    const values = expectFirstBlockReplyValues(params);
+    expect(values.map((value) => value.split(":").at(-1))).toEqual(["1", "2"]);
     expect(
-      answerCodexUserInput({
-        token: token ?? "",
-        answerText: answer ?? "",
+      answerCodexUserInputCallback({
+        payload: values[1]?.slice("codex:".length) ?? "",
         ctx: {
           channel: "discord",
           senderId: "user-1",

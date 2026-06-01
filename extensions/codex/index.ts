@@ -11,6 +11,7 @@ import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
+import { answerCodexUserInputCallback } from "./src/conversation-chat-controls.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -41,6 +42,7 @@ export default definePluginEntry({
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
+    registerCodexUserInputInteractiveHandlers(api);
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
     }
@@ -158,6 +160,102 @@ export default definePluginEntry({
     api.onConversationBindingResolved?.(handleCodexConversationBindingResolved);
   },
 });
+
+type CodexInteractiveResult = {
+  handled?: boolean;
+};
+
+type CodexInteractiveRegistration = {
+  channel: "telegram" | "discord" | "slack";
+  namespace: string;
+  handler: (ctx: unknown) => Promise<CodexInteractiveResult>;
+};
+
+type CodexPluginInteractiveApi = {
+  registerInteractiveHandler?: (registration: CodexInteractiveRegistration) => void;
+};
+
+function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveApi): void {
+  api.registerInteractiveHandler?.({
+    channel: "telegram",
+    namespace: "codex",
+    handler: async (rawCtx): Promise<CodexInteractiveResult> => {
+      const ctx = rawCtx as {
+        accountId: string;
+        senderId?: string;
+        threadId?: number;
+        callback: { payload: string };
+        respond: { reply: (params: { text: string }) => Promise<void> };
+      };
+      const text = answerCodexUserInputCallback({
+        payload: ctx.callback.payload,
+        ctx: {
+          channel: "telegram",
+          accountId: ctx.accountId,
+          senderId: ctx.senderId,
+          messageThreadId: ctx.threadId,
+        },
+      });
+      if (!text) {
+        return { handled: false };
+      }
+      await ctx.respond.reply({ text });
+      return { handled: true };
+    },
+  });
+  api.registerInteractiveHandler?.({
+    channel: "discord",
+    namespace: "codex",
+    handler: async (rawCtx): Promise<CodexInteractiveResult> => {
+      const ctx = rawCtx as {
+        accountId: string;
+        senderId?: string;
+        interaction: { payload: string };
+        respond: { reply: (params: { text: string; ephemeral?: boolean }) => Promise<void> };
+      };
+      const text = answerCodexUserInputCallback({
+        payload: ctx.interaction.payload,
+        ctx: {
+          channel: "discord",
+          accountId: ctx.accountId,
+          senderId: ctx.senderId,
+        },
+      });
+      if (!text) {
+        return { handled: false };
+      }
+      await ctx.respond.reply({ text, ephemeral: true });
+      return { handled: true };
+    },
+  });
+  api.registerInteractiveHandler?.({
+    channel: "slack",
+    namespace: "codex",
+    handler: async (rawCtx): Promise<CodexInteractiveResult> => {
+      const ctx = rawCtx as {
+        accountId: string;
+        senderId?: string;
+        threadId?: string;
+        interaction: { payload: string };
+        respond: { reply: (params: { text: string }) => Promise<void> };
+      };
+      const text = answerCodexUserInputCallback({
+        payload: ctx.interaction.payload,
+        ctx: {
+          channel: "slack",
+          accountId: ctx.accountId,
+          senderId: ctx.senderId,
+          messageThreadId: ctx.threadId,
+        },
+      });
+      if (!text) {
+        return { handled: false };
+      }
+      await ctx.respond.reply({ text });
+      return { handled: true };
+    },
+  });
+}
 
 function resolveProgressReplyTarget(
   event: {

@@ -1,6 +1,7 @@
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  answerCodexUserInput,
+  answerCodexUserInputCallback,
   buildCodexPlanDecisionReply,
   consumeCodexPlanDecision,
   createCodexUserInputPrompt,
@@ -10,7 +11,7 @@ import {
 
 type TestButton = {
   label: string;
-  action?: { type: string; command?: string };
+  value?: string;
 };
 
 const scope = {
@@ -51,11 +52,14 @@ describe("codex conversation chat controls", () => {
       "Approve and execute with clean context",
       "Stay in plan mode",
     ]);
-    expect(
-      buttons.map((button) => button.action?.command?.split(" ").slice(0, 3).join(" ")),
-    ).toEqual(["/codex plan approve", "/codex plan approve-clean", "/codex plan stay"]);
+    expect(normalizeMessagePresentation(reply.presentation)).toBeDefined();
+    expect(buttons.map((button) => button.value?.split(" ").slice(0, 3).join(" "))).toEqual([
+      "/codex plan approve",
+      "/codex plan approve-clean",
+      "/codex plan stay",
+    ]);
 
-    const token = buttons[0]?.action?.command?.split(" ").at(-1) ?? "";
+    const token = buttons[0]?.value?.split(" ").at(-1) ?? "";
     expect(consumeCodexPlanDecision({ token, ctx, sessionFile: scope.sessionFile })).toEqual({
       ok: true,
       sessionFile: scope.sessionFile,
@@ -73,7 +77,7 @@ describe("codex conversation chat controls", () => {
       text: "<proposed_plan>do this</proposed_plan>",
       scope,
     });
-    const token = readButtons(reply)[0]?.action?.command?.split(" ").at(-1) ?? "";
+    const token = readButtons(reply)[0]?.value?.split(" ").at(-1) ?? "";
 
     expect(
       consumeCodexPlanDecision({
@@ -111,10 +115,10 @@ describe("codex conversation chat controls", () => {
     });
     const buttons = readButtons(reply);
     expect(buttons.map((button) => button.label)).toEqual(["Execute", "Plan"]);
-    expect(buttons.map((button) => button.action?.command?.split(" ").at(-1))).toEqual(["1", "2"]);
+    expect(normalizeMessagePresentation(reply.presentation)).toBeDefined();
+    expect(buttons.map((button) => button.value?.split(":").at(-1))).toEqual(["1", "2"]);
 
-    const [token, answer] = buttons[1]?.action?.command?.split(" ").slice(2) ?? [];
-    expect(answerCodexUserInput({ token: token ?? "", answerText: answer ?? "", ctx })).toBe(
+    expect(answerCodexUserInputCallback({ payload: buttons[1]?.value?.slice(6) ?? "", ctx })).toBe(
       "Sent answer to Codex.",
     );
     await expect(answered).resolves.toBe("2");

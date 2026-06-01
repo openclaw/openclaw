@@ -74,7 +74,7 @@ import {
   startCodexConversationThread,
 } from "./conversation-binding.js";
 import {
-  answerCodexUserInput,
+  answerCodexUserInputCallback,
   resetCodexConversationChatControlsForTests,
 } from "./conversation-chat-controls.js";
 
@@ -1386,14 +1386,10 @@ describe("codex conversation binding", () => {
     let userInputResponse: unknown;
     const sendProgressReply = vi.fn(async ({ payload }) => {
       const block = payload.presentation?.blocks.find(
-        (entry): entry is { buttons: Array<{ action?: { command?: string } }> } =>
-          entry.type === "buttons",
+        (entry): entry is { buttons: Array<{ value?: string }> } => entry.type === "buttons",
       );
-      const command = block?.buttons[1]?.action?.command ?? "";
-      const [token, answer] = command.split(" ").slice(2);
-      answerCodexUserInput({
-        token: token ?? "",
-        answerText: answer ?? "",
+      answerCodexUserInputCallback({
+        payload: block?.buttons[1]?.value?.slice("codex:".length) ?? "",
         ctx: {
           channel: "telegram",
           senderId: "user-1",
