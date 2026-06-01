@@ -1324,6 +1324,8 @@ describe("stageSystemdService", () => {
 
       const unit = await fs.readFile(unitPath, "utf8");
       expect(unit).not.toContain("EnvironmentFile=");
+      expect(unit).not.toContain("LLM_API_KEY");
+      expect(unit).not.toContain("$SECRET_FROM_SHELL");
       await expect(fs.access(envFilePath)).rejects.toThrow();
     });
   });

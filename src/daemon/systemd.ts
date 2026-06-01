@@ -860,6 +860,13 @@ async function writeSystemdUnit({
       if (typeof value !== "string") {
         return false;
       }
+      const source = readSystemdEnvironmentValueSource({
+        environmentValueSources,
+        key,
+      });
+      if (isEnvironmentFileOnlySource(source) && isUnresolvedShellReference(value)) {
+        return false;
+      }
       const normalizedKey = normalizeSystemdEnvironmentKey(key);
       if (
         normalizedKey &&
