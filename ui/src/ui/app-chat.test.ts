@@ -1964,6 +1964,56 @@ describe("handleAbortChat", () => {
     expect(hasAbortableSessionRun(host)).toBe(false);
   });
 
+  it("ignores stale active-run session row when local stream and send are idle (regression for #87387)", () => {
+    // After a stream completes locally (chatRunId cleared, chatStream null,
+    // chatSending false), a lagging sessions poll may still show the session
+    // as active. This must not re-light the "In progress" badge or "Stop"
+    // button — only local live state should gate the abort UI.
+    const host = makeHost({
+      chatRunId: null,
+      chatSending: false,
+      chatStream: null,
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(false);
+  });
+
+  it("reports abortable when local stream is live even with stale session row", () => {
+    // When a stream is locally active (chatStream non-null), the abort UI
+    // should be present regardless of what the sessions poll says.
+    const host = makeHost({
+      chatRunId: null,
+      chatSending: false,
+      chatStream: "partial response...",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: false, status: "done" }),
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(true);
+  });
+
+  it("reports abortable when sending is live even with stale session row", () => {
+    // When a message is being sent (chatSending true), the abort UI should
+    // be present regardless of what the sessions poll says.
+    const host = makeHost({
+      chatRunId: null,
+      chatSending: true,
+      chatStream: null,
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: false, status: "done" }),
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(true);
+  });
+
   it("keeps the draft when disconnected without an active run", async () => {
     const host = makeHost({
       connected: false,

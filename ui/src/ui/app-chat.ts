@@ -148,11 +148,20 @@ export function isChatBusy(host: ChatHost) {
 
 export function hasAbortableSessionRun(host: {
   chatRunId?: string | null;
+  chatSending?: boolean;
+  chatStream?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
 }): boolean {
   if (host.chatRunId) {
     return true;
+  }
+  // Bail out when there is no local live state indicating an active run.
+  // The sessions poll can lag behind the local terminal event, showing a
+  // stale active row that would keep "In progress" / "Stop" visible after
+  // the stream has already completed (issue #87387).
+  if (!host.chatSending && host.chatStream == null) {
+    return false;
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
