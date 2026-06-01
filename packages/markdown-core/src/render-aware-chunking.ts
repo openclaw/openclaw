@@ -6,11 +6,13 @@ import {
   type MarkdownStyleSpan,
 } from "./ir.js";
 
+/** A rendered chunk paired with the Markdown IR slice that produced it. */
 export type RenderedMarkdownChunk<TRendered> = {
   rendered: TRendered;
   source: MarkdownIR;
 };
 
+/** Inputs for chunking Markdown IR against the final rendered payload size. */
 export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
   ir: MarkdownIR;
   limit: number;
@@ -319,6 +321,8 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
     }
 
     if (prev && next) {
+      // Split pure whitespace between neighbors before dropping it so list,
+      // paragraph, and quote spacing survives when both sides still fit.
       for (let prefixLength = chunkLength - 1; prefixLength >= 1; prefixLength -= 1) {
         const prefix = sliceMarkdownIR(chunk, 0, prefixLength);
         const suffix = sliceMarkdownIR(chunk, prefixLength, chunkLength);
