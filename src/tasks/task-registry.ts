@@ -929,11 +929,13 @@ function mergeExistingTaskForCreate(
 
 function resolveTaskAgentId(params: {
   explicitAgentId?: string;
+  childSessionKey?: string;
   ownerKey: string;
   requesterSessionKey: string;
 }): string | undefined {
   return (
     normalizeOptionalString(params.explicitAgentId) ??
+    parseAgentSessionKey(params.childSessionKey)?.agentId ??
     parseAgentSessionKey(params.ownerKey)?.agentId ??
     parseAgentSessionKey(params.requesterSessionKey)?.agentId
   );
@@ -1713,6 +1715,7 @@ export function createTaskRecord(params: {
   });
   const agentId = resolveTaskAgentId({
     explicitAgentId: params.agentId,
+    childSessionKey: params.childSessionKey,
     ownerKey,
     requesterSessionKey,
   });
