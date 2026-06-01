@@ -1009,7 +1009,7 @@ describe("memory index", () => {
         waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
       }
     ).provider = {
-      id: "openai",
+      id: "mock",
       model: "mock-embed",
       embedQuery: async () => {
         queryCalls += 1;
@@ -1053,7 +1053,7 @@ describe("memory index", () => {
         };
       }
     ).provider = {
-      id: "openai",
+      id: "mock",
       model: "mock-embed",
       embedQuery: async () => {
         queryCalls += 1;
