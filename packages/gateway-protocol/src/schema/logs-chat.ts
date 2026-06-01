@@ -80,7 +80,12 @@ export const ChatSendParamsSchema = Type.Object(
     sessionKey: ChatSendSessionKeyString,
     agentId: Type.Optional(NonEmptyString),
     sessionId: Type.Optional(NonEmptyString),
-    resumeSession: Type.Optional(Type.Boolean()),
+    resumeSession: Type.Optional(
+      Type.Boolean({
+        description:
+          "One-shot Control UI reconnect hint. When true, the gateway may preserve the matching current sessionId across daily/idle rollover only for that send; ordinary stale sends without this flag still rotate.",
+      }),
+    ),
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
     fastMode: Type.Optional(Type.Boolean()),

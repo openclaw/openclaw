@@ -7054,7 +7054,7 @@ public struct ChatSendParams: Codable, Sendable {
         sessionkey: String,
         agentid: String? = nil,
         sessionid: String?,
-        resumesession: Bool?,
+        resumesession: Bool? = nil,
         message: String,
         thinking: String?,
         fastmode: Bool?,
