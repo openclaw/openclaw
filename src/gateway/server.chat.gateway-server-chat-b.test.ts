@@ -116,6 +116,15 @@ async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
   await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
 }
 
+async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  return raw
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 async function fetchHistoryMessages(
   ws: GatewaySocket,
   params?: {
@@ -1176,6 +1185,60 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
       }
     });
+  });
+
+  test("chat.send diagnostics timeline carries run correlation attributes", async () => {
+    const timelineDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-timeline-"));
+    const timelinePath = path.join(timelineDir, "timeline.jsonl");
+    const previousDiagnostics = process.env.OPENCLAW_DIAGNOSTICS;
+    const previousTimelinePath = process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+    process.env.OPENCLAW_DIAGNOSTICS = "timeline";
+    process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
+    try {
+      await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws);
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        mockGetReplyFromConfigOnce(async () => undefined);
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-timeline",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+        await vi.waitFor(async () => {
+          const events = await readTimelineEvents(timelinePath);
+          expect(
+            events.some(
+              (event) =>
+                event.type === "span.end" &&
+                event.name === "gateway.chat_send.dispatch_inbound" &&
+                (event.attributes as Record<string, unknown> | undefined)?.runId ===
+                  "idem-timeline",
+            ),
+          ).toBe(true);
+        }, FAST_WAIT_OPTS);
+      });
+    } finally {
+      if (previousDiagnostics === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS = previousDiagnostics;
+      }
+      if (previousTimelinePath === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
+      }
+      await fs.rm(timelineDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {

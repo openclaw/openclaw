@@ -2943,6 +2943,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalText(p.agentId);
+    const clientRunId = p.idempotencyKey;
     const requestedAgentId = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: rawSessionKey,
@@ -2959,6 +2960,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       {
         phase: "agent-turn",
         attributes: {
+          runId: clientRunId,
           hasAttachments: normalizedAttachments.length > 0,
           hasExplicitOrigin: explicitOriginResult.value !== undefined,
         },
@@ -3013,7 +3015,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       overrideMs: p.timeoutMs,
     });
     const now = Date.now();
-    const clientRunId = p.idempotencyKey;
 
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -3347,6 +3348,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const chatSendTraceAttributes = {
+        runId: clientRunId,
+        sessionKey,
+        agentId: selectedAgent.agentId ?? agentId,
+        provider: resolvedSessionModel.provider,
+        model: resolvedSessionModel.model,
         hasAttachments: normalizedAttachments.length > 0,
         hasExplicitOrigin: explicitOriginResult.value !== undefined,
         hasConnectedClient: client?.connect !== undefined,

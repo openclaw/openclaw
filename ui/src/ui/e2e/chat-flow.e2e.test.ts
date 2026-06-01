@@ -56,6 +56,26 @@ async function chatThreadDistanceFromBottom(page: Page): Promise<number> {
   });
 }
 
+async function controlUiEventPayloads(
+  page: Page,
+  event: string,
+): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate((eventName) => {
+    const app = document.querySelector("openclaw-app") as
+      | (Element & { eventLogBuffer?: unknown[] })
+      | null;
+    return (app?.eventLogBuffer ?? [])
+      .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
+        const candidate = entry as { event?: unknown; payload?: unknown };
+        return (
+          candidate.event === eventName &&
+          Boolean(candidate.payload && typeof candidate.payload === "object")
+        );
+      })
+      .map((entry) => entry.payload);
+  }, event);
+}
+
 function chatSessionListResponse() {
   return {
     count: 2,
@@ -280,6 +300,40 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "First token visible.",
+        message: {
+          content: [{ text: "First token visible.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      await page.waitForFunction((expectedRunId) => {
+        const app = document.querySelector("openclaw-app") as
+          | (Element & { eventLogBuffer?: unknown[] })
+          | null;
+        return (app?.eventLogBuffer ?? []).some((entry) => {
+          const candidate = entry as {
+            event?: unknown;
+            payload?: { phase?: unknown; runId?: unknown };
+          };
+          return (
+            candidate.event === "control-ui.chat.send" &&
+            candidate.payload?.phase === "first-assistant-visible" &&
+            candidate.payload.runId === expectedRunId
+          );
+        });
+      }, runId);
+      const firstOutputEvents = await controlUiEventPayloads(page, "control-ui.chat.send");
+      expect(
+        firstOutputEvents.some(
+          (payload) => payload.phase === "first-assistant-visible" && payload.runId === runId,
+        ),
+      ).toBe(true);
       await gateway.resolveDeferred("chat.history", {
         messages: [],
         sessionId: "control-ui-e2e-session",

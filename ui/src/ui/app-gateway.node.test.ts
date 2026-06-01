@@ -125,6 +125,7 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
   activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
@@ -207,6 +208,18 @@ function connectHostGateway() {
   connectGateway(host);
   const client = requireGatewayClient();
   return { host, client };
+}
+
+function eventPayloads(host: TestGatewayHost, event: string): Array<Record<string, unknown>> {
+  const payloads: Array<Record<string, unknown>> = [];
+  for (const entry of host.eventLogBuffer) {
+    const candidate = entry as { event?: unknown; payload?: unknown };
+    if (candidate.event !== event || !candidate.payload || typeof candidate.payload !== "object") {
+      continue;
+    }
+    payloads.push(candidate.payload as Record<string, unknown>);
+  }
+  return payloads;
 }
 
 function emitToolResultEvent(client: GatewayClientMock) {
@@ -1102,6 +1115,67 @@ describe("connectGateway", () => {
     emitToolResultEvent(client);
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("records first assistant paint timing for tracked chat sends", async () => {
+    const { host, client } = connectHostGateway();
+    host.updateComplete = Promise.resolve();
+    host.chatRunId = "run-first-visible";
+    host.chatStream = "";
+    (
+      host as TestGatewayHost & {
+        chatSendTimingsByRun: Map<string, Record<string, unknown>>;
+      }
+    ).chatSendTimingsByRun = new Map([
+      [
+        "run-first-visible",
+        {
+          runId: "run-first-visible",
+          sessionKey: "main",
+          sendAttempts: 1,
+          sendState: "sending",
+          submittedAtMs: 100,
+          requestStartedAtMs: 125,
+          ackAtMs: 150,
+          ackStatus: "started",
+        },
+      ],
+    ]);
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-first-visible",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Hello",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          timestamp: Date.now(),
+        },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        eventPayloads(host, "control-ui.chat.send").some(
+          (payload) => payload.phase === "first-assistant-visible",
+        ),
+      ).toBe(true),
+    );
+    const firstVisible = eventPayloads(host, "control-ui.chat.send").find(
+      (payload) => payload.phase === "first-assistant-visible",
+    );
+    expect(firstVisible).toMatchObject({
+      runId: "run-first-visible",
+      sessionKey: "main",
+      ackStatus: "started",
+      eventState: "delta",
+      sendState: "sending",
+    });
+    expect(firstVisible?.ackToFirstAssistantEventMs).toEqual(expect.any(Number));
+    expect(host.chatStream).toBe("Hello");
   });
 
   it("renders session-scoped tool events for externally started runs", () => {

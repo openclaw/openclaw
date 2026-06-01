@@ -9,6 +9,7 @@ import {
   flushChatQueueForEvent,
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
+  recordFirstAssistantChatTiming,
   refreshChatAvatar,
   scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
@@ -895,6 +896,11 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const activeRunIdBeforeEvent = host.chatRunId;
   const state = handleChatEvent(host as unknown as ChatState, payload);
+  recordFirstAssistantChatTiming(
+    host as unknown as Parameters<typeof recordFirstAssistantChatTiming>[0],
+    payload,
+    state,
+  );
   const terminalEventIsForDifferentActiveRun = isEventForDifferentActiveRun(
     payload,
     activeRunIdBeforeEvent,
