@@ -28,7 +28,7 @@ import {
   runtimeSatisfies,
   type RuntimeDetails,
 } from "../infra/runtime-guard.js";
-import { note } from "../terminal/note.js";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { shortenHomePath } from "../utils.js";
 
 // ─── Types ──────────────────────────────────────────────────────
