@@ -288,11 +288,6 @@ function readPnpmLockScopedVersionOverrides() {
   }
   return expandScopedOverrideChildren(overrides);
 }
-
-function setKey(values) {
-  return [...values].toSorted((left, right) => left.localeCompare(right)).join("\0");
-}
-
 function mergeOverrideEntry(merged, name, spec) {
   const current = merged[name];
   if (current === undefined) {

@@ -196,12 +196,10 @@ export async function dispatchOutbound(
       clearTimeout(toolOnlyTimeoutId);
       toolRenewalCount++;
     }
-    toolOnlyTimeoutId = setTimeout(async () => {
+    toolOnlyTimeoutId = setTimeout(() => {
       if (!hasBlockResponse && !toolFallbackSent) {
         toolFallbackSent = true;
-        try {
-          await sendToolFallback();
-        } catch {}
+        void sendToolFallback().catch(() => {});
       }
     }, TOOL_ONLY_TIMEOUT);
     return true;

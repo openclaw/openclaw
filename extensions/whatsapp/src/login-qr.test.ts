@@ -13,8 +13,8 @@ import {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const createWaSocket = vi.fn();
-  const waitForWaConnection = vi.fn();
+  const createWaSocketLocal = vi.fn();
+  const waitForWaConnectionLocal = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
   const getStatusCode = vi.fn(
     (err: unknown) =>
@@ -22,21 +22,21 @@ vi.mock("./session.js", async () => {
       (err as { status?: number })?.status ??
       (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
   );
-  const readWebAuthExistsForDecision = vi.fn(async () => ({
+  const readWebAuthExistsForDecisionLocal = vi.fn(async () => ({
     outcome: "stable" as const,
     exists: false,
   }));
-  const readWebSelfId = vi.fn(() => ({ e164: null, jid: null, lid: null }));
-  const logoutWeb = vi.fn(async () => true);
+  const readWebSelfIdLocal = vi.fn(() => ({ e164: null, jid: null, lid: null }));
+  const logoutWebLocal = vi.fn(async () => true);
   return {
     ...actual,
-    createWaSocket,
-    waitForWaConnection,
+    createWaSocket: createWaSocketLocal,
+    waitForWaConnection: waitForWaConnectionLocal,
     formatError,
     getStatusCode,
-    readWebAuthExistsForDecision,
-    readWebSelfId,
-    logoutWeb,
+    readWebAuthExistsForDecision: readWebAuthExistsForDecisionLocal,
+    readWebSelfId: readWebSelfIdLocal,
+    logoutWeb: logoutWebLocal,
   };
 });
 

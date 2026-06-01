@@ -7,7 +7,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createTaskFlowForTask,
   createManagedTaskFlow,
   getTaskFlowById,
   requestFlowCancel,

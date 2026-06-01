@@ -444,7 +444,7 @@ describe("gateway server cron", () => {
     });
 
     const cronEvents = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
@@ -508,7 +508,7 @@ describe("gateway server cron", () => {
     });
 
     const cronEvents = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
 
     try {
       const routeRes = await directCronReq(cronState, "cron.add", {
@@ -1053,7 +1053,7 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     const events = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: events.broadcast });
+    const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {

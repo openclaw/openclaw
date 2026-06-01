@@ -1217,7 +1217,7 @@ export async function runCodexAppServerAttempt(
     },
   });
 
-  const releaseTurnAfterTerminalDynamicTool = (params: {
+  const releaseTurnAfterTerminalDynamicTool = (paramsValue: {
     call: CodexDynamicToolCallParams;
     response: CodexDynamicToolCallResponse;
     durationMs: number;
@@ -1226,7 +1226,7 @@ export async function runCodexAppServerAttempt(
       !shouldReleaseTurnAfterTerminalDynamicTool({
         completed,
         aborted: runAbortController.signal.aborted,
-        responseSuccess: params.response.success,
+        responseSuccess: paramsValue.response.success,
         currentTurnHadNonTerminalDynamicToolResult,
         activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
@@ -1237,22 +1237,22 @@ export async function runCodexAppServerAttempt(
     }
     pendingTerminalDynamicToolRelease = undefined;
     trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
-      threadId: params.call.threadId,
-      turnId: params.call.turnId,
-      toolCallId: params.call.callId,
-      name: params.call.tool,
-      durationMs: params.durationMs,
+      threadId: paramsValue.call.threadId,
+      turnId: paramsValue.call.turnId,
+      toolCallId: paramsValue.call.callId,
+      name: paramsValue.call.tool,
+      durationMs: paramsValue.durationMs,
     });
     embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
-      threadId: params.call.threadId,
-      turnId: params.call.turnId,
-      toolCallId: params.call.callId,
-      tool: params.call.tool,
-      durationMs: params.durationMs,
+      threadId: paramsValue.call.threadId,
+      turnId: paramsValue.call.turnId,
+      toolCallId: paramsValue.call.callId,
+      tool: paramsValue.call.tool,
+      durationMs: paramsValue.durationMs,
     });
     interruptCodexTurnBestEffort(client, {
-      threadId: params.call.threadId,
-      turnId: params.call.turnId,
+      threadId: paramsValue.call.threadId,
+      turnId: paramsValue.call.turnId,
       timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
     });
     completed = true;
@@ -1290,12 +1290,12 @@ export async function runCodexAppServerAttempt(
     immediate.unref?.();
   };
 
-  const scheduleTurnReleaseAfterTerminalDynamicTool = (params: {
+  const scheduleTurnReleaseAfterTerminalDynamicTool = (paramsLocal: {
     call: CodexDynamicToolCallParams;
     response: CodexDynamicToolCallResponse;
     durationMs: number;
   }) => {
-    pendingTerminalDynamicToolRelease = params;
+    pendingTerminalDynamicToolRelease = paramsLocal;
     scheduleTerminalDynamicToolReleaseCheck();
   };
 
@@ -2090,8 +2090,8 @@ export async function runCodexAppServerAttempt(
   steeringQueueRef.current = activeSteeringQueue;
   const handle = {
     kind: "embedded" as const,
-    queueMessage: async (text: string, options?: CodexSteeringQueueOptions) =>
-      activeSteeringQueue.queue(text, options),
+    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
+      activeSteeringQueue.queue(text, optionsLocal),
     isStreaming: () => !completed,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -2280,7 +2280,8 @@ export async function runCodexAppServerAttempt(
       });
     }
     if (activeContextEngine) {
-      const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
+      const activeContextEnginePluginIdLocal =
+        resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
         (await readMirroredSessionHistoryMessages(activeSessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
@@ -2301,7 +2302,7 @@ export async function runCodexAppServerAttempt(
           cwd: effectiveCwd,
           agentDir,
           activeAgentId: sessionAgentId,
-          contextEnginePluginId: activeContextEnginePluginId,
+          contextEnginePluginId: activeContextEnginePluginIdLocal,
           tokenBudget: params.contextTokenBudget,
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,

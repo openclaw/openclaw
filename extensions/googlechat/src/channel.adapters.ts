@@ -287,13 +287,13 @@ export const googlechatOutboundAdapter = {
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
+        resolveChannelLimitMb: ({ cfg: cfgLocal, accountId: accountIdLocal }) =>
           (
-            cfg.channels?.googlechat as
+            cfgLocal.channels?.googlechat as
               | { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number }
               | undefined
-          )?.accounts?.[accountId]?.mediaMaxMb ??
-          (cfg.channels?.googlechat as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
+          )?.accounts?.[accountIdLocal]?.mediaMaxMb ??
+          (cfgLocal.channels?.googlechat as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
       const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;

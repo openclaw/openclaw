@@ -4,7 +4,6 @@ import {
   createJob,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
-  resolveJobPayloadTextForMain,
 } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";

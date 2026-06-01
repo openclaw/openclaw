@@ -26,7 +26,7 @@
     "eslint/no-return-assign": "error",
     "eslint/no-sequences": "error",
     "eslint/no-self-compare": "error",
-    "eslint/no-shadow": "off",
+    "eslint/no-shadow": "error",
     "eslint/no-implicit-coercion": "error",
     "eslint/no-var": "error",
     "eslint/no-useless-call": "error",
@@ -35,7 +35,7 @@
     "eslint/no-useless-constructor": "error",
     "eslint/no-useless-rename": "error",
     "eslint/no-useless-return": "error",
-    "eslint/no-unused-vars": "off",
+    "eslint/no-unused-vars": "error",
     "eslint/no-warning-comments": "error",
     "eslint/no-unmodified-loop-condition": "error",
     "eslint/no-new-wrappers": "error",
@@ -78,6 +78,7 @@
     "typescript/no-extraneous-class": "error",
     "typescript/no-import-type-side-effects": "error",
     "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-misused-promises": "error",
     "typescript/no-inferrable-types": "error",
     "typescript/no-non-null-asserted-nullish-coalescing": "error",
     "typescript/no-unnecessary-qualifier": "error",
@@ -229,15 +230,7 @@
         "**/*test-support.ts"
       ],
       "rules": {
-        "typescript/no-explicit-any": "off",
-        "typescript/unbound-method": "off",
-        "eslint/no-unsafe-optional-chaining": "off"
-      }
-    },
-    {
-      "files": ["src/agents/embedded-agent-runner/run/attempt.ts"],
-      "rules": {
-        "eslint/no-shadow": "error"
+        "typescript/no-explicit-any": "off"
       }
     }
   ]

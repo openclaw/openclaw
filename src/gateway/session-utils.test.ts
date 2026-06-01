@@ -197,6 +197,36 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
+  test("session list search includes direct-session origin display labels", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const store = {
+      "agent:main:telegram:direct:42": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "openclaw-tui" },
+        updatedAt: 2,
+      } as SessionEntry,
+      "agent:main:telegram:direct:99": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "other-direct" },
+        updatedAt: 1,
+      } as SessionEntry,
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "openclaw-tui" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "agent:main:telegram:direct:42",
+    ]);
+    expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
+  });
+
   test("session lists mark the final offset page without hasMore", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -701,6 +731,60 @@ describe("gateway session utils", () => {
     expect(classifySessionKey("main")).toBe("direct");
     const entry = { chatType: "group" } as SessionEntry;
     expect(classifySessionKey("main", entry)).toBe("group");
+  });
+
+  test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:42": entry },
+      key: "agent:main:telegram:direct:42",
+      entry,
+    });
+    expect(row.displayName).toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "group",
+      channel: "telegram",
+      subject: "Engineering",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:group:99": entry },
+      key: "agent:main:telegram:group:99",
+      entry,
+    });
+    expect(row.displayName).toMatch(/^telegram:/);
+    expect(row.displayName).not.toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      label: "Alice",
+      origin: { label: "openclaw-tui" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:42": entry },
+      key: "agent:main:telegram:direct:42",
+      entry,
+    });
+    expect(row.displayName).toBe("Alice");
   });
 
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {

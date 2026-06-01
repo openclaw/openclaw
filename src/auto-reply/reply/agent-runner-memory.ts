@@ -7,11 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import {
-  classifyCompactionReason,
-  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
-} from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { isRecoverableNativeHarnessBindingFailure } from "../../agents/harness/compaction-recovery.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -187,10 +183,6 @@ function isPreflightCompactionSkipReason(reason?: string): boolean {
     classification === "no_compactable_entries" ||
     classification === "already_compacted_recently"
   );
-}
-
-function isDeferredPreflightCompactionReason(reason?: string): boolean {
-  return normalizeOptionalString(reason) === DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON;
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -893,6 +885,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     thinkLevel: params.followupRun.run.thinkLevel,
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
+    force: true,
+    forcePreflight: true,
+    preflightRequired: true,
+    preflightCompactionTrigger: compactionTrigger,
     deferOwningContextEngineCompaction: false,
     contextTokenBudget: contextWindowTokens,
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
@@ -907,25 +903,17 @@ export async function runPreflightCompactionIfNeeded(params: {
       return entry ?? params.sessionEntry;
     }
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-    if (isRecoverableNativeHarnessBindingFailure(result)) {
-      logVerbose(
-        `preflightCompaction continuing after recoverable native harness binding failure: sessionKey=${params.sessionKey} reason=${reason}`,
-      );
-      return entry ?? params.sessionEntry;
-    }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
   if (!result.compacted) {
-    const reason = normalizeOptionalString(result.reason);
-    if (isDeferredPreflightCompactionReason(reason)) {
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+    const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
+    if (isPreflightCompactionSkipReason(reason)) {
+      logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+      return entry ?? params.sessionEntry;
     }
-    logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason ?? "not_compacted"}`,
-    );
-    return entry ?? params.sessionEntry;
+    logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
   await deps.incrementCompactionCount({
@@ -1365,8 +1353,8 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           skipMaintenance: true,
           takeCacheOwnership: true,
-          update: async (entry) => ({
-            memoryFlushFailureCount: Math.max(0, entry.memoryFlushFailureCount ?? 0) + 1,
+          update: async (sessionEntry) => ({
+            memoryFlushFailureCount: Math.max(0, sessionEntry.memoryFlushFailureCount ?? 0) + 1,
             memoryFlushLastFailedAt: failedAt,
             memoryFlushLastFailureError: truncatedError,
           }),
@@ -1413,9 +1401,9 @@ export async function runMemoryFlushIfNeeded(params: {
             sessionKey: params.sessionKey,
             skipMaintenance: true,
             takeCacheOwnership: true,
-            update: async (entry) => ({
+            update: async (sessionEntry) => ({
               memoryFlushAt: memoryDeps.now(),
-              memoryFlushCompactionCount: entry.compactionCount ?? 0,
+              memoryFlushCompactionCount: sessionEntry.compactionCount ?? 0,
             }),
           });
           if (exhaustedEntry) {

@@ -334,16 +334,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     if (!contextEngine.bootstrap) {
       throw new Error("expected bootstrap hook");
     }
-    expect(contextEngine.bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
-      NonNullable<ContextEngine["bootstrap"]>
-    >[0];
+    expect(contextEngine["bootstrap"]).toHaveBeenCalledTimes(1);
+    const bootstrapParams = requireFirstCallArg(
+      contextEngine["bootstrap"],
+      "bootstrap",
+    ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
     expect(bootstrapParams.sessionId).toBe("session-1");
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.sessionFile).toBe(sessionFile);
 
-    expect(contextEngine.assemble).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+    expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
       ContextEngine["assemble"]
     >[0];
     expect(assembleParams.sessionId).toBe("session-1");
@@ -385,12 +386,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     if (!contextEngine.bootstrap) {
       throw new Error("expected bootstrap hook");
     }
-    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
-      NonNullable<ContextEngine["bootstrap"]>
-    >[0];
+    const bootstrapParams = requireFirstCallArg(
+      contextEngine["bootstrap"],
+      "bootstrap",
+    ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
     expect(bootstrapParams.sessionKey).toBe("agent:main:main");
 
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
       ContextEngine["assemble"]
     >[0];
     expect(assembleParams.sessionKey).toBe("agent:main:main");
@@ -1640,7 +1642,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
 
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
       ContextEngine["assemble"]
     >[0];
     expect(assembleParams.messages.map((message) => message.role)).toEqual([

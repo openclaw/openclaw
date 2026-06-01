@@ -111,6 +111,36 @@ vi.mock("../process/supervisor/index.js", () => {
     env[readPathKey(env)] = value;
   };
   const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const parseShellSingleQuoted = (input: string) => {
+    if (!input.startsWith("'")) {
+      return null;
+    }
+    let output = "";
+    for (let index = 1; index < input.length; index += 1) {
+      const char = input[index];
+      if (char !== "'") {
+        output += char;
+        continue;
+      }
+      if (input.startsWith("'\\''", index)) {
+        output += "'";
+        index += 3;
+        continue;
+      }
+      return input.slice(index + 1).trim().length === 0 ? output : null;
+    }
+    return null;
+  };
+  const unwrapSnapshotEvalCommand = (command: string) => {
+    const evalIndex = command.lastIndexOf("\neval ");
+    const evalCommand =
+      evalIndex === -1
+        ? command.trimStart().startsWith("eval ")
+          ? command.trimStart().slice("eval ".length)
+          : null
+        : command.slice(evalIndex + "\neval ".length);
+    return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+  };
   const splitCommands = (command: string) => {
     const commands: string[] = [];
     for (const part of command.split(";")) {
@@ -147,7 +177,7 @@ vi.mock("../process/supervisor/index.js", () => {
 
   const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
     const shellEnv = { ...env };
-    return splitCommands(command)
+    return splitCommands(unwrapSnapshotEvalCommand(command))
       .map((segment) => {
         applySegmentShellEffects(segment, shellEnv);
         return stdoutForSegment(segment, shellEnv);
@@ -160,7 +190,9 @@ vi.mock("../process/supervisor/index.js", () => {
       spawn: async (input: SpawnInput) => {
         const command = extractCommand(input);
         const output = commandOutput(command, input.env);
-        const exitCode = splitCommands(command).includes("exit 1") ? 1 : 0;
+        const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
+          ? 1
+          : 0;
         const stagedOutput = command.includes("after")
           ? output.replace(/after[^\n]*\n?/gu, "")
           : output;

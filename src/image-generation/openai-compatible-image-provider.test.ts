@@ -7,20 +7,22 @@ import {
 const {
   assertOkOrThrowHttpErrorMock,
   createProviderOperationDeadlineMock,
+  fetchWithTimeoutGuardedMock,
   isProviderApiKeyConfiguredMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMsMock,
   resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
-  fetchWithTimeoutGuardedMock,
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => ({
     timeoutMs: params.timeoutMs,
     label: params.label,
   })),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
@@ -40,8 +42,11 @@ const {
   resolveProviderOperationTimeoutMsMock: vi.fn(
     (params: Record<string, unknown>) => params.defaultTimeoutMs,
   ),
+  resolveProviderOperationRemainingTimeoutMsMock: vi.fn(
+    (params: { deadline: { timeoutMs?: number }; defaultTimeoutMs: number }) =>
+      params.deadline.timeoutMs ?? params.defaultTimeoutMs,
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
-  fetchWithTimeoutGuardedMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -55,22 +60,14 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMs: resolveProviderOperationRemainingTimeoutMsMock,
   resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
-
-vi.mock("../media-understanding/shared.js", async () => {
-  const actual = await vi.importActual<typeof import("../media-understanding/shared.js")>(
-    "../media-understanding/shared.js",
-  );
-  return {
-    ...actual,
-    fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
-  };
-});
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
   const [call] = mock.mock.calls;
@@ -159,14 +156,15 @@ describe("OpenAI-compatible image provider helper", () => {
     assertOkOrThrowHttpErrorMock.mockClear();
     createProviderOperationDeadlineMock.mockClear();
     isProviderApiKeyConfiguredMock.mockClear();
+    fetchWithTimeoutGuardedMock.mockReset();
     postJsonRequestMock.mockReset();
     postMultipartRequestMock.mockReset();
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "provider-key" });
     resolveProviderHttpRequestConfigMock.mockClear();
+    resolveProviderOperationRemainingTimeoutMsMock.mockClear();
     resolveProviderOperationTimeoutMsMock.mockClear();
     sanitizeConfiguredModelProviderRequestMock.mockClear();
-    fetchWithTimeoutGuardedMock.mockReset();
   });
 
   it("builds provider metadata and delegates configuration checks", () => {
@@ -238,19 +236,19 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("scopes returned image URL downloads to the provider origin", async () => {
+  it("downloads OpenAI-compatible URL image responses through guarded provider HTTP", async () => {
     const requestRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
-    postJsonRequestMock.mockResolvedValueOnce({
+    postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
-          data: [{ url: "http://127.0.0.1:8082/v1/files/generated.png" }],
+          data: [{ url: "http://127.0.0.1:8080/generated.png" }],
         }),
       },
       release: requestRelease,
     });
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValue({
       response: new Response(pngBytes, { headers: { "content-type": "image/png" } }),
       release: downloadRelease,
     });
@@ -260,17 +258,12 @@ describe("OpenAI-compatible image provider helper", () => {
       provider: "sample",
       model: "sample-image",
       prompt: "draw a square",
-      ssrfPolicy: {
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-        allowPrivateNetwork: true,
-        allowedHostnames: ["internal.example"],
-      },
+      timeoutMs: 123,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       cfg: {
         models: {
           providers: {
             sample: {
-              baseUrl: "http://127.0.0.1:8082/v1",
               request: { allowPrivateNetwork: true },
             },
           },
@@ -278,55 +271,85 @@ describe("OpenAI-compatible image provider helper", () => {
       },
     } as never);
 
-    const downloadCall = fetchWithTimeoutGuardedMock.mock.calls[0];
-    expect(downloadCall?.[0]).toBe("http://127.0.0.1:8082/v1/files/generated.png");
-    const downloadInit = downloadCall?.[1] as RequestInit | undefined;
-    const downloadHeaders = new Headers(downloadInit?.headers);
-    expect(downloadHeaders.get("Authorization")).toBe("Bearer provider-key");
-    expect(downloadHeaders.has("Content-Type")).toBe(false);
-    expect(downloadCall?.[2]).toBeUndefined();
-    expect(downloadCall?.[3]).toBe(fetch);
-    expect(downloadCall?.[4]).toEqual({
-      ssrfPolicy: {
-        allowedOrigins: ["http://127.0.0.1:8082"],
-      },
-      dispatcherPolicy: { request: { allowPrivateNetwork: true } },
-      auditContext: "sample.image-url-download",
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledOnce();
+    const [url, init, timeoutMs, fetchFn, guardedOptions] = fetchWithTimeoutGuardedMock.mock
+      .calls[0] as [string, RequestInit, number | undefined, typeof fetch, Record<string, unknown>];
+    expect(url).toBe("http://127.0.0.1:8080/generated.png");
+    expect(init).toEqual({ method: "GET" });
+    expect(timeoutMs).toBe(123);
+    expect(fetchFn).toBe(fetch);
+    expect(createProviderOperationDeadlineMock).toHaveBeenCalledWith({
+      timeoutMs: 123,
+      label: "Sample image generation",
     });
-    expect(result.images[0]?.buffer).toEqual(pngBytes);
+    expect(resolveProviderOperationRemainingTimeoutMsMock).toHaveBeenCalledTimes(2);
+    expect(guardedOptions).toEqual({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      auditContext: "sample-image-download",
+    });
+    expect(result.images).toEqual([
+      {
+        buffer: pngBytes,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+      },
+    ]);
     expect(requestRelease).toHaveBeenCalledOnce();
     expect(downloadRelease).toHaveBeenCalledOnce();
   });
 
-  it("honors the configured generated-media cap for returned image URL downloads", async () => {
+  it("keeps provider transport policy for same-origin URL image responses", async () => {
     const requestRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
-    postJsonRequestMock.mockResolvedValueOnce({
+    postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
-          data: [{ url: "https://sample.example/v1/files/generated.png" }],
+          data: [{ url: "http://127.0.0.1:8080/generated.png" }],
         }),
       },
       release: requestRelease,
     });
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+    fetchWithTimeoutGuardedMock.mockResolvedValue({
       response: new Response(pngBytes, { headers: { "content-type": "image/png" } }),
       release: downloadRelease,
     });
     const provider = createProvider();
 
-    await expect(
-      provider.generateImage({
-        provider: "sample",
-        model: "sample-image",
-        prompt: "draw a square",
-        cfg: {
-          agents: { defaults: { mediaMaxMb: 0.000001 } },
+    await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "draw a square",
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      cfg: {
+        models: {
+          providers: {
+            sample: {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              request: { allowPrivateNetwork: true },
+            },
+          },
         },
-      } as never),
-    ).rejects.toThrow("OpenAI-compatible image URL download exceeded maxBytes 1");
+      },
+    } as never);
 
+    const downloadCall = fetchWithTimeoutGuardedMock.mock.calls[0] as [
+      string,
+      RequestInit,
+      number | undefined,
+      typeof fetch,
+      Record<string, unknown>,
+    ];
+    expect(downloadCall[1].method).toBe("GET");
+    expect(downloadCall[1].headers).toBeInstanceOf(Headers);
+    expect(new Headers(downloadCall[1].headers).get("Authorization")).toBe("Bearer provider-key");
+    expect(new Headers(downloadCall[1].headers).has("Content-Type")).toBe(false);
+    const guardedOptions = downloadCall[4];
+    expect(guardedOptions).toEqual({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true, allowPrivateNetwork: true },
+      dispatcherPolicy: { request: { allowPrivateNetwork: true } },
+      auditContext: "sample-image-download",
+    });
     expect(requestRelease).toHaveBeenCalledOnce();
     expect(downloadRelease).toHaveBeenCalledOnce();
   });
@@ -377,12 +400,12 @@ describe("OpenAI-compatible image provider helper", () => {
       timeoutMs: 123,
       label: "Sample image generation",
     });
-    expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith({
+    expect(resolveProviderOperationRemainingTimeoutMsMock).toHaveBeenCalledWith({
       deadline: { timeoutMs: 123, label: "Sample image generation" },
       defaultTimeoutMs: 60_000,
     });
     const timeoutRequest = requireFirstCallArg(postJsonRequestMock) as { timeoutMs?: number };
-    expect(timeoutRequest.timeoutMs).toBe(60_000);
+    expect(timeoutRequest.timeoutMs).toBe(123);
   });
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {

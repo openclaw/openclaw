@@ -22,6 +22,8 @@ export {
   type ImageMimeTypeDetection,
   type OpenAiCompatibleImageResponseEntry,
   type OpenAiCompatibleImageResponsePayload,
+  type OpenAiCompatibleImageUrlDownload,
+  type OpenAiCompatibleImageUrlDownloader,
 } from "../image-generation/image-assets.js";
 
 export type {

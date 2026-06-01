@@ -759,7 +759,7 @@ export class RealtimeCallHandler {
           text,
         });
       },
-      onToolCall: (toolEvent, session) => {
+      onToolCall: (toolEvent, sessionLocal) => {
         const turnId = ensureTalkTurn();
         emitTalkEvent({
           type: "tool.call",
@@ -772,7 +772,7 @@ export class RealtimeCallHandler {
           `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
         );
         void this.executeToolCall(
-          session,
+          sessionLocal,
           callId,
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,

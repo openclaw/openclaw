@@ -298,7 +298,7 @@ async function postWebhookPayloadWithChunkPlan(params: {
         },
       },
       (res) => {
-        collectResponseBody(res, settle.resolve);
+        collectResponseBody(res, settle["resolve"]);
       },
     );
 

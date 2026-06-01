@@ -90,7 +90,7 @@ describe("model override pipeline wiring", () => {
     catchErrors?: boolean;
   }) {
     const handlerSpy = vi.fn(
-      (eventValue: PluginHookBeforeModelResolveEvent) =>
+      (_eventValue: PluginHookBeforeModelResolveEvent) =>
         ({
           modelOverride: "demo-local-model",
           providerOverride: "demo-local-provider",

@@ -6,7 +6,6 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   loadCronQuarantineFile,
   loadCronStore,

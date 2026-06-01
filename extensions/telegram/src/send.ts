@@ -776,9 +776,9 @@ export async function sendMessageTelegram(
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
     const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
-    return htmlChunks.map((htmlText, index) => ({
-      htmlText,
-      plainText: plainTextChunks[index] ?? htmlText,
+    return htmlChunks.map((htmlTextLocal, index) => ({
+      htmlText: htmlTextLocal,
+      plainText: plainTextChunks[index] ?? htmlTextLocal,
     }));
   };
 

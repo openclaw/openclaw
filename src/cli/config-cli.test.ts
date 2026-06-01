@@ -23,7 +23,7 @@ const mockWriteConfigFile = vi.fn<
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
-const mockLoadPluginMetadataSnapshot = vi.fn((configForTest: unknown) =>
+const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
 

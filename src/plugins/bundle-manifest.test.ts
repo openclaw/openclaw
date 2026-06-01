@@ -120,7 +120,7 @@ function setupClaudeHookFixture(
   });
 }
 
-type ExpectedBundlePluginManifest = Omit<
+type _ExpectedBundlePluginManifest = Omit<
   BundlePluginManifest,
   "bundleFormat" | "skills" | "settingsFiles" | "hooks" | "capabilities"
 > & {

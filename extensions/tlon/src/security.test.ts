@@ -318,9 +318,6 @@ describe("Security: Channel Authorization Logic", () => {
   });
 
   it("empty allowedShips with restricted mode should block all", () => {
-    // If a channel is restricted but has no allowed ships,
-    // no one should be able to send messages
-    const modeValue = "restricted";
     const allowedShips: string[] = [];
     const sender = "~random-ship";
 

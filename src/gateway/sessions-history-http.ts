@@ -266,14 +266,14 @@ export async function handleSessionHistoryHttpRequest(
   };
 
   const isStreamStillAuthorized = async (): Promise<boolean> => {
-    const cfg = getRuntimeConfig();
+    const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       req,
       auth: opts.getResolvedAuth?.() ?? opts.auth,
-      trustedProxies: cfg.gateway?.trustedProxies,
-      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
+      trustedProxies: cfgLocal.gateway?.trustedProxies,
+      allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
       rateLimiter: opts.rateLimiter,
-      cfg,
+      cfg: cfgLocal,
     });
     if (!currentRequestAuth.ok) {
       return false;

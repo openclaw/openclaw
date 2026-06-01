@@ -233,9 +233,9 @@ export function createLsToolDefinition(
       text.setText(formatLsCall(args, theme));
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatLsResult(result, options, theme, context.showImages));
+      text.setText(formatLsResult(result, optionsLocal, theme, context.showImages));
       return text;
     },
   };

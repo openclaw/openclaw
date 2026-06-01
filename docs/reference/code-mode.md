@@ -100,6 +100,11 @@ The shorthand is also accepted:
 Code mode remains off when `tools.codeMode` is omitted, `false`, or an object
 without `enabled: true`.
 
+When you use sandboxed agents with configured MCP servers, also make sure the
+sandbox tool policy allows the bundled MCP plugin, for example with
+`tools.sandbox.tools.alsoAllow: ["bundle-mcp"]`. See
+[Configuration - tools and custom providers](/gateway/config-tools#mcp-and-plugin-tools-inside-sandbox-tool-policy).
+
 Use explicit limits when you want tighter bounds:
 
 ```json5
@@ -441,12 +446,13 @@ const hits = await tools.web_search({ query: "OpenClaw code mode" });
 
 MCP catalog entries are not callable through `tools.call(...)` or convenience
 functions in code mode. They are exposed only through the generated `MCP`
-namespace, which includes TypeScript-style API headers for discovery:
+namespace. TypeScript-style declaration files are available through the
+read-only `API` virtual file surface, so agents can inspect MCP signatures
+without adding MCP schemas to the prompt:
 
 ```typescript
-const servers = await MCP.$api();
-const githubApi = await MCP.github.$api();
-const createIssueApi = await MCP.github.$api("createIssue", { schema: true });
+const files = await API.list("mcp");
+const githubApi = await API.read("mcp/github.d.ts");
 
 const issue = await MCP.github.createIssue({
   owner: "openclaw",
@@ -462,7 +468,8 @@ const prompt = await MCP.docs.prompts.get({
 });
 ```
 
-`MCP.<server>.$api()` returns a compact header inferred from MCP tool metadata:
+`API.read("mcp/<server>.d.ts")` returns compact declarations inferred from MCP
+tool metadata:
 
 ```typescript
 type McpToolResult = {
@@ -490,6 +497,20 @@ declare namespace MCP.github {
   }): Promise<McpToolResult>;
 }
 ```
+
+The declaration files are virtual, not files written under the workspace or
+state directory. For each code-mode `exec` call, OpenClaw builds the run-scoped
+tool catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
+`mcp/<server>.d.ts` declaration per visible server, and injects that small
+read-only table into the QuickJS worker. Guest code sees only the `API` object:
+`API.list(prefix?)` returns file metadata and `API.read(path)` returns the
+selected declaration content. Unknown paths and `.` / `..` segments are rejected.
+
+This keeps large MCP schemas out of the model prompt. The agent learns that the
+virtual API exists from the `exec` tool description, reads only the needed
+declaration file, and then calls `MCP.<server>.<tool>()` with one object argument.
+`MCP.<server>.$api()` remains available as an inline fallback when the agent
+needs a single-tool schema response inside the program.
 
 The guest runtime must not expose host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
@@ -981,8 +1002,9 @@ Code mode coverage should prove:
 - all effective non-MCP tools appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
 - `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
-- MCP namespace `$api()` returns TypeScript-style headers inferred from MCP
-  schemas
+- `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` expose TypeScript-style
+  MCP declarations without a bridge/tool call
+- MCP namespace `$api()` remains available as an inline fallback for schemas
 - MCP namespace calls work for visible MCP tools with one object input, while
   direct MCP catalog entries are absent from `tools.*`
 - Tool Search control tools are hidden from both the model surface and the hidden
@@ -1014,8 +1036,8 @@ Run these as integration or end-to-end tests when changing the runtime:
 7. In `exec`, read `ALL_TOOLS` and assert the effective test tools are present.
 8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
    `tools.describe`, and `tools.call`.
-9. In `exec`, call `MCP.$api()` and `MCP.<server>.$api()` and assert the headers
-   describe visible MCP tools.
+9. In `exec`, call `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` and
+   assert the declaration files describe visible MCP tools.
 10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and
     assert direct MCP catalog entries are absent from `ALL_TOOLS` and `tools.*`.
 11. Assert denied tools are absent and cannot be called by guessed id.

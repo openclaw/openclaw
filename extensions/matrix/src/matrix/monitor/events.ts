@@ -271,9 +271,8 @@ export function registerMatrixMonitorEvents(params: {
     );
   });
 
-  client.on(
-    "room.failed_decryption",
-    async (roomId: string, event: MatrixRawEvent, error: Error) => {
+  client.on("room.failed_decryption", (roomId: string, event: MatrixRawEvent, error: Error) => {
+    void (async () => {
       const failureState = postHealthySyncDecryptFailureTracker.recordFailure(roomId, event, error);
       const selfUserId = await resolveMatrixSelfUserId(client, logVerboseMessage);
       const sender = typeof event.sender === "string" ? event.sender : null;
@@ -320,8 +319,8 @@ export function registerMatrixMonitorEvents(params: {
       logVerboseMessage(
         `matrix: failed decrypt room=${roomId} id=${event.event_id ?? "unknown"} freshAfterHealthySync=${String(failureState.freshAfterHealthySync)} error=${error.message}`,
       );
-    },
-  );
+    })();
+  });
 
   client.on("verification.summary", (summary) => {
     void runMonitorTask("verification summary handler", async () => {

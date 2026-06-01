@@ -11,6 +11,8 @@ import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
   resolveReportArtifactDirs,
+  resolveReportRunSpecs,
+  resolveRunPlanConcurrency,
   resolveRunPlans,
 } from "../../scripts/test-group-report.mjs";
 
@@ -248,6 +250,7 @@ describe("scripts/test-group-report arg parsing", () => {
     ).toStrictEqual({
       allowFailures: true,
       compare: null,
+      concurrency: null,
       configs: ["a.ts", "b.ts"],
       fullSuite: false,
       groupBy: "folder",
@@ -275,6 +278,7 @@ describe("scripts/test-group-report arg parsing", () => {
     ).toStrictEqual({
       allowFailures: false,
       compare: { before: "before.json", after: "after.json" },
+      concurrency: null,
       configs: [],
       fullSuite: false,
       groupBy: "area",
@@ -291,6 +295,12 @@ describe("scripts/test-group-report arg parsing", () => {
   it("parses individual test duration threshold", () => {
     expect(parseTestGroupReportArgs(["--max-test-ms", "2000"])).toMatchObject({
       maxTestMs: 2000,
+    });
+  });
+
+  it("parses explicit run concurrency", () => {
+    expect(parseTestGroupReportArgs(["--concurrency", "4"])).toMatchObject({
+      concurrency: 4,
     });
   });
 });
@@ -321,6 +331,37 @@ describe("scripts/test-group-report run plans", () => {
         OPENCLAW_TEST_WORKERS: "2",
       }),
     ).toEqual({});
+  });
+
+  it("parallelizes repeated explicit configs but keeps full-suite profiling serial by default", () => {
+    expect(
+      resolveRunPlanConcurrency(parseTestGroupReportArgs(["--config", "a", "--config", "b"]), 2),
+    ).toBe(2);
+    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(["--full-suite"]), 8)).toBe(1);
+    expect(
+      resolveRunPlanConcurrency(
+        parseTestGroupReportArgs(["--full-suite", "--concurrency", "3"]),
+        8,
+      ),
+    ).toBe(3);
+    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(["--concurrency", "9"]), 2)).toBe(2);
+  });
+
+  it("isolates Vitest filesystem module caches for parallel report configs", () => {
+    const args = parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]);
+    const specs = resolveReportRunSpecs(
+      args,
+      [
+        { config: "a.ts", forwardedArgs: [], label: "a" },
+        { config: "b.ts", forwardedArgs: [], label: "b" },
+      ],
+      { cwd: "/repo", env: {} },
+    );
+
+    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
+      path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
+    ]);
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {

@@ -353,8 +353,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    void Promise.resolve(degradedProvider.close?.()).catch((err: unknown) => {
-      log.debug(`memory embeddings: failed to close degraded local provider: ${String(err)}`);
+    void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
     });
     log.warn("memory embeddings: local provider degraded after worker failure", {
       error: message,

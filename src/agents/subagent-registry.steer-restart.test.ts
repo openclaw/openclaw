@@ -65,7 +65,7 @@ vi.mock("../config/sessions.js", () => {
 });
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async (eventValue?: unknown, _ctx?: unknown) => {});
+const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 const removeInternalSessionEffectsTranscriptMock = vi.fn(async (_sessionFile?: string) => {});
 

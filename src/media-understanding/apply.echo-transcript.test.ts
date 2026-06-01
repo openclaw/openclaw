@@ -35,7 +35,7 @@ const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 const { MediaFetchErrorMock } = vi.hoisted(() => {
-  class MediaFetchErrorMock extends Error {
+  class MediaFetchErrorMockLocal extends Error {
     code: string;
     constructor(message: string, code: string) {
       super(message);
@@ -43,7 +43,7 @@ const { MediaFetchErrorMock } = vi.hoisted(() => {
       this.code = code;
     }
   }
-  return { MediaFetchErrorMock };
+  return { MediaFetchErrorMock: MediaFetchErrorMockLocal };
 });
 
 // ---------------------------------------------------------------------------

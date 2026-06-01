@@ -1010,7 +1010,7 @@ function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
   const text = payloads
     .filter((payload) => payload.isReasoning !== true)
     .map((payload) => payload.text)
-    .filter((text): text is string => Boolean(text))
+    .filter((textLocal): textLocal is string => Boolean(textLocal))
     .join("\n\n");
   return sanitizePendingFinalDeliveryText(text);
 }

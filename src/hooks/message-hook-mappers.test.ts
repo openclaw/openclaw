@@ -305,6 +305,15 @@ describe("message hook mappers", () => {
     expect(internalMetadata?.senderUsername).toBe("userone");
     expect(internalMetadata?.senderE164).toBe("+15551234567");
     expect(internalMetadata?.topicName).toBe("Deployments");
+    expect(internalMetadata?.mediaPath).toBe("/tmp/audio.ogg");
+    expect(internalMetadata?.mediaUrl).toBe("https://cdn.example.com/audio.ogg");
+    expect(internalMetadata?.mediaType).toBe("audio/ogg");
+    expect(internalMetadata?.mediaPaths).toEqual(["/tmp/audio.ogg", "/tmp/photo.jpg"]);
+    expect(internalMetadata?.mediaUrls).toEqual([
+      "https://cdn.example.com/audio.ogg",
+      "https://cdn.example.com/photo.jpg",
+    ]);
+    expect(internalMetadata?.mediaTypes).toEqual(["audio/ogg", "image/jpeg"]);
   });
 
   it("passes frozen trace copies to inbound claim and sent plugin hooks", () => {

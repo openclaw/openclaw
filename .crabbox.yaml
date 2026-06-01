@@ -48,6 +48,10 @@ aws:
   # leaking AWS region names into the Azure default capacity fallback list.
   region: eu-west-1
   rootGB: 400
+azure:
+  # The OpenClaw Azure subscription has reliable D2 spot capacity in eastus2;
+  # eastus rejects the same SKUs and can stall provisioning.
+  location: eastus2
 sync:
   delete: true
   checksum: false
@@ -73,6 +77,7 @@ jobs:
     provider: azure
     target: linux
     class: standard
+    type: Standard_D2ads_v6
     market: spot
     idleTimeout: 90m
     hydrate:
@@ -90,6 +95,7 @@ jobs:
     provider: azure
     target: linux
     class: standard
+    type: Standard_D2ads_v6
     market: spot
     idleTimeout: 90m
     hydrate:

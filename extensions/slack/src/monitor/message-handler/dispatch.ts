@@ -635,7 +635,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       },
       onStartError: (err) => {
         logTypingFailure({
-          log: (message) => runtime.error?.(danger(message)),
+          log: (messageValue) => runtime.error?.(danger(messageValue)),
           channel: "slack",
           action: "start",
           target: typingTarget,
@@ -644,7 +644,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       },
       onStopError: (err) => {
         logTypingFailure({
-          log: (message) => runtime.error?.(danger(message)),
+          log: (messageLocal) => runtime.error?.(danger(messageLocal)),
           channel: "slack",
           action: "stop",
           target: typingTarget,
@@ -1492,8 +1492,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
       const alreadyStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      const progressActive = await progressDraftGate.noteWork();
+      if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
         await refreshStartedProgressDraft();
       }
       return;
@@ -1533,12 +1533,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         await updateNativeProgressStream();
       } else {
         await progressDraftGate.startNow();
+        if (progressDraftGate.hasStarted) {
+          await updateNativeProgressStream();
+        }
       }
       return;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
-    await progressDraftGate.noteWork();
-    if (alreadyStarted && progressDraftGate.hasStarted) {
+    const progressActive = await progressDraftGate.noteWork();
+    if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
       await refreshStartedProgressDraft();
     }
   };

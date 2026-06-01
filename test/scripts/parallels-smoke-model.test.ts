@@ -84,7 +84,7 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
 
 function withEnv<T>(env: Record<string, string>, callback: () => T): T {
   const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, _value] of Object.entries(env)) {
     previous.set(key, process.env[key]);
   }
   for (const [key, value] of Object.entries(env)) {

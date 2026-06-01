@@ -716,7 +716,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect((firstMockCallArg(generateSpy) as { timeoutMs?: number }).timeoutMs).toBe(180_000);
-    expect((generateSpy.mock.calls.at(1)?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
+    expect((generateSpy.mock.calls.at(1)![0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
     expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });

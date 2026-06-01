@@ -15,6 +15,38 @@ const shellEnvMocks = vi.hoisted(() => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
 
+const parseShellSingleQuoted = (input: string) => {
+  if (!input.startsWith("'")) {
+    return null;
+  }
+  let output = "";
+  for (let index = 1; index < input.length; index += 1) {
+    const char = input[index];
+    if (char !== "'") {
+      output += char;
+      continue;
+    }
+    if (input.startsWith("'\\''", index)) {
+      output += "'";
+      index += 3;
+      continue;
+    }
+    return input.slice(index + 1).trim().length === 0 ? output : null;
+  }
+  return null;
+};
+
+const unwrapSnapshotEvalCommand = (command: string) => {
+  const evalIndex = command.lastIndexOf("\neval ");
+  const evalCommand =
+    evalIndex === -1
+      ? command.trimStart().startsWith("eval ")
+        ? command.trimStart().slice("eval ".length)
+        : null
+      : command.slice(evalIndex + "\neval ".length);
+  return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+};
+
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
     await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
@@ -40,7 +72,7 @@ vi.mock("../process/supervisor/index.js", () => ({
       env?: NodeJS.ProcessEnv;
       onStdout?: (chunk: string) => void;
     }) => {
-      const command = input.ptyCommand ?? input.argv?.at(-1) ?? "";
+      const command = unwrapSnapshotEvalCommand(input.ptyCommand ?? input.argv?.at(-1) ?? "");
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");

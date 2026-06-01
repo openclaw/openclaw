@@ -986,17 +986,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           scopes,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
-          verifyBootstrapToken: async ({ deviceId, publicKey, token, role, scopes }) =>
+          verifyBootstrapToken: async ({
+            deviceId,
+            publicKey,
+            token,
+            role: roleLocal,
+            scopes: scopesLocal,
+          }) =>
             await verifyDeviceBootstrapToken({
               deviceId,
               publicKey,
               token,
-              role,
-              scopes,
+              role: roleLocal,
+              scopes: scopesLocal,
             }),
-          verifyDeviceToken: async (params) =>
+          verifyDeviceToken: async (paramsLocal) =>
             await verifyDeviceToken({
-              ...params,
+              ...paramsLocal,
               requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
             }),
         });
@@ -1765,10 +1771,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             remoteIp: reportedClientIp,
           });
           const instanceIdRaw = connectParams.client.instanceId;
-          const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
+          const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceId) {
-            nodeIdsForPairing.add(instanceId);
+          if (instanceIdLocal) {
+            nodeIdsForPairing.add(instanceIdLocal);
           }
           for (const nodeId of nodeIdsForPairing) {
             void updatePairedNodeMetadata(nodeId, {

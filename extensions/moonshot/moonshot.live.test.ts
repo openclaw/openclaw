@@ -50,7 +50,7 @@ describeLive("moonshot plugin live", () => {
 
     expect(result?.provider).toBe("kimi");
     expect(typeof result?.content).toBe("string");
-    expect((result?.content as string).length).toBeGreaterThan(20);
+    expect((result!.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
   }, 180_000);
 });

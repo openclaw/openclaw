@@ -20,7 +20,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { externalCliDiscoveryForProviderAuth } from "../../agents/auth-profiles.js";
+import {
+  externalCliDiscoveryForProviderAuth,
+  removeProviderAuthProfilesWithLock,
+} from "../../agents/auth-profiles.js";
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
@@ -874,6 +877,13 @@ type LoginOptions = {
   setDefault?: boolean;
   yes?: boolean;
   agent?: string;
+  /**
+   * When true, remove any existing auth profiles for the resolved provider
+   * before invoking the auth flow. This is the escape hatch for stuck
+   * cached OAuth profiles where the standard `auth login` short-circuits
+   * because credentials already exist on disk.
+   */
+  force?: boolean;
 };
 
 /**
@@ -982,6 +992,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       `Unknown provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to see available provider plugins.`,
     );
   }
+
   const chosenMethod = await pickProviderAuthMethod({
     provider: selectedProvider,
     requestedMethod: opts.method,
@@ -992,6 +1003,35 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error(
       `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
     );
+  }
+
+  if (opts.force) {
+    // Purge existing profiles for this provider only after we have a valid
+    // auth method to invoke. Running the purge earlier (before method
+    // resolution) would delete the user's working credentials and then
+    // throw on an unresolvable `--method`, leaving them without a usable
+    // profile and no auth flow started. This is the documented escape
+    // hatch for stuck OAuth credentials (expired token, swapped account,
+    // etc.) where `auth login` would otherwise short-circuit on the cached
+    // profile.
+    try {
+      const clearedStore = await removeProviderAuthProfilesWithLock({
+        provider: selectedProvider.id,
+        agentDir,
+      });
+      if (!clearedStore) {
+        throw new Error("profile store update failed");
+      }
+      runtime.log(
+        `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Could not clear cached profiles for "${selectedProvider.id}" before re-login: ${message}. Re-login was not started because --force must remove cached profiles first.`,
+        { cause: err },
+      );
+    }
   }
 
   await runProviderAuthMethod({

@@ -2221,11 +2221,11 @@ function isJsonValue(value: unknown): value is JsonValue {
       continue;
     }
     if (Array.isArray(current.value)) {
-      for (const value of current.value) {
+      for (const valueLocal of current.value) {
         if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
-        stack.push({ value, depth: current.depth + 1 });
+        stack.push({ value: valueLocal, depth: current.depth + 1 });
       }
       continue;
     }

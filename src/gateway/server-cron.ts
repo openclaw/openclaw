@@ -170,42 +170,42 @@ export function buildGatewayCronService(params: {
     return { agentId, cfg: effectiveConfig };
   };
 
-  const resolveCronSessionKey = (params: {
+  const resolveCronSessionKey = (paramsValue: {
     runtimeConfig: OpenClawConfig;
     agentId: string;
     requestedSessionKey?: string | null;
   }) => {
-    const requested = params.requestedSessionKey?.trim();
+    const requested = paramsValue.requestedSessionKey?.trim();
     if (!requested) {
       return resolveAgentMainSessionKey({
-        cfg: params.runtimeConfig,
-        agentId: params.agentId,
+        cfg: paramsValue.runtimeConfig,
+        agentId: paramsValue.agentId,
       });
     }
     const candidate = toAgentStoreSessionKey({
-      agentId: params.agentId,
+      agentId: paramsValue.agentId,
       requestKey: requested,
-      mainKey: params.runtimeConfig.session?.mainKey,
+      mainKey: paramsValue.runtimeConfig.session?.mainKey,
     });
     const canonical = canonicalizeMainSessionAlias({
-      cfg: params.runtimeConfig,
-      agentId: params.agentId,
+      cfg: paramsValue.runtimeConfig,
+      agentId: paramsValue.agentId,
       sessionKey: candidate,
     });
     if (canonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-      if (normalizeAgentId(sessionAgentId) !== normalizeAgentId(params.agentId)) {
+      if (normalizeAgentId(sessionAgentId) !== normalizeAgentId(paramsValue.agentId)) {
         return resolveAgentMainSessionKey({
-          cfg: params.runtimeConfig,
-          agentId: params.agentId,
+          cfg: paramsValue.runtimeConfig,
+          agentId: paramsValue.agentId,
         });
       }
     }
     return (
       resolveMainScopedEventSessionKey({
-        cfg: params.runtimeConfig,
+        cfg: paramsValue.runtimeConfig,
         sessionKey: canonical,
-        agentId: params.agentId,
+        agentId: paramsValue.agentId,
       }) ?? canonical
     );
   };
@@ -253,25 +253,25 @@ export function buildGatewayCronService(params: {
     return { runtimeConfig, agentId, sessionKey };
   };
 
-  const resolveCronHeartbeatOverride = (params: {
+  const resolveCronHeartbeatOverride = (paramsLocal: {
     runtimeConfig: OpenClawConfig;
     agentId?: string;
     heartbeat?: AgentDefaultsConfig["heartbeat"];
   }) => {
-    if (!params.heartbeat) {
+    if (!paramsLocal.heartbeat) {
       return undefined;
     }
     const agentEntry =
-      params.agentId !== undefined
-        ? findAgentEntry(params.runtimeConfig, params.agentId)
+      paramsLocal.agentId !== undefined
+        ? findAgentEntry(paramsLocal.runtimeConfig, paramsLocal.agentId)
         : undefined;
     const agentHeartbeat =
       agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
     const baseHeartbeat = {
-      ...params.runtimeConfig.agents?.defaults?.heartbeat,
+      ...paramsLocal.runtimeConfig.agents?.defaults?.heartbeat,
       ...agentHeartbeat,
     };
-    const heartbeatOverride = { ...baseHeartbeat, ...params.heartbeat };
+    const heartbeatOverride = { ...baseHeartbeat, ...paramsLocal.heartbeat };
     return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 

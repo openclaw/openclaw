@@ -37,8 +37,8 @@ vi.mock("../../../agents/agent-tools.js", () => ({
 }));
 
 vi.mock("../../../plugins/tools.js", () => ({
-  getPluginToolMeta: (tool: { name: string }) => {
-    const pluginId = toolState.pluginIds[tool.name];
+  getPluginToolMeta: (toolLocal: { name: string }) => {
+    const pluginId = toolState.pluginIds[toolLocal.name];
     return pluginId ? { pluginId, optional: false } : undefined;
   },
 }));

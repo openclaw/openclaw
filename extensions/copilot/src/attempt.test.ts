@@ -53,16 +53,17 @@ type SessionEventShape = {
   timestamp: string;
   type: string;
 };
+type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
 
 type FakeSession = {
-  abort: ReturnType<typeof vi.fn>;
+  abort: ReturnType<typeof vi.fn<() => Promise<void>>>;
   cfg: Record<string, unknown>;
-  disconnect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
   emit: (eventType: string, data: Record<string, unknown>) => void;
   id: string;
   off: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
-  sendAndWait: ReturnType<typeof vi.fn>;
+  sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
   sessionId: string;
 };
 
@@ -129,9 +130,9 @@ function makeAssistantMessageEvent(
 function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEventShape) => void>>();
   return {
-    abort: vi.fn(async () => undefined),
+    abort: vi.fn<() => Promise<void>>(async () => undefined),
     cfg,
-    disconnect: vi.fn(async () => undefined),
+    disconnect: vi.fn<() => Promise<void>>(async () => undefined),
     emit: (eventType: string, data: Record<string, unknown>) => {
       const event = makeEvent(eventType, data);
       for (const listener of listeners.get(eventType) ?? []) {
@@ -151,7 +152,7 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
       handlers.push(handler);
       listeners.set(eventType, handlers);
     }),
-    sendAndWait: vi.fn(async () => makeAssistantMessageEvent()),
+    sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
     sessionId: id,
   };
 }
@@ -560,8 +561,7 @@ describe("runCopilotAttempt", () => {
     expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
     expect(sdk.resumeSession.mock.calls[0]?.[0]).toBe("resume-1");
     expect(
-      (sdk.resumeSession.mock.calls[0]?.[1] as { continuePendingWork?: boolean })
-        .continuePendingWork,
+      (sdk.resumeSession.mock.calls[0][1] as { continuePendingWork?: boolean }).continuePendingWork,
     ).toBe(false);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
   });
@@ -754,7 +754,7 @@ describe("runCopilotAttempt", () => {
     expect(result.aborted).toBe(true);
     expect(result.externalAbort).toBe(true);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect(pool.acquire).toHaveBeenCalledTimes(0);
+    expect(pool["acquire"]).toHaveBeenCalledTimes(0);
   });
 
   it("abort path (signal fires after settled)", async () => {
@@ -810,7 +810,7 @@ describe("runCopilotAttempt", () => {
     expect(bridgeCall.attemptParams).toBeDefined();
     expect(bridgeCall.sessionRef).toBeDefined();
     expect(
-      ((sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as { tools?: unknown[] })
+      ((sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as { tools?: unknown[] })
         .tools,
     ).toBe(sdkTools);
   });
@@ -930,8 +930,8 @@ describe("runCopilotAttempt", () => {
       "[copilot-attempt] tool-bridge construction failed: bridge failed",
     );
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect(pool.acquire).toHaveBeenCalledTimes(0);
-    expect(pool.release).toHaveBeenCalledTimes(0);
+    expect(pool["acquire"]).toHaveBeenCalledTimes(0);
+    expect(pool["release"]).toHaveBeenCalledTimes(0);
   });
 
   it("unsupported providers skip injected tool bridge wiring", async () => {
@@ -958,7 +958,7 @@ describe("runCopilotAttempt", () => {
     await runCopilotAttempt(makeParams(), { pool });
 
     const handler = (
-      (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      (sdk.createSession.mock.calls[0] as unknown[] | undefined)![0] as {
         onPermissionRequest: (
           request: { kind: string },
           invocation: { sessionId: string },
@@ -1371,8 +1371,8 @@ describe("runCopilotAttempt", () => {
 
     expect(getPromptErrorCode(result)).toBe("model_not_supported");
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect(pool.acquire).toHaveBeenCalledTimes(0);
-    expect(pool.release).toHaveBeenCalledTimes(0);
+    expect(pool["acquire"]).toHaveBeenCalledTimes(0);
+    expect(pool["release"]).toHaveBeenCalledTimes(0);
   });
 
   it("acquire failure", async () => {
@@ -1387,7 +1387,7 @@ describe("runCopilotAttempt", () => {
 
     expect(result.promptError).toBe(error);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect(pool.release).toHaveBeenCalledTimes(0);
+    expect(pool["release"]).toHaveBeenCalledTimes(0);
   });
 
   it("release failure after a successful send rejects the attempt", async () => {
@@ -1449,7 +1449,7 @@ describe("runCopilotAttempt", () => {
     const session = sdk.sessions[0];
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool.release).toHaveBeenCalledTimes(1);
+    expect(pool["release"]).toHaveBeenCalledTimes(1);
   });
 
   it("cleanup on send error", async () => {
@@ -1467,7 +1467,7 @@ describe("runCopilotAttempt", () => {
     expect(result.promptError).toBe(error);
     expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
     expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool.release).toHaveBeenCalledTimes(1);
+    expect(pool["release"]).toHaveBeenCalledTimes(1);
   });
 
   it("cleanup on disconnect throw", async () => {
@@ -1504,10 +1504,10 @@ describe("runCopilotAttempt", () => {
       { pool },
     );
 
-    const key = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[0] as {
+    const key = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[0] as {
       authMode: string;
     };
-    const options = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[1] as {
+    const options = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[1] as {
       gitHubToken?: string;
       useLoggedInUser?: boolean;
     };
@@ -1525,7 +1525,7 @@ describe("runCopilotAttempt", () => {
     ).rejects.toThrow(
       "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)",
     );
-    expect(pool.acquire).toHaveBeenCalledTimes(0);
+    expect(pool["acquire"]).toHaveBeenCalledTimes(0);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
   });
 
@@ -1540,12 +1540,12 @@ describe("runCopilotAttempt", () => {
       { pool },
     );
 
-    const key = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[0] as {
+    const key = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[0] as {
       authMode: string;
       authProfileId?: string;
       authProfileVersion?: string;
     };
-    const options = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[1] as {
+    const options = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[1] as {
       gitHubToken?: string;
       useLoggedInUser?: boolean;
     };
@@ -1926,12 +1926,12 @@ describe("runCopilotAttempt", () => {
 
       const calls = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls;
       const id1 = (
-        calls[0]?.[0] as {
+        calls[0][0] as {
           messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
         }
       ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
       const id2 = (
-        calls[1]?.[0] as {
+        calls[1][0] as {
           messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
         }
       ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;

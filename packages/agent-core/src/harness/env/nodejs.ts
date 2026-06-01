@@ -144,7 +144,7 @@ async function runCommand(
   args: string[],
   timeoutMs: number,
 ): Promise<{ stdout: string; status: number | null }> {
-  return await new Promise((resolve) => {
+  return await new Promise((resolveLocal) => {
     let stdout = "";
     let child: ReturnType<typeof spawn>;
     try {
@@ -153,7 +153,7 @@ async function runCommand(
         windowsHide: true,
       });
     } catch {
-      resolve({ stdout: "", status: null });
+      resolveLocal({ stdout: "", status: null });
       return;
     }
     const timeout = setTimeout(() => {
@@ -167,11 +167,11 @@ async function runCommand(
     });
     child.on("error", () => {
       clearTimeout(timeout);
-      resolve({ stdout: "", status: null });
+      resolveLocal({ stdout: "", status: null });
     });
     child.on("close", (status) => {
       clearTimeout(timeout);
-      resolve({ stdout, status });
+      resolveLocal({ stdout, status });
     });
   });
 }

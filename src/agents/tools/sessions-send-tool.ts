@@ -3,6 +3,7 @@ import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/sess
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -167,10 +168,16 @@ type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "s
 
 function isRequesterParentOfNativeSubagentSession(params: {
   entry: SessionsSendRouteEntry | null | undefined;
+  acpMeta?: unknown;
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (!params.entry || params.entry.acp || !isSubagentSessionKey(params.targetSessionKey)) {
+  if (
+    !params.entry ||
+    params.acpMeta ||
+    params.entry.acp ||
+    !isSubagentSessionKey(params.targetSessionKey)
+  ) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
@@ -574,14 +581,20 @@ export function createSessionsSendTool(opts?: {
       // `tools.sessions.visibility=all`) must still go through the normal A2A
       // path so it actually receives a follow-up delivery.
       const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
+      const targetAcpMeta = readAcpSessionMeta({ sessionKey: resolvedKey });
+      const targetSessionEntryWithAcp =
+        targetAcpMeta && targetSessionEntry
+          ? { ...targetSessionEntry, acp: targetAcpMeta }
+          : targetSessionEntry;
       const skipAcpA2AFlow = isRequesterParentOfBackgroundAcpSession(
-        targetSessionEntry,
+        targetSessionEntryWithAcp,
         effectiveRequesterKey,
       );
       const skipNativeParentA2AFlow =
         timeoutSeconds !== 0 &&
         isRequesterParentOfNativeSubagentSession({
           entry: targetSessionEntry,
+          acpMeta: targetAcpMeta,
           requesterSessionKey: effectiveRequesterKey,
           targetSessionKey: resolvedKey,
         });

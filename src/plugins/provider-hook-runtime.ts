@@ -202,28 +202,15 @@ export function resolveProviderPluginsForHooks(params: {
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  if (
-    isPluginProvidersLoadInFlight({
-      ...params,
-      workspaceDir,
-      env,
-      activate: false,
-      applyAutoEnable: params.applyAutoEnable,
-      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
-      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-    })
-  ) {
-    return [];
-  }
-  const resolved = resolvePluginProviders({
+  return resolvePluginProviders({
     ...params,
     workspaceDir,
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+    skipIfLoadInFlight: true,
   });
-  return resolved;
 }
 
 export function resolveProviderRuntimePlugin(

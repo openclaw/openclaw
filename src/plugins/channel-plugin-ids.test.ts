@@ -72,12 +72,11 @@ import {
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
+  resolveConfiguredChannelPluginIds,
   resolveConfiguredChannelPresencePolicy,
   resolveConfiguredDeferredChannelPluginIdsFromRegistry,
-  resolveConfiguredChannelPluginIds,
   resolveConfigValidationMetadataPluginIds,
   resolveGatewayStartupMetadataPluginIds,
-  resolveGatewayStartupPluginIds,
   resolveGatewayStartupPluginIdsFromRegistry,
   resolveGatewayStartupPluginPlanFromRegistry,
 } from "./channel-plugin-ids.js";

@@ -22,7 +22,7 @@ const {
   withTrustedEnvProxyGuardedFetchModeMock,
   managedStreamCleanupRegistrations,
 } = vi.hoisted(() => {
-  const managedStreamCleanupRegistrations: Array<{
+  const managedStreamCleanupRegistrationsLocal: Array<{
     callback: (held: { finalize: () => Promise<void> }) => void;
     held: { finalize: () => Promise<void> };
     token: object;
@@ -32,7 +32,7 @@ const {
     constructor(private callback: (held: { finalize: () => Promise<void> }) => void) {}
 
     register(_target: object, held: { finalize: () => Promise<void> }, token?: object) {
-      managedStreamCleanupRegistrations.push({
+      managedStreamCleanupRegistrationsLocal.push({
         callback: this.callback,
         held,
         token: token ?? {},
@@ -40,9 +40,11 @@ const {
     }
 
     unregister(token: object) {
-      const index = managedStreamCleanupRegistrations.findIndex((entry) => entry.token === token);
+      const index = managedStreamCleanupRegistrationsLocal.findIndex(
+        (entry) => entry.token === token,
+      );
       if (index >= 0) {
-        managedStreamCleanupRegistrations.splice(index, 1);
+        managedStreamCleanupRegistrationsLocal.splice(index, 1);
       }
     }
   }
@@ -69,7 +71,7 @@ const {
       ...params,
       mode: "trusted_env_proxy",
     })),
-    managedStreamCleanupRegistrations,
+    managedStreamCleanupRegistrations: managedStreamCleanupRegistrationsLocal,
   };
 });
 

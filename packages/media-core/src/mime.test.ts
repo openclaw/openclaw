@@ -109,6 +109,20 @@ describe("mime detection", () => {
       }),
       expected: "text/javascript",
     },
+    {
+      name: "uses extension mapping for YAML assets",
+      input: async () => ({
+        filePath: "/tmp/config.yml",
+      }),
+      expected: "application/yaml",
+    },
+    {
+      name: "uses extension mapping for YAML documents",
+      input: async () => ({
+        filePath: "/tmp/config.yaml",
+      }),
+      expected: "application/yaml",
+    },
   ] as const)("$name", async ({ input, expected }) => {
     await expectDetectedMime({
       input: await input(),
@@ -182,6 +196,8 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "clip.flv", expected: "video/x-flv" },
     { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
     { filePath: "debug.log", expected: "text/plain" },
+    { filePath: "config.yml", expected: "application/yaml" },
+    { filePath: "config.yaml", expected: "application/yaml" },
     { filePath: "page.xml", expected: "text/xml" },
     { filePath: "unknown.bin", expected: undefined },
   ] as const)("maps $filePath", ({ filePath, expected }) => {
@@ -221,6 +237,7 @@ describe("extensionForMime", () => {
     { mime: "video/x-ms-wmv", expected: ".wmv" },
     { mime: "video/quicktime", expected: ".mov" },
     { mime: "application/pdf", expected: ".pdf" },
+    { mime: "application/yaml", expected: ".yaml" },
     { mime: "text/plain", expected: ".txt" },
     { mime: "text/markdown", expected: ".md" },
     { mime: "text/html", expected: ".html" },

@@ -448,6 +448,13 @@ API key auth, and dynamic model resolution.
           return await fetchAcmeUsage(ctx.token, ctx.timeoutMs);
         },
         ```
+
+        `resolveUsageAuth` has three outcomes. Return `{ token, accountId? }`
+        when the provider has a usage/billing credential. Return
+        `{ handled: true }` only when the provider has definitively handled usage
+        auth but has no usable usage token, and OpenClaw must skip generic
+        API-key/OAuth fallback. Return `null` or `undefined` when the provider did
+        not handle the request and OpenClaw should continue with generic fallback.
       </Tab>
     </Tabs>
 

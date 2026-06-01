@@ -335,9 +335,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
       defaultAccountId: string,
     ): ChannelAccountSnapshot | undefined => {
       const accounts = runtime.channelAccounts[channelId];
-      const defaultRuntime = runtime.channels[channelId];
+      const defaultRuntimeLocal = runtime.channels[channelId];
       const raw =
-        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
+        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntimeLocal : undefined);
       if (!raw) {
         return undefined;
       }

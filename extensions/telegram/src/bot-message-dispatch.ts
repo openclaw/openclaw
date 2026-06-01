@@ -1046,17 +1046,16 @@ export const dispatchTelegramMessage = async ({
     }
     streamToolProgressLines = nextLines;
     if (options?.startImmediately) {
-      const alreadyStarted = progressDraftGate.hasStarted;
       await progressDraftGate.startNow();
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      if (progressDraftGate.hasStarted) {
         await renderProgressDraft();
         return true;
       }
       return progressDraftGate.hasStarted;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
-    await progressDraftGate.noteWork();
-    if (alreadyStarted && progressDraftGate.hasStarted) {
+    const progressActive = await progressDraftGate.noteWork();
+    if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
       await renderProgressDraft();
       return true;
     }
@@ -1600,9 +1599,9 @@ export const dispatchTelegramMessage = async ({
     if (isDmTopic) {
       try {
         const { store } = loadFreshSessionStore(route.agentId);
-        const sessionKey = ctxPayload.SessionKey;
-        if (sessionKey) {
-          const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+        const sessionKeyLocal = ctxPayload.SessionKey;
+        if (sessionKeyLocal) {
+          const entry = resolveSessionStoreEntry({ store, sessionKey: sessionKeyLocal }).existing;
           isFirstTurnInSession = !entry?.systemSent;
         } else {
           logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");

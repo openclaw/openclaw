@@ -500,7 +500,7 @@ PY
     });
 
     it("renders tables surrounded by text", () => {
-      const md = [
+      const mdLocal = [
         "Text before.",
         "",
         "| A | B |",
@@ -509,7 +509,7 @@ PY
         "",
         "Text after.",
       ].join("\n");
-      const html = toSanitizedMarkdownHtml(md);
+      const html = toSanitizedMarkdownHtml(mdLocal);
       expect(html).toBe(
         "<p>Text before.</p>\n<table>\n<thead>\n<tr>\n<th>A</th>\n<th>B</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n<p>Text after.</p>\n",
       );

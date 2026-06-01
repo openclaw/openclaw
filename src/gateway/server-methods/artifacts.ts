@@ -522,7 +522,7 @@ async function findArtifact(
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: dataValue, url: _url, ...summary } = artifact;
+  const { data: _dataValue, url: _url, ...summary } = artifact;
   return summary;
 }
 

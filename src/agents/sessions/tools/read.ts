@@ -393,13 +393,13 @@ export function createReadToolDefinition(
       );
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       text.setText(
         formatReadResult(
           context.args,
           result,
-          options,
+          optionsLocal,
           theme,
           context.showImages,
           context.cwd,

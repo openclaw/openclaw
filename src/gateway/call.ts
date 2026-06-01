@@ -907,30 +907,32 @@ async function executeGatewayRequestWithScopes<T>(params: {
       deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async (hello) => {
-        try {
-          ensureGatewaySupportsRequiredMethods({
-            requiredMethods: opts.requiredMethods,
-            methods: hello.features?.methods,
-            attemptedMethod: opts.method,
-          });
-          const activeClient = client;
-          if (!activeClient) {
-            throw new Error("gateway client not initialized");
+      onHelloOk: (hello) => {
+        void (async () => {
+          try {
+            ensureGatewaySupportsRequiredMethods({
+              requiredMethods: opts.requiredMethods,
+              methods: hello.features?.methods,
+              attemptedMethod: opts.method,
+            });
+            const activeClient = client;
+            if (!activeClient) {
+              throw new Error("gateway client not initialized");
+            }
+            primaryRequestStarted = true;
+            const result = await activeClient.request<T>(opts.method, opts.params, {
+              expectFinal: opts.expectFinal,
+              timeoutMs: opts.timeoutMs,
+              signal: opts.signal,
+              onAccepted: opts.onAccepted,
+            });
+            ignoreClose = true;
+            stop(undefined, result);
+          } catch (err) {
+            ignoreClose = true;
+            stop(err as Error);
           }
-          primaryRequestStarted = true;
-          const result = await activeClient.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-            timeoutMs: opts.timeoutMs,
-            signal: opts.signal,
-            onAccepted: opts.onAccepted,
-          });
-          ignoreClose = true;
-          stop(undefined, result);
-        } catch (err) {
-          ignoreClose = true;
-          stop(err as Error);
-        }
+        })();
       },
       onClose: (code, reason) => {
         if (settled || ignoreClose) {

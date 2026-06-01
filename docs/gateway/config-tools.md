@@ -76,6 +76,37 @@ Server globs use the provider-safe MCP server prefix, not necessarily the raw `m
 
 Without that sandbox-layer entry, the MCP server can still load successfully while its tools are filtered before the provider request. Use `openclaw doctor` to catch this shape for OpenClaw-managed servers in `mcp.servers`. MCP servers loaded from bundled plugin manifests or Claude `.mcp.json` use the same sandbox gate, but this diagnostic does not enumerate those sources yet; use the same allowlist entries if their tools disappear in sandboxed turns.
 
+### `tools.codeMode`
+
+`tools.codeMode` enables the generic OpenClaw code-mode surface. When enabled
+for a run with tools, the model sees only `exec` and `wait`; normal OpenClaw
+tools move behind the in-sandbox `tools.*` catalog bridge, and MCP tools are
+available through the generated `MCP` namespace.
+
+```json5
+{
+  tools: {
+    codeMode: {
+      enabled: true,
+    },
+  },
+}
+```
+
+The shorthand is also accepted:
+
+```json5
+{
+  tools: { codeMode: true },
+}
+```
+
+MCP declarations are exposed through the read-only virtual API file surface in
+code mode. Guest code can call `API.list("mcp")` and
+`API.read("mcp/<server>.d.ts")` to inspect TypeScript-style signatures before
+calling `MCP.<server>.<tool>()`. See [Code mode](/reference/code-mode) for the
+runtime contract, limits, and debugging steps.
+
 ### `tools.allow` / `tools.deny`
 
 Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildcards. Applied even when Docker sandbox is off.

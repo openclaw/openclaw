@@ -2,6 +2,8 @@ import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { copyPluginToolMeta } from "../../plugins/tools.js";
+import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -35,12 +37,48 @@ function runtimePlanToolContext(params: {
   };
 }
 
+function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
+  if (source === target) {
+    return;
+  }
+  copyPluginToolMeta(source as never, target as never);
+  copyChannelAgentToolMeta(source as never, target as never);
+}
+
+function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(
+  sourceTools: AgentTool<TSchemaType, TResult>[],
+  normalizedTools: AgentTool<TSchemaType, TResult>[],
+): AgentTool<TSchemaType, TResult>[] {
+  const sourcesByUniqueName = new Map<string, AgentTool<TSchemaType, TResult>>();
+  const duplicateNames = new Set<string>();
+  for (const source of sourceTools) {
+    const name = source.name;
+    if (sourcesByUniqueName.has(name)) {
+      duplicateNames.add(name);
+      sourcesByUniqueName.delete(name);
+      continue;
+    }
+    if (!duplicateNames.has(name)) {
+      sourcesByUniqueName.set(name, source);
+    }
+  }
+  for (const [index, target] of normalizedTools.entries()) {
+    const indexedSource = sourceTools[index];
+    const source =
+      indexedSource?.name === target.name ? indexedSource : sourcesByUniqueName.get(target.name);
+    if (source) {
+      copyRuntimeToolMetadata(source, target);
+    }
+  }
+  return normalizedTools;
+}
+
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
 >(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
-  return (
+  const normalized =
     params.runtimePlan?.tools.normalize(params.tools, planContext) ??
     normalizeProviderToolSchemas({
       tools: params.tools,
@@ -53,8 +91,9 @@ export function normalizeAgentRuntimeTools<
       model: params.model,
       runtimeHandle: params.runtimeHandle,
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
-    })
-  );
+    });
+  const normalizedTools = Array.isArray(normalized) ? normalized : params.tools;
+  return preserveRuntimeToolMetadata(params.tools, normalizedTools);
 }
 
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {

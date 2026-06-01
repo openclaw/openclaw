@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "audio-decode": "3.10.1",
+    "audio-decode": "2.2.3",
     "baileys": "7.0.0-rc13",
     "typebox": "1.1.39"
   },

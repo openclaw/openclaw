@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -1111,6 +1112,18 @@ export function parseGroupKey(
   return null;
 }
 
+function isGroupOrChannelDisplaySession(
+  entry: SessionEntry | undefined,
+  parsed: { kind?: "group" | "channel" } | null,
+): boolean {
+  return (
+    entry?.chatType === "group" ||
+    entry?.chatType === "channel" ||
+    parsed?.kind === "group" ||
+    parsed?.kind === "channel"
+  );
+}
+
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
@@ -1860,9 +1873,10 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   const displayName =
     entry?.displayName ??
-    (channel
+    (isGroupSession && channel
       ? buildGroupDisplayName({
           provider: channel,
           subject,
@@ -2037,14 +2051,20 @@ export function buildGatewaySessionRow(params: {
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: sessionAgentId,
+    sessionKey: key,
+  });
+  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
   const agentRuntime = resolveModelAgentRuntimeMetadata({
     cfg,
     agentId: sessionAgentId,
     provider: rowModelProvider,
     model: rowModel,
-    sessionKey: key,
-    acpRuntime: entry?.acp != null,
-    acpBackend: entry?.acp?.backend,
+    sessionKey: acpSessionKey,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
   });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
@@ -2174,17 +2194,17 @@ function resolveSessionListSearchDisplayName(
   }
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
-  if (!channel) {
-    return undefined;
+  if (isGroupOrChannelDisplaySession(entry, parsed) && channel) {
+    return buildGroupDisplayName({
+      provider: channel,
+      subject: entry?.subject,
+      groupChannel: entry?.groupChannel,
+      space: entry?.space,
+      id: parsed?.id,
+      key,
+    });
   }
-  return buildGroupDisplayName({
-    provider: channel,
-    subject: entry?.subject,
-    groupChannel: entry?.groupChannel,
-    space: entry?.space,
-    id: parsed?.id,
-    key,
-  });
+  return entry?.label ?? entry?.origin?.label;
 }
 
 function addSessionListSearchModelFields(

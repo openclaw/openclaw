@@ -83,12 +83,14 @@ function lastClientAppId(): string | undefined {
 describe("feishu tool account routing", () => {
   beforeAll(async () => {
     ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
-      await import("./bitable.js").then(async ({ registerFeishuBitableTools }) => ({
-        registerFeishuBitableTools,
-        ...(await import("./drive.js")),
-        ...(await import("./perm.js")),
-        ...(await import("./wiki.js")),
-      })));
+      await import("./bitable.js").then(
+        async ({ registerFeishuBitableTools: registerFeishuBitableToolsLocal }) => ({
+          registerFeishuBitableTools: registerFeishuBitableToolsLocal,
+          ...(await import("./drive.js")),
+          ...(await import("./perm.js")),
+          ...(await import("./wiki.js")),
+        }),
+      ));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
   });
 

@@ -722,8 +722,8 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAbort = { method, params, opts };
+                  await onSignalAbort?.(async (method, paramsResult, opts) => {
+                    sameConnectionAbort = { method, params: paramsResult, opts };
                     return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
                   });
                   const err = new Error("gateway request aborted before accepted ack");
@@ -826,8 +826,8 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAborts.push({ method, params, opts });
+                  await onSignalAbort?.(async (method, paramsValue, opts) => {
+                    sameConnectionAborts.push({ method, params: paramsValue, opts });
                     return sameConnectionAborts.length < 3
                       ? { ok: true, aborted: false, runIds: [] }
                       : { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
@@ -900,8 +900,8 @@ describe("agentCliCommand", () => {
               "abort",
               () => {
                 void (async () => {
-                  await onSignalAbort?.(async (method, params, opts) => {
-                    sameConnectionAborts.push({ method, params, opts });
+                  await onSignalAbort?.(async (method, paramsLocal, opts) => {
+                    sameConnectionAborts.push({ method, params: paramsLocal, opts });
                     return { ok: true, aborted: false, runIds: [] };
                   });
                   const err = new Error("gateway request aborted before registration");

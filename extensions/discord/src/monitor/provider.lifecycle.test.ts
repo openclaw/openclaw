@@ -29,17 +29,17 @@ const {
   unregisterGatewayMock,
   waitForDiscordGatewayStopMock,
 } = vi.hoisted(() => {
-  const stopGatewayLoggingMock = vi.fn();
-  const getDiscordGatewayEmitterMock = vi.fn<() => EventEmitter | undefined>(() => undefined);
+  const stopGatewayLoggingMockLocal = vi.fn();
+  const getDiscordGatewayEmitterMockLocal = vi.fn<() => EventEmitter | undefined>(() => undefined);
   return {
-    attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
-    getDiscordGatewayEmitterMock,
+    attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMockLocal),
+    getDiscordGatewayEmitterMock: getDiscordGatewayEmitterMockLocal,
     waitForDiscordGatewayStopMock: vi.fn((_params: WaitForDiscordGatewayStopParams) =>
       Promise.resolve(),
     ),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
-    stopGatewayLoggingMock,
+    stopGatewayLoggingMock: stopGatewayLoggingMockLocal,
   };
 });
 

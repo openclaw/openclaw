@@ -11,16 +11,16 @@ import {
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticModelStartedForTest,
+  markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
-  getDiagnosticSessionStateCountForTest,
   getDiagnosticSessionState,
+  getDiagnosticSessionStateCountForTest,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
@@ -31,15 +31,14 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 import {
-  logSessionStateChange,
-  logMessageQueued,
   diagnosticLogger,
+  logMessageQueued,
+  logSessionStateChange,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
 } from "./diagnostic.js";
 
 function createEmitMemorySampleMock() {
@@ -1559,9 +1558,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    const requestedEvents = events.filter(
-      (event) => event.type === "session.recovery.requested",
-    );
+    const requestedEvents = events.filter((event) => event.type === "session.recovery.requested");
     // Before the fix (RED): coordinator key = `${ref}:${generation}`, so S:G and
     //   S:G+1 are distinct -> a second requested event is emitted ->
     //   requestedEvents.length === 2. The runtime sees the same ref and skips the

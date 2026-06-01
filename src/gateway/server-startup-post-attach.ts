@@ -463,8 +463,8 @@ async function cleanupStaleSessionLocks(params: {
       if (result.cleaned.length === 0) {
         continue;
       }
-      const markRestartAbortedMainSessionsFromLocks = await getMarker();
-      await markRestartAbortedMainSessionsFromLocks({
+      const markRestartAbortedMainSessionsFromLocksLocal = await getMarker();
+      await markRestartAbortedMainSessionsFromLocksLocal({
         sessionsDir,
         cleanedLocks: result.cleaned,
       });
@@ -1139,6 +1139,7 @@ export async function startGatewayPostAttachRuntime(
     broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
+    serviceName?: string;
     preserveFunnel: boolean;
     controlUiBasePath: string;
     logTailscale: {
@@ -1260,6 +1261,7 @@ export async function startGatewayPostAttachRuntime(
           runtimeDeps.startGatewayTailscaleExposure({
             tailscaleMode: params.tailscaleMode,
             resetOnExit: params.resetOnExit,
+            serviceName: params.serviceName,
             preserveFunnel: params.preserveFunnel,
             port: params.port,
             controlUiBasePath: params.controlUiBasePath,

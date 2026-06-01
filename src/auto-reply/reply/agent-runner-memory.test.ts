@@ -72,6 +72,7 @@ type ModelFallbackParams = {
   model?: string;
   abortSignal?: AbortSignal;
   agentId?: string;
+  sessionId?: string;
   sessionKey?: string;
   fallbacksOverride?: unknown[];
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
@@ -105,6 +106,10 @@ type CompactEmbeddedAgentSessionParams = {
   sandboxSessionKey?: string;
   currentTokenCount?: number;
   cwd?: string;
+  force?: boolean;
+  forcePreflight?: boolean;
+  preflightRequired?: boolean;
+  preflightCompactionTrigger?: string;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -775,6 +780,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(fallbackCall.provider).toBe("ollama");
     expect(fallbackCall.model).toBe("qwen3:8b");
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(fallbackCall.sessionId).toBe("session");
     expect(fallbackCall.fallbacksOverride).toEqual([]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const agentCall = requireEmbeddedAgentCall();
@@ -997,6 +1003,10 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
       trigger: "budget",
+      force: true,
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "tokens",
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
     });
@@ -1110,7 +1120,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ["stale_thread_binding", "thread not found: <codex-thread-id>"],
     ["missing_thread_binding", "no thread binding for session"],
   ])(
-    "continues after recoverable native harness %s failure during preflight compaction",
+    "fails required preflight compaction after native harness %s failure",
     async (failureReason, reason) => {
       const sessionFile = path.join(rootDir, "session.jsonl");
       await fs.writeFile(
@@ -1141,30 +1151,31 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
-      const entry = await runPreflightCompactionIfNeeded({
-        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-        followupRun: createTestFollowupRun({
-          sessionId: "session",
-          sessionFile,
+      await expect(
+        runPreflightCompactionIfNeeded({
+          cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+          followupRun: createTestFollowupRun({
+            sessionId: "session",
+            sessionFile,
+            sessionKey: "agent:main:telegram:group:redacted",
+          }),
+          defaultModel: "anthropic/claude-opus-4-6",
+          agentCfgContextTokens: 100,
+          sessionEntry,
+          sessionStore,
           sessionKey: "agent:main:telegram:group:redacted",
+          storePath: path.join(rootDir, "sessions.json"),
+          isHeartbeat: false,
+          replyOperation: createReplyOperation(),
         }),
-        defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 100,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:telegram:group:redacted",
-        storePath: path.join(rootDir, "sessions.json"),
-        isHeartbeat: false,
-        replyOperation: createReplyOperation(),
-      });
+      ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
 
-      expect(entry).toBe(sessionEntry);
       expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
       expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     },
   );
 
-  it("continues after an unstructured thread-not-found preflight compaction failure", async () => {
+  it("fails required preflight compaction after an unstructured thread-not-found failure", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -1193,24 +1204,27 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
-    const entry = await runPreflightCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionFile,
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:telegram:group:redacted",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore,
         sessionKey: "agent:main:telegram:group:redacted",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
       }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:telegram:group:redacted",
-      storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+    ).rejects.toThrow(
+      "Preflight compaction required but failed: thread not found: <codex-thread-id>",
+    );
 
-    expect(entry).toBe(sessionEntry);
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
@@ -1467,7 +1481,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 
-  it("continues when preflight compaction returns a successful no-op", async () => {
+  it("fails when required preflight compaction returns an unknown successful no-op", async () => {
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: false,
@@ -1483,23 +1497,24 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionStore = { main: sessionEntry };
     const replyOperation = createReplyOperation();
 
-    const entry = await runPreflightCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionKey: "main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 200_000,
+        sessionEntry,
+        sessionStore,
         sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation,
       }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
-      replyOperation,
-    });
+    ).rejects.toThrow("Preflight compaction required but failed: plugin already stored this turn");
 
-    expect(entry).toBe(sessionEntry);
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.contextTokenBudget).toBe(200_000);

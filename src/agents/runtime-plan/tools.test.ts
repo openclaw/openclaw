@@ -5,6 +5,7 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
 import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
@@ -108,6 +109,39 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       modelApi: "openai-responses",
       model: createNativeOpenAIResponsesModel(),
       allowRuntimePluginLoad: undefined,
+    });
+  });
+
+  it("preserves plugin metadata when provider schema normalization clones tools", () => {
+    const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
+    setPluginToolMeta(tool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "lookup_note",
+        operation: "tool",
+      },
+    });
+    const normalized = {
+      ...tool,
+      parameters: normalizedParameterFreeSchema(),
+    };
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [tool],
+      provider: "openai",
+    });
+
+    expect(result[0]).toBe(normalized);
+    expect(getPluginToolMeta(result[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "fixture",
+        toolName: "lookup_note",
+      },
     });
   });
 

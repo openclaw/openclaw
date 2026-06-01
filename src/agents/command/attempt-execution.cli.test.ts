@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";

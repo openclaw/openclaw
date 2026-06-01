@@ -245,10 +245,10 @@ export async function runSetupWizard(
   let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
-    opts: { allowConfigSizeDrop?: boolean } = {},
+    optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) =>
     await writeWizardConfigFile(config, {
-      ...opts,
+      ...optsLocal,
       migrationBaseConfig: pendingPluginInstallMigrationBaseConfig,
       onPendingPluginInstallMigration: () => {
         pendingPluginInstallMigrationBaseConfig = undefined;

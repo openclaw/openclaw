@@ -64,14 +64,14 @@ function formatFindCall(
 ): string {
   const pattern = str(args?.pattern);
   const rawPath = str(args?.path);
-  const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
+  const pathLocal = rawPath !== null ? shortenPath(rawPath || ".") : null;
   const limit = args?.limit;
   const invalidArg = invalidArgText(theme);
   let text =
     theme.fg("toolTitle", theme.bold("find")) +
     " " +
     (pattern === null ? invalidArg : theme.fg("accent", pattern || "")) +
-    theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
+    theme.fg("toolOutput", ` in ${pathLocal === null ? invalidArg : pathLocal}`);
   if (limit !== undefined) {
     text += theme.fg("toolOutput", ` (limit ${limit})`);
   }
@@ -375,9 +375,9 @@ export function createFindToolDefinition(
       text.setText(formatFindCall(args, theme));
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatFindResult(result, options, theme, context.showImages));
+      text.setText(formatFindResult(result, optionsLocal, theme, context.showImages));
       return text;
     },
   };

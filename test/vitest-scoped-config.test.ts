@@ -119,16 +119,6 @@ function expectThreadedNonIsolatedRunner(config: {
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
-
-function expectThreadedIsolatedRunner(config: {
-  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
-}) {
-  const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("threads");
-  expect(testConfig.isolate).toBe(true);
-  expect(testConfig.runner).toBeUndefined();
-}
-
 function expectForkedNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
 }) {

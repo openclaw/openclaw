@@ -1690,12 +1690,13 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "render.ts",
       distFile: "render.mjs",
     });
-    const terminalCore = writeWorkspacePackageEntry({
+    const ignoredTerminalCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "terminal-core",
       srcFile: "links.ts",
       distFile: "links.mjs",
     });
+    void ignoredTerminalCore;
     const terminalCoreRootDistFile = path.join(fixture.root, "dist", "terminal-core", "links.js");
     mkdirSafeDir(path.dirname(terminalCoreRootDistFile));
     fs.writeFileSync(terminalCoreRootDistFile, "export {};\n", "utf-8");

@@ -1513,12 +1513,17 @@ async function agentCommandInternal(
           runId,
           agentDir,
           agentId: sessionAgentId,
+          sessionId,
           sessionKey: sessionKey ?? sessionId,
-          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+          prepareAgentHarnessRuntime: async ({
+            provider: providerValue,
+            model: modelValue,
+            agentHarnessRuntimeOverride,
+          }) => {
             await ensureSelectedAgentHarnessPlugin({
               config: cfg,
-              provider,
-              modelId: model,
+              provider: providerValue,
+              modelId: modelValue,
               agentId: sessionAgentId,
               sessionKey,
               agentHarnessRuntimeOverride,
@@ -1529,11 +1534,11 @@ async function agentCommandInternal(
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
-          classifyResult: ({ provider, model, result }) =>
+          classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
             classifyEmbeddedAgentRunResultForModelFallback({
-              provider,
-              model,
-              result,
+              provider: providerLocal,
+              model: modelLocal,
+              result: resultLocal,
             }),
           abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {

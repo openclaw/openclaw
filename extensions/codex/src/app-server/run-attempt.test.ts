@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  abortAgentHarnessRun,
   embeddedAgentLog,
-  onAgentEvent,
-  type AgentEventPayload,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -12,15 +9,10 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
-  type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  createMockPluginRegistry,
-  onTrustedInternalDiagnosticEvent,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
@@ -32,7 +24,6 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
-import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -49,10 +40,10 @@ import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
-  createAppServerHarness,
   assistantMessage,
-  createParams,
+  createAppServerHarness,
   createCodexRuntimePlanFixture,
+  createParams,
   createResumeHarness,
   createStartedThreadHarness,
   fastWait,
@@ -1638,11 +1629,11 @@ describe("runCodexAppServerAttempt", () => {
       "assistant",
       "toolResult",
     ]);
-    const assistantMessage = result.messagesSnapshot[1];
-    if (assistantMessage?.role !== "assistant") {
+    const assistantMessageLocal = result.messagesSnapshot[1];
+    if (assistantMessageLocal?.role !== "assistant") {
       throw new Error("expected mirrored assistant tool-call message");
     }
-    expect(assistantMessage.content).toStrictEqual([
+    expect(assistantMessageLocal.content).toStrictEqual([
       {
         type: "toolCall",
         id: "call-wiki-status-1",

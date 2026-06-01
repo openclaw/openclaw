@@ -1461,9 +1461,9 @@ async function runCodeModeBridgeRequest(
       if (typeof query !== "string") {
         throw new ToolInputError("search query must be a string.");
       }
-      const options = isRecord(values[1]) ? values[1] : undefined;
+      const optionsLocal = isRecord(values[1]) ? values[1] : undefined;
       return await runtime.search(query, {
-        limit: typeof options?.limit === "number" ? options.limit : undefined,
+        limit: typeof optionsLocal?.limit === "number" ? optionsLocal.limit : undefined,
       });
     }
     case "describe": {

@@ -364,7 +364,7 @@ setInterval(() => {}, 1000);
     expect(samples[0]).toMatchObject({
       aggregateRssMiB: 640,
       label: "plugins install",
-      processId: seenPids[0]! + 1,
+      processId: seenPids[0] + 1,
       rssMiB: 512,
     });
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);

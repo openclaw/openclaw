@@ -187,7 +187,7 @@ function wrapLine(text: string, width: number): string[] {
     return params.every((param) => Number.isInteger(param)) ? params : null;
   };
 
-  const activeSgrAfter = (tokens: Token[]) => {
+  const activeSgrAfter = (tokensValue: Token[]) => {
     type SgrCategory =
       | "background"
       | "blink"
@@ -272,7 +272,7 @@ function wrapLine(text: string, width: number): string[] {
       }
       return false;
     };
-    for (const token of tokens) {
+    for (const token of tokensValue) {
       if (token.kind !== "ansi") {
         continue;
       }
@@ -314,17 +314,17 @@ function wrapLine(text: string, width: number): string[] {
     lines.push(cleaned);
   };
 
-  const trimLeadingSpaces = (tokens: Token[]) => {
+  const trimLeadingSpaces = (tokensLocal: Token[]) => {
     while (true) {
-      const firstCharIndex = tokens.findIndex((token) => token.kind === "char");
-      if (firstCharIndex < 0) {
+      const firstCharIndexLocal = tokensLocal.findIndex((token) => token.kind === "char");
+      if (firstCharIndexLocal < 0) {
         return;
       }
-      const firstChar = tokens[firstCharIndex];
+      const firstChar = tokensLocal[firstCharIndexLocal];
       if (!firstChar || !isSpaceChar(firstChar.value)) {
         return;
       }
-      tokens.splice(firstCharIndex, 1);
+      tokensLocal.splice(firstCharIndexLocal, 1);
     }
   };
 
@@ -513,8 +513,8 @@ export function renderTable(opts: RenderTableOptions): string {
   // If we have room and any flex columns, expand them to fill the available width.
   // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
   if (maxWidth) {
-    const sepCount = columns.length + 1;
-    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
+    const sepCountLocal = columns.length + 1;
+    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCountLocal;
     let extra = maxWidth - currentTotal;
     if (extra > 0) {
       const flexCols = columns

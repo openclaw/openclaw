@@ -484,7 +484,7 @@ describe("deepseek provider plugin", () => {
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
     expect(capture.payload).not.toHaveProperty("reasoning_effort");
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+    expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );
   });

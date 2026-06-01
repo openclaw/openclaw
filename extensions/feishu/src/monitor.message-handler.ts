@@ -166,8 +166,8 @@ export function createFeishuMessageReceiveHandler({
   recordProcessedMessage,
   getBotOpenId = () => undefined,
   getBotName = () => undefined,
-  resolveSequentialKey = ({ accountId, event }) =>
-    `feishu:${accountId}:${event.message.chat_id?.trim() || "unknown"}`,
+  resolveSequentialKey = ({ accountId: accountIdLocal, event }) =>
+    `feishu:${accountIdLocal}:${event.message.chat_id?.trim() || "unknown"}`,
 }: FeishuMessageReceiveHandlerContext): (data: unknown) => Promise<void> {
   const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
     cfg,

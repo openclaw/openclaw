@@ -10,7 +10,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   clearPluginStateStoreForTests,
   closePluginStateDatabase,
   createCorePluginStateKeyedStore,

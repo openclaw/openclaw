@@ -79,7 +79,7 @@ function createHarness(sessions: Array<{ sessionId: string; sessionKey: string }
   return {
     agent,
     requestSpy,
-    sessionUpdateSpy: connection.sessionUpdate as unknown as ReturnType<typeof vi.fn>,
+    sessionUpdateSpy: connection["sessionUpdate"] as unknown as ReturnType<typeof vi.fn>,
     sessionStore,
     sentRunIds,
   };

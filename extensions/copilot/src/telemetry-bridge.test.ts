@@ -164,7 +164,7 @@ describe("createTraceContextProvider", () => {
     });
     await expect(provider()).resolves.toEqual({});
     expect(onError).toHaveBeenCalledTimes(1);
-    expect((onError.mock.calls[0]?.[0] as CopilotTraceContextErrorInfo).part).toBe("traceparent");
+    expect((onError.mock.calls[0][0] as CopilotTraceContextErrorInfo).part).toBe("traceparent");
   });
 
   it("getTracestate failure → partial success (traceparent kept) + notifier called", async () => {
@@ -180,7 +180,7 @@ describe("createTraceContextProvider", () => {
       traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
     });
     expect(onError).toHaveBeenCalledTimes(1);
-    expect((onError.mock.calls[0]?.[0] as CopilotTraceContextErrorInfo).part).toBe("tracestate");
+    expect((onError.mock.calls[0][0] as CopilotTraceContextErrorInfo).part).toBe("tracestate");
   });
 
   it("default notifier uses console.warn", async () => {

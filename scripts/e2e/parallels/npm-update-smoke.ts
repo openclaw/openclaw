@@ -654,9 +654,11 @@ class NpmUpdateSmoke {
         onOutput(text);
       });
       child.on("error", reject);
-      child.on("close", async (code) => {
-        await writeFile(logPath, log, "utf8");
-        resolve(code ?? 1);
+      child.on("close", (code) => {
+        void (async () => {
+          await writeFile(logPath, log, "utf8");
+          resolve(code ?? 1);
+        })();
       });
     });
   }

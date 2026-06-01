@@ -106,9 +106,9 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.backupPath).toMatch(/session\.jsonl\.bak-/);
-    expect(debug.mock.calls.some(([message]) => String(message).includes("cleanup failed"))).toBe(
-      true,
-    );
+    expect(
+      debug.mock.calls.some(([messageLocal]) => String(messageLocal).includes("cleanup failed")),
+    ).toBe(true);
     const siblings = await fs.readdir(path.dirname(file));
     expect(siblings.filter((name) => name.includes(".bak-"))).toHaveLength(1);
   });

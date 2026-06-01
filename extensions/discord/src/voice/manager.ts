@@ -683,7 +683,7 @@ export class DiscordVoiceManager {
     };
     const stopEntry = (
       entry: VoiceSessionEntry,
-      options: { destroyConnection: boolean; reason: string },
+      optionsLocal: { destroyConnection: boolean; reason: string },
     ) => {
       if (stopped) {
         return;
@@ -710,11 +710,11 @@ export class DiscordVoiceManager {
       entry.realtime?.close();
       entry.realtime = undefined;
       player.stop();
-      if (options.destroyConnection) {
+      if (optionsLocal.destroyConnection) {
         destroyVoiceConnectionSafely({
           connection,
           voiceSdk,
-          reason: options.reason,
+          reason: optionsLocal.reason,
         });
       }
     };
@@ -790,34 +790,36 @@ export class DiscordVoiceManager {
       this.scheduleCaptureFinalize(entry, userId, "speaker end");
     };
 
-    const disconnectedHandler: (() => Promise<void>) | undefined = async () => {
-      try {
-        logVoiceVerbose(
-          `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
-        );
-        await Promise.race([
-          voiceSdk.entersState(
-            connection,
-            voiceSdk.VoiceConnectionStatus.Signalling,
-            reconnectGraceMs,
-          ),
-          voiceSdk.entersState(
-            connection,
-            voiceSdk.VoiceConnectionStatus.Connecting,
-            reconnectGraceMs,
-          ),
-        ]);
-        logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
-      } catch (err) {
-        logger.warn(
-          `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
-        );
-        clearSessionIfCurrent();
-        stopEntry(entry, {
-          destroyConnection: true,
-          reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
-        });
-      }
+    const disconnectedHandler: (() => void) | undefined = () => {
+      void (async () => {
+        try {
+          logVoiceVerbose(
+            `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
+          );
+          await Promise.race([
+            voiceSdk.entersState(
+              connection,
+              voiceSdk.VoiceConnectionStatus.Signalling,
+              reconnectGraceMs,
+            ),
+            voiceSdk.entersState(
+              connection,
+              voiceSdk.VoiceConnectionStatus.Connecting,
+              reconnectGraceMs,
+            ),
+          ]);
+          logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
+        } catch (err) {
+          logger.warn(
+            `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
+          );
+          clearSessionIfCurrent();
+          stopEntry(entry, {
+            destroyConnection: true,
+            reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
+          });
+        }
+      })();
     };
     const destroyedHandler: (() => void) | undefined = () => {
       clearSessionIfCurrent();

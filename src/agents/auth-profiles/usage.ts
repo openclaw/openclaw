@@ -716,12 +716,12 @@ export async function markAuthProfileFailure(params: {
   const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
-      const profile = freshStore.profiles[profileId];
-      if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+      const profileValue = freshStore.profiles[profileId];
+      if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider)) {
         return false;
       }
       const now = Date.now();
-      const providerKey = normalizeProviderId(profile.provider);
+      const providerKey = normalizeProviderId(profileValue.provider);
       const cfgResolved = resolveAuthCooldownConfig({
         cfg,
         providerId: providerKey,
@@ -737,7 +737,7 @@ export async function markAuthProfileFailure(params: {
         modelId,
       });
       nextStats =
-        whamResult && shouldProbeWhamForFailure(profile.provider, reason)
+        whamResult && shouldProbeWhamForFailure(profileValue.provider, reason)
           ? applyWhamCooldownResult({
               existing: previousStats ?? {},
               computed,
@@ -850,8 +850,8 @@ export async function markAuthProfileBlockedUntil(params: {
   const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
-      const profile = freshStore.profiles[profileId];
-      if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+      const profileLocal = freshStore.profiles[profileId];
+      if (!profileLocal || isAuthCooldownBypassedForProvider(profileLocal.provider)) {
         return false;
       }
       const now = asDateTimestampMs(Date.now());
