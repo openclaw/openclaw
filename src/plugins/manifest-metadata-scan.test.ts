@@ -85,7 +85,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
   it("ignores disabled persisted plugin records", () => {
     const root = createTempRoot();
     const home = path.join(root, "home");
-    const installedRoot = path.join(root, "installed", "disabled-marker-plugin");
+    const installedRoot = path.join(home, ".openclaw", "extensions", "disabled-marker-plugin");
 
     writeJson(path.join(installedRoot, "openclaw.plugin.json"), {
       id: "disabled-marker-plugin",
