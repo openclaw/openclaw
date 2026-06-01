@@ -94,6 +94,75 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
+  it("keeps trusted inherited thread ids from explicit route metadata", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          route: {
+            channel: "feishu",
+            accountId: "work",
+            target: { to: "user:ou_123" },
+            thread: { id: "thread:om_123", source: "explicit" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+            threadId: "thread:om_123",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      threadId: "thread:om_123",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("drops inherited thread ids from session-normalized route metadata", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          route: {
+            channel: "feishu",
+            accountId: "work",
+            target: { to: "user:ou_123" },
+            thread: { id: "thread:stale", source: "session" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+            threadId: "thread:stale",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      inheritedExternalRoute: true,
+    });
+  });
+
   it("keeps plugin-owned external routes for runtime routability checks", () => {
     expect(
       resolveEffectiveReplyRoute({

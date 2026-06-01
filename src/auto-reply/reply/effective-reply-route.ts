@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -10,13 +11,14 @@ export type EffectiveReplyRouteContext = Pick<
 
 export type EffectiveReplyRouteEntry = Pick<
   SessionEntry,
-  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId"
+  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId" | "route"
 >;
 
 export type EffectiveReplyRoute = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
   inheritedExternalRoute?: boolean;
 };
 
@@ -29,6 +31,24 @@ function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | un
     inputProvenance?.kind === "inter_session" &&
     inputProvenance.sourceTool?.toLowerCase() === "sessions_send"
   );
+}
+
+function resolveTrustedInheritedThreadId(
+  entry: EffectiveReplyRouteEntry | undefined,
+): string | number | undefined {
+  const deliveryThreadId = entry?.deliveryContext?.threadId;
+  if (deliveryThreadId == null) {
+    return undefined;
+  }
+  const routeThread = entry?.route?.thread;
+  if (
+    routeThread?.id != null &&
+    routeThread.source !== "session" &&
+    stringifyRouteThreadId(routeThread.id) === stringifyRouteThreadId(deliveryThreadId)
+  ) {
+    return deliveryThreadId;
+  }
+  return undefined;
 }
 
 export function resolveEffectiveReplyRoute(params: {
@@ -48,10 +68,12 @@ export function resolveEffectiveReplyRoute(params: {
     persistedDeliveryChannel !== INTERNAL_MESSAGE_CHANNEL &&
     persistedDeliveryContext?.to
   ) {
+    const inheritedThreadId = resolveTrustedInheritedThreadId(params.entry);
     return {
       channel: persistedDeliveryChannel,
       to: persistedDeliveryContext.to,
       accountId: persistedDeliveryContext.accountId,
+      ...(inheritedThreadId !== undefined ? { threadId: inheritedThreadId } : {}),
       inheritedExternalRoute: true,
     };
   }
