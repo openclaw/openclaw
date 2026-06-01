@@ -87,6 +87,8 @@ const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
+const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
+const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
 function isIMessagePluginPayloadAttachment(attachment: {
   original_path?: string | null;
@@ -810,6 +812,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   client: getActiveClient(),
                 });
               },
+              // Keep the native typing bubble alive through long tool chains.
+              // The dispatcher idle path below still owns teardown on final,
+              // error, abort, or monitor shutdown.
+              keepaliveIntervalMs: IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS,
+              maxDurationMs: IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS,
               onStartError: (err) => {
                 logTypingFailure({
                   log: (msg) => logVerbose(msg),
@@ -961,6 +968,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                       ? !accountInfo.config.blockStreaming
                       : undefined,
                   onModelSelected,
+                  ...(typingReplyOptions.onReplyStart
+                    ? { onToolStart: typingReplyOptions.onReplyStart }
+                    : {}),
                 },
               });
             } finally {

@@ -7,7 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { loadIMessageCatchupCursor } from "./monitor/catchup.js";
+import {
+  clearCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+} from "./private-api-status.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+
+type DispatchInboundMessageParams = {
+  ctx: MsgContext;
+  replyOptions?: {
+    onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  };
+};
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -17,7 +28,7 @@ const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as s
 const recordInboundSessionMock = vi.hoisted(() => vi.fn(async (_params: unknown) => {}));
 const dispatchInboundMessageMock = vi.hoisted(() =>
   vi.fn(
-    async (_params: { ctx: MsgContext }) =>
+    async (_params: DispatchInboundMessageParams) =>
       ({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }) as const,
   ),
 );
@@ -115,6 +126,7 @@ describe("iMessage monitor last-route updates", () => {
     recordInboundSessionMock.mockClear();
     dispatchInboundMessageMock.mockClear();
     debouncerControl.reset();
+    clearCachedIMessagePrivateApiStatus();
   });
 
   afterEach(() => {
@@ -123,6 +135,88 @@ describe("iMessage monitor last-route updates", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps native typing alive when tool activity arrives before reply text", async () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: ["watch.subscribe", "send", "typing"],
+    });
+    dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+      await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+    });
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "typing") {
+          return { ok: true };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 7,
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "run a long script",
+              is_group: false,
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            sendReadReceipts: false,
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith(
+        "typing",
+        expect.objectContaining({ typing: true }),
+        expect.any(Object),
+      );
+    });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith(
+        "typing",
+        expect.objectContaining({ typing: false }),
+        expect.any(Object),
+      );
+    });
   });
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
