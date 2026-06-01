@@ -134,6 +134,36 @@ describe("exec safe bin policy wc", () => {
   });
 });
 
+describe("exec safe bin policy boolean flags", () => {
+  it("accepts recognized read-only boolean short flags on default safe bins", () => {
+    expect(validateSafeBinArgv(["-l"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["-w"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["-lw"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["-c"], SAFE_BIN_PROFILES.uniq)).toBe(true);
+    expect(validateSafeBinArgv(["-d", "abc"], SAFE_BIN_PROFILES.tr)).toBe(true);
+    expect(validateSafeBinArgv(["-s", "abc"], SAFE_BIN_PROFILES.tr)).toBe(true);
+  });
+
+  it("accepts recognized boolean long flags and their abbreviations", () => {
+    expect(validateSafeBinArgv(["--lines"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["--max-line-length"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["--word"], SAFE_BIN_PROFILES.wc)).toBe(true);
+  });
+
+  it("still rejects a value attached to a boolean flag", () => {
+    expect(validateSafeBinArgv(["--lines=5"], SAFE_BIN_PROFILES.wc)).toBe(false);
+  });
+
+  it("still rejects unrecognized short flags", () => {
+    expect(validateSafeBinArgv(["-S", "a", "b"], SAFE_BIN_PROFILES.tr)).toBe(false);
+    expect(validateSafeBinArgv(["-Z"], SAFE_BIN_PROFILES.wc)).toBe(false);
+  });
+
+  it("keeps mixed boolean+value short clusters working", () => {
+    expect(validateSafeBinArgv(["-cf", "2"], SAFE_BIN_PROFILES.uniq)).toBe(true);
+  });
+});
+
 describe("exec safe bin policy token hygiene", () => {
   it("rejects path-like and glob positional tokens after the terminator", () => {
     const grepProfile = SAFE_BIN_PROFILES.grep;
