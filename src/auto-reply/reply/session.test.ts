@@ -996,6 +996,13 @@ describe("initSessionState RawBody", () => {
           messageCount: 8,
           unwindowedMessageCount: 8,
         },
+        compactionCount: 3,
+        memoryFlushAt: 123,
+        memoryFlushCompactionCount: 2,
+        memoryFlushContextHash: "stale-context",
+        memoryFlushFailureCount: 3,
+        memoryFlushLastFailedAt: 456,
+        memoryFlushLastFailureError: "provider crashed",
         skillsSnapshot: {
           prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
           skills: [{ name: "stale" }],
@@ -1029,6 +1036,13 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
+    expect(result.sessionEntry.compactionCount).toBe(0);
+    expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushContextHash).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushFailureCount).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushLastFailedAt).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushLastFailureError).toBeUndefined();
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -1038,6 +1052,13 @@ describe("initSessionState RawBody", () => {
         totalTokensFresh?: boolean;
         contextTokens?: number;
         contextBudgetStatus?: unknown;
+        compactionCount?: number;
+        memoryFlushAt?: number;
+        memoryFlushCompactionCount?: number;
+        memoryFlushContextHash?: string;
+        memoryFlushFailureCount?: number;
+        memoryFlushLastFailedAt?: number;
+        memoryFlushLastFailureError?: string;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
@@ -1045,6 +1066,13 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.contextTokens).toBeUndefined();
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    expect(store[sessionKey]?.compactionCount).toBe(0);
+    expect(store[sessionKey]?.memoryFlushAt).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushCompactionCount).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushContextHash).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushFailureCount).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushLastFailedAt).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("drains stale system events when /new rotates an existing session", async () => {
