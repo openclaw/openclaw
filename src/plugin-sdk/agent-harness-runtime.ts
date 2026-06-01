@@ -8,11 +8,13 @@ import type {
 } from "../agents/codex-mcp-config.types.js";
 import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import {
+  abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
+  type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
@@ -146,10 +148,14 @@ export {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
 export {
+  abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
+};
+export type {
+  AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult,
 };
 
 /**
@@ -286,6 +292,7 @@ export {
 // timeout the built-in embedded-agent runner uses — one shared implementation, no
 // copy-pasted watchdog.
 export {
+  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";

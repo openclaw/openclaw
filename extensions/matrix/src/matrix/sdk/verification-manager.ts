@@ -394,7 +394,7 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.acceptRequested = false;
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
@@ -516,7 +516,7 @@ export class MatrixVerificationManager {
         .then(() => {
           this.touchVerificationSession(session);
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           session.error = formatMatrixErrorMessage(err);
           this.touchVerificationSession(session);
         });
@@ -545,7 +545,7 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
       });

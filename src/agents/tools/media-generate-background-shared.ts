@@ -297,7 +297,7 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
     queueMicrotask(() => {
-      void work().catch((error) => {
+      void work().catch((error: unknown) => {
         params.onCrash(`Detached ${params.toolName} job crashed`, { error });
       });
     });

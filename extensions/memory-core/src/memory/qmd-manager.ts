@@ -479,18 +479,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.qmd.update.onBoot) {
       const bootRun = this.runUpdate("boot", true);
       if (this.qmd.update.waitForBootSync) {
-        await bootRun.catch((err) => {
+        await bootRun.catch((err: unknown) => {
           log.warn(`qmd boot update failed: ${String(err)}`);
         });
       } else {
-        void bootRun.catch((err) => {
+        void bootRun.catch((err: unknown) => {
           log.warn(`qmd boot update failed: ${String(err)}`);
         });
       }
     }
     if (this.qmd.update.intervalMs > 0) {
       this.updateTimer = setInterval(() => {
-        void this.runUpdate("interval").catch((err) => {
+        void this.runUpdate("interval").catch((err: unknown) => {
           log.warn(`qmd update failed (${String(err)})`);
         });
       }, this.qmd.update.intervalMs);
@@ -498,7 +498,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.shouldScheduleEmbedTimer()) {
       const startPeriodicEmbedTimer = () => {
         this.embedTimer = setInterval(() => {
-          void this.runUpdate("embed-interval").catch((err) => {
+          void this.runUpdate("embed-interval").catch((err: unknown) => {
             log.warn(`qmd embed interval update failed (${String(err)})`);
           });
         }, this.qmd.update.embedIntervalMs);
@@ -511,7 +511,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             return;
           }
           void this.runUpdate("embed-interval")
-            .catch((err) => {
+            .catch((err: unknown) => {
               log.warn(`qmd embed interval update failed (${String(err)})`);
             })
             .finally(() => {
@@ -1650,7 +1650,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           return;
         }
         await this.sync({ reason: "watch" });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         log.warn(`qmd watch sync failed: ${String(err)}`);
       });
     }, this.syncSettings.watchDebounceMs);
@@ -1665,7 +1665,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     this.sessionWarm.add(key);
-    void this.sync({ reason: "session-start" }).catch((err) => {
+    void this.sync({ reason: "session-start" }).catch((err: unknown) => {
       log.warn(`qmd session-start sync failed: ${String(err)}`);
     });
   }
@@ -2070,8 +2070,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       case "vsearch":
         // Vector search only
         return [{ type: "vec", query: semanticQuery }];
-      case "query":
-      case undefined:
       default:
         // Full hybrid: lex + vec + hyde (query expansion)
         return [

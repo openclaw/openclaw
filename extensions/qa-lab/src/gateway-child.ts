@@ -96,7 +96,7 @@ async function closeWriteStream(stream: WriteStream) {
 }
 
 async function writeSanitizedQaGatewayDebugLog(params: { sourcePath: string; targetPath: string }) {
-  const contents = await fs.readFile(params.sourcePath, "utf8").catch((error) => {
+  const contents = await fs.readFile(params.sourcePath, "utf8").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return "";
     }
@@ -783,7 +783,10 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw lastRpcStartupError ?? new Error("qa gateway rpc client failed to start");
+            throw toLintErrorObject(
+              lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
+              "Non-Error thrown",
+            );
           }
         } catch (error) {
           await attemptRpcClient.stop().catch(() => {});
@@ -883,7 +886,10 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw lastRpcStartupError ?? new Error("qa gateway rpc client failed to start");
+            throw toLintErrorObject(
+              lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
+              "Non-Error thrown",
+            );
           }
         } catch (error) {
           await nextRpcClient.stop().catch(() => {});
@@ -1035,3 +1041,17 @@ export async function startQaGatewayChild(params: {
   }
 }
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

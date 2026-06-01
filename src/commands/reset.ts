@@ -13,6 +13,7 @@ import {
   listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
+  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
@@ -148,6 +149,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
       { dryRun },
     );
     await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceAttestationPaths(workspaceDirs, runtime, { dryRun });
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
   }
 }

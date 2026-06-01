@@ -255,7 +255,7 @@ export function startMatrixQaOpenClawCli(params: {
           return;
         }
         settleWait = { reject, resolve };
-      }).catch((error) => {
+      }).catch((error: unknown) => {
         throw new Error(
           `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
         );

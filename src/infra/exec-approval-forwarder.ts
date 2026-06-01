@@ -580,7 +580,7 @@ function createApprovalHandlers<
           buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
           deliver: params.deliver,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         log.error(
           `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
         );
@@ -627,7 +627,7 @@ function createApprovalHandlers<
       },
       deliver: params.deliver,
       shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
       );

@@ -377,7 +377,7 @@ export function createProfileTabOps({
         method: "PUT",
       },
       getCdpControlPolicy(),
-    ).catch(async (err) => {
+    ).catch(async (err: unknown) => {
       if (String(err).includes("HTTP 405")) {
         return await fetchJson<CdpTarget>(
           endpoint,

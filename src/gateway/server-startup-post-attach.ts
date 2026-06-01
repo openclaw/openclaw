@@ -184,7 +184,7 @@ function scheduleGatewayMemoryBackend(params: {
       .then(({ startGatewayMemoryBackend }) =>
         startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }),
       )
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
       });
   };
@@ -210,7 +210,7 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
       } catch (err) {
         params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
       }
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
     });
   });
@@ -307,14 +307,14 @@ function scheduleProviderAuthStatePrewarm(params: {
           params.log.info(
             `provider auth state pre-warmed ${formatProviderAuthWarmMetrics(metrics)}`,
           );
-        })().catch((err) => {
+        })().catch((err: unknown) => {
           params.log.warn(`provider auth state pre-warm failed: ${String(err)}`);
         });
       },
       Math.max(0, delayMs),
     );
     startupTimer.unref?.();
-  })().catch((err) => {
+  })().catch((err: unknown) => {
     params.log.warn(`provider auth state pre-warm setup failed: ${String(err)}`);
   });
   return {
@@ -368,7 +368,7 @@ function scheduleAgentRuntimePluginPrewarm(params: {
             `agent runtime plugins pre-warmed in ${(performance.now() - started).toFixed(0)}ms`,
           );
         }
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         params.log.warn(`agent runtime plugin pre-warm failed: ${String(err)}`);
       });
     },
@@ -402,7 +402,7 @@ function schedulePostReadySidecarTask(params: {
     }
     void measureStartup(params.startupTrace, params.name, () =>
       params.run(isStopped, abortController.signal),
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
   });
@@ -685,7 +685,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
 ): Promise<void> {
   let settled = false;
   const warmup = prewarm(params)
-    .catch((err) => {
+    .catch((err: unknown) => {
       params.log.warn(`startup model warmup failed: ${String(err)}`);
     })
     .finally(() => {
@@ -724,7 +724,7 @@ function schedulePrimaryModelPrewarm(
       },
       prewarm,
     ),
-  ).catch((err) => {
+  ).catch((err: unknown) => {
     params.log.warn(`startup model warmup failed: ${String(err)}`);
   });
 }
@@ -821,7 +821,7 @@ export async function startGatewaySidecars(params: {
           }
         });
   if (pluginServices && params.shouldStartPluginServices?.() === false) {
-    await pluginServices.stop().catch((err) => {
+    await pluginServices.stop().catch((err: unknown) => {
       params.log.warn(`plugin services stop after close failed: ${String(err)}`);
     });
     pluginServices = null;
@@ -870,7 +870,7 @@ export async function startGatewaySidecars(params: {
           `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
         );
       });
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
   }
@@ -924,7 +924,7 @@ export async function startGatewaySidecars(params: {
           .then(({ scheduleRestartSentinelWake }) =>
             scheduleRestartSentinelWake({ deps: params.deps }),
           )
-          .catch((err) => {
+          .catch((err: unknown) => {
             params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
           });
       }, 750);
@@ -1109,7 +1109,7 @@ function createDeferredGatewayUpdateCheck(params: {
           }
           stopUpdateCheck = nextStop;
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (stopped) {
             return;
           }
@@ -1412,12 +1412,12 @@ export async function startGatewayPostAttachRuntime(
                 (params.deps.cron as PluginHookGatewayCronService | undefined),
             },
           ),
-        ).catch((err) => {
+        ).catch((err: unknown) => {
           params.log.warn(`gateway_start hook failed: ${String(err)}`);
         });
       }
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 

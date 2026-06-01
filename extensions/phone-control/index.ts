@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -35,6 +34,14 @@ type ArmStateFileV2 = {
 };
 
 type ArmStateFile = ArmStateFileV1 | ArmStateFileV2;
+type PhoneControlConfigView = {
+  readonly gateway?: {
+    readonly nodes?: {
+      readonly allowCommands?: readonly string[];
+      readonly denyCommands?: readonly string[];
+    };
+  };
+};
 
 const STATE_VERSION = 2;
 const ARM_STATE_NAMESPACE = "armed";
@@ -46,6 +53,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   screen: ["screen.record"],
   writes: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
 };
+const PHONE_CONTROL_COMMANDS = Object.values(GROUP_COMMANDS).flat();
 
 function uniqSorted(values: string[]): string[] {
   return sortUniqueStrings(normalizeStringEntries(values));
@@ -118,12 +126,17 @@ async function writeArmState(api: OpenClawPluginApi, state: ArmStateFile | null)
   await store.register(ARM_STATE_KEY, state);
 }
 
-function normalizeDenyList(cfg: OpenClawPluginApi["config"]): string[] {
+function normalizeDenyList(cfg: PhoneControlConfigView): string[] {
   return uniqSorted([...(cfg.gateway?.nodes?.denyCommands ?? [])]);
 }
 
-function normalizeAllowList(cfg: OpenClawPluginApi["config"]): string[] {
+function normalizeAllowList(cfg: PhoneControlConfigView): string[] {
   return uniqSorted([...(cfg.gateway?.nodes?.allowCommands ?? [])]);
+}
+
+function hasPhoneControlAllowOverride(cfg: PhoneControlConfigView): boolean {
+  const allow = new Set(normalizeAllowList(cfg));
+  return PHONE_CONTROL_COMMANDS.some((cmd) => allow.has(cmd));
 }
 
 function patchConfigNodeLists(
@@ -152,7 +165,7 @@ async function disarmNow(params: {
   if (!state) {
     return { changed: false, restored: [], removed: [] };
   }
-  const cfg = api.runtime.config.current() as OpenClawConfig;
+  const cfg = api.runtime.config.current();
   const allow = new Set(normalizeAllowList(cfg));
   const deny = new Set(normalizeDenyList(cfg));
   const removed: string[] = [];
@@ -290,10 +303,11 @@ export default definePluginEntry({
   description: "Temporary allowlist control for phone automation commands",
   register(api: OpenClawPluginApi) {
     let expiryInterval: ReturnType<typeof setInterval> | null = null;
+    let initialExpiryTick: ReturnType<typeof setImmediate> | null = null;
 
     const timerService: OpenClawPluginService = {
       id: "phone-control-expiry",
-      start: async () => {
+      start: async (ctx) => {
         const tick = async () => {
           const state = await readArmState(api);
           if (!state || state.expiresAtMs == null) {
@@ -308,15 +322,30 @@ export default definePluginEntry({
           });
         };
 
-        // Best effort; don't crash the gateway if state is corrupt.
-        await tick().catch(() => {});
-
         expiryInterval = setInterval(() => {
           tick().catch(() => {});
         }, 15_000);
         expiryInterval.unref?.();
+
+        if (hasPhoneControlAllowOverride(ctx.config)) {
+          // Active dangerous command allows must be reconciled before gateway
+          // readiness; otherwise an expired phone-control window can survive.
+          await tick().catch(() => {});
+        } else {
+          // With no active phone-control allowlist, startup can avoid opening
+          // plugin state before readiness; cleanup still runs before the interval.
+          initialExpiryTick = setImmediate(() => {
+            initialExpiryTick = null;
+            tick().catch(() => {});
+          });
+          initialExpiryTick.unref?.();
+        }
       },
       stop: async () => {
+        if (initialExpiryTick) {
+          clearImmediate(initialExpiryTick);
+          initialExpiryTick = null;
+        }
         if (expiryInterval) {
           clearInterval(expiryInterval);
           expiryInterval = null;
@@ -400,7 +429,7 @@ export default definePluginEntry({
           }
 
           const commands = resolveCommandsForGroup(group);
-          const cfg = api.runtime.config.current() as OpenClawConfig;
+          const cfg = api.runtime.config.current();
           const allowSet = new Set(normalizeAllowList(cfg));
           const denySet = new Set(normalizeDenyList(cfg));
 

@@ -918,7 +918,7 @@ export class RealtimeCallHandler {
       closeSession();
     };
 
-    session.connect().catch((error: Error) => {
+    session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       session.close();
       emitCallEnd("error");

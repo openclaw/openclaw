@@ -423,7 +423,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         lastProcessedAt,
         gatewayStartedAt,
         recentEventIds,
-      }).catch((err) => onError?.(err as Error, "persist state"));
+      }).catch((err: unknown) => onError?.(err as Error, "persist state"));
     }, STATE_PERSIST_DEBOUNCE_MS);
   }
 
@@ -698,7 +698,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close: () => {
       relayAbort.abort("closed by caller");
       void Promise.resolve(sub.close("closed by caller"))
-        .catch((err) => onError?.(err as Error, "close subscription"))
+        .catch((err: unknown) => onError?.(err as Error, "close subscription"))
         .finally(() => {
           pool.close(relays);
         });
@@ -713,7 +713,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           lastProcessedAt,
           gatewayStartedAt,
           recentEventIds,
-        }).catch((err) => onError?.(err as Error, "persist state on close"));
+        }).catch((err: unknown) => onError?.(err as Error, "persist state on close"));
       }
     },
     publicKey: pk,

@@ -438,7 +438,7 @@ export class AcpGatewayAgent implements Agent {
       this.getSessionSnapshot(session.sessionKey),
       ledgerReplay.complete
         ? Promise.resolve([])
-        : this.getSessionTranscript(session.sessionKey).catch((err) => {
+        : this.getSessionTranscript(session.sessionKey).catch((err: unknown) => {
             this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
             return [];
           }),
@@ -726,7 +726,7 @@ export class AcpGatewayAgent implements Agent {
         }
       };
 
-      void sendWithProvenanceFallback().catch((err) => {
+      void sendWithProvenanceFallback().catch((err: unknown) => {
         if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
           return;
         }

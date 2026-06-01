@@ -151,7 +151,10 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
     }
   }
 
-  throw lastError ?? new Error("Could not determine Tailscale DNS or IP");
+  throw toLintErrorObject(
+    lastError ?? new Error("Could not determine Tailscale DNS or IP"),
+    "Non-Error thrown",
+  );
 }
 
 /**
@@ -614,4 +617,18 @@ export async function readTailscaleWhoisIdentity(
     writeCachedWhois(normalized, null, errorTtlMs);
     return null;
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

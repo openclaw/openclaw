@@ -331,7 +331,7 @@ async function resolveParsedCommentContent(params: {
               resolvedObjToken: objToken,
             };
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger?.(
               `feishu[${params.accountId}]: wiki link resolution threw token=${link.wikiNodeToken} error=${formatErrorMessage(error)}`,
             );
@@ -485,7 +485,7 @@ async function requestFeishuOpenApi<T>(params: {
     { timeoutMs: params.timeoutMs },
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
-    .catch((error) => {
+    .catch((error: unknown) => {
       params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
       return null;
     });

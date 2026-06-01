@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
@@ -207,6 +208,8 @@ describe("openrouter music generation provider", () => {
   });
 
   it("caps oversized OpenRouter music stream timeouts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       postJsonRequestMock.mockResolvedValue({
@@ -224,10 +227,13 @@ describe("openrouter music generation provider", () => {
         }),
       ).rejects.toThrow("OpenRouter music generation response missing audio data");
 
-      expect(postRequest().timeoutMs).toBe(180_000);
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 180_000);
+      expect(postRequest().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+      const streamTimeoutMs = timeoutSpy.mock.calls.at(-1)?.[1];
+      expect(streamTimeoutMs).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS - 1_000);
+      expect(streamTimeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 

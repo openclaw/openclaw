@@ -414,7 +414,7 @@ process.on("message", (message) => {
     const embedPromise = provider.embedQuery("stuck");
     const embedError = embedPromise.then(
       () => undefined,
-      (err) => err,
+      (err: unknown) => err,
     );
     await expect
       .poll(async () => {

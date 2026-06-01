@@ -1532,8 +1532,10 @@ export async function runNodeMain(params = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
     .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
+    .catch(
+      /** @param {unknown} err */ (err) => {
+        console.error(err);
+        process.exit(1);
+      },
+    );
 }

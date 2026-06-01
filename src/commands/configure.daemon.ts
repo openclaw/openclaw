@@ -143,7 +143,7 @@ export async function maybeInstallDaemon(params: {
       },
     );
     if (installError) {
-      note("Gateway service install failed: " + installError, "Gateway");
+      note("Gateway service install failed: ".concat(installError), "Gateway");
       note(gatewayInstallErrorHint(), "Gateway");
       return;
     }

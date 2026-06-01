@@ -1816,7 +1816,7 @@ export function createExecTool(
               }),
             );
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
               return;

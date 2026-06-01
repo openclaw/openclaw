@@ -277,7 +277,7 @@ export async function startNodeAgentAudioBridge(params: {
           ),
         );
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         params.logger.warn(`[google-meet] node agent TTS failed: ${formatErrorMessage(error)}`);
       });
   };
@@ -557,7 +557,7 @@ export async function startNodeRealtimeAudioBridge(params: {
             },
             timeoutMs: 5_000,
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger.warn(
               `[google-meet] node audio output failed: ${formatErrorMessage(error)}`,
             );
@@ -580,7 +580,7 @@ export async function startNodeRealtimeAudioBridge(params: {
             },
             timeoutMs: 5_000,
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger.warn(
               `[google-meet] node audio clear failed: ${formatErrorMessage(error)}`,
             );

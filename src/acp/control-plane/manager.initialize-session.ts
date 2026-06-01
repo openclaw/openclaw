@@ -165,7 +165,7 @@ async function closeRuntimeAfterInitMetaFailure(params: {
       handle: params.handle,
       reason: "init-meta-failed",
     })
-    .catch((closeError) => {
+    .catch((closeError: unknown) => {
       logVerbose(
         `acp-manager: cleanup close failed after metadata write error for ${params.sessionKey}: ${String(closeError)}`,
       );

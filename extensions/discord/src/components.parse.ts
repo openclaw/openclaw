@@ -153,7 +153,6 @@ export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle
       return ButtonStyle.Danger;
     case "link":
       return ButtonStyle.Link;
-    case "primary":
     default:
       return ButtonStyle.Primary;
   }

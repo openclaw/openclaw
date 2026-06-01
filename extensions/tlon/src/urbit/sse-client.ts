@@ -209,7 +209,7 @@ export class UrbitSSEClient {
       throw new Error(`Stream connection failed: ${response.status}`);
     }
 
-    this.processStream(response.body).catch((error) => {
+    this.processStream(response.body).catch((error: unknown) => {
       if (!this.aborted) {
         this.logger.error?.(`Stream error: ${String(error)}`);
         for (const { err } of this.eventHandlers.values()) {
@@ -286,7 +286,7 @@ export class UrbitSSEClient {
           this.logger.log?.(
             `[SSE] Acking event ${eventId} (last acked: ${this.lastAcknowledgedEventId})`,
           );
-          this.ack(eventId).catch((err) => {
+          this.ack(eventId).catch((err: unknown) => {
             this.logger.error?.(`Failed to ack event ${eventId}: ${String(err)}`);
           });
         }

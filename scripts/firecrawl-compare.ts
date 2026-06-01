@@ -165,7 +165,7 @@ async function run() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  run().catch((error) => {
+  run().catch((error: unknown) => {
     console.error(error);
     process.exit(1);
   });

@@ -794,7 +794,7 @@ export function createSubagentRunManager(params: {
             inFlightRunIds: params.endedHookInFlightRunIds,
             persist: () => params.persist(),
           });
-        void persistSubagentSessionTiming(entry).catch((err) => {
+        void persistSubagentSessionTiming(entry).catch((err: unknown) => {
           log.warn("failed to persist killed subagent session timing", {
             err,
             runId: entry.runId,

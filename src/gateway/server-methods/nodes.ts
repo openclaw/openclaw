@@ -339,7 +339,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
     deviceFamily: nodeSession.deviceFamily,
     commands: nodeSession.commands,
     cfg,
-  }).catch((err) =>
+  }).catch((err: unknown) =>
     params.context.logGateway.warn(
       `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
     ),

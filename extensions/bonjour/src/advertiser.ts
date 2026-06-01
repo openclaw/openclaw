@@ -571,7 +571,7 @@ export async function startGatewayBonjourAdvertiser(
             .then(() => {
               logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
-            .catch((err) => {
+            .catch((err: unknown) => {
               handleAdvertiseFailure(label, svc, err, "failed");
             });
         } catch (err) {
@@ -747,7 +747,7 @@ export async function startGatewayBonjourAdvertiser(
           )})`,
         );
         try {
-          void svc.advertise().catch((err) => {
+          void svc.advertise().catch((err: unknown) => {
             logger.warn(
               `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
             );

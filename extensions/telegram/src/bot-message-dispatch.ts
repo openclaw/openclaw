@@ -1071,7 +1071,7 @@ export const dispatchTelegramMessage = async ({
       }
       await task();
     });
-    draftLaneEventQueue = next.catch((err) => {
+    draftLaneEventQueue = next.catch((err: unknown) => {
       logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
     });
     return draftLaneEventQueue;

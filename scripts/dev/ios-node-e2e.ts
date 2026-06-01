@@ -230,7 +230,7 @@ async function main() {
         idempotencyKey: randomUUID(),
       },
       (t.timeoutMs ?? 12_000) + 2_000,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       results.push({ id: t.id, ok: false, error: formatErr(err) });
       return null;
     });

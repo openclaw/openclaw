@@ -918,7 +918,7 @@ export async function handleFeishuMessage(params: {
           replyToMessageId: replyTargetMessageId,
           replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : false,
           accountId: account.accountId,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           log(`feishu[${account.accountId}]: failed to send ACP init error reply: ${String(err)}`);
         });
         return;

@@ -628,7 +628,7 @@ export function createMatrixVerificationEventRouter(params: {
         routeTask,
       );
     } else {
-      void routeTask().catch((err) => {
+      void routeTask().catch((err: unknown) => {
         params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
       });
     }

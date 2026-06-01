@@ -287,9 +287,9 @@ async function downloadToFile(
                 size: total,
               });
             })
-            .catch(async (err) => {
+            .catch(async (err: unknown) => {
               await fs.rm(dest, { force: true }).catch(() => {});
-              reject(err);
+              reject(toLintErrorObject(err, "Non-Error rejection"));
             });
         });
         req.on("error", reject);
@@ -505,7 +505,6 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
       return new SaveMediaSourceError("invalid-path", "Media path is outside workspace root", {
         cause: err,
       });
-    case "invalid-path":
     default:
       return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {
         cause: err,
@@ -729,4 +728,18 @@ export async function readMediaBuffer(
 export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

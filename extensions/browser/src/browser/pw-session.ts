@@ -1359,12 +1359,12 @@ export async function gotoPageWithNavigationGuard(
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     return response;
   } catch (err) {
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     throw err;
   } finally {
@@ -1812,4 +1812,18 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
       throw err;
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

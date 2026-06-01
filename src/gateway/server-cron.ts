@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -292,7 +293,7 @@ export function buildGatewayCronService(params: {
       config: getRuntimeConfig(),
       getCron: () => cron as PluginHookGatewayCronService,
     };
-    void hookRunner.runCronChanged(evt, hookCtx).catch((err) => {
+    void hookRunner.runCronChanged(evt, hookCtx).catch((err: unknown) => {
       cronLogger.warn(
         { err: formatErrorMessage(err), jobId: evt.jobId },
         "cron_changed hook failed",
@@ -400,6 +401,16 @@ export function buildGatewayCronService(params: {
         },
         "cron: cleaned up timed-out agent run",
       );
+      await retireSessionMcpRuntime({
+        sessionId: execution.sessionId,
+        reason: "cron-timeout-cleanup",
+        onError: (error, sid) => {
+          cronLogger.warn(
+            { jobId: job.id, sessionId: sid },
+            `cron: failed to retire MCP runtime for timed-out session: ${String(error)}`,
+          );
+        },
+      }).catch(() => {});
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({
@@ -490,7 +501,7 @@ export function buildGatewayCronService(params: {
             usage: evt.usage,
           },
           opts: { keepLines: runLogPrune.keepLines },
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           cronLogger.warn(
             { err: String(err), storePath, jobId: evt.jobId },
             "cron: run log append failed",

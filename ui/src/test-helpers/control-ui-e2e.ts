@@ -82,9 +82,35 @@ export type MockGatewayControls = {
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
+const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+const systemChromiumExecutableCandidates = [
+  "/snap/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+] as const;
+
 function resolveRepoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../..");
+}
+
+export function resolvePlaywrightChromiumExecutablePath(
+  defaultExecutablePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const executableOverride = env[chromiumExecutableOverrideEnvKey]?.trim();
+  if (executableOverride) {
+    return executableOverride;
+  }
+  if (existsSync(defaultExecutablePath)) {
+    return defaultExecutablePath;
+  }
+  return (
+    systemChromiumExecutableCandidates.find((candidate) => existsSync(candidate)) ??
+    defaultExecutablePath
+  );
 }
 
 export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
@@ -356,7 +382,7 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: [] },
+          features: { events: [], methods: ["chat.startup"] },
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -402,6 +428,24 @@ function installControlUiMockGateway(input: {
         return null;
       case "chat.history":
         return {
+          messages: scenario.historyMessages,
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        };
+      case "chat.startup":
+        return {
+          agentsList: {
+            agents: [
+              {
+                id: scenario.defaultAgentId,
+                identity: { name: scenario.assistantName },
+                name: scenario.assistantName,
+              },
+            ],
+            defaultId: scenario.defaultAgentId,
+            mainKey: "main",
+            scope: "agent",
+          },
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,

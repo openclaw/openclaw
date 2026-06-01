@@ -1390,7 +1390,7 @@ export async function runWhatsAppQaLive(params: {
       }
     }
     if (tempAuthRoot) {
-      await fs.rm(tempAuthRoot, { recursive: true, force: true }).catch((error) => {
+      await fs.rm(tempAuthRoot, { recursive: true, force: true }).catch((error: unknown) => {
         appendLiveLaneIssue(cleanupIssues, "temporary auth cleanup failed", error);
       });
     }

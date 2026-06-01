@@ -104,6 +104,16 @@ function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<s
   return arg as Record<string, any>;
 }
 
+function writeSecurePluginEntrypoint(pathname: string): void {
+  fs.writeFileSync(pathname, "");
+  fs.chmodSync(pathname, 0o644);
+}
+
+function createSecurePluginRoot(pathname: string): void {
+  fs.mkdirSync(pathname);
+  fs.chmodSync(pathname, 0o755);
+}
+
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
     expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
@@ -470,8 +480,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -530,8 +540,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -658,8 +668,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    createSecurePluginRoot(pluginRoot);
+    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
     mocks.loadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [

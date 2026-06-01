@@ -982,7 +982,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           }),
         );
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (settled) {
           return;
         }

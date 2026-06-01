@@ -225,7 +225,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
           },
           (error: unknown) => {
             realClearTimeout(timeout);
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
           },
         );
       });
@@ -600,6 +600,7 @@ describe("TelegramPollingSession", () => {
   });
 
   afterEach(() => {
+    pollingSessionTesting.resetActiveSpooledUpdateHandlersForTests();
     clearTelegramRuntime();
     closeOpenClawStateDatabaseForTest();
   });
@@ -716,17 +717,11 @@ describe("TelegramPollingSession", () => {
       spoolDir: tempDir,
       update: { update_id: 42, message: { text: "hello" } },
     });
-    let stopWorker: (() => void) | undefined;
-    const workerDone = new Promise<void>((resolve) => {
-      stopWorker = resolve;
-    });
     const createWorker = vi.fn(() => ({
       onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => {
-        stopWorker?.();
-      }),
+      stop: vi.fn(async () => undefined),
       task: vi.fn(async () => {
-        await workerDone;
+        await waitForAbortSignal(abort.signal);
       }),
     }));
 
@@ -1921,21 +1916,17 @@ describe("TelegramPollingSession", () => {
     });
 
     let workerTaskCalls = 0;
-    let stopWorker: (() => void) | undefined;
-    const workerDone = new Promise<void>((resolve) => {
-      stopWorker = resolve;
-    });
     const createWorker = vi.fn(() => ({
       onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => {
-        stopWorker?.();
-      }),
+      stop: vi.fn(async () => undefined),
       task: vi.fn(async () => {
         workerTaskCalls += 1;
         if (workerTaskCalls === 1) {
           return;
         }
-        await workerDone;
+        await new Promise<void>((resolve) => {
+          abort.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
       }),
     }));
 
@@ -2405,6 +2396,48 @@ describe("TelegramPollingSession", () => {
     expect(
       pollingSessionTesting.resolveSpooledUpdateHandlerAbortGraceMs(Number.MAX_SAFE_INTEGER),
     ).toBe(MAX_TIMER_TIMEOUT_MS);
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    let releaseTurn: (() => void) | undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+
+    try {
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "wedged topic 10 turn"),
+        topicUpdate(43, 10, "blocked topic 10 turn"),
+      ]);
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        spooledUpdateHandlerTimeoutMs: 100,
+        spooledUpdateHandlerAbortGraceMs: Number.MAX_SAFE_INTEGER,
+        handleUpdate: async () => {
+          await turnDone;
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => {
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      });
+
+      releaseTurn?.();
+      abort.abort();
+      stopWorker();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      releaseTurn?.();
+      abort.abort();
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("does not drain more updates on the old bot while a timeout restart is pending", async () => {
@@ -3434,3 +3467,17 @@ describe("TelegramPollingSession", () => {
     expect(transport2.close).toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

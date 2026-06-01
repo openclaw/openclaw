@@ -1107,7 +1107,7 @@ export async function prepareSlackMessage(params: {
           client: ctx.app.client,
         }).then(
           () => true,
-          (err) => {
+          (err: unknown) => {
             logVerbose(
               `slack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
             );

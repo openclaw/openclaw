@@ -474,9 +474,9 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
               window.clearTimeout(timeout);
               resolve({ setupComplete: true, readyState: ws.readyState });
-            })().catch((error) => {
+            })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(error);
+              reject(toLintErrorObject(error, "Non-Error rejection"));
             });
           });
           ws.addEventListener("error", () => {
@@ -751,7 +751,7 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(shortError(error));
     process.exitCode = 1;
   });
@@ -763,3 +763,17 @@ export const testing = {
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

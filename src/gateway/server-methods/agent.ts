@@ -944,7 +944,7 @@ function dispatchAgentRunFromGateway(params: {
       // Swift clients will typically treat the first res as the result and ignore this.
       params.respond(true, payload, undefined, { runId: params.runId });
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
       const renderedErr = formatForLog(err);
       if (taskTracked) {
@@ -1205,6 +1205,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             status: "accepted" as const,
             sessionKey,
             ...(dedupeSessionResolvesGlobal && dedupeAgentId ? { agentId: dedupeAgentId } : {}),
+            controlUiVisible: !suppressVisibleSessionEffects,
             acceptedAt,
             dedupeKeys: agentDedupeKeys,
             expiresAtMs: resolveAgentRunExpiresAtMs({
@@ -2204,6 +2205,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
       });
       const existingRunAbort = context.chatAbortControllers.get(runId);
@@ -2258,6 +2260,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       };
       const acceptedDedupePayload = {
         ...accepted,
+        controlUiVisible: !suppressVisibleSessionEffects,
         dedupeKeys: agentDedupeKeys,
         ownerConnId,
         ownerDeviceId,

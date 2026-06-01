@@ -5,7 +5,10 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
-import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
+import {
+  isUnresolvedShellReference,
+  readStateDirDotEnvFromStateDir,
+} from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import {
@@ -312,7 +315,7 @@ function collectSystemdFileBackedEnvironment(params: {
       continue;
     }
     const key = normalizeSystemdEnvironmentKey(rawKey);
-    if (key && params.fileManagedKeys.has(key)) {
+    if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
       environment[rawKey] = rawValue;
     }
   }
@@ -825,8 +828,10 @@ async function writeSystemdUnit({
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
+    readStateDirDotEnvFromStateDir(stateDir);
   const stateDirDotEnvVars = Object.fromEntries(
-    Object.entries(readStateDirDotEnvVarsFromStateDir(stateDir)).filter(([key, value]) => {
+    Object.entries(stateDirDotEnvEntries).filter(([key, value]) => {
       const inlineValue = environment?.[key];
       if (typeof inlineValue !== "string") {
         return true;
@@ -843,6 +848,7 @@ async function writeSystemdUnit({
     dotenvVars: stateDirDotEnvVars,
     inlineManagedKeys,
     fileManagedKeys,
+    skippedManagedKeys: skippedShellReferenceKeys,
     fileBackedEnvironment: collectSystemdFileBackedEnvironment({
       environment,
       fileManagedKeys,
@@ -852,6 +858,13 @@ async function writeSystemdUnit({
   const environmentSansDotEnvEntries = Object.fromEntries(
     Object.entries(environment ?? {}).filter(([key, value]) => {
       if (typeof value !== "string") {
+        return false;
+      }
+      const source = readSystemdEnvironmentValueSource({
+        environmentValueSources,
+        key,
+      });
+      if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
         return false;
       }
       const normalizedKey = normalizeSystemdEnvironmentKey(key);
@@ -888,6 +901,10 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   inlineManagedKeys?: ReadonlySet<string>;
   /** File-managed keys that should be written from current environment values or removed when absent. */
   fileManagedKeys?: ReadonlySet<string>;
+  /** State-dir .env keys OpenClaw previously managed but is now skipping (unresolved shell
+   *  references). A prior re-stage may have written a stale literal value for them; drop it so
+   *  the regenerated env file no longer carries the obsolete reference. */
+  skippedManagedKeys?: Iterable<string>;
   fileBackedEnvironment?: Record<string, string>;
   environment?: GatewayServiceEnv;
 }): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
@@ -928,16 +945,20 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   const managedKeysToDrop = new Set([
     ...(params.inlineManagedKeys ?? []),
     ...(params.fileManagedKeys ?? []),
+    ...[...(params.skippedManagedKeys ?? [])].flatMap((key) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      return normalized ? [normalized] : [];
+    }),
   ]);
-  const operatorOnly =
-    managedKeysToDrop.size > 0
-      ? Object.fromEntries(
-          Object.entries(existing).filter(([key]) => {
-            const normalized = normalizeSystemdEnvironmentKey(key);
-            return !normalized || !managedKeysToDrop.has(normalized);
-          }),
-        )
-      : existing;
+  const operatorOnly = Object.fromEntries(
+    Object.entries(existing).filter(([key, value]) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      if (normalized && managedKeysToDrop.has(normalized)) {
+        return false;
+      }
+      return !isUnresolvedShellReference(value);
+    }),
+  );
   const merged = { ...operatorOnly, ...incoming };
   const environmentKeys = new Set(
     Object.keys(merged).flatMap((key) => {

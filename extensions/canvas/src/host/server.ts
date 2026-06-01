@@ -487,7 +487,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       opts.runtime.error(`Canvas host request failed: ${String(err)}`);
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");

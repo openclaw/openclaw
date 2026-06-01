@@ -462,8 +462,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             fromShip: botShipName,
             toShip: effectiveOwnerShip,
             text: warningMsg,
-          }).catch((err) =>
-            runtime.error?.(`[tlon] Failed to send security warning to owner: ${err}`),
+          }).catch((err: unknown) =>
+            runtime.error?.(
+              `[tlon] Failed to send security warning to owner: ${formatErrorMessage(err)}`,
+            ),
           );
         }
       }

@@ -568,7 +568,7 @@ export const registerTelegramHandlers = ({
             "Something went wrong while processing your message. Please try again.",
             threadId != null ? { message_thread_id: threadId } : undefined,
           )
-          .catch((sendErr) => {
+          .catch((sendErr: unknown) => {
             logVerbose(`telegram: error fallback send failed: ${String(sendErr)}`);
           });
       }

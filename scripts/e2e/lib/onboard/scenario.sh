@@ -7,6 +7,19 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missi
 ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
 OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
 export OPENCLAW_ENTRY
+ONBOARD_TMP_ROOT="${OPENCLAW_ONBOARD_E2E_TMPDIR:-${TMPDIR:-/tmp}}"
+ONBOARD_TMP_ROOT="${ONBOARD_TMP_ROOT%/}"
+[ -n "$ONBOARD_TMP_ROOT" ] || ONBOARD_TMP_ROOT="/tmp"
+mkdir -p "$ONBOARD_TMP_ROOT"
+ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"
+OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"
+export OPENCLAW_E2E_LOG_DIR
+mkdir -p "$OPENCLAW_E2E_LOG_DIR"
+cleanup_onboard_artifacts() {
+  openclaw_e2e_stop_process "${GATEWAY_PID:-}"
+  rm -rf "$ONBOARD_TMP_DIR"
+}
+trap cleanup_onboard_artifacts EXIT
 
 # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
 openclaw_e2e_install_trash_shim
@@ -73,6 +86,13 @@ stop_gateway() {
   openclaw_e2e_stop_process "$1"
 }
 
+cleanup_wizard_case() {
+  exec 3>&- 2>/dev/null || true
+  openclaw_e2e_stop_process "${wizard_pid:-}"
+  stop_gateway "${gw_pid:-}"
+  rm -rf "${input_fifo_dir:-}"
+}
+
 run_wizard_cmd() {
   local case_name="$1"
   local state_ref="$2"
@@ -89,21 +109,20 @@ run_wizard_cmd() {
   echo "== Wizard case: $case_name =="
   set_isolated_openclaw_env "$state_ref"
 
-  input_fifo_dir="$(mktemp -d "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
+  input_fifo_dir="$(mktemp -d "$ONBOARD_TMP_DIR/${case_name}.fifo.XXXXXX")"
   input_fifo="$input_fifo_dir/stdin.fifo"
   if ! mkfifo "$input_fifo"; then
     rm -rf "$input_fifo_dir"
     return 1
   fi
-  local log_path="/tmp/openclaw-onboard-${case_name}.log"
+  local log_path="$OPENCLAW_E2E_LOG_DIR/${case_name}.log"
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
   # Run under script to keep an interactive TTY for clack prompts.
   openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
   wizard_pid=$!
   if ! exec 3>"$input_fifo"; then
-    openclaw_e2e_stop_process "$wizard_pid"
-    rm -rf "$input_fifo_dir"
+    cleanup_wizard_case
     return 1
   fi
 
@@ -111,20 +130,14 @@ run_wizard_cmd() {
     start_gateway
     gw_pid="$GATEWAY_PID"
     if ! wait_for_gateway; then
-      exec 3>&-
-      openclaw_e2e_stop_process "$wizard_pid"
-      rm -rf "$input_fifo_dir"
-      stop_gateway "$gw_pid"
+      cleanup_wizard_case
       exit 1
     fi
   fi
 
   "$send_fn" || wizard_status=$?
   if [ "$wizard_status" -ne 0 ]; then
-    exec 3>&-
-    openclaw_e2e_stop_process "$wizard_pid"
-    rm -rf "$input_fifo_dir"
-    stop_gateway "$gw_pid"
+    cleanup_wizard_case
     echo "Wizard input driver exited with status $wizard_status"
     if [ -f "$log_path" ]; then
       tail -n 160 "$log_path" || true
@@ -133,19 +146,16 @@ run_wizard_cmd() {
   fi
 
   wait "$wizard_pid" || wizard_status=$?
+  wizard_pid=""
   if [ "$wizard_status" -ne 0 ]; then
-    exec 3>&-
-    rm -rf "$input_fifo_dir"
-    stop_gateway "$gw_pid"
+    cleanup_wizard_case
     echo "Wizard exited with status $wizard_status"
     if [ -f "$log_path" ]; then
       tail -n 160 "$log_path" || true
     fi
     exit "$wizard_status"
   fi
-  exec 3>&-
-  rm -rf "$input_fifo_dir"
-  stop_gateway "$gw_pid"
+  cleanup_wizard_case
   if [ -n "$validate_fn" ]; then
     "$validate_fn" "$log_path"
   fi
@@ -233,7 +243,7 @@ run_case_local_basic() {
     --skip-ui \
     --skip-health
 
-  validate_local_basic_log /tmp/openclaw-onboard-local-basic.log
+  validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"
 
   # Assert config + workspace scaffolding.
   workspace_dir="$OPENCLAW_STATE_DIR/workspace"

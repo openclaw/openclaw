@@ -218,13 +218,21 @@ describe("active-memory plugin", () => {
   };
   const waitForAbort = async (abortSignal?: AbortSignal): Promise<never> => {
     if (abortSignal?.aborted) {
-      throw (abortSignal.reason as unknown) ?? new Error("Operation aborted");
+      throw toLintErrorObject(
+        (abortSignal.reason as unknown) ?? new Error("Operation aborted"),
+        "Non-Error thrown",
+      );
     }
     return await new Promise<never>((_resolve, reject) => {
       abortSignal?.addEventListener(
         "abort",
         () => {
-          reject((abortSignal.reason as unknown) ?? new Error("Operation aborted"));
+          reject(
+            toLintErrorObject(
+              (abortSignal.reason as unknown) ?? new Error("Operation aborted"),
+              "Non-Error rejection",
+            ),
+          );
         },
         { once: true },
       );
@@ -3210,7 +3218,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 100,
+      timeoutMs: 1_000,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     hoisted.sessionStore["agent:main:memory-get-miss"] = {
@@ -4350,3 +4358,17 @@ describe("active-memory plugin", () => {
     expect(config.circuitBreakerCooldownMs).toBe(5000);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

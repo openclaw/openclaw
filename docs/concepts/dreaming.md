@@ -107,6 +107,13 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
 
+Shadow-trial results can be layered on top of that base score as a review
+signal before any durable write. A helpful trial gives the candidate a small
+bounded boost, a neutral trial keeps it deferred, and a harmful trial marks it
+as rejected for that scoring pass. This signal is still report-only: it can
+change candidate ordering or review metadata, but it does not write to
+`MEMORY.md` or promote the candidate by itself.
+
 ## QA shadow trial report coverage
 
 QA Lab includes a report-only scenario for exploring how a future dreaming

@@ -541,7 +541,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
     startupTrace,
   });
-  void maybeLogPendingControlUiBuild(cfg).catch((err) => {
+  void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
   const portOverride = parsePort(opts.port);

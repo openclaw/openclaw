@@ -162,7 +162,10 @@ describe("package acceptance workflow", () => {
     const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
-      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
+      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $cacheRoot "openclaw-pnpm-node-modules"',
+    );
+    expect(hydrateWindowsPnpm.run).toContain(
+      '$env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $env:PNPM_CONFIG_MODULES_DIR ".pnpm"',
     );
     expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
@@ -175,6 +178,10 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsPnpm.run).toContain('"--filter",');
     expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
+    expect(hydrateWindowsPnpm.run).toContain(
+      "New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR",
+    );
+    expect(hydrateWindowsPnpm.run).toContain(".pnpm-workspace-state-v1.json");
     expect(hydrateWindowsPnpm.run).not.toContain("Remove-Item -Recurse -Force");
     expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_ENV");
     expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_PATH");
@@ -255,9 +262,7 @@ describe("package acceptance workflow", () => {
     expect(crabboxConfig.jobs?.changed?.command).toContain(
       "commit -q --no-gpg-sign -m remote-check-tree",
     );
-    expect(crabboxConfig.jobs?.changed?.command).toContain(
-      "env CI=1 corepack pnpm check --timed",
-    );
+    expect(crabboxConfig.jobs?.changed?.command).toContain("env CI=1 corepack pnpm check --timed");
     expect(crabboxConfig.ssh?.user).toBe("crabbox");
     expect(crabboxConfig.ssh?.port).toBe("22");
   });
@@ -655,7 +660,7 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
     );
     expect(workflow).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
@@ -1459,6 +1464,16 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
+    expect(releaseWorkflow).toContain("default: from-validation");
+    expect(releaseWorkflow).toContain(
+      'if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "release_profile=$release_profile" >> "$GITHUB_OUTPUT"',
+    );
+    expect(releaseWorkflow).toContain(
+      "has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}",
+    );
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
       releaseWorkflow.indexOf('if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"'),
     );

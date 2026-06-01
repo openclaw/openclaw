@@ -473,8 +473,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         execute: async () => ({ text: "ok" }),
       },
       {
-        name: "dofbot_move_angles",
-        label: "Dofbot Move Angles",
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
         description: "Move robot joints.",
         parameters: { type: "array", items: { type: "number" } },
         execute: async () => ({ text: "bad" }),

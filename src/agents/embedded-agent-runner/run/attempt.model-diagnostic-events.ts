@@ -635,7 +635,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, eventBase, startedAt, state),
-          (err) => {
+          (err: unknown) => {
             emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
             throw err;
           },

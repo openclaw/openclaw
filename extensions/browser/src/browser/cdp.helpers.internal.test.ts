@@ -416,7 +416,8 @@ describe("cdp.helpers internal", () => {
       await expect(
         withCdpSocket(server.url, async (send) => {
           await send("Test.ok");
-          const rejectRawString = () => Promise.reject("raw-string-from-callback");
+          const rejectRawString = () =>
+            Promise.reject(toLintErrorObject("raw-string-from-callback", "Non-Error rejection"));
           return rejectRawString();
         }),
       ).rejects.toThrow(/raw-string-from-callback/);
@@ -572,3 +573,17 @@ describe("openCdpWebSocket option handling", () => {
     ws.close();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

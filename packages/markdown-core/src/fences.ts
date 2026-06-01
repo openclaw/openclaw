@@ -1,3 +1,4 @@
+/** Markdown fenced-code block span with the opener data needed to reopen it. */
 export type FenceSpan = {
   start: number;
   end: number;
@@ -6,6 +7,7 @@ export type FenceSpan = {
   indent: string;
 };
 
+/** Streaming fence scanner state carried across partial markdown chunks. */
 export type FenceScanState = {
   atLineStart?: boolean;
   open?: {
@@ -57,6 +59,8 @@ export function scanFenceSpans(
           indent,
         };
       } else if (open.markerChar === markerChar && markerLen >= open.markerLen) {
+        // CommonMark allows a closing fence to be longer than the opener, but
+        // it must use the same marker character to avoid crossing fence kinds.
         const end = lineEnd;
         spans.push({
           start: open.start,

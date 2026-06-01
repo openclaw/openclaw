@@ -1085,7 +1085,7 @@ export async function attachWebInboxToSocket(
     }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
-      void task.catch((err) => {
+      void task.catch((err: unknown) => {
         inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
         inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
       });
@@ -1121,7 +1121,7 @@ export async function attachWebInboxToSocket(
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    const task = handleMessagesUpsert(upsert).catch((err) => {
+    const task = handleMessagesUpsert(upsert).catch((err: unknown) => {
       inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
       inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
     });
@@ -1213,7 +1213,7 @@ export async function attachWebInboxToSocket(
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
 
-  const replayTask = replayPendingDurableInboundMessages().catch((err) => {
+  const replayTask = replayPendingDurableInboundMessages().catch((err: unknown) => {
     inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
   });

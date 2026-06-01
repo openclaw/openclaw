@@ -189,7 +189,11 @@ describe("telegram proxy client", () => {
       (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise((_resolve, reject) => {
           const signal = init?.signal as AbortSignal;
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
         }),
     );
 
@@ -212,3 +216,17 @@ describe("telegram proxy client", () => {
     vi.useRealTimers();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -631,6 +631,48 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
   </Accordion>
 
+  <Accordion title="Can I make SOUL.md bigger?">
+    Yes. `SOUL.md` is one of the workspace bootstrap files injected into the
+    agent context. The default per-file injection limit is `20000` characters,
+    and the total bootstrap budget across files is `60000` characters.
+
+    Change the shared defaults in your OpenClaw config:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50000,
+          bootstrapTotalMaxChars: 300000,
+        },
+      },
+    }
+    ```
+
+    Or override one agent:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "main",
+            bootstrapMaxChars: 50000,
+            bootstrapTotalMaxChars: 300000,
+          },
+        ],
+      },
+    }
+    ```
+
+    Use `/context` to check raw vs injected sizes and whether truncation happened.
+    Keep `SOUL.md` focused on voice, stance, and personality; put operating rules
+    in `AGENTS.md` and durable facts in memory.
+
+    See [Context](/concepts/context) and [Agent config](/gateway/config-agents).
+
+  </Accordion>
+
   <Accordion title="Recommended backup strategy">
     Put your **agent workspace** in a **private** git repo and back it up somewhere
     private (for example GitHub private). This captures memory + AGENTS/SOUL/USER

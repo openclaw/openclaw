@@ -494,7 +494,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       auth,
       env: process.env,
       abortSignal: opts.abortSignal,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
     });
 

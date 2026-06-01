@@ -365,7 +365,7 @@ export async function writeVoiceWavFile(
 
 function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
   const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err) => {
+    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
       if (shouldLogVerbose()) {
         logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
       }

@@ -49,7 +49,7 @@ export async function awaitTurnWithTimeout<T>(params: {
       kind: "value" as const,
       value,
     }),
-    (error) => ({
+    (error: unknown) => ({
       kind: "error" as const,
       error,
     }),
@@ -162,7 +162,7 @@ async function awaitCleanupWithGrace(params: {
     () => ({
       kind: "done" as const,
     }),
-    (error) => ({
+    (error: unknown) => ({
       kind: "error" as const,
       error,
     }),

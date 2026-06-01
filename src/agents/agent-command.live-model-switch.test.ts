@@ -330,6 +330,7 @@ vi.mock("../utils/message-channel.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   clearAutoFallbackPrimaryProbeSelection: vi.fn(),
   entryMatchesAutoFallbackPrimaryProbe: () => true,
+  hasLegacyAutoFallbackWithoutOrigin: () => false,
   hasSessionAutoModelFallbackProvenance: () => false,
   listAgentEntries: () => [],
   listAgentIds: () => ["default"],
@@ -372,6 +373,7 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => {
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const buildAllowedModelSet = ({
     cfg,
     catalog,
@@ -439,7 +441,6 @@ vi.mock("./model-selection.js", () => {
       allowAny: false,
     };
   };
-
   return {
     buildAllowedModelSet,
     createModelVisibilityPolicy: (params: {
@@ -536,7 +537,9 @@ vi.mock("./model-selection.js", () => {
       return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
     modelKey: (p: string, m: string) => `${p}/${m}`,
-    normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
+    normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })

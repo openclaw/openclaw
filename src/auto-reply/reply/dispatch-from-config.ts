@@ -1202,6 +1202,9 @@ export async function dispatchReplyFromConfig(
     ctx,
     sessionKey: acpDispatchSessionKey,
   });
+  // Inherited sessions_send routes carry thread ids only when the stored route
+  // proves the thread came from an explicit target, not session normalization.
+  const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -1400,10 +1403,12 @@ export async function dispatchReplyFromConfig(
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
   const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
+  const effectiveExplicitDeliverRoute =
+    ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
   const isInternalWebchatTurn =
     normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
     (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
-    ctx.ExplicitDeliverRoute !== true;
+    !effectiveExplicitDeliverRoute;
   const hasRouteReplyCandidate = Boolean(
     !suppressAcpChildUserDelivery &&
     !isInternalWebchatTurn &&
@@ -1420,7 +1425,7 @@ export async function dispatchReplyFromConfig(
   } = resolveReplyRoutingDecision({
     provider: ctx.Provider,
     surface: ctx.Surface,
-    explicitDeliverRoute: ctx.ExplicitDeliverRoute,
+    explicitDeliverRoute: effectiveExplicitDeliverRoute,
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
     suppressDirectUserDelivery: suppressAcpChildUserDelivery,
@@ -1489,7 +1494,7 @@ export async function dispatchReplyFromConfig(
       requesterSenderName: ctx.SenderName,
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
-      threadId: routeThreadId,
+      threadId: routeReplyThreadId,
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,
@@ -2102,6 +2107,9 @@ export async function dispatchReplyFromConfig(
               channel: hookContext.channelId,
               sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
               senderId: hookContext.senderId,
+              replyToId: hookContext.replyToId,
+              replyToBody: hookContext.replyToBody,
+              replyToSender: hookContext.replyToSender,
               isGroup: hookContext.isGroup,
               timestamp: hookContext.timestamp,
             },
@@ -2111,6 +2119,9 @@ export async function dispatchReplyFromConfig(
               conversationId: inboundClaimContext.conversationId,
               sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
               senderId: hookContext.senderId,
+              replyToId: hookContext.replyToId,
+              replyToBody: hookContext.replyToBody,
+              replyToSender: hookContext.replyToSender,
             },
           ),
         ),
@@ -2155,6 +2166,8 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
+              originatingAccountId: replyRoute.accountId,
+              originatingThreadId: routeReplyThreadId,
               shouldSendToolSummaries,
               sendPolicy,
             }),
@@ -2791,6 +2804,8 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
+              originatingAccountId: replyRoute.accountId,
+              originatingThreadId: routeReplyThreadId,
               shouldSendToolSummaries,
               sendPolicy,
               isTailDispatch: true,

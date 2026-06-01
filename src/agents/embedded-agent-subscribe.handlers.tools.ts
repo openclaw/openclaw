@@ -1554,7 +1554,7 @@ export async function handleToolExecutionEnd(
         runId,
         toolCallId,
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }

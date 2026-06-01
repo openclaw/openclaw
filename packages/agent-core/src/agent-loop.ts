@@ -63,7 +63,7 @@ export function agentLoop(
     .then((messages) => {
       stream.end(messages);
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       pushLoopFailure(stream, config, error, signal?.aborted === true);
     });
 
@@ -108,7 +108,7 @@ export function agentLoopContinue(
     .then((messages) => {
       stream.end(messages);
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       pushLoopFailure(stream, config, error, signal?.aborted === true);
     });
 

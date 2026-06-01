@@ -43,6 +43,7 @@ const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
+const POSIX_PROCESS_SNAPSHOT_ARGS = ["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="];
 const ERROR_LOG_DENY_PATTERNS = [
   /\buncaught exception\b/iu,
   /\bunhandled rejection\b/iu,
@@ -255,7 +256,9 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      void stopResourceSampling().finally(() => reject(error));
+      void stopResourceSampling().finally(() =>
+        reject(toLintErrorObject(error, "Command failed before exit")),
+      );
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
@@ -504,7 +507,10 @@ async function retryRpcCall(method, params, options) {
       await delay(500);
     }
   }
-  throw lastError ?? new Error(`gateway RPC ${method} timed out before retry`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
+    "Non-Error thrown",
+  );
 }
 
 function isRetryableGatewayCallError(error) {
@@ -585,7 +591,7 @@ export async function fetchJson(url, options = {}) {
       }
     }
   }
-  throw lastError ?? new Error(`fetch ${url} failed`);
+  throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
 export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
@@ -721,11 +727,15 @@ export async function stopGateway(child, options = {}) {
       ? true
       : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
 
-  signalGateway(child, "SIGTERM");
+  if (!signalGateway(child, "SIGTERM")) {
+    return;
+  }
   if (await waitForExit(teardownGraceMs)) {
     return;
   }
-  signalGateway(child, "SIGKILL");
+  if (!signalGateway(child, "SIGKILL")) {
+    return;
+  }
   if (await waitForExit(killGraceMs)) {
     return;
   }
@@ -747,10 +757,21 @@ function signalGateway(child, signal) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
-      return;
-    } catch {}
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return false;
+      }
+    }
   }
-  child.kill(signal);
+  try {
+    return child.kill(signal) !== false;
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+    return false;
+  }
 }
 
 export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready") {
@@ -1014,7 +1035,7 @@ async function samplePosixProcessWithDescendants(pid, run) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1034,7 +1055,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1629,4 +1650,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   } else {
     await main();
   }
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

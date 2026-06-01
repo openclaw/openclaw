@@ -38,7 +38,7 @@ import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
@@ -178,7 +178,7 @@ function execConfigOpenCommand(command: ConfigOpenCommand): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(command.command, command.args, (error) => {
       if (error) {
-        reject(error);
+        reject(toErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve();

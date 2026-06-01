@@ -4,6 +4,35 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionUtils from "./session-utils.js";
 
+type HistorySnapshot = ReturnType<typeof buildSessionHistorySnapshot>;
+
+function assistantTextMessage(text: string, seq: number) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    __openclaw: { seq },
+  };
+}
+
+function userTextMessage(text: string, seq: number) {
+  return {
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    __openclaw: { seq },
+  };
+}
+
+function newStateWithUserText(text: string): SessionHistorySseState {
+  return SessionHistorySseState.fromRawSnapshot({
+    target: { sessionId: "sess-main" },
+    rawMessages: [userTextMessage(text, 1)],
+  });
+}
+
+function expectOnlyAssistantText(snapshot: HistorySnapshot, text: string, seq: number): void {
+  expect(snapshot.history.messages).toEqual([assistantTextMessage(text, seq)]);
+}
+
 describe("SessionHistorySseState", () => {
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
     const readSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([
@@ -58,18 +87,7 @@ describe("SessionHistorySseState", () => {
 
   test("reuses one canonical array for items and messages", () => {
     const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "first" }],
-          __openclaw: { seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "second" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
+      rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
       limit: 1,
     });
 
@@ -103,16 +121,7 @@ describe("SessionHistorySseState", () => {
   });
 
   test("emits message-tool mirror when silent control reply completes inline append", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "reply here" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
-    });
+    const state = newStateWithUserText("reply here");
 
     expect(
       state.appendInlineMessage({
@@ -219,18 +228,7 @@ describe("SessionHistorySseState", () => {
 
   test("does not coerce partial cursor values", () => {
     const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "first" }],
-          __openclaw: { seq: 1 },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "second" }],
-          __openclaw: { seq: 2 },
-        },
-      ],
+      rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
       cursor: "seq:2next",
     });
 
@@ -314,16 +312,7 @@ describe("SessionHistorySseState", () => {
   });
 
   test("does not emit a no-op hidden inline control reply", () => {
-    const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
-      rawMessages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "reply here" }],
-          __openclaw: { seq: 1 },
-        },
-      ],
-    });
+    const state = newStateWithUserText("reply here");
 
     const appended = state.appendInlineMessage({
       message: {
@@ -528,21 +517,11 @@ describe("SessionHistorySseState", () => {
           ],
           __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "visible answer" }],
-          __openclaw: { seq: 2 },
-        },
+        assistantTextMessage("visible answer", 2),
       ],
     });
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible answer" }],
-        __openclaw: { seq: 2 },
-      },
-    ]);
+    expectOnlyAssistantText(snapshot, "visible answer", 2);
   });
 
   test("drops hidden runtime-context custom messages from projected history", () => {
@@ -555,21 +534,11 @@ describe("SessionHistorySseState", () => {
           display: false,
           __openclaw: { seq: 1 },
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "visible answer" }],
-          __openclaw: { seq: 2 },
-        },
+        assistantTextMessage("visible answer", 2),
       ],
     });
 
-    expect(snapshot.history.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "visible answer" }],
-        __openclaw: { seq: 2 },
-      },
-    ]);
+    expectOnlyAssistantText(snapshot, "visible answer", 2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 

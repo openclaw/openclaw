@@ -1396,7 +1396,7 @@ describe("runCopilotAttempt", () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
     pool.release = vi.fn(async () => {
-      throw "release failed";
+      throw toLintErrorObject("release failed", "Non-Error thrown");
     });
 
     await expect(runCopilotAttempt(makeParams(), { pool })).rejects.toThrow("release failed");
@@ -1414,7 +1414,7 @@ describe("runCopilotAttempt", () => {
     });
     const pool = makeFakePool(sdk);
     pool.release = vi.fn(async () => {
-      throw "release failed";
+      throw toLintErrorObject("release failed", "Non-Error thrown");
     });
 
     const result = await runCopilotAttempt(makeParams(), { pool });
@@ -2534,3 +2534,17 @@ describe("runCopilotAttempt", () => {
     });
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

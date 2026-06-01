@@ -287,7 +287,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
 
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
-        params.processEvent(parsedEvent, dispatchTarget).catch((err) => {
+        params.processEvent(parsedEvent, dispatchTarget).catch((err: unknown) => {
           dispatchTarget.runtime.error?.(
             `[${dispatchTarget.account.accountId}] Google Chat webhook failed: ${String(err)}`,
           );

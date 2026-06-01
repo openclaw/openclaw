@@ -819,7 +819,7 @@ export function handleMessageUpdate(
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
       .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true }))
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
   }
@@ -1032,7 +1032,7 @@ export function handleMessageEnd(
         final: true,
       });
       if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-        void flushBlockReplyBufferResult.catch((err) => {
+        void flushBlockReplyBufferResult.catch((err: unknown) => {
           ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
         });
       }

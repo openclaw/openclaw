@@ -196,7 +196,7 @@ export async function createWaSocket(
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-            void printTerminalQr(qr).catch((err) => {
+            void printTerminalQr(qr).catch((err: unknown) => {
               sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
             });
           }
@@ -326,7 +326,12 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
       }
       if (update.connection === "close") {
         evWithOff.off?.("connection.update", handler);
-        reject(update.lastDisconnect ?? new Error("Connection closed"));
+        reject(
+          toLintErrorObject(
+            update.lastDisconnect ?? new Error("Connection closed"),
+            "Non-Error rejection",
+          ),
+        );
       }
     };
 
@@ -336,4 +341,18 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 
 export function newConnectionId() {
   return randomUUID();
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

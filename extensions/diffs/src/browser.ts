@@ -331,7 +331,7 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     return await executablePathCache.valuePromise;
   }
 
-  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error) => {
+  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error: unknown) => {
     if (executablePathCache?.valuePromise === valuePromise) {
       executablePathCache = null;
     }
@@ -405,7 +405,7 @@ async function acquireSharedBrowser(params: {
         }
         return browser;
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (sharedBrowserState?.browserPromise === browserPromise) {
           sharedBrowserState = null;
         }

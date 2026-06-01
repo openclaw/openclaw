@@ -231,7 +231,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     }
     if (isPromiseLike<void>(beforeLifecycleTerminal)) {
       return Promise.resolve(beforeLifecycleTerminal)
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
         })
         .then(() => {
@@ -251,7 +251,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
       return Promise.resolve(flushPendingMediaAndChannelResult).then(
         () => emitLifecycleTerminalOnce(),
-        (error) => {
+        (error: unknown) => {
           const emitted = emitLifecycleTerminalOnce();
           if (isPromiseLike<void>(emitted)) {
             return Promise.resolve(emitted).then(() => {

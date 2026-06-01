@@ -127,7 +127,7 @@ async function raceWithTimeout<T>(params: {
       .then(params.run)
       .then(
         (value) => ({ kind: "value" as const, value }),
-        (error) => ({ kind: "error" as const, error }),
+        (error: unknown) => ({ kind: "error" as const, error }),
       ),
     timeout,
   ]);

@@ -184,7 +184,7 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
     const backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
     if (!backend) {
       if (params.missingBackendError) {
-        throw params.missingBackendError;
+        throw toLintErrorObject(params.missingBackendError, "Non-Error thrown");
       }
       return;
     }
@@ -196,4 +196,18 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
       `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
     );
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

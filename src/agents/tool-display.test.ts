@@ -532,6 +532,15 @@ describe("compactRawCommand middle truncation", () => {
     // The sk- prefixed token must be redacted (masked) before truncation
     expect(result).not.toContain("ABCDEFGHIJKLMNOP1234567890abcdefghij");
   });
+
+  it("uses the canonical tool payload redactor before compacting raw commands", () => {
+    const longCommand =
+      "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890 --output /data/results/deploy-output.json";
+    const result = resolveExecDetail({ command: longCommand });
+
+    expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
+    expect(result).toContain("AKIDAB…7890");
+  });
 });
 
 describe("coerceDisplayValue middle truncation", () => {
@@ -581,5 +590,21 @@ describe("coerceDisplayValue middle truncation", () => {
     );
     // The ghp_ token must be redacted before truncation
     expect(detail).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop");
+  });
+
+  it("uses the canonical tool payload redactor before compacting string details", () => {
+    const longValue =
+      "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
+      "x".repeat(200) +
+      " final-step";
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: longValue },
+      }),
+    );
+
+    expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
+    expect(detail).toContain("AKIDAB…7890");
   });
 });

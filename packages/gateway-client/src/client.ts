@@ -878,7 +878,7 @@ export class GatewayClient {
         this.startTickWatch();
         this.opts.onHelloOk?.(helloOk);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         this.pendingConnectErrorDetails =

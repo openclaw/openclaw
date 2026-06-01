@@ -605,6 +605,7 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
     warn: () => {},
+    toolPolicyAuditLogLevel: "debug",
   });
   const preNormalizationFindings: HealthFinding[] = [];
 
@@ -694,6 +695,7 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelContextWindowTokens: params.model.contextWindow,
       allowGatewaySubagentBinding: true,
       emitBeforeToolCallDiagnostics: false,
+      toolPolicyAuditLogLevel: "debug",
     });
   } catch (error) {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
@@ -866,6 +868,7 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
       modelProvider: params.modelRef.provider,
       modelId: params.modelRef.model,
       warn: () => {},
+      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }

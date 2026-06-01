@@ -665,7 +665,7 @@ function scheduleDeferredTurnMaintenance(
     }
   };
   const trackedPromise = runPromise
-    .catch((err) => {
+    .catch((err: unknown) => {
       params.onScheduleFailure?.(err);
       markDeferredTurnMaintenanceTaskScheduleFailure({
         sessionKey,
@@ -673,7 +673,7 @@ function scheduleDeferredTurnMaintenance(
         error: err,
       });
     })
-    .then(cleanupDeferredTurnMaintenance, async (err) => {
+    .then(cleanupDeferredTurnMaintenance, async (err: unknown) => {
       await cleanupDeferredTurnMaintenance();
       throw err;
     });

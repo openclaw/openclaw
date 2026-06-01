@@ -532,7 +532,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await reactSlackMessage(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
         token: ctx.botToken,
         client: ctx.app.client,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("already_reacted")) {
           return;
         }
@@ -543,7 +543,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await removeSlackReaction(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
         token: ctx.botToken,
         client: ctx.app.client,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("no_reaction")) {
           return;
         }
@@ -1866,7 +1866,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (dispatchError) {
-    throw dispatchError;
+    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
   }
 
   // Record thread participation only when we actually delivered a reply and
@@ -1915,4 +1915,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       },
     });
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1323,7 +1323,7 @@ async function* parseWebSocket(
     }
 
     if (failed) {
-      throw failed;
+      throw toLintErrorObject(failed, "Non-Error thrown");
     }
     if (!sawCompletion) {
       throw new Error("WebSocket stream closed before response.completed");
@@ -1636,4 +1636,18 @@ function buildWebSocketHeaders(
   headers.set("x-client-request-id", requestId);
   headers.set("session_id", requestId);
   return headers;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

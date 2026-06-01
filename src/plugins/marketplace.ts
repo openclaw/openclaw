@@ -660,10 +660,10 @@ async function readMarketplaceChunkWithTimeout(
           resolve(result);
         }
       },
-      (err) => {
+      (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(err);
+          reject(toLintErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -1175,4 +1175,18 @@ export async function installPluginFromMarketplace(
     await installCleanup?.();
     await loaded.marketplace.cleanup?.();
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

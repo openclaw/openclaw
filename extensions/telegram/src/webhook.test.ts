@@ -346,7 +346,7 @@ async function postWebhookPayloadWithChunkPlan(params: {
       req.end();
     };
 
-    void writeAll().catch((error) => {
+    void writeAll().catch((error: unknown) => {
       settle.reject(error);
     });
   });

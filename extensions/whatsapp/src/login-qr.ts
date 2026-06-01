@@ -229,7 +229,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
       current.error = result.message;
       current.errorStatus = result.statusCode;
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       const current = activeLogins.get(accountId);
       if (current?.id !== login.id) {
         return;
@@ -246,7 +246,7 @@ async function waitForQrOrRecoveredLogin(params: {
 }): Promise<LoginQrRaceResult> {
   const qrResult = params.qrPromise.then(
     (qr) => ({ outcome: "qr", qr }) as const,
-    (err) =>
+    (err: unknown) =>
       ({
         outcome: "failed",
         message: `Failed to get QR: ${String(err)}`,

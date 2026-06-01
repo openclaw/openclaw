@@ -24,7 +24,7 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
   if (silkWasmPromise) {
     return silkWasmPromise;
   }
-  silkWasmPromise = import("silk-wasm").catch((err) => {
+  silkWasmPromise = import("silk-wasm").catch((err: unknown) => {
     debugWarn(
       `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${formatErrorMessage(err)})`,
     );

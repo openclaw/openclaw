@@ -88,7 +88,7 @@ export async function expectRejectedRecord(
     () => {
       throw new Error("Expected promise to reject.");
     },
-    (error) => {
+    (error: unknown) => {
       expectRecordFields(error, expected);
     },
   );

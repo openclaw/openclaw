@@ -10,7 +10,6 @@ import type { PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -137,6 +136,16 @@ function resolvePluginRegistrySnapshotMemoKey(
   if (!canMemoizePluginRegistrySnapshot(params)) {
     return undefined;
   }
+  const persistedReadsEnabled =
+    params.preferPersisted !== false && !hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
+  const persistedRegistryFingerprint = persistedReadsEnabled
+    ? hashJson(
+        readPersistedInstalledPluginIndexSync({
+          env,
+          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+        }),
+      )
+    : "disabled";
   return hashJson({
     config: params.config ?? null,
     cwd: process.cwd(),
@@ -145,12 +154,7 @@ function resolvePluginRegistrySnapshotMemoKey(
     preferPersisted: params.preferPersisted ?? null,
     // Plugin manifests are process-stable inside the Gateway, while the persisted
     // registry envelope can change through explicit refresh/install flows.
-    registryFile: fileFingerprint(
-      resolveInstalledPluginIndexStorePath({
-        env,
-        ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-      }),
-    ),
+    registry: persistedRegistryFingerprint,
     pluginRoots: fingerprintPluginSourceRoots(params, env),
     stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
     workspaceDir: params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : null,
@@ -441,7 +445,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
   const disabledByCaller = params.preferPersisted === false;
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
   const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
-  const persistedInstallRecordReadsEnabled = !disabledByEnv;
+  const persistedInstallRecordReadsEnabled = persistedReadsEnabled;
   let persistedIndex: InstalledPluginIndex | null;
   if (persistedInstallRecordReadsEnabled) {
     persistedIndex = readPersistedInstalledPluginIndexSync(params);

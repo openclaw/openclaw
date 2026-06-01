@@ -296,33 +296,7 @@ openclaw_e2e_stop_process() {
   wait "$pid" >/dev/null 2>&1 || true
 }
 openclaw_e2e_terminate_gateways() {
-  local pid="${1:-}" _
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  for _ in $(seq 1 100); do
-    local alive=0
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      alive=1
-    fi
-    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
-      alive=1
-    fi
-    [ "$alive" = "0" ] && break
-    sleep 0.1
-  done
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  if [ -n "$pid" ]; then
-    wait "$pid" 2>/dev/null || true
-  fi
+  openclaw_e2e_stop_process "${1:-}"
 }
 openclaw_e2e_start_mock_openai() { MOCK_PORT="$1" node scripts/e2e/mock-openai-server.mjs >"$2" 2>&1 & printf '%s\n' "$!"; }
 openclaw_e2e_wait_mock_openai() {
@@ -388,8 +362,14 @@ openclaw_e2e_assert_log_not_contains() {
   ! grep -q "$2" "$1" || { echo "Unexpected log output: $2"; exit 1; }
 }
 openclaw_e2e_run_logged() {
-  local label="$1" log_path="/tmp/openclaw-onboard-${1}.log"
+  local label="$1" log_root="${OPENCLAW_E2E_LOG_DIR:-${TMPDIR:-/tmp}}" log_path safe_label
   shift
+  safe_label="${label//[^A-Za-z0-9_.-]/-}"
+  [ -n "$safe_label" ] || safe_label="command"
+  mkdir -p "$log_root"
+  log_path="$(mktemp "$log_root/openclaw-${safe_label}.XXXXXX.log")"
+  OPENCLAW_E2E_LAST_LOG_PATH="$log_path"
+  export OPENCLAW_E2E_LAST_LOG_PATH
   openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
 }
 openclaw_e2e_run_command() {

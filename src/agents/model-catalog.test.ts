@@ -716,6 +716,61 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("refreshes stale persisted read-only rows with manifest catalog metadata", async () => {
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          xai: {
+            models: [
+              {
+                id: "grok-4.3",
+                name: "Grok 4.3",
+                reasoning: false,
+                contextWindow: 200_000,
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    currentPluginMetadataSnapshotMock.mockReturnValue({
+      ...emptyPluginMetadataSnapshot(),
+      plugins: [
+        {
+          id: "xai",
+          origin: "bundled",
+          providers: ["xai"],
+          modelCatalog: {
+            providers: {
+              xai: {
+                models: [
+                  {
+                    id: "grok-4.3",
+                    name: "Grok 4.3",
+                    reasoning: true,
+                    contextWindow: 1_000_000,
+                    input: ["text", "image"],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    const entry = requireCatalogEntry(result, "xai", "grok-4.3");
+    expect(result.filter((entryValue) => entryValue.provider === "xai")).toHaveLength(1);
+    expect(entry.contextWindow).toBe(1_000_000);
+    expect(entry.input).toEqual(["text", "image"]);
+    expect(entry.reasoning).toBe(true);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
   it("normalizes persisted read-only catalog rows with manifest model id policies", async () => {
     currentPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
     readFileMock.mockResolvedValueOnce(
@@ -1211,6 +1266,38 @@ describe("loadModelCatalog", () => {
     ).toHaveLength(1);
   });
 
+  it("refreshes discovered rows with provider supplemental catalog metadata", async () => {
+    mockAgentDiscoveryModels([
+      {
+        provider: "github-copilot",
+        id: "claude-opus-4.8",
+        name: "Claude Opus 4.8",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 200_000,
+      },
+    ]);
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "github-copilot",
+        id: "claude-opus-4.8",
+        name: "Claude Opus 4.8 Live",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    const entry = requireCatalogEntry(result, "github-copilot", "claude-opus-4.8");
+    expect(result.filter((entryValue) => entryValue.provider === "github-copilot")).toHaveLength(1);
+    expect(entry.name).toBe("Claude Opus 4.8");
+    expect(entry.contextWindow).toBe(1_000_000);
+    expect(entry.input).toEqual(["text", "image"]);
+    expect(entry.reasoning).toBe(true);
+  });
+
   it("includes configured provider models missing from discovery", async () => {
     mockSingleOpenAiCatalogModel();
 
@@ -1373,6 +1460,52 @@ describe("loadModelCatalog", () => {
     expect(entry.name).toBe("Doubao Seed 1.8");
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.contextWindow).toBe(256_000);
+  });
+
+  it("refreshes discovered rows with manifest catalog metadata", async () => {
+    mockAgentDiscoveryModels([
+      {
+        provider: "xai",
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 200_000,
+      },
+    ]);
+    currentPluginMetadataSnapshotMock.mockReturnValue({
+      ...emptyPluginMetadataSnapshot(),
+      plugins: [
+        {
+          id: "xai",
+          origin: "bundled",
+          providers: ["xai"],
+          modelCatalog: {
+            providers: {
+              xai: {
+                models: [
+                  {
+                    id: "grok-4.3",
+                    name: "Grok 4.3",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    contextWindow: 1_000_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    const entry = requireCatalogEntry(result, "xai", "grok-4.3");
+    expect(result.filter((entryValue) => entryValue.provider === "xai")).toHaveLength(1);
+    expect(entry.contextWindow).toBe(1_000_000);
+    expect(entry.input).toEqual(["text", "image"]);
+    expect(entry.reasoning).toBe(true);
   });
 
   it("keeps configured LM Studio models visible without runtime catalog augmentation", async () => {

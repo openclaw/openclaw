@@ -207,7 +207,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         await options.deliver(deliverPayload, { kind });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         failedCounts[kind] += 1;
         void options.onError?.(err, { kind });
       })

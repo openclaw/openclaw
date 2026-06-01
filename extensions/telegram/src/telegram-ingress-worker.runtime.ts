@@ -214,7 +214,7 @@ main()
   .then(() => {
     parentPort?.close();
   })
-  .catch((err) => {
+  .catch((err: unknown) => {
     post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
     parentPort?.close();
     process.exitCode = stopped ? 0 : 1;

@@ -51,10 +51,12 @@ export type SessionAcpIdentitySource = "ensure" | "status" | "event";
 export type SessionAcpIdentityState = "pending" | "resolved";
 
 export type SessionAcpIdentity = {
+  /** Pending identities may expose provisional ids; resolved identities are safe for resume output. */
   state: SessionAcpIdentityState;
   acpxRecordId?: string;
   acpxSessionId?: string;
   agentSessionId?: string;
+  /** Runtime lifecycle point that last supplied the identity fields. */
   source: SessionAcpIdentitySource;
   lastUpdatedAt: number;
 };
@@ -82,6 +84,7 @@ export type SessionAcpMeta = {
   backend: string;
   agent: string;
   runtimeSessionName: string;
+  /** Canonical backend/agent ids used for resume hints and thread/status details. */
   identity?: SessionAcpIdentity;
   mode: "persistent" | "oneshot";
   runtimeOptions?: AcpSessionRuntimeOptions;

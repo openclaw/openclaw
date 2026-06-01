@@ -564,7 +564,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("Proof script error:", err);
   process.exit(1);
 });

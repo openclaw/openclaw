@@ -76,7 +76,7 @@ async function prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot: string): Promi
   if (sourceCodexHome) {
     await fs
       .copyFile(path.join(sourceCodexHome, "auth.json"), path.join(codexHome, "auth.json"))
-      .catch((error) => {
+      .catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
           throw error;
         }

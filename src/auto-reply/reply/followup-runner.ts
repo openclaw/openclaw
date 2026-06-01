@@ -490,7 +490,7 @@ export function createFollowupRunner(params: {
       let progressDeliveryChain: Promise<void> = Promise.resolve();
       const pendingProgressDeliveries = new Set<Promise<void>>();
       const enqueueProgressDelivery = (deliver: () => Promise<void>) => {
-        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err) => {
+        progressDeliveryChain = progressDeliveryChain.then(deliver).catch((err: unknown) => {
           logVerbose(`followup queue: progress delivery failed: ${formatErrorMessage(err)}`);
         });
         const task = progressDeliveryChain.finally(() => {

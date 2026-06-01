@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
@@ -63,6 +64,7 @@ import {
   type ModelManifestNormalizationContext,
   modelKey,
   normalizeModelRef,
+  normalizeProviderId,
 } from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
@@ -73,6 +75,50 @@ import {
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
+
+function hasExactConfiguredProviderModel(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const model = params.model.trim();
+  if (!params.cfg || !normalizedProvider || !model) {
+    return false;
+  }
+  for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
+    if (normalizeProviderId(providerId) !== normalizedProvider) {
+      continue;
+    }
+    return (providerConfig.models ?? []).some((entry) => entry.id.trim() === model);
+  }
+  return false;
+}
+
+function hasConfiguredProvider(params: { cfg?: OpenClawConfig; provider: string }): boolean {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!params.cfg || !normalizedProvider) {
+    return false;
+  }
+  return Object.keys(params.cfg.models?.providers ?? {}).some(
+    (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+  );
+}
+
+function allowPluginModelNormalizationForRef(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  if (
+    params.cfg &&
+    !normalizePluginsConfig(params.cfg.plugins).enabled &&
+    hasConfiguredProvider(params)
+  ) {
+    return false;
+  }
+  return !hasExactConfiguredProviderModel(params);
+}
 
 type FailoverAttribution = {
   sessionId?: string;
@@ -339,7 +385,7 @@ async function runFallbackAttempt<T>(params: {
     });
     if (classifiedError) {
       if (isTerminalAbort(params.abortSignal)) {
-        throw classifiedError;
+        throw toLintErrorObject(classifiedError, "Non-Error thrown");
       }
       return { error: classifiedError };
     }
@@ -552,7 +598,7 @@ function throwFallbackFailureSummary(params: {
   agentDir?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
+    throw toLintErrorObject(params.lastError, "Non-Error thrown");
   }
 
   if (params.attribution?.sessionId) {
@@ -646,6 +692,7 @@ export function resolveImageFallbackCandidates(
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
       raw,
       defaultProvider: params.defaultProvider,
       aliasIndex,
@@ -689,6 +736,7 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
       defaultProvider: DEFAULT_PROVIDER,
     });
     const resolved = resolveModelRefFromString({
+      cfg,
       raw: configuredPrimary,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
@@ -830,6 +878,7 @@ function resolveFallbackCandidatesUncached(
         cfg: params.cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
+        allowPluginNormalization: false,
         manifestPlugins: params.manifestPlugins,
       })
     : null;
@@ -837,30 +886,54 @@ function resolveFallbackCandidatesUncached(
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
   const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
   const modelRaw = normalizeOptionalString(params.model) || defaultModel;
-  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw, {
-    manifestPlugins: params.manifestPlugins,
-  });
+  const normalizeCandidateRef = (provider: string, model: string) =>
+    normalizeModelRef(provider, model, {
+      allowPluginNormalization: allowPluginModelNormalizationForRef({
+        cfg: params.cfg,
+        provider,
+        model,
+      }),
+      manifestPlugins: params.manifestPlugins,
+    });
+  const allowPluginModelAliases = params.cfg
+    ? normalizePluginsConfig(params.cfg.plugins).enabled
+    : true;
+  const normalizedPrimary = normalizeCandidateRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
+    allowPluginNormalization: allowPluginModelAliases,
     manifestPlugins: params.manifestPlugins,
   });
   const allowlist = buildConfiguredAllowlistKeys({
     cfg: params.cfg,
     defaultProvider,
+    allowPluginNormalization: allowPluginModelAliases,
     manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
   const resolvedModelAlias = resolveModelRefFromString({
+    cfg: params.cfg,
     raw: modelRaw,
     defaultProvider: providerRaw,
     aliasIndex,
+    allowPluginNormalization: allowPluginModelNormalizationForRef({
+      cfg: params.cfg,
+      provider: providerRaw,
+      model: modelRaw,
+    }),
     manifestPlugins: params.manifestPlugins,
   });
   const resolvedProviderModelAlias = resolveModelRefFromString({
+    cfg: params.cfg,
     raw: `${providerRaw}/${modelRaw}`,
     defaultProvider,
     aliasIndex,
+    allowPluginNormalization: allowPluginModelNormalizationForRef({
+      cfg: params.cfg,
+      provider: providerRaw,
+      model: modelRaw,
+    }),
     manifestPlugins: params.manifestPlugins,
   });
   const resolvedBareModelAlias =
@@ -873,9 +946,7 @@ function resolveFallbackCandidatesUncached(
     (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
     resolvedBareModelAlias ??
     normalizedPrimary;
-  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model, {
-    manifestPlugins: params.manifestPlugins,
-  });
+  const effectivePrimary = normalizeCandidateRef(resolvedPrimary.provider, resolvedPrimary.model);
 
   addExplicitCandidate(effectivePrimary);
 
@@ -886,9 +957,11 @@ function resolveFallbackCandidatesUncached(
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
       raw,
       defaultProvider,
       aliasIndex,
+      allowPluginNormalization: allowPluginModelAliases,
       manifestPlugins: params.manifestPlugins,
     });
     if (!resolved) {
@@ -896,11 +969,11 @@ function resolveFallbackCandidatesUncached(
     }
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
-    addExplicitCandidate(resolved.ref);
+    addExplicitCandidate(normalizeCandidateRef(resolved.ref.provider, resolved.ref.model));
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
-    addExplicitCandidate({ provider: primary.provider, model: primary.model });
+    addExplicitCandidate(normalizeCandidateRef(primary.provider, primary.model));
   }
 
   return candidates;
@@ -1687,3 +1760,17 @@ export async function runWithImageModelFallback<T>(params: {
   });
 }
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

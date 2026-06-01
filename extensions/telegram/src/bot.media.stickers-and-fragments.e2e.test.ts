@@ -272,7 +272,7 @@ describe("telegram text fragments", () => {
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
         );
 
-        expect(replySpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
         const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
@@ -348,9 +348,9 @@ describe("telegram text fragments", () => {
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
         );
 
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
         expect(readAllowFromStore).toHaveBeenCalledWith("telegram", process.env, "default");
         expect(upsertPairingRequest).not.toHaveBeenCalled();
-        expect(replySpy).toHaveBeenCalledTimes(1);
         expect(runtimeError).not.toHaveBeenCalled();
       } finally {
         setTimeoutSpy.mockRestore();
@@ -430,7 +430,7 @@ describe("telegram text fragments", () => {
           clearTimeout(timer.handle);
           await timer.callback();
         }
-        expect(replySpy).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
         const rawBodies = replySpy.mock.calls.map(
           (call) => (call[0] as { RawBody?: string }).RawBody,
         );

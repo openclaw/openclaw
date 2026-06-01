@@ -1779,7 +1779,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           for (const nodeId of nodeIdsForPairing) {
             void updatePairedNodeMetadata(nodeId, {
               lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err) =>
+            }).catch((err: unknown) =>
               logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
             );
           }
@@ -1797,7 +1797,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             deviceFamily: nodeSession.deviceFamily,
             commands: nodeSession.commands,
             cfg: getRuntimeConfig(),
-          }).catch((err) =>
+          }).catch((err: unknown) =>
             logGateway.warn(
               `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
             ),
@@ -1808,7 +1808,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 triggers: cfg.triggers,
               });
             })
-            .catch((err) =>
+            .catch((err: unknown) =>
               logGateway.warn(
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
@@ -1819,7 +1819,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 config: routing,
               });
             })
-            .catch((err) =>
+            .catch((err: unknown) =>
               logGateway.warn(
                 `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
@@ -1921,7 +1921,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         // Post-connect refresh only needs a cached/config snapshot for UI state;
         // live channel probes here pulled slow Discord/Telegram HTTP checks into
         // reply-adjacent websocket handshakes.
-        void refreshHealthSnapshot({ probe: false }).catch((err) =>
+        void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
@@ -2026,7 +2026,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           methodRegistry: getMethodRegistry?.(),
           context: buildRequestContext(),
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       });

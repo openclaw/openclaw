@@ -112,7 +112,6 @@ export function resolveFeishuGroupSession(params: {
           })
         : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
       break;
-    case "group":
     default:
       peerId = chatId;
       break;

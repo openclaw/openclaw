@@ -364,6 +364,15 @@ describe("runMessageAction media behavior", () => {
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
+      expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
+      expect(sendParams.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
     });
   });
 

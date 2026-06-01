@@ -8,6 +8,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   buildCleanupPlan,
   removeStateAndLinkedPaths,
+  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
@@ -192,5 +193,26 @@ describe("cleanup path removals", () => {
       "[dry-run] remove /tmp/openclaw-workspace-1",
       "[dry-run] remove /tmp/openclaw-workspace-2",
     ]);
+  });
+
+  it("removes owned legacy workspace attestations", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-attest-"));
+    const workspaceDir = path.join(tmpRoot, "workspace");
+    const legacyAttestationPath = `${workspaceDir}.attested`;
+
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(
+        legacyAttestationPath,
+        `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
+      );
+
+      await removeWorkspaceAttestationPaths([workspaceDir], runtime);
+
+      await expect(fs.stat(legacyAttestationPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

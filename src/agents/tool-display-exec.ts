@@ -1,4 +1,4 @@
-import { redactToolDetail } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import {
   binaryName,
   firstPositional,
@@ -427,7 +427,7 @@ function isGenericSummary(summary: string): boolean {
 }
 
 function compactRawCommand(raw: string, maxLength = 120): string {
-  const oneLine = redactToolDetail(
+  const oneLine = redactToolPayloadText(
     raw
       .replace(/\s*\n\s*/g, " ")
       .replace(/\s{2,}/g, " ")

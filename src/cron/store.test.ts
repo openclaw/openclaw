@@ -7,6 +7,7 @@ import {
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
 import {
+  loadCronJobsStoreWithConfigJobs,
   loadCronQuarantineFile,
   loadCronStore,
   loadCronStoreSync,
@@ -67,6 +68,13 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`expected path to be missing: ${targetPath}`);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
 }
 
 describe("resolveCronStorePath", () => {
@@ -543,6 +551,47 @@ describe("cron store", () => {
         to: "https://example.invalid/legacy-completion",
       },
     });
+  });
+
+  it("round-trips explicit failure destination field clears through SQLite delivery columns", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-failure-destination-clear-job", true).jobs[0];
+    job.sessionTarget = "isolated";
+    job.payload = { kind: "agentTurn", message: "hello" };
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      failureDestination: {
+        channel: undefined,
+        to: "slack:C123",
+        accountId: undefined,
+        mode: undefined,
+      },
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const delivery = (await loadCronStore(storePath)).jobs[0]?.delivery;
+    expect(delivery?.failureDestination).toEqual({
+      channel: undefined,
+      to: "slack:C123",
+      accountId: undefined,
+      mode: undefined,
+    });
+    expect(Object.hasOwn(delivery?.failureDestination as object, "channel")).toBe(true);
+    expect(Object.hasOwn(delivery?.failureDestination as object, "accountId")).toBe(true);
+    expect(Object.hasOwn(delivery?.failureDestination as object, "mode")).toBe(true);
+
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const configDelivery = requireRecord(loaded.configJobs[0]?.delivery, "config delivery");
+    const configFailureDestination = requireRecord(
+      configDelivery.failureDestination,
+      "config failure destination",
+    );
+    expect(Object.hasOwn(configFailureDestination, "channel")).toBe(true);
+    expect(Object.hasOwn(configFailureDestination, "accountId")).toBe(true);
+    expect(Object.hasOwn(configFailureDestination, "mode")).toBe(true);
   });
 
   it("drops stale split runtime nextRunAtMs when doctor imports edited legacy config", async () => {

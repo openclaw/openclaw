@@ -500,8 +500,8 @@ export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): str
 }
 
 async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
-  const stat = await fs.lstat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
+  const stat = await fs.lstat(dreamsPath).catch((err: unknown) => {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;

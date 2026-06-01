@@ -6,9 +6,13 @@ import {
 import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
 } from "../session-key.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import type {
@@ -104,47 +108,22 @@ function normalizeSubscriptionKey(value: string | null | undefined): string | nu
   return normalized ? normalized : null;
 }
 
-function isGlobalSessionKey(value: string | null | undefined): boolean {
-  return (value ?? "").trim().toLowerCase() === "global";
-}
-
-function resolveConfiguredMainKey(state: SessionsState): string {
-  const snapshot = state.hello?.snapshot as { sessionDefaults?: { mainKey?: string } } | undefined;
-  const mainKey =
-    typeof state.agentsList?.mainKey === "string" && state.agentsList.mainKey.trim()
-      ? state.agentsList.mainKey
-      : typeof snapshot?.sessionDefaults?.mainKey === "string" &&
-          snapshot.sessionDefaults.mainKey.trim()
-        ? snapshot.sessionDefaults.mainKey
-        : "main";
-  return mainKey.trim().toLowerCase();
-}
-
 function resolveSelectedGlobalAliasAgentId(
   state: SessionsState,
   key: string | null | undefined,
 ): string | null {
-  const parsed = parseAgentSessionKey(key);
-  if (!parsed?.agentId) {
-    return null;
-  }
-  const rest = parsed.rest.toLowerCase();
-  if (rest === "global") {
-    return normalizeAgentId(parsed.agentId);
-  }
-  const configuredMainKey = resolveConfiguredMainKey(state);
-  if (rest !== "main" && rest !== configuredMainKey) {
-    return null;
-  }
   const row = state.sessionsResult?.sessions.find((session) => session.key === key);
-  return row?.kind === "global" ? normalizeAgentId(parsed.agentId) : null;
+  return resolveUiGlobalAliasAgentId(state, key, {
+    rowKind: row?.kind,
+    requireGlobalRowForMainAlias: true,
+  });
 }
 
 function resolveSelectedSessionMessageSubscriptionAgentId(
   state: SessionsState,
   key: string,
 ): string | null {
-  if (isGlobalSessionKey(key)) {
+  if (isUiGlobalSessionKey(key)) {
     return resolveSelectedGlobalAgentId(state);
   }
   return resolveSelectedGlobalAliasAgentId(state, key);
@@ -155,23 +134,7 @@ function resolveSelectedGlobalAgentId(state: SessionsState): string {
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  const assistantAgentId =
-    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
-      ? state.assistantAgentId
-      : undefined;
-  const defaultAgentId =
-    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
-      ? state.agentsList.defaultId
-      : undefined;
-  const helloDefaultAgentId =
-    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
-    snapshot.sessionDefaults.defaultAgentId.trim()
-      ? snapshot.sessionDefaults.defaultAgentId
-      : undefined;
-  return normalizeAgentId(assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId ?? "main");
+  return resolveUiSelectedGlobalAgentId(state);
 }
 
 function resolveChatHistorySessionResultAgentId(
@@ -182,21 +145,11 @@ function resolveChatHistorySessionResultAgentId(
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
-  return isGlobalSessionKey(row.key) ? resolveSelectedGlobalAgentId(state) : null;
+  return isUiGlobalSessionKey(row.key) ? resolveSelectedGlobalAgentId(state) : null;
 }
 
 function resolveDefaultGlobalAgentId(state: SessionsState): string {
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  const defaultAgentId =
-    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
-      ? state.agentsList.defaultId
-      : typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
-          snapshot.sessionDefaults.defaultAgentId.trim()
-        ? snapshot.sessionDefaults.defaultAgentId
-        : "main";
-  return normalizeAgentId(defaultAgentId);
+  return resolveUiDefaultAgentId(state);
 }
 
 function sessionsChangedGlobalAgentMatches(
@@ -204,7 +157,7 @@ function sessionsChangedGlobalAgentMatches(
   payload: Record<string, unknown>,
   key: string,
 ): boolean {
-  if (!isGlobalSessionKey(key)) {
+  if (!isUiGlobalSessionKey(key)) {
     return true;
   }
   const eventSession = isRecord(payload.session) ? payload.session : null;
@@ -309,7 +262,7 @@ async function unsubscribeSelectedSessionMessageBestEffort(
   try {
     await client.request("sessions.messages.unsubscribe", {
       key,
-      ...(isGlobalSessionKey(key) && agentId ? { agentId } : {}),
+      ...(isUiGlobalSessionKey(key) && agentId ? { agentId } : {}),
     });
   } catch {
     // Best-effort cleanup for stale async subscription completions.
@@ -576,7 +529,7 @@ function sessionRowMatchesChatHistoryRow(
     return true;
   }
   return (
-    isGlobalSessionKey(incoming.key) &&
+    isUiGlobalSessionKey(incoming.key) &&
     resolveSelectedGlobalAliasAgentId(state, existing.key) === resolveSelectedGlobalAgentId(state)
   );
 }
@@ -729,7 +682,7 @@ async function runCompactionMutation<T>(
     });
     await loadSessions(
       state,
-      isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
     );
     return result;
   } catch (err) {
@@ -983,7 +936,7 @@ export function applyChatHistorySessionInfo(
   const applied = applySessionsChangedEvent(state, {
     session: visibleSession,
     sessionKey: visibleSession.key,
-    ...(isGlobalSessionKey(visibleSession.key)
+    ...(isUiGlobalSessionKey(visibleSession.key)
       ? { agentId: resolveSelectedGlobalAgentId(state) }
       : {}),
   });
@@ -1066,7 +1019,8 @@ export async function syncSelectedSessionMessageSubscription(
     if (shouldUnsubscribePrevious && previousCanonicalKey) {
       await client.request("sessions.messages.unsubscribe", {
         key: previousCanonicalKey,
-        ...(isGlobalSessionKey(previousCanonicalKey) && state.chatSessionMessageSubscriptionAgentId
+        ...(isUiGlobalSessionKey(previousCanonicalKey) &&
+        state.chatSessionMessageSubscriptionAgentId
           ? { agentId: state.chatSessionMessageSubscriptionAgentId }
           : {}),
       });
@@ -1087,7 +1041,7 @@ export async function syncSelectedSessionMessageSubscription(
       const staleKeyChanged =
         normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribedKey;
       const staleAgentChanged =
-        isGlobalSessionKey(subscribedKey) &&
+        isUiGlobalSessionKey(subscribedKey) &&
         (state.chatSessionMessageSubscriptionAgentId ?? null) !== subscribedAgentId;
       if (staleKeyChanged || staleAgentChanged) {
         await unsubscribeSelectedSessionMessageBestEffort(client, subscribedKey, subscribedAgentId);
@@ -1254,7 +1208,7 @@ export async function patchSession(
   }
   const params: Record<string, unknown> = {
     key,
-    ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+    ...(isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
   };
   for (const field of [
     "label",
@@ -1271,7 +1225,7 @@ export async function patchSession(
     await state.client.request("sessions.patch", params);
     await loadSessions(
       state,
-      isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
+      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
     );
   } catch (err) {
     state.sessionsError = String(err);
@@ -1329,7 +1283,7 @@ export async function deleteSessionsAndRefresh(
       try {
         await client.request("sessions.delete", {
           key,
-          ...(isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+          ...(isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
           deleteTranscript: true,
         });
         deleted.push(key);
@@ -1339,7 +1293,7 @@ export async function deleteSessionsAndRefresh(
     }
   });
   if (deleted.length > 0 && !refreshedDuringDelete) {
-    const selectedGlobalDeleted = deleted.some((key) => isGlobalSessionKey(key));
+    const selectedGlobalDeleted = deleted.some((key) => isUiGlobalSessionKey(key));
     await loadSessions(
       state,
       selectedGlobalDeleted ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,

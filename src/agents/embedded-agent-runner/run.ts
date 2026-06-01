@@ -2422,7 +2422,7 @@ export async function runEmbeddedAgent(
               !hasRecoverableCodexAppServerTimeoutOutcome &&
               !shouldSurfaceCodexCompletionTimeout
             ) {
-              throw promptError;
+              throw toLintErrorObject(promptError, "Prompt failed");
             }
           }
 
@@ -2594,7 +2594,7 @@ export async function runEmbeddedAgent(
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
-                }).catch((err) => {
+                }).catch((err: unknown) => {
                   log.warn(`prompt profile failure mark failed: ${String(err)}`);
                 });
               }
@@ -2686,7 +2686,7 @@ export async function runEmbeddedAgent(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw promptError;
+            throw toLintErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -3652,4 +3652,18 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

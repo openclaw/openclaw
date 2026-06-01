@@ -800,7 +800,7 @@ async function loadCostUsageSummaryCached(params: {
       });
       return summary;
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       if (entry.summary) {
         // Serve the stale summary if background refresh fails; callers asked for usage, not repair.
         return entry.summary;

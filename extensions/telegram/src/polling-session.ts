@@ -374,7 +374,7 @@ export class TelegramPollingSession {
         bypassBackoff: false,
       }),
     })
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
       })
       .finally(() => {
@@ -1163,6 +1163,9 @@ const isGetUpdatesConflict = (err: unknown) => {
 };
 
 export const testing = {
+  resetActiveSpooledUpdateHandlersForTests: (): void => {
+    activeSpooledUpdateHandlersByLane.clear();
+  },
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };

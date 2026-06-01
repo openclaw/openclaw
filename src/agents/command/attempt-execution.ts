@@ -14,6 +14,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -151,6 +152,8 @@ function resolveHarnessAuthProfileSelection(params: {
   sessionAuthProfileSource?: "auto" | "user";
   harnessId?: string;
   harnessRuntime?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  providerAuthAliasesEnabled?: boolean;
   allowHarnessAuthProfileForwarding: boolean;
 }): HarnessAuthProfileSelection {
   const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
@@ -172,6 +175,8 @@ function resolveHarnessAuthProfileSelection(params: {
     authProfileProvider: params.authProfileProvider,
     config: params.config,
     workspaceDir: params.workspaceDir,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+    providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
     harnessId: params.harnessId,
     harnessRuntime: params.harnessRuntime,
     allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
@@ -419,6 +424,8 @@ export function runAgentAttempt(params: {
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  pluginsEnabled?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
@@ -478,6 +485,8 @@ export function runAgentAttempt(params: {
     sessionAuthProfileSource: params.sessionEntry?.authProfileOverrideSource,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+    providerAuthAliasesEnabled: params.pluginsEnabled,
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
@@ -487,6 +496,8 @@ export function runAgentAttempt(params: {
     sessionAuthProfileId: harnessAuthSelection.authProfileId,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+    providerAuthAliasesEnabled: params.pluginsEnabled,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),

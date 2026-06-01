@@ -40,7 +40,7 @@ async function connectThroughProxy(proxyUrl: string): Promise<string> {
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
@@ -61,7 +61,7 @@ async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
@@ -81,7 +81,7 @@ async function requestRawThroughProxy(proxyUrl: string, request: string): Promis
   let data = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
-    data += chunk;
+    data += chunk.toString();
   });
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);

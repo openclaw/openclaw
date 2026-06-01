@@ -5,7 +5,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -44,6 +44,7 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
+let assistantAttachmentAvailabilityRenderVersion = 0;
 
 export type ChatTimestampDisplay = {
   label: string;
@@ -94,6 +95,7 @@ function renderChatTimestamp(timestamp: number) {
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
+  bumpAssistantAttachmentAvailabilityRenderVersion();
   for (const timer of assistantAttachmentRefreshTimers.values()) {
     clearTimeout(timer);
   }
@@ -104,6 +106,29 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
   managedImageBlobUrlCache.clear();
   managedImageBlobUrlResolvedCache.clear();
   managedImageBlobUrlMissCache.clear();
+}
+
+export function getAssistantAttachmentAvailabilityRenderVersion(): number {
+  return assistantAttachmentAvailabilityRenderVersion;
+}
+
+function bumpAssistantAttachmentAvailabilityRenderVersion() {
+  assistantAttachmentAvailabilityRenderVersion =
+    (assistantAttachmentAvailabilityRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
+}
+
+function setAssistantAttachmentAvailability(
+  cacheKey: string,
+  availability: AssistantAttachmentAvailability,
+) {
+  assistantAttachmentAvailabilityCache.set(cacheKey, availability);
+  bumpAssistantAttachmentAvailabilityRenderVersion();
+}
+
+function deleteAssistantAttachmentAvailability(cacheKey: string) {
+  if (assistantAttachmentAvailabilityCache.delete(cacheKey)) {
+    bumpAssistantAttachmentAvailabilityRenderVersion();
+  }
 }
 
 type ImageBlock = {
@@ -1218,7 +1243,7 @@ function scheduleAssistantAttachmentRefresh(
     if (cached?.status !== "available" || cached.mediaTicket !== availability.mediaTicket) {
       return;
     }
-    assistantAttachmentAvailabilityCache.delete(cacheKey);
+    deleteAssistantAttachmentAvailability(cacheKey);
     onRequestUpdate();
   }, refreshInMs);
   assistantAttachmentRefreshTimers.set(cacheKey, timer);
@@ -1246,21 +1271,21 @@ function resolveAssistantAttachmentAvailability(
       cached.status === "unavailable" &&
       now - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
     ) {
-      assistantAttachmentAvailabilityCache.delete(cacheKey);
+      deleteAssistantAttachmentAvailability(cacheKey);
     } else if (
       cached.status === "available" &&
       cached.mediaTicket &&
       (!cached.mediaTicketExpiresAt ||
         cached.mediaTicketExpiresAt - now <= ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS)
     ) {
-      assistantAttachmentAvailabilityCache.delete(cacheKey);
+      deleteAssistantAttachmentAvailability(cacheKey);
     } else {
       scheduleAssistantAttachmentRefresh(cacheKey, cached, onRequestUpdate);
       return cached;
     }
   }
   clearAssistantAttachmentRefreshTimer(cacheKey);
-  assistantAttachmentAvailabilityCache.set(cacheKey, { status: "checking" });
+  setAssistantAttachmentAvailability(cacheKey, { status: "checking" });
   if (typeof fetch === "function") {
     const headers = new Headers({ Accept: "application/json" });
     if (normalizedAuthToken) {
@@ -1283,7 +1308,7 @@ function resolveAssistantAttachmentAvailability(
           const mediaTicketExpiresAt = Date.parse(payload.mediaTicketExpiresAt ?? "");
           if (mediaTicket && !Number.isFinite(mediaTicketExpiresAt)) {
             clearAssistantAttachmentRefreshTimer(cacheKey);
-            assistantAttachmentAvailabilityCache.set(cacheKey, {
+            setAssistantAttachmentAvailability(cacheKey, {
               status: "unavailable",
               reason: "Attachment unavailable",
               checkedAt: Date.now(),
@@ -1294,11 +1319,11 @@ function resolveAssistantAttachmentAvailability(
             status: "available",
             ...(mediaTicket ? { mediaTicket, mediaTicketExpiresAt } : {}),
           };
-          assistantAttachmentAvailabilityCache.set(cacheKey, availability);
+          setAssistantAttachmentAvailability(cacheKey, availability);
           scheduleAssistantAttachmentRefresh(cacheKey, availability, onRequestUpdate);
         } else {
           clearAssistantAttachmentRefreshTimer(cacheKey);
-          assistantAttachmentAvailabilityCache.set(cacheKey, {
+          setAssistantAttachmentAvailability(cacheKey, {
             status: "unavailable",
             reason: payload?.reason?.trim() || "Attachment unavailable",
             checkedAt: Date.now(),
@@ -1307,7 +1332,7 @@ function resolveAssistantAttachmentAvailability(
       })
       .catch(() => {
         clearAssistantAttachmentRefreshTimer(cacheKey);
-        assistantAttachmentAvailabilityCache.set(cacheKey, {
+        setAssistantAttachmentAvailability(cacheKey, {
           status: "unavailable",
           reason: "Attachment unavailable",
           checkedAt: Date.now(),
@@ -1813,11 +1838,7 @@ function renderGroupedMessage(
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
                         : markdown
-                          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                              ${unsafeHTML(
-                                toSanitizedMarkdownHtml(markdown, markdownRenderOptions),
-                              )}
-                            </div>`
+                          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                           : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
@@ -1880,9 +1901,7 @@ function renderGroupedMessage(
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
               : markdown
-                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
-                  </div>`
+                ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
@@ -1907,6 +1926,25 @@ function renderGroupedMessage(
             ×${duplicateCount}
           </div>`
         : nothing}
+    </div>
+  `;
+}
+
+function renderMarkdownText(
+  markdown: string,
+  isStreaming: boolean,
+  markdownRenderOptions?: { codeBlockChrome: "copy" | "none" },
+) {
+  if (isStreaming) {
+    return html`
+      <div class="chat-text" dir="${detectTextDirection(markdown)}">
+        ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
+      </div>
+    `;
+  }
+  return html`
+    <div class="chat-text" dir="${detectTextDirection(markdown)}">
+      ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
     </div>
   `;
 }

@@ -178,7 +178,10 @@ export async function probeTelegram(
     }
 
     if (!meRes) {
-      throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
+      throw toLintErrorObject(
+        fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`),
+        "Non-Error thrown",
+      );
     }
 
     const meJson = (await meRes.json()) as {
@@ -253,4 +256,18 @@ export async function probeTelegram(
       elapsedMs: Date.now() - started,
     };
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

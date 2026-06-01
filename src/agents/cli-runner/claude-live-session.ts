@@ -1094,7 +1094,7 @@ async function createClaudeLiveSession(params: {
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),
-    (error) => {
+    (error: unknown) => {
       if (session) {
         closeLiveSession(session, "abort", error);
       }

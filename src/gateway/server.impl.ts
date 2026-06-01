@@ -1327,7 +1327,7 @@ export async function startGatewayServer(
       const previousPluginServices = runtimeState.pluginServices;
       runtimeState.pluginServices = null;
       if (previousPluginServices) {
-        await previousPluginServices.stop().catch((err) => {
+        await previousPluginServices.stop().catch((err: unknown) => {
           log.warn(`plugin services stop failed during reload: ${String(err)}`);
         });
       }
@@ -1706,7 +1706,7 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       clients,
     });
-    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err) => {
+    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
     if (!minimalTestGateway) {

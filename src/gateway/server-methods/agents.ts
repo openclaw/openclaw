@@ -32,6 +32,8 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
@@ -52,7 +54,8 @@ import {
   isConfiguredAgent,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -71,41 +74,6 @@ const agentsHandlerDeps = {
   root,
   isWorkspaceSetupCompleted,
 };
-
-let loggedSlowAgentsListCatalog = false;
-
-const AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
-
-async function loadOptionalAgentsListModelCatalog(
-  context: GatewayRequestContext,
-): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = Symbol("agents-list-model-catalog-timeout");
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  try {
-    const result = await Promise.race([
-      context.loadGatewayModelCatalog().catch(() => undefined),
-      timeoutPromise,
-    ]);
-    if (result === timedOut) {
-      if (!loggedSlowAgentsListCatalog) {
-        loggedSlowAgentsListCatalog = true;
-        context.logGateway.debug(
-          `agents.list continuing without model catalog after ${AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
-        );
-      }
-      return undefined;
-    }
-    return Array.isArray(result) ? result : undefined;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
 
 export const testing = {
   setDepsForTests(
@@ -527,7 +495,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const modelCatalog = await loadOptionalAgentsListModelCatalog(context);
+    const modelCatalog = await loadOptionalServerMethodModelCatalog(context, "agents.list", {
+      logOnceKey: "agents.list",
+    });
     const result = listAgentsForGateway(cfg, modelCatalog);
     respond(true, result, undefined);
   },
@@ -772,18 +742,31 @@ export const agentsHandlers: GatewayRequestHandlers = {
         deleteResult.workspaceDir,
       );
       const deleteWorkspace = workspaceSharedWith.length === 0;
-      await Promise.all([
-        ...(deleteWorkspace ? [moveToTrashBestEffort(deleteResult.workspaceDir)] : []),
-        moveToTrashBestEffort(deleteResult.agentDir),
-        moveToTrashBestEffort(deleteResult.sessionsDir),
-      ]);
+      const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
+      if (deleteWorkspace) {
+        pathsToTrash.unshift(deleteResult.workspaceDir);
+        for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+          deleteResult.workspaceDir,
+        ).entries()) {
+          if (
+            await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })
+          ) {
+            pathsToTrash.push(attestationPath);
+          }
+        }
+      }
+      await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
     }
 
     respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {
-      respondInvalidMethodParams(respond, "agents.files.list", validateAgentsFilesListParams.errors);
+      respondInvalidMethodParams(
+        respond,
+        "agents.files.list",
+        validateAgentsFilesListParams.errors,
+      );
       return;
     }
     const cfg = context.getRuntimeConfig();

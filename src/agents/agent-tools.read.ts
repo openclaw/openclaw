@@ -723,7 +723,10 @@ async function assertSandboxPathWithinAnyRoot(params: {
       firstRootEscapeError ??= error;
     }
   }
-  throw firstRootEscapeError ?? new Error("Path guard has no configured roots.");
+  throw toLintErrorObject(
+    firstRootEscapeError ?? new Error("Path guard has no configured roots."),
+    "Non-Error thrown",
+  );
 }
 
 export function wrapToolWorkspaceRootGuardWithOptions(
@@ -1084,5 +1087,19 @@ async function toCanonicalRelativeWorkspacePath(
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
   const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
   error.code = code;
+  return error;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
   return error;
 }

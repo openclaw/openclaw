@@ -447,7 +447,6 @@ export class TwilioProvider implements VoiceCallProvider {
         const streamUrl = view.callSid ? this.getStreamUrlForCall(view.callSid) : null;
         return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
       }
-      case "empty":
       default:
         return TwilioProvider.EMPTY_TWIML;
     }

@@ -704,7 +704,7 @@ export function createSubagentRegistryLifecycleController(params: {
           runId,
           entry,
           reason: "expiry",
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           defaultRuntime.log(
             `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
           );
@@ -965,7 +965,7 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       void finalizeSubagentCleanup(runId, entry.cleanup, true, {
         skipAnnounce: true,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -998,7 +998,7 @@ export function createSubagentRegistryLifecycleController(params: {
           skipAnnounce: true,
           skipDeliveryStatus: true,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -1025,7 +1025,7 @@ export function createSubagentRegistryLifecycleController(params: {
         runId,
         entry.cleanup,
         didAnnounce || shouldCreditPriorDelivery,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -1080,7 +1080,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .then((didAnnounce) => {
         void finalizeAnnounceCleanup(didAnnounce);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );

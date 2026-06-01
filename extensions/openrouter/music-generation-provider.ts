@@ -137,7 +137,7 @@ function processOpenRouterSseLine(
 function resolveOpenRouterStreamRemainingMs(deadline: ProviderOperationDeadline): number {
   return resolveProviderOperationTimeoutMs({
     deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
 }
 

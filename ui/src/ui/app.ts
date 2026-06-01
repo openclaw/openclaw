@@ -103,6 +103,7 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -167,7 +168,6 @@ function resolveSidebarUnavailableReason(
       return "Full content is unavailable because the stored transcript entry is too large to return safely.";
     case "not_visible":
       return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
-    case "not_found":
     default:
       return "Full content is no longer available for this transcript entry.";
   }
@@ -288,6 +288,12 @@ export class OpenClawApp extends LitElement {
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
+  chatComposerPersistTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  chatComposerPersistSnapshot: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
@@ -621,6 +627,23 @@ export class OpenClawApp extends LitElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+  @state() skillWorkshopLoading = false;
+  @state() skillWorkshopLoaded = false;
+  @state() skillWorkshopError: string | null = null;
+  @state() skillWorkshopInspectingKey: string | null = null;
+  @state() skillWorkshopProposals: SkillWorkshopState["skillWorkshopProposals"] = [];
+  @state() skillWorkshopSelectedKey: string | null = null;
+  @state() skillWorkshopActionBusy: SkillWorkshopState["skillWorkshopActionBusy"] = null;
+  @state() skillWorkshopActionNotice: SkillWorkshopState["skillWorkshopActionNotice"] = null;
+  skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  @state() skillWorkshopRevisionKey: string | null = null;
+  @state() skillWorkshopRevisionDraft = "";
+  @state() skillWorkshopStatusFilter: SkillWorkshopState["skillWorkshopStatusFilter"] = "pending";
+  @state() skillWorkshopQuery = "";
+  @state() skillWorkshopFilePreviewKey: string | null = null;
+  @state() skillWorkshopFilePreviewQuery = "";
+  @state() skillWorkshopQueueWidth = 360;
+  @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = "today";
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;

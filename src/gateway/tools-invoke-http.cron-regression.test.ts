@@ -89,7 +89,7 @@ beforeAll(async () => {
       }
       res.statusCode = 404;
       res.end("not found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       res.statusCode = 500;
       res.end(String(err));
     });

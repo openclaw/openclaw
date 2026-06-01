@@ -416,7 +416,7 @@ function loadConfigSchemaAfterPrimary(
   );
 }
 
-export async function refreshActiveTab(host: SettingsHost) {
+export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?: boolean }) {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.tab);
   try {
@@ -491,13 +491,18 @@ export async function refreshActiveTab(host: SettingsHost) {
         ]);
         break;
       case "chat": {
-        const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
-        await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
-        scheduleChatScroll(
-          host as unknown as Parameters<typeof scheduleChatScroll>[0],
-          !host.chatHasAutoScrolled,
-        );
-        void modelAuthRefresh;
+        try {
+          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+            awaitHistory: opts?.chatStartup === true,
+            startup: opts?.chatStartup === true,
+          });
+          scheduleChatScroll(
+            host as unknown as Parameters<typeof scheduleChatScroll>[0],
+            !host.chatHasAutoScrolled,
+          );
+        } finally {
+          void loadModelAuthStatusState(app).catch(() => undefined);
+        }
         break;
       }
       case "debug":
@@ -820,6 +825,19 @@ export function hasOperatorWriteAccess(
   return roleScopesAllow({
     role: auth.role ?? "operator",
     requestedScopes: ["operator.write"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorAdminAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.admin"],
     allowedScopes: auth.scopes,
   });
 }

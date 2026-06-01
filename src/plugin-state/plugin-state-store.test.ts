@@ -100,6 +100,24 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("updates a key from the current stored value", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateSyncKeyedStore<{ count: number }>("discord", {
+        namespace: "sync-update",
+        maxEntries: 10,
+      });
+      const update = store.update;
+      if (!update) {
+        throw new Error("expected sync keyed store update support");
+      }
+
+      expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
+      expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
+      expect(update("counter", () => undefined)).toBe(false);
+      expect(store.lookup("counter")).toEqual({ count: 2 });
+    });
+  });
+
   it("honors explicit store env without mutating process state", async () => {
     await withOpenClawTestState(
       { label: "plugin-state-explicit-env-a", applyEnv: false },

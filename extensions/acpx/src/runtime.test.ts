@@ -286,7 +286,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       })
       .then(
         () => ({ status: "resolved" as const }),
-        (error) => ({ status: "rejected" as const, error }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
       );
 
     expect(outcome.status).toBe("rejected");
@@ -298,7 +298,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       code: "ACP_SESSION_INIT_FAILED",
       message: expect.stringContaining("deployment missing"),
     });
-    expect(outcome.error.message).not.toContain("sk-testsecret1234567890");
+    const error = outcome.error;
+    expect(error).toBeInstanceOf(AcpRuntimeError);
+    if (!(error instanceof AcpRuntimeError)) {
+      throw new Error("expected AcpRuntimeError");
+    }
+    expect(error.message).not.toContain("sk-testsecret1234567890");
   });
 
   it("adds Codex wrapper stderr tail to generic first-turn failures", async () => {

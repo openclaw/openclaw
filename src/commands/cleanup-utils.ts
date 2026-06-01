@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
+import {
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
+} from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -105,6 +109,22 @@ export async function removePath(
   } catch (err) {
     runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
     return { ok: false };
+  }
+}
+
+export async function removeWorkspaceAttestationPaths(
+  workspaceDirs: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: RemovalOptions,
+): Promise<void> {
+  for (const workspaceDir of workspaceDirs) {
+    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+      workspaceDir,
+    ).entries()) {
+      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+        await removePath(attestationPath, runtime, opts);
+      }
+    }
   }
 }
 

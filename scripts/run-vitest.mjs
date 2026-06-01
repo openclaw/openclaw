@@ -129,11 +129,86 @@ export function resolveMissingVitestDependencyMessage(baseDir = repoRoot, fsImpl
   ].join("\n");
 }
 
+function resolvePathFromBase(value, baseDir) {
+  return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
+}
+
+function resolvePnpmModulesDir(env) {
+  return env.PNPM_CONFIG_MODULES_DIR?.trim() || env.npm_config_modules_dir?.trim() || "";
+}
+
+function resolveHydratedVitestPackageJson({ baseDir, env, fsImpl }) {
+  const modulesDir = resolvePnpmModulesDir(env);
+  if (!modulesDir) {
+    return null;
+  }
+  const packageJsonPath = path.join(
+    resolvePathFromBase(modulesDir, baseDir),
+    "vitest",
+    "package.json",
+  );
+  return fsImpl.existsSync(packageJsonPath) ? packageJsonPath : null;
+}
+
+function ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform }) {
+  if (platform !== "win32") {
+    return true;
+  }
+  const selfLinkPath = path.join(hydratedNodeModulesPath, "node_modules");
+  if (fsImpl.existsSync(selfLinkPath)) {
+    return true;
+  }
+  try {
+    fsImpl.symlinkSync(hydratedNodeModulesPath, selfLinkPath, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHydratedVitestCliEntry({ baseDir, env, fsImpl, platform }) {
+  const hydratedVitestPackageJson = resolveHydratedVitestPackageJson({ baseDir, env, fsImpl });
+  if (!hydratedVitestPackageJson) {
+    return null;
+  }
+  const hydratedNodeModulesPath = path.dirname(path.dirname(hydratedVitestPackageJson));
+  if (!ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform })) {
+    return null;
+  }
+  const nodeModulesPath = path.join(baseDir, "node_modules");
+  if (fsImpl.existsSync(nodeModulesPath)) {
+    const workspaceVitestCliEntry = path.join(nodeModulesPath, "vitest", "vitest.mjs");
+    return fsImpl.existsSync(workspaceVitestCliEntry) ? workspaceVitestCliEntry : null;
+  }
+  try {
+    fsImpl.symlinkSync(
+      hydratedNodeModulesPath,
+      nodeModulesPath,
+      platform === "win32" ? "junction" : "dir",
+    );
+  } catch {
+    return null;
+  }
+  return path.join(nodeModulesPath, "vitest", "vitest.mjs");
+}
+
 export function resolveVitestCliEntry({
   baseDir = repoRoot,
+  env = process.env,
   fsImpl = fs,
+  platform = process.platform,
   requireResolve = require.resolve.bind(require),
 } = {}) {
+  const hydratedVitestCliEntry = resolveHydratedVitestCliEntry({
+    baseDir,
+    env,
+    fsImpl,
+    platform,
+  });
+  if (hydratedVitestCliEntry) {
+    return hydratedVitestCliEntry;
+  }
+
   let vitestPackageJson;
   try {
     vitestPackageJson = requireResolve("vitest/package.json");
@@ -243,9 +318,7 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...env,
-    ...(!hasTimeout
-      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) }
-      : {}),
+    ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
       : {}),
@@ -753,11 +826,22 @@ export function resolveTestProjectsRunnerEnv(env) {
   return resolveVitestSpawnEnv(env);
 }
 
-function spawnTestProjectsRunner(argv, env) {
-  return spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+export function resolveTestProjectsRunnerSpawnParams(env, platform = process.platform) {
+  return {
     env: resolveTestProjectsRunnerEnv(env),
+    detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: "inherit",
+  };
+}
+
+function spawnTestProjectsRunner(argv, env) {
+  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+    ...resolveTestProjectsRunnerSpawnParams(env),
   });
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+  });
+  return { child, teardown };
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -779,8 +863,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const child = spawnTestProjectsRunner(delegatedArgs, env);
+    const { child, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
     child.on("exit", (code, signal) => {
+      teardown();
       if (signal) {
         process.kill(process.pid, signal);
         return;
@@ -788,6 +873,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       process.exit(code ?? 1);
     });
     child.on("error", (error) => {
+      teardown();
       console.error(error);
       process.exit(1);
     });

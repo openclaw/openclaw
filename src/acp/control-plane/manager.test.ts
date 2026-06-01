@@ -595,7 +595,7 @@ describe("AcpSessionManager", () => {
     const secondOutcome = await Promise.race([
       second.then(
         () => ({ status: "resolved" as const }),
-        (error) => ({ status: "rejected" as const, error }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
       ),
       new Promise<{ status: "pending" }>((resolve) => {
         scheduleNativeTimeout(() => resolve({ status: "pending" }), 100);

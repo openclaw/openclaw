@@ -493,6 +493,8 @@ private fun playVoiceSetupTone() {
   Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 300L)
 }
 
+private const val NOTIFICATION_PICKER_RESULT_LIMIT = 40
+
 @Composable
 private fun NotificationSettingsScreen(
   viewModel: MainViewModel,
@@ -507,6 +509,19 @@ private fun NotificationSettingsScreen(
   val quietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
   val maxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val modeLabel = if (mode == NotificationPackageFilterMode.Blocklist) "Blocklist" else "Allowlist"
+  val installedApps = remember(context, packages) { queryInstalledApps(context, packages) }
+  var notificationPickerExpanded by remember { mutableStateOf(false) }
+  var notificationAppSearch by remember { mutableStateOf("") }
+  var notificationShowSystemApps by remember { mutableStateOf(false) }
+  val filteredApps =
+    remember(installedApps, packages, notificationAppSearch, notificationShowSystemApps) {
+      filterNotificationAppsForPicker(
+        apps = installedApps,
+        selectedPackages = packages,
+        query = notificationAppSearch,
+        showSystemApps = notificationShowSystemApps,
+      )
+    }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -567,6 +582,124 @@ private fun NotificationSettingsScreen(
         )
       }
     }
+    NotificationPackagePickerPanel(
+      mode = mode,
+      selectedPackages = packages,
+      apps = filteredApps,
+      search = notificationAppSearch,
+      showSystemApps = notificationShowSystemApps,
+      expanded = notificationPickerExpanded,
+      onSearchChange = { notificationAppSearch = it },
+      onShowSystemAppsChange = { notificationShowSystemApps = it },
+      onExpandedChange = { notificationPickerExpanded = it },
+      onPackageSelectionChange = { packageName, selected ->
+        val next = packages.toMutableSet()
+        if (selected) {
+          next.add(packageName)
+        } else {
+          next.remove(packageName)
+        }
+        viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+      },
+    )
+  }
+}
+
+@Composable
+private fun NotificationPackagePickerPanel(
+  mode: NotificationPackageFilterMode,
+  selectedPackages: Set<String>,
+  apps: List<InstalledApp>,
+  search: String,
+  showSystemApps: Boolean,
+  expanded: Boolean,
+  onSearchChange: (String) -> Unit,
+  onShowSystemAppsChange: (Boolean) -> Unit,
+  onExpandedChange: (Boolean) -> Unit,
+  onPackageSelectionChange: (String, Boolean) -> Unit,
+) {
+  val visibleApps = apps.take(NOTIFICATION_PICKER_RESULT_LIMIT)
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = "App Filter", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = notificationPackageSelectionSummary(mode = mode, selectedCount = selectedPackages.size),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      ClawSecondaryButton(
+        text = if (expanded) "Close App Picker" else "Open App Picker",
+        onClick = { onExpandedChange(!expanded) },
+        modifier = Modifier.fillMaxWidth(),
+      )
+      if (expanded) {
+        ClawTextField(value = search, onValueChange = onSearchChange, placeholder = "Search apps")
+        SettingsToggleListRow(
+          SettingsToggleRow(
+            title = "Show System Apps",
+            subtitle = "Include Android and background packages.",
+            icon = Icons.Default.Storage,
+            checked = showSystemApps,
+            onCheckedChange = onShowSystemAppsChange,
+          ),
+        )
+        if (visibleApps.isEmpty()) {
+          Text(text = "No matching apps.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        } else {
+          ClawSeparatedColumn(items = visibleApps) { app ->
+            NotificationPackageAppRow(
+              app = app,
+              selected = selectedPackages.contains(app.packageName),
+              onSelectedChange = { selected -> onPackageSelectionChange(app.packageName, selected) },
+            )
+          }
+          if (apps.size > visibleApps.size) {
+            Text(
+              text = "Showing ${visibleApps.size} of ${apps.size}. Refine search for more.",
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun NotificationPackageAppRow(
+  app: InstalledApp,
+  selected: Boolean,
+  onSelectedChange: (Boolean) -> Unit,
+) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 58.dp)
+        .clickable { onSelectedChange(!selected) }
+        .padding(vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    ClawTextBadge(text = notificationAppBadge(app.label))
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(
+        text = app.label,
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.text,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Text(
+        text = app.packageName,
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    Switch(checked = selected, onCheckedChange = onSelectedChange)
   }
 }
 
@@ -1110,6 +1243,55 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
     "skipped" -> ClawStatus.Warning
     else -> ClawStatus.Success
   }
+}
+
+internal fun filterNotificationAppsForPicker(
+  apps: List<InstalledApp>,
+  selectedPackages: Set<String>,
+  query: String,
+  showSystemApps: Boolean,
+): List<InstalledApp> {
+  val normalizedQuery = query.trim().lowercase()
+  return apps.filter { app ->
+    val selected = app.packageName in selectedPackages
+    val visibleByType = showSystemApps || !app.isSystemApp || selected
+    val visibleBySearch =
+      normalizedQuery.isEmpty() ||
+        app.label.lowercase().contains(normalizedQuery) ||
+        app.packageName.lowercase().contains(normalizedQuery)
+    visibleByType && visibleBySearch
+  }
+}
+
+private fun notificationPackageSelectionSummary(
+  mode: NotificationPackageFilterMode,
+  selectedCount: Int,
+): String =
+  when (mode) {
+    NotificationPackageFilterMode.Allowlist ->
+      if (selectedCount == 0) {
+        "No apps selected. Nothing forwards until you add apps."
+      } else {
+        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} allowed to forward."
+      }
+    NotificationPackageFilterMode.Blocklist ->
+      if (selectedCount == 0) {
+        "No apps blocked. Apps can forward unless you add blocks."
+      } else {
+        "$selectedCount ${if (selectedCount == 1) "app" else "apps"} blocked from forwarding."
+      }
+  }
+
+private fun notificationAppBadge(label: String): String {
+  val initials =
+    label
+      .split(' ', '-', '_', '.')
+      .asSequence()
+      .filter { it.isNotBlank() }
+      .take(2)
+      .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+      .joinToString("")
+  return initials.ifBlank { "A" }
 }
 
 /**
