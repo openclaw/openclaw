@@ -20,6 +20,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -44,6 +45,7 @@ import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
+import { isGatewayShuttingDown } from "./server-close.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   runWithGatewayHttpWorkAdmission,
@@ -63,6 +65,24 @@ import {
   type GatewayWsClient,
 } from "./server/ws-types.js";
 import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
+
+const gatewayProbeLog = createSubsystemLogger("gateway/probe");
+// Logging the shutting-down 503 response once per shutdown sequence is enough to
+// trace the zombie cascade; bursts add noise without value because every callers'
+// probe round-trips during the same window.
+let shuttingDownResponseLogged = false;
+function noteShuttingDownProbeResponse(requestPath: string): void {
+  if (shuttingDownResponseLogged) {
+    return;
+  }
+  shuttingDownResponseLogged = true;
+  gatewayProbeLog.warn(
+    `gateway.healthz.shutting_down_response path=${requestPath}; returning 503 so supervised lock recovery treats this gateway as draining`,
+  );
+}
+export function resetGatewayHealthzShuttingDownLogForTest(): void {
+  shuttingDownResponseLogged = false;
+}
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -276,6 +296,7 @@ async function handleGatewayProbeRequest(
   trustedProxies: string[],
   allowRealIpFallback: boolean,
   getReadiness?: ReadinessChecker,
+  getShuttingDown: () => boolean = isGatewayShuttingDown,
 ): Promise<boolean> {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
   if (!status) {
@@ -296,7 +317,15 @@ async function handleGatewayProbeRequest(
 
   let statusCode: number;
   let body: string;
-  if (status === "ready" && getReadiness) {
+  // Live probes flip to 503 the moment shutdown starts so supervised lock
+  // recovery distinguishes a healthy gateway from a zombie that still holds
+  // the HTTP listener. The flag is owned by `server-close` and is set before
+  // any close-handler await.
+  if (status === "live" && getShuttingDown()) {
+    noteShuttingDownProbeResponse(requestPath);
+    statusCode = 503;
+    body = JSON.stringify({ live: false, phase: "shutting_down" });
+  } else if (status === "ready" && getReadiness) {
     const includeDetails = await canRevealReadinessDetails({
       req,
       resolvedAuth,
@@ -496,6 +525,10 @@ export function createGatewayHttpServer(opts: {
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   isTerminalEnabled?: () => boolean;
+  // Test seam: injected so tests can drive the shutting-down flag without
+  // touching the module-level state. Production callers leave it undefined so
+  // the canonical `isGatewayShuttingDown` from server-close is used.
+  getShuttingDown?: () => boolean;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -516,6 +549,7 @@ export function createGatewayHttpServer(opts: {
     rateLimiter,
     getReadiness,
   } = opts;
+  const getShuttingDown = opts.getShuttingDown ?? isGatewayShuttingDown;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
@@ -558,6 +592,7 @@ export function createGatewayHttpServer(opts: {
           [],
           false,
           getReadiness,
+          getShuttingDown,
         );
         return;
       }
@@ -604,6 +639,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               getReadiness,
+              getShuttingDown,
             ),
         },
         {

@@ -31,6 +31,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { recordGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
@@ -645,6 +646,18 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       }
 
       const elapsedMs = now() - startedAt;
+      // Probe came back unhealthy while the lock is held. Either the previous
+      // gateway is mid-shutdown (now returns 503 from /healthz thanks to the
+      // shutting-down flag) or it is a zombie that lost the close path but
+      // kept the HTTP listener. Either way, log the detection so the next
+      // supervisor cycle can be correlated in OTel/Loki.
+      recordGatewayRestartTrace("gateway.preflight.zombie_detected", elapsedMs, [
+        ["supervisor", supervisor],
+        ["port", params.port],
+      ]);
+      params.log.warn(
+        `gateway.preflight.zombie_detected supervisor=${supervisor} port=${params.port}; lock held but /healthz reported unhealthy (likely zombie or draining)`,
+      );
       if (elapsedMs >= timeoutMs) {
         throw new SupervisedGatewayLockError(
           `gateway already running under ${supervisor}; existing gateway did not become healthy after ${timeoutMs}ms`,
