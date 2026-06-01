@@ -32,6 +32,7 @@ let embedBatchInputCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
+let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 
@@ -67,6 +68,7 @@ vi.mock("./embeddings.js", () => {
         model: options.model,
         outputDimensionality: options.outputDimensionality,
       });
+      await providerInitGate;
       if (forceNoProvider) {
         return {
           provider: null,
@@ -218,6 +220,7 @@ describe("memory index", () => {
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
     providerCloseGate = null;
+    providerInitGate = null;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -402,7 +405,7 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(1);
   });
 
-  it("closes embedding providers before waiting for pending sync to settle", async () => {
+  it("waits for pending sync before closing embedding providers", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -415,18 +418,77 @@ describe("memory index", () => {
     });
 
     const closePromise = manager.close();
-    await vi.waitFor(() => {
-      expect(providerCloseCalls).toBe(1);
-    });
-    let closeSettled = false;
-    void closePromise.then(() => {
-      closeSettled = true;
-    });
-    await Promise.resolve();
+    try {
+      await Promise.resolve();
+      expect(providerCloseCalls).toBe(0);
 
-    expect(closeSettled).toBe(false);
-    resolveSync();
+      let closeSettled = false;
+      void closePromise.then(() => {
+        closeSettled = true;
+      });
+      await Promise.resolve();
+
+      expect(closeSettled).toBe(false);
+    } finally {
+      resolveSync();
+    }
     await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("waits for sync that attaches after provider initialization before closing providers", async () => {
+    let releaseProviderInit: () => void = () => {};
+    providerInitGate = new Promise<void>((resolve) => {
+      releaseProviderInit = resolve;
+    });
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    let releaseSync: () => void = () => {};
+    const syncStarted = new Promise<void>((resolve) => {
+      const originalRunSyncWithReadonlyRecovery = (
+        manager as unknown as {
+          runSyncWithReadonlyRecovery: (params?: {
+            reason?: string;
+            force?: boolean;
+            sessionFiles?: string[];
+            progress?: (update: unknown) => void;
+          }) => Promise<void>;
+        }
+      ).runSyncWithReadonlyRecovery.bind(manager);
+      (
+        manager as unknown as {
+          runSyncWithReadonlyRecovery: typeof originalRunSyncWithReadonlyRecovery;
+        }
+      ).runSyncWithReadonlyRecovery = async (params) => {
+        resolve();
+        await new Promise<void>((syncResolve) => {
+          releaseSync = syncResolve;
+        });
+        await originalRunSyncWithReadonlyRecovery(params);
+      };
+    });
+
+    const syncPromise = manager.sync({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(providerCalls).toHaveLength(1);
+    });
+
+    const closePromise = manager.close();
+    try {
+      releaseProviderInit();
+      await syncStarted;
+      await Promise.resolve();
+
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseSync();
+    }
+    await syncPromise;
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
   });
 
   it("evicts scoped memory index managers before close settles", async () => {
@@ -442,7 +504,7 @@ describe("memory index", () => {
     managersForCleanup.add(first);
     await first.probeEmbeddingAvailability();
     const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
-    let second: MemoryIndexManager | null = null;
+    let second: MemoryIndexManager | null;
     try {
       await vi.waitFor(() => {
         expect(providerCloseCalls).toBe(1);
@@ -508,6 +570,90 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
+  });
+
+  it("retries transient query embedding transport failures during search", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-query-retry.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).provider = {
+      id: "openai",
+      model: "mock-embed",
+      embedQuery: async () => {
+        queryCalls += 1;
+        if (queryCalls === 1) {
+          throw new Error("TypeError: fetch failed | other side closed");
+        }
+        return [1, 0, 0, 0];
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(2);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+  });
+
+  it("fails search after bounded query embedding retries are exhausted", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-query-retry-exhausted.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "openai",
+      model: "mock-embed",
+      embedQuery: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
+    expect(queryCalls).toBe(3);
   });
 
   it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {

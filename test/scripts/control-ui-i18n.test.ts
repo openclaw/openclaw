@@ -1,98 +1,96 @@
-import { win32 } from "node:path";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import process from "node:process";
 import { describe, expect, it } from "vitest";
-import {
-  resolveControlUiI18nNpmInstallCommand,
-  resolveControlUiI18nPnpmCommand,
-  resolveControlUiI18nProcessCommand,
-  resolvePiShimNodeCommand,
-} from "../../scripts/control-ui-i18n.ts";
+import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
 
-describe("control-ui-i18n command resolution", () => {
-  const comSpec = String.raw`C:\Windows\System32\cmd.exe`;
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
-  it("resolves Windows pi.cmd shims to the node CLI before multiline RPC prompts", () => {
-    const piCmdPath = String.raw`C:\Users\runner\AppData\Roaming\npm\pi.cmd`;
-    const cliPath = win32.join(
-      win32.dirname(piCmdPath),
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
-      "dist",
-      "cli.js",
-    );
-    const command = resolvePiShimNodeCommand(piCmdPath, {
-      existsSync: (candidate) => candidate === cliPath,
-      platform: "win32",
-    });
-
-    expect(command).toEqual({
-      args: [cliPath],
-      executable: "node",
-    });
-    if (!command) {
-      throw new Error("expected Windows Pi shim to resolve to a node command");
+async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processIsAlive(pid)) {
+      return;
     }
-    expect(
-      resolveControlUiI18nProcessCommand(
-        command.executable,
-        [...command.args, "--system-prompt", "line one\nline two"],
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
+}
+
+describe("control-ui-i18n process runner", () => {
+  it("keeps a bounded process output tail", () => {
+    const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
+    const second = appendBoundedProcessOutput(first, "ghij", 5);
+
+    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
+    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("bounds failure diagnostics to the newest output", async () => {
+    await expect(
+      runProcess(
+        process.execPath,
+        [
+          "-e",
+          [
+            "process.stderr.write('stderr-begin-' + 'x'.repeat(128) + '-stderr-end', () => process.exit(2));",
+          ].join(" "),
+        ],
+        { maxOutputChars: 64, rejectOnFailure: true },
+      ),
+    ).rejects.toThrow(/output truncated[\s\S]*stderr-end/u);
+  });
+
+  it("rejects successful commands before returning truncated stdout", async () => {
+    await expect(
+      runProcess(
+        process.execPath,
+        ["-e", "process.stdout.write('x'.repeat(128), () => process.exit(0));"],
         {
-          comSpec,
-          platform: "win32",
+          maxOutputChars: 12,
         },
       ),
-    ).toEqual({
-      args: [cliPath, "--system-prompt", "line one\nline two"],
-      executable: "node",
-      shell: false,
-    });
+    ).rejects.toThrow("produced more than 12 stdout chars");
   });
 
-  it("routes Windows Pi package installs through toolchain-local npm.cmd", () => {
-    const nodeExecPath = String.raw`C:\Program Files\nodejs\node.exe`;
-    const npmCmdPath = win32.resolve(win32.dirname(nodeExecPath), "npm.cmd");
+  it.runIf(process.platform !== "win32")(
+    "kills descendant processes after the process timeout",
+    async () => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-control-ui-i18n-timeout-"));
+      const markerPath = path.join(tempDir, "grandchild.pid");
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const { writeFileSync } = require('node:fs');",
+        `const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
+        `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
 
-    expect(
-      resolveControlUiI18nNpmInstallCommand("@pi/pai@1.2.3", {
-        comSpec,
-        env: { ComSpec: comSpec },
-        execPath: nodeExecPath,
-        existsSync: (candidate) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\npm.cmd" install --silent --no-audit --no-fund @pi/pai@1.2.3"`,
-      ],
-      executable: comSpec,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
+      await expect(
+        runProcess(process.execPath, ["-e", parentScript], {
+          cwd: tempDir,
+          killGraceMs: 25,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow(`timed out after 500ms`);
 
-  it("routes Windows formatting through the active pnpm.cmd runner", () => {
-    expect(
-      resolveControlUiI18nPnpmCommand(
-        ["exec", "oxfmt", "--stdin-filepath", "ui/src/i18n/generated.ts"],
-        {
-          comSpec,
-          npmExecPath: String.raw`C:\Program Files\nodejs\pnpm.cmd`,
-          platform: "win32",
-        },
-      ),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\pnpm.cmd" exec oxfmt --stdin-filepath ui/src/i18n/generated.ts"`,
-      ],
-      executable: comSpec,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
+      const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+      await waitForProcessExit(grandchildPid);
+    },
+  );
 });

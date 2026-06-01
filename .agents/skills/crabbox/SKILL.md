@@ -44,7 +44,9 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
   shim can be stale.
 - Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
-  means brokered AWS today.
+  means brokered AWS for normal Linux/macOS paths; the wrapper selects Azure
+  for unqualified Windows/WSL2 runs when the local Crabbox binary advertises
+  Azure.
 - The brokered AWS default is a Linux developer image in `eu-west-1`; the repo
   config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
   If warmup drifts well past the minute-scale path, verify image promotion,
@@ -82,18 +84,16 @@ Use these only when the task needs an existing non-Linux host. OpenClaw broad
 Linux validation uses the repo Crabbox config unless a provider is explicitly
 requested.
 
-Native brokered Windows is available for Windows-specific proof. Use the AWS
-developer image in `us-west-2` on demand; it has the expected OpenClaw developer
-toolchain and Docker image cache. Keep broad Linux gates on Linux/Testbox unless
-the bug is Windows-specific:
+Native brokered Windows is available for Windows-specific proof. Prefer Azure
+for Windows/WSL2 when the subscription has quota or credits and the local
+Crabbox binary advertises Azure. Keep broad Linux gates on Linux/Testbox unless
+the bug is Windows-specific, and only force AWS when the operator asks for the
+older AWS developer image/cache path or Azure is unavailable:
 
 ```sh
-../crabbox/bin/crabbox warmup \
-  --provider aws \
+pnpm crabbox:warmup -- \
   --target windows \
-  --windows-mode normal \
-  --region us-west-2 \
-  --market on-demand \
+  --windows-mode wsl2 \
   --timing-json
 ```
 
@@ -160,8 +160,13 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "pnpm test"
+  "pnpm verify"
 ```
+
+Use `pnpm verify` when you need check plus full Vitest proof. It emits
+`CRABBOX_PHASE:check` and `CRABBOX_PHASE:test`, making Crabbox summaries show
+which stage failed. Use plain `pnpm test` only when check proof is already
+covered or intentionally skipped.
 
 Focused rerun:
 
@@ -217,6 +222,21 @@ Read the JSON summary and the Testbox line. Useful fields:
 - `syncPhases`: delegated/skipped because Blacksmith owns checkout/sync
 - Actions run URL/id from the Testbox output
 - `exitCode`
+
+Use provider-backed cache volumes only for rebuildable caches, not secrets or
+checkout state. On Blacksmith, Crabbox forwards them as sticky disks:
+
+```sh
+node scripts/crabbox-wrapper.mjs run \
+  --provider blacksmith-testbox \
+  --cache-volume pnpm-store=openclaw-node24-pnpm-lock:/tmp/openclaw-pnpm-store \
+  --timing-json \
+  -- \
+  corepack pnpm check:changed
+```
+
+The selected provider must advertise cache-volume support. If not, omit
+`--cache-volume` and rely on kept-lease caches.
 
 `blacksmith testbox list` may hide hydrating or ready boxes. Use:
 
@@ -585,7 +605,8 @@ Crabbox Blacksmith backend delegates setup to:
 
 The hydration workflow owns checkout, Node/pnpm setup, dependency install,
 secrets, ready marker, and keepalive. Crabbox owns dispatch, sync, SSH command
-execution, timing, logs/results, and cleanup.
+execution, timing, logs/results, cleanup, and cache-volume requests. Blacksmith
+implements cache volumes as sticky disks.
 
 Minimal Blacksmith-backed Crabbox run, from repo root:
 
@@ -680,6 +701,7 @@ crabbox events <run_id> --json
 crabbox logs <run_id>
 crabbox results <run_id>
 crabbox cache stats --id <id-or-slug>
+crabbox cache volumes
 crabbox ssh --id <id-or-slug>
 blacksmith testbox list
 ```

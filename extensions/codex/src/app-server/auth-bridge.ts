@@ -26,9 +26,14 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
-const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
+const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
+const LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER = "codex-cli";
+const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [
+  CODEX_APP_SERVER_AUTH_PROVIDER,
+  LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER,
+];
 const OPENAI_PROVIDER = "openai";
-const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
@@ -120,7 +125,7 @@ function ensureCodexAppServerAuthProfileStore(params: {
   return ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
     config: params.config,
-    externalCliProviderIds: [CODEX_APP_SERVER_AUTH_PROVIDER],
+    externalCliProviderIds: CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS,
     ...(params.authProfileId ? { externalCliProfileIds: [params.authProfileId] } : {}),
   });
 }
@@ -131,6 +136,16 @@ function resolveCodexAppServerAuthProfileStore(params: {
   authProfileStore?: AuthProfileStore;
   config?: AuthProfileOrderConfig;
 }): AuthProfileStore {
+  if (params.authProfileStore) {
+    const providedProfileId = resolveCodexAppServerAuthProfileId({
+      authProfileId: params.authProfileId,
+      store: params.authProfileStore,
+      config: params.config,
+    });
+    if (providedProfileId && params.authProfileStore.profiles[providedProfileId]) {
+      return params.authProfileStore;
+    }
+  }
   const overlaidStore = ensureCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,
@@ -589,7 +604,13 @@ async function resolveOAuthCredentialForCodexAppServer(
 }
 
 function isCodexAppServerAuthProvider(provider: string, config?: AuthProfileOrderConfig): boolean {
-  return resolveProviderIdForAuth(provider, { config }) === CODEX_APP_SERVER_AUTH_PROVIDER;
+  const resolvedProvider = resolveProviderIdForAuth(provider, { config });
+  return (
+    resolvedProvider === CODEX_APP_SERVER_AUTH_PROVIDER ||
+    // Older Codex auth profiles stored the CLI runtime id here. The app-server
+    // login protocol still receives the same externally managed ChatGPT token.
+    resolvedProvider === LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER
+  );
 }
 
 function isOpenAIApiKeyBackupCredential(

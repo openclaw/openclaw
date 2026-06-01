@@ -1,27 +1,28 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
   completeSimpleWithTimeout,
-  type CompleteSimpleContent,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
+  type CompleteSimpleContent,
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
-const DEFAULT_TARGET_MODEL_REFS = "openai-codex/gpt-5.5,google/gemini-3-flash-preview";
+const DEFAULT_TARGET_MODEL_REFS = "openai/gpt-5.5,google/gemini-3-flash-preview";
 const TARGET_MODEL_REFS = parseTargetModelRefs(
   process.env.OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS ?? DEFAULT_TARGET_MODEL_REFS,
 );
@@ -57,7 +58,7 @@ const logProgress = logLiveProgress;
 function isOpenAIResponsesFamily(api: string): boolean {
   return (
     api === "openai-responses" ||
-    api === "openai-codex-responses" ||
+    api === "openai-chatgpt-responses" ||
     api === "azure-openai-responses"
   );
 }
@@ -72,22 +73,14 @@ function createNoopTools() {
   ];
 }
 
-function replayValidationTools() {
-  return createNoopTools();
+function replayValidationTools(model: Model) {
+  // Responses-family providers may force or reject fresh tool-choice policy
+  // when tools are present. These probes validate repaired historical transcript
+  // shape, not new tool invocation.
+  return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
 }
 
-function disableResponsesReplayToolChoice(payload: unknown, model: Model<Api>): unknown {
-  if (!isOpenAIResponsesFamily(model.api) || !payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const next = payload as { tool_choice?: unknown };
-  // Replay probes include historical tool calls to validate transcript repair,
-  // but they should not force a fresh noop tool call during the live request.
-  next.tool_choice = "none";
-  return next;
-}
-
-function buildReplayMessages(model: Model<Api>): AgentMessage[] {
+function buildReplayMessages(model: Model): AgentMessage[] {
   const now = Date.now();
   // Gemini source metadata deliberately simulates a model switch from a
   // provider-owned transcript. That forces the same id sanitization and replay
@@ -141,7 +134,7 @@ function buildReplayMessages(model: Model<Api>): AgentMessage[] {
   ] as unknown as AgentMessage[];
 }
 
-function buildAbortedTransportMessages(model: Model<Api>): Context["messages"] {
+function buildAbortedTransportMessages(model: Model): Context["messages"] {
   const now = Date.now();
   return [
     {
@@ -210,7 +203,7 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -222,14 +215,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -278,13 +277,12 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: sanitized as never,
-            tools: replayValidationTools(),
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
             reasoning: "low",
             maxTokens: 96,
-            onPayload: disableResponsesReplayToolChoice,
           },
           120_000,
         );
@@ -316,7 +314,7 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -328,14 +326,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -354,13 +358,12 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: transformed as never,
-            tools: replayValidationTools(),
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
             reasoning: "low",
             maxTokens: 96,
-            onPayload: disableResponsesReplayToolChoice,
           },
           120_000,
         );

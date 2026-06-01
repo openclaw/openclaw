@@ -96,9 +96,6 @@ steps:
             - set: wakeMarker
               value:
                 expr: "`QA-CAPABILITY-${randomUUID().slice(0, 8)}`"
-            - set: wakeStartIndex
-              value:
-                expr: "state.getSnapshot().messages.length"
             - call: patchConfig
               args:
                 - env:
@@ -114,9 +111,6 @@ steps:
                             ref: originalImageGenerationModelPrimary
                   sessionKey:
                     ref: sessionKey
-                  deliveryContext:
-                    channel: qa-channel
-                    to: dm:qa-operator
                   note:
                     ref: wakeMarker
             - call: waitForGatewayHealthy
@@ -127,16 +121,6 @@ steps:
               args:
                 - ref: env
                 - 60000
-            - call: waitForOutboundMessage
-              saveAs: wakeReply
-              args:
-                - ref: state
-                - lambda:
-                    params: [candidate]
-                    expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').includes(wakeMarker)"
-                - expr: liveTurnTimeoutMs(env, 60000)
-                - sinceIndex:
-                    ref: wakeStartIndex
             - call: waitForCondition
               saveAs: afterTools
               args:

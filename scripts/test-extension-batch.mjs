@@ -9,18 +9,24 @@ import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const PARALLEL_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_PARALLEL";
+const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
+const ALLOW_EMPTY_AFTER_EXCLUDE_FLAG = "--allow-empty-after-exclude";
 
 function printUsage() {
-  console.error("Usage: pnpm test:extensions:batch <extension[,extension...]> [vitest args...]");
   console.error(
-    "       node scripts/test-extension-batch.mjs <extension[,extension...]> [vitest args...]",
+    `Usage: pnpm test:extensions:batch <extension[,extension...]> [${ALLOW_NO_TESTS_FLAG}] [${ALLOW_EMPTY_AFTER_EXCLUDE_FLAG}] [vitest args...]`,
+  );
+  console.error(
+    `       node scripts/test-extension-batch.mjs <extension[,extension...]> [${ALLOW_NO_TESTS_FLAG}] [${ALLOW_EMPTY_AFTER_EXCLUDE_FLAG}] [vitest args...]`,
   );
 }
 
 export function parseExtensionIds(rawArgs) {
-  const separatorIndex = rawArgs.indexOf("--");
-  const args = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : [...rawArgs];
-  const separatorPassthroughArgs = separatorIndex >= 0 ? rawArgs.slice(separatorIndex + 1) : [];
+  const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
+  const separatorIndex = normalizedArgs.indexOf("--");
+  const args = separatorIndex >= 0 ? normalizedArgs.slice(0, separatorIndex) : [...normalizedArgs];
+  const separatorPassthroughArgs =
+    separatorIndex >= 0 ? normalizedArgs.slice(separatorIndex + 1) : [];
   const extensionIds = [];
 
   while (args[0] && !args[0].startsWith("-")) {
@@ -140,8 +146,8 @@ function resolveGroupTargets(group, exactExcludePaths) {
 async function runPlanGroup(group, params) {
   const targets = resolveGroupTargets(group, params.exactExcludePaths);
   if (targets.length === 0) {
-    console.log(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
-    return 0;
+    console.error(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
+    return params.allowEmptyAfterExclude ? 0 : 1;
   }
 
   console.log(
@@ -168,6 +174,7 @@ export async function runExtensionBatchPlan(batchPlan, params = {}) {
   const parallelism = resolveExtensionBatchParallelism(batchPlan.planGroups.length, env);
   const orderedGroups = orderPlanGroups(batchPlan.planGroups, parallelism);
   const useDedicatedCache = parallelism > 1;
+  const allowEmptyAfterExclude = params.allowEmptyAfterExclude ?? false;
 
   if (parallelism > 1) {
     console.log(`[test-extension-batch] Running up to ${parallelism} config groups in parallel`);
@@ -188,6 +195,7 @@ export async function runExtensionBatchPlan(batchPlan, params = {}) {
         groupIndex,
         runGroup,
         exactExcludePaths,
+        allowEmptyAfterExclude,
         useDedicatedCache,
         vitestArgs,
       });
@@ -209,15 +217,28 @@ async function run() {
     return;
   }
 
-  const { extensionIds, passthroughArgs: vitestArgs } = parseExtensionIds(rawArgs);
+  const allowNoTests = rawArgs.includes(ALLOW_NO_TESTS_FLAG);
+  const allowEmptyAfterExclude = rawArgs.includes(ALLOW_EMPTY_AFTER_EXCLUDE_FLAG);
+  const controlArgs = new Set([ALLOW_NO_TESTS_FLAG, ALLOW_EMPTY_AFTER_EXCLUDE_FLAG]);
+  const args = rawArgs.filter((arg) => !controlArgs.has(arg));
+  const { extensionIds, passthroughArgs: vitestArgs } = parseExtensionIds(args);
   if (extensionIds.length === 0) {
     printUsage();
     process.exit(1);
   }
 
   const batchPlan = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
+  if (batchPlan.noTestExtensionIds.length > 0 && !allowNoTests) {
+    console.error(
+      `[test-extension-batch] No tests found for requested extension(s): ${batchPlan.noTestExtensionIds.join(", ")}`,
+    );
+    process.exit(1);
+  }
   if (!batchPlan.hasTests) {
-    console.log("[test-extension-batch] No tests found for the requested extensions. Skipping.");
+    console.error("[test-extension-batch] No tests found for the requested extensions.");
+    if (!allowNoTests) {
+      process.exit(1);
+    }
     return;
   }
 
@@ -226,6 +247,7 @@ async function run() {
   );
 
   const exitCode = await runExtensionBatchPlan(batchPlan, {
+    allowEmptyAfterExclude,
     env: process.env,
     vitestArgs,
   });

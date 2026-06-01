@@ -1391,7 +1391,6 @@ export async function updateNpmInstalledPlugins(params: {
         activeClawHubInstallSpec = clawhubSpecs.fallbackSpec;
         if (officialNpmFallbackSpecs?.fallbackSpec) {
           officialNpmFallbackInstallSpec = officialNpmFallbackSpecs.fallbackSpec;
-          officialNpmFallbackRecordSpec = officialNpmFallbackSpecs.fallbackSpec;
         }
       }
       if (
@@ -1677,7 +1676,7 @@ export async function updateNpmInstalledPlugins(params: {
                     usedFallback: usedNpmFallback,
                   }),
               phase: "update",
-              result: result,
+              result,
             })
           : resultSource === "clawhub"
             ? formatClawHubInstallFailure({

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadSubagentSpawnModuleForTest,
@@ -151,6 +152,49 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionKey).toBe("main");
     expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(result));
     expect(prepareContext.contextMode).toBe("isolated");
+  });
+
+  it("keeps lightContext isolated spawns out of context-engine preparation", async () => {
+    const store: SessionStore = {
+      main: { sessionId: "parent-session-id", updatedAt: 1 },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "clean worker", context: "isolated", lightContext: true },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(ensureContextEnginesInitializedMock).not.toHaveBeenCalled();
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+    const agentRequest = requireGatewayRequest("agent");
+    expect(agentRequest.params?.bootstrapContextMode).toBe("lightweight");
+  });
+
+  it("caps oversized context engine subagent TTLs at the timer-safe ceiling", async () => {
+    const store: SessionStore = {
+      main: { sessionId: "parent-session-id", updatedAt: 1 },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "clean worker",
+        runTimeoutSeconds: Number.MAX_SAFE_INTEGER,
+      },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("accepted");
+    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
+    expect(prepareContext.ttlMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("falls back to isolated context when requested fork is too large", async () => {

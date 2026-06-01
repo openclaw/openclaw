@@ -1,8 +1,10 @@
+import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeStringEntries,
   type BaseProbeResult,
   type MSTeamsConfig,
 } from "../runtime-api.js";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { formatUnknownError } from "./errors.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
@@ -67,7 +69,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   }
 
   try {
-    const { app } = await loadMSTeamsSdkWithAuth(creds);
+    const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(cfg));
     const tokenProvider = createMSTeamsTokenProvider(app);
     const botTokenValue = await tokenProvider.getAccessToken("https://api.botframework.com");
     if (!botTokenValue) {
@@ -99,7 +101,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
       try {
         const tokens = loadDelegatedTokens();
         if (tokens) {
-          const isExpired = tokens.expiresAt <= Date.now();
+          const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
           delegatedAuth = {
             ok: !isExpired,
             scopes: tokens.scopes,

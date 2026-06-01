@@ -6,8 +6,9 @@ import {
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
+  setMemorySearchManagerImpl,
 } from "./memory-tool-manager-mock.js";
-import { createMemorySearchTool } from "./tools.js";
+import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
 import {
   asOpenClawConfig,
@@ -56,6 +57,49 @@ describe("memory tool schemas", () => {
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
     resetMemoryToolMockState({ searchImpl: async () => [] });
+    memoryToolsTesting.resetMemorySearchToolCooldowns();
+  });
+
+  it("rejects fractional maxResults before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("fractional-max-results", {
+        query: "hello",
+        maxResults: 1.5,
+      }),
+    ).rejects.toThrow("maxResults must be a positive integer");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("rejects malformed minScore before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("malformed-min-score", {
+        query: "hello",
+        minScore: "0.8junk",
+      }),
+    ).rejects.toThrow("minScore must be a finite number");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("passes string minScore through to memory search", async () => {
+    let seenMinScore: number | undefined;
+    setMemorySearchImpl(async (opts) => {
+      seenMinScore = opts?.minScore;
+      return [];
+    });
+    const tool = createMemorySearchToolOrThrow();
+
+    await tool.execute("string-min-score", {
+      query: "hello",
+      minScore: "0.8",
+    });
+
+    expect(seenMinScore).toBe(0.8);
   });
 
   it("returns explicit unavailable metadata for quota failures", async () => {
@@ -84,6 +128,57 @@ describe("memory_search unavailable payloads", () => {
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
     });
+  });
+
+  it("returns unavailable metadata when manager setup does not settle", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchManagerImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("manager-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns unavailable metadata when memory search does not settle", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return await new Promise(() => {});
+      });
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("search-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
+      expectUnavailableMemorySearchDetails(cooldownResult.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("re-resolves the manager once when a cached sqlite handle was closed", async () => {

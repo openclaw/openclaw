@@ -5,6 +5,7 @@ import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/ap
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -19,8 +20,11 @@ import {
   startQaCredentialLeaseHeartbeat,
   type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+} from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -94,6 +98,7 @@ type SlackQaBeforeRunResult =
     };
 
 type SlackQaConfigOverrides = {
+  allowFrom?: string[];
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -331,7 +336,10 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     standardId: "allowlist-block",
     title: "Slack non-allowlisted sender does not trigger",
     timeoutMs: 8_000,
-    configOverrides: { users: ["U_OPENCLAW_QA_NEVER_ALLOWED"] },
+    configOverrides: {
+      allowFrom: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+      users: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+    },
     buildRun: (sutUserId) => {
       const token = `SLACK_QA_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
@@ -653,7 +661,7 @@ function buildSlackQaConfig(
             mode: "socket",
             botToken: params.sutBotToken,
             appToken: params.sutAppToken,
-            allowFrom: [params.driverBotUserId],
+            allowFrom: params.overrides?.allowFrom ?? [params.driverBotUserId],
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",
@@ -941,7 +949,9 @@ async function waitForSlackScenarioReply(params: {
         { cause: error },
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack message`);
 }
@@ -958,7 +968,13 @@ async function waitForSlackNoReply(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
+  const observedKeys = new Set(
+    params.observedMessages
+      .map((message) => `${message.channelId ?? params.channelId}:${message.ts ?? ""}`)
+      .filter((key) => !key.endsWith(":")),
+  );
+  let elapsedMs = Date.now() - startedAt;
+  while (elapsedMs < params.timeoutMs) {
     const messages = await listSlackMessages({
       channelId: params.channelId,
       client: params.client,
@@ -974,24 +990,35 @@ async function waitForSlackNoReply(params: {
         continue;
       }
       const matchedScenario = text.includes(params.matchText);
-      params.observedMessages.push({
-        actionValues: collectSlackActionValues(message.blocks),
-        blockText: collectSlackBlockText(message.blocks),
-        botId: message.bot_id,
-        channelId: params.channelId,
-        matchedScenario,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        text,
-        threadTs: message.thread_ts,
-        ts: message.ts,
-        userId: message.user,
-      });
+      const observedKey = `${params.channelId}:${message.ts}`;
+      if (!observedKeys.has(observedKey)) {
+        observedKeys.add(observedKey);
+        params.observedMessages.push({
+          actionValues: collectSlackActionValues(message.blocks),
+          blockText: collectSlackBlockText(message.blocks),
+          botId: message.bot_id,
+          channelId: params.channelId,
+          matchedScenario,
+          scenarioId: params.observationScenarioId,
+          scenarioTitle: params.observationScenarioTitle,
+          text,
+          threadTs: message.thread_ts,
+          ts: message.ts,
+          userId: message.user,
+        });
+      }
       if (matchedScenario) {
         throw new Error("unexpected Slack SUT reply observed");
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    elapsedMs = Date.now() - startedAt;
+    const remainingMs = params.timeoutMs - elapsedMs;
+    if (remainingMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(1_000, remainingMs));
+      });
+    }
+    elapsedMs = Date.now() - startedAt;
   }
 }
 
@@ -1111,7 +1138,9 @@ async function waitForSlackApprovalPrompt(params: {
         observedAt: new Date().toISOString(),
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(
     [
@@ -1179,7 +1208,9 @@ async function waitForSlackApprovalResolvedUpdate(params: {
         };
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(
     `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval resolution update`,
@@ -1193,9 +1224,9 @@ function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.e
   }
   const rawTimeout = env[SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV]?.trim();
   const timeoutMs = rawTimeout
-    ? Number.parseInt(rawTimeout, 10)
+    ? parseStrictPositiveInteger(rawTimeout)
     : SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  if (timeoutMs === undefined) {
     throw new Error(`${SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV} must be a positive integer.`);
   }
   return {
@@ -1229,7 +1260,9 @@ async function waitForSlackApprovalCheckpointAck(params: {
         throw error;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for ${params.ackPath}`);
 }
@@ -1549,7 +1582,9 @@ async function waitForSlackChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(
     `slack account "${accountId}" did not become ready` +
@@ -1576,9 +1611,9 @@ async function waitForSlackChannelStable(
     if (readyForMs >= SLACK_QA_READY_STABILITY_MS) {
       return;
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs)),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs));
+    });
   }
   throw new Error(
     `slack account "${accountId}" did not remain ready for ${SLACK_QA_READY_STABILITY_MS}ms`,
@@ -1725,9 +1760,11 @@ async function preserveSlackGatewayDebugArtifacts(params: {
   gatewayDebugDirPath: string;
   gatewayHarness: SlackQaGatewayHarness;
 }) {
-  await params.gatewayHarness.stop({ preserveToDir: params.gatewayDebugDirPath }).catch((error) => {
-    appendLiveLaneIssue(params.cleanupIssues, "gateway debug preservation failed", error);
-  });
+  await params.gatewayHarness
+    .stop({ preserveToDir: params.gatewayDebugDirPath })
+    .catch((error: unknown) => {
+      appendLiveLaneIssue(params.cleanupIssues, "gateway debug preservation failed", error);
+    });
 }
 
 export async function runSlackQaLive(params: {
@@ -1992,10 +2029,12 @@ export async function runSlackQaLive(params: {
           break;
         } finally {
           if (!preservedGatewayDebugArtifacts && gatewayHarness) {
-            await gatewayHarness.stop().catch((error) => {
+            await gatewayHarness.stop().catch((error: unknown) => {
               appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
             });
-            await new Promise((resolve) => setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS));
+            await new Promise((resolve) => {
+              setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS);
+            });
           }
         }
         if (scenarioResults.at(-1)?.id === scenario.id) {

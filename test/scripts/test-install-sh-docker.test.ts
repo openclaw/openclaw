@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
@@ -6,11 +8,58 @@ const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
 const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
 const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
+const NONROOT_RUNNER_PATH = "scripts/docker/install-sh-nonroot/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+
+class ScriptExit extends Error {
+  constructor(readonly status: number) {
+    super(`script exited ${String(status)}`);
+  }
+}
+
+function extractNonrootNodePreflight(): string {
+  const script = readFileSync(NONROOT_RUNNER_PATH, "utf8");
+  const match = script.match(/node -e '\n([\s\S]*?)\n'\ncommand -v npm/u);
+  if (!match) {
+    throw new Error("non-root smoke Node preflight was not found");
+  }
+  return match[1];
+}
+
+function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } = {}) {
+  const stderr: string[] = [];
+  try {
+    runInNewContext(extractNonrootNodePreflight(), {
+      process: {
+        versions: { node: version },
+        stderr: {
+          write(message: string) {
+            stderr.push(message);
+          },
+        },
+        exit(status: number) {
+          throw new ScriptExit(status);
+        },
+      },
+      require(specifier: string) {
+        if (specifier === "node:sqlite" && options.sqlite === false) {
+          throw new Error("missing node:sqlite");
+        }
+        return {};
+      },
+    });
+    return { status: 0, stderr: stderr.join("") };
+  } catch (error) {
+    if (error instanceof ScriptExit) {
+      return { status: error.status, stderr: stderr.join("") };
+    }
+    throw error;
+  }
+}
 
 describe("test-install-sh-docker", () => {
   it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
@@ -95,6 +144,25 @@ describe("test-install-sh-docker", () => {
     expect(script).not.toContain("docker run --rm -t \\");
   });
 
+  it("rejects stale non-root smoke Node runtimes below the runtime floor", () => {
+    const result = runNonrootNodePreflight("22.18.0");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unsupported node 22.18.0");
+  });
+
+  it("rejects non-root smoke Node runtimes without node:sqlite", () => {
+    const result = runNonrootNodePreflight("22.19.0", { sqlite: false });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unsupported node 22.19.0: missing node:sqlite");
+  });
+
+  it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
+    expect(runNonrootNodePreflight("22.19.0").status).toBe(0);
+    expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
+  });
+
   it("runs the root Dockerfile build with the CI heap limit", () => {
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
@@ -127,7 +195,9 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_docker_pull()");
     expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain('timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(script).toContain(
+      'timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"',
+    );
     expect(script).toContain('timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
     expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
     expect(script).not.toContain('docker pull "$IMAGE_NAME"');
@@ -136,12 +206,12 @@ describe("test-install-sh-docker", () => {
   it("bounds Podman setup image pulls", () => {
     const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
 
-    expect(script).toContain(
-      'PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"',
-    );
+    expect(script).toContain('PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_podman_pull()");
     expect(script).toContain("timeout --kill-after=1s 1s true");
-    expect(script).toContain('timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
+    expect(script).toContain(
+      'timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
+    );
     expect(script).toContain('timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
     expect(script).toContain('run_podman_pull "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
@@ -251,6 +321,16 @@ describe("test-install-sh-docker", () => {
     expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
   });
+
+  it("uses public npm latest as the non-root installer expectation", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(wrapper).toContain(
+      'public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"',
+    );
+    expect(wrapper).toContain('LATEST_VERSION="$public_latest_version"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION"');
+  });
 });
 
 describe("install-sh smoke runner", () => {
@@ -283,7 +363,7 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain('SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"');
     expect(script).toContain('NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"');
     expect(script).toContain("-e npm_config_cache=/npm-cache");
-    expect(script).toContain('"${NPM_CACHE_DOCKER_ARGS[@]}"');
+    expect(script).toContain('${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"}');
     expect(script).toContain("remove_owned_npm_cache");
     expect(script).toContain('sudo -n rm -rf "$NPM_CACHE_DIR"');
     expect(script).not.toMatch(
@@ -314,14 +394,16 @@ describe("install-sh smoke runner", () => {
       expect(script).toContain(envName);
     }
     expect(script).toMatch(
-      /Run installer smoke test[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
-    );
-    expect(script).toMatch(/Run update smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u);
-    expect(script).toMatch(
-      /Run direct npm global smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+      /Run installer smoke test[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
     );
     expect(script).toMatch(
-      /Run installer npm freshness smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+      /Run update smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
+    );
+    expect(script).toMatch(
+      /Run direct npm global smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
+    );
+    expect(script).toMatch(
+      /Run installer npm freshness smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
     );
   });
 });
@@ -395,9 +477,7 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("timeout --kill-after=30s 45m docker buildx build");
     expect(workflow).toContain('timeout --kill-after=30s 600s docker pull "$IMAGE_REF"');
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(
-      6,
-    );
+    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
     expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
@@ -411,6 +491,8 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).toContain('throw new Error(\\"missing patch for \\" + dep + \\": \\" + rel)');
+    expect(workflow).not.toContain("throw new Error(`missing patch");
     expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
     expect(workflow).not.toContain("--cache-from");
     expect(workflow).not.toContain("--cache-to");
@@ -419,5 +501,31 @@ describe("bun global install smoke", () => {
     expect(releaseChecks).toContain("install_smoke_release_checks:");
     expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");
     expect(releaseChecks).toContain("run_bun_global_install_smoke: true");
+  });
+
+  it("kills Bun global install smoke commands that ignore TERM after timeout", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "run-with-timeout",
+        "50",
+        process.execPath,
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "50",
+        },
+        timeout: 5000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`command timed out after 50ms: ${process.execPath}`);
   });
 });

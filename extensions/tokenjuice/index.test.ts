@@ -3,11 +3,11 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { tokenjuiceFactory, createTokenjuiceOpenClawEmbeddedExtension } = vi.hoisted(() => {
-  const tokenjuiceFactory = vi.fn();
-  const createTokenjuiceOpenClawEmbeddedExtension = vi.fn(() => tokenjuiceFactory);
+  const tokenjuiceFactoryLocal = vi.fn();
+  const createTokenjuiceOpenClawEmbeddedExtensionLocal = vi.fn(() => tokenjuiceFactoryLocal);
   return {
-    tokenjuiceFactory,
-    createTokenjuiceOpenClawEmbeddedExtension,
+    tokenjuiceFactory: tokenjuiceFactoryLocal,
+    createTokenjuiceOpenClawEmbeddedExtension: createTokenjuiceOpenClawEmbeddedExtensionLocal,
   };
 });
 
@@ -17,7 +17,7 @@ vi.mock("./runtime-api.js", () => ({
 
 import plugin from "./index.js";
 
-describe("tokenjuice bundled plugin", () => {
+describe("tokenjuice plugin", () => {
   beforeEach(() => {
     createTokenjuiceOpenClawEmbeddedExtension.mockClear();
     tokenjuiceFactory.mockClear();
@@ -31,7 +31,7 @@ describe("tokenjuice bundled plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers tokenjuice tool result middleware for Pi and Codex runtimes", () => {
+  it("registers tokenjuice tool result middleware for OpenClaw and Codex runtimes", () => {
     const registerAgentToolResultMiddleware = vi.fn();
 
     plugin.register(
@@ -50,6 +50,6 @@ describe("tokenjuice bundled plugin", () => {
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
     const registration = registerAgentToolResultMiddleware.mock.calls[0];
     expect(typeof registration?.[0]).toBe("function");
-    expect(registration?.[1]).toEqual({ runtimes: ["pi", "codex"] });
+    expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
   });
 });

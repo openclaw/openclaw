@@ -62,7 +62,7 @@ describe("codex plugin lifecycle: cold install", () => {
 });
 
 describe("codex plugin lifecycle: OAuth-only with mixed profiles", () => {
-  it("selects openai-codex OAuth when openai API-key profiles are present", async () => {
+  it("selects openai OAuth when openai API-key profiles are present", async () => {
     const agentDir = await createAgentDir("qa-codex-auth-mixed-");
     await seedAuthProfiles("mixed", agentDir);
 
@@ -74,7 +74,7 @@ describe("codex plugin lifecycle: OAuth-only with mixed profiles", () => {
     }
     expect(selection.profileId).toBe(QA_CODEX_OAUTH_PROFILE_ID);
     expect(selection.profileId).not.toBe(QA_OPENAI_API_KEY_PROFILE_ID);
-    expect(selection.provider).toBe("openai-codex");
+    expect(selection.provider).toBe("openai");
     expect(selection.mode).toBe("oauth");
   });
 });
@@ -155,18 +155,20 @@ describe("codex plugin lifecycle: doctor migration safety matrix", () => {
       config: {},
     },
     {
-      name: "mixed profile with defaults pi pin",
+      name: "mixed profile with defaults OpenClaw pin",
       profileShape: "mixed" as const,
-      config: { agents: { defaults: { agentRuntime: { id: "pi" } } } },
+      config: { agents: { defaults: { agentRuntime: { id: "openclaw" } } } },
+      expectedRemovedRuntimePins: ["agentRuntime.id=openclaw"],
     },
     {
-      name: "mixed profile with main-agent pi pin",
+      name: "mixed profile with main-agent OpenClaw pin",
       profileShape: "mixed" as const,
-      config: { agents: { list: { main: { agentRuntime: { id: "pi" } } } } },
+      config: { agents: { list: { main: { agentRuntime: { id: "openclaw" } } } } },
+      expectedRemovedRuntimePins: ["agentRuntime.id=openclaw"],
     },
   ])(
-    "keeps codex auth and strips stale pi runtime pins for $name",
-    async ({ profileShape, config }) => {
+    "keeps codex auth and strips stale OpenClaw runtime pins for $name",
+    async ({ profileShape, config, expectedRemovedRuntimePins = [] }) => {
       const agentDir = await createAgentDir("qa-codex-doctor-matrix-");
       await seedCodexPluginAt("current", agentDir);
       await seedAuthProfiles(profileShape, agentDir);
@@ -182,9 +184,7 @@ describe("codex plugin lifecycle: doctor migration safety matrix", () => {
       expect(result.status).toBe("ready");
       expect(result.selectedAuthProfileId).toBe(QA_CODEX_OAUTH_PROFILE_ID);
       expect(result.tokenRoute).toBe("codex-oauth");
-      expect(result.removedRuntimePins).toEqual(
-        Object.keys(config).length === 0 ? [] : ["agentRuntime.id=pi"],
-      );
+      expect(result.removedRuntimePins).toEqual(expectedRemovedRuntimePins);
     },
   );
 });

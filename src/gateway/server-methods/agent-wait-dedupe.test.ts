@@ -28,6 +28,50 @@ describe("agent wait dedupe helper", () => {
     });
   }
 
+  function setRpcQueueTimeoutEntry(params: {
+    dedupe: Map<string, DedupeEntry>;
+    kind: "agent" | "chat";
+    runId: string;
+    ts?: number;
+  }) {
+    setRunEntry({
+      dedupe: params.dedupe,
+      kind: params.kind,
+      runId: params.runId,
+      ts: params.ts ?? 100,
+      payload: {
+        runId: params.runId,
+        status: "timeout",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 100,
+      },
+    });
+  }
+
+  function expectTerminalSnapshot(
+    dedupe: Map<string, DedupeEntry>,
+    runId: string,
+    snapshot: Record<string, unknown>,
+  ) {
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual(snapshot);
+  }
+
+  const RPC_QUEUE_TIMEOUT_SNAPSHOT = {
+    status: "timeout",
+    endedAt: 100,
+    error: undefined,
+    stopReason: "rpc",
+    timeoutPhase: "queue",
+    providerStarted: false,
+  } as const;
+
   beforeEach(() => {
     testing.resetWaiters();
     vi.useFakeTimers();
@@ -142,6 +186,46 @@ describe("agent wait dedupe helper", () => {
       startedAt: 100,
       endedAt: 200,
       error: undefined,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("keeps hard timeout snapshots stronger than blocked liveness", () => {
+    const dedupe = new Map();
+    const runId = "run-blocked-provider-timeout";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "error",
+        startedAt: 100,
+        endedAt: 200,
+        error: "model timed out",
+        result: {
+          meta: {
+            livenessState: "blocked",
+            timeoutPhase: "provider",
+            providerStarted: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 200,
+      error: "model timed out",
+      livenessState: "blocked",
       timeoutPhase: "provider",
       providerStarted: true,
     });
@@ -443,12 +527,101 @@ describe("agent wait dedupe helper", () => {
     const dedupe = new Map();
     const runId = "run-cancel-wins";
 
+    setRpcQueueTimeoutEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", endedAt: 200 },
+    });
+
+    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_TIMEOUT_SNAPSHOT);
+  });
+
+  it("preserves an RPC cancel snapshot when a later accepted write reuses the key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-wins-over-accepted";
+
+    setRpcQueueTimeoutEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "accepted" },
+    });
+
+    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_TIMEOUT_SNAPSHOT);
+  });
+
+  it("lets an earlier terminal completion correct a provisional timeout snapshot", () => {
+    const dedupe = new Map();
+    const runId = "run-earlier-completion-wins";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: {
+        runId,
+        status: "timeout",
+        timeoutPhase: "provider",
+        startedAt: 100,
+        endedAt: 200,
+      },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 250,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 190,
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 190,
+      error: undefined,
+    });
+  });
+
+  it("does not make bare queue timeouts sticky", () => {
+    const dedupe = new Map();
+    const runId = "run-queue-timeout-replaced";
+
     setRunEntry({
       dedupe,
       kind: "agent",
       runId,
       ts: 100,
-      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+      payload: {
+        runId,
+        status: "timeout",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 100,
+      },
     });
     setRunEntry({
       dedupe,
@@ -464,10 +637,9 @@ describe("agent wait dedupe helper", () => {
         runId,
       }),
     ).toEqual({
-      status: "timeout",
-      endedAt: 100,
+      status: "ok",
+      endedAt: 200,
       error: undefined,
-      stopReason: "rpc",
     });
   });
 
@@ -475,12 +647,10 @@ describe("agent wait dedupe helper", () => {
     const dedupe = new Map();
     const runId = "run-cancel-chat-error";
 
-    setRunEntry({
+    setRpcQueueTimeoutEntry({
       dedupe,
       kind: "chat",
       runId,
-      ts: 100,
-      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
     });
     setRunEntry({
       dedupe,
@@ -491,17 +661,7 @@ describe("agent wait dedupe helper", () => {
       payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
     });
 
-    expect(
-      readTerminalSnapshotFromGatewayDedupe({
-        dedupe,
-        runId,
-      }),
-    ).toEqual({
-      status: "timeout",
-      endedAt: 100,
-      error: undefined,
-      stopReason: "rpc",
-    });
+    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_TIMEOUT_SNAPSHOT);
   });
 
   it("resolves multiple waiters for the same run id", async () => {

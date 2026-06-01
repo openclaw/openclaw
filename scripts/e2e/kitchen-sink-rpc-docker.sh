@@ -47,12 +47,13 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --nam
   node scripts/e2e/kitchen-sink-rpc-walk.mjs >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 
-while kill -0 "$docker_pid" 2>/dev/null; do
-  if docker_e2e_docker_cmd inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-    docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$CONTAINER_NAME" >>"$STATS_LOG" 2>/dev/null || true
-  fi
-  sleep 2
-done
+docker_e2e_sample_stats_until_exit \
+  "$CONTAINER_NAME" \
+  "$docker_pid" \
+  "$STATS_LOG" \
+  "$RUN_LOG" \
+  "Kitchen-sink RPC Docker E2E" \
+  "${OPENCLAW_DOCKER_E2E_STATS_HEARTBEAT_SECONDS:-30}"
 
 set +e
 wait "$docker_pid"
@@ -61,6 +62,10 @@ set -e
 
 cat "$RUN_LOG"
 
-node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc
+if [ "$run_status" -eq 0 ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc
+elif [ -s "$STATS_LOG" ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc || true
+fi
 
 exit "$run_status"

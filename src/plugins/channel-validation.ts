@@ -1,16 +1,36 @@
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
 function resolveBundledChannelMeta(id: string): ChannelMeta | undefined {
-  return listChatChannels().find((meta) => meta?.id === id);
+  return (
+    listChatChannels().find((meta) => meta?.id === id) ?? resolveGeneratedBundledChannelMeta(id)
+  );
+}
+
+function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined {
+  const channel = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+    (entry) => entry.channelId === id && entry.configurable !== false,
+  );
+  const label = normalizeOptionalString(channel?.label);
+  if (!channel || !label) {
+    return undefined;
+  }
+  return {
+    id,
+    label,
+    selectionLabel: label,
+    docsPath: `/channels/${id}`,
+    blurb: normalizeOptionalString(channel.description) ?? "",
+  };
 }
 
 function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): string[] {

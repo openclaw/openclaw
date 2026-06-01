@@ -2,7 +2,8 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
   jsonResult,
-  readNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -23,7 +24,7 @@ import {
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
-import { getCachedIMessagePrivateApiStatus } from "./probe.js";
+import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -103,7 +104,7 @@ async function resolveChatGuid(params: {
   if (explicitChatGuid) {
     return explicitChatGuid;
   }
-  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  const explicitChatId = readPositiveIntegerParam(params.actionParams, "chatId");
   if (typeof explicitChatId === "number") {
     const resolved = await params.runtime.resolveChatGuidForTarget({
       target: { kind: "chat_id", chatId: explicitChatId },
@@ -198,7 +199,7 @@ function buildChatContextFromActionParams(params: {
 }): IMessageChatContext {
   const explicitChatGuid = readStringParam(params.actionParams, "chatGuid")?.trim();
   const explicitChatIdentifier = readStringParam(params.actionParams, "chatIdentifier")?.trim();
-  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  const explicitChatId = readPositiveIntegerParam(params.actionParams, "chatId");
   // Trim before the truthy check so a whitespace-only currentChannelId can't
   // reach parseIMessageTarget (which throws on empty/whitespace input and
   // would abort the whole action with a confusing "target is required").
@@ -416,7 +417,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // status adapter, which doesn't fire eagerly on first dispatch. Run
         // an inline probe so the first react/send-rich attempt after `imsg
         // launch` succeeds without requiring a manual `channels status`.
-        const { probeIMessagePrivateApi } = await import("./probe.js");
         privateApiStatus = await probeIMessagePrivateApi(
           cliPathForProbe,
           account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
@@ -486,7 +486,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         );
       }
       const resolvedMessageId = messageId();
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
       const reactionsToSend = remove && !reaction ? [...TAPBACK_KINDS] : reaction ? [reaction] : [];
       for (const kind of reactionsToSend) {
@@ -512,7 +512,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage edit requires text, newText, or message.");
       }
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
       const resolvedChatGuid = await chatGuid();
       await runtime.editMessage({
@@ -529,7 +529,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "unsend") {
       await assertPrivateApiEnabled();
       const resolvedMessageId = messageId({ requireFromMe: true });
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
       await runtime.unsendMessage({
         chatGuid: resolvedChatGuid,
@@ -569,7 +569,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           );
         }
       }
-      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({
         chatGuid: resolvedChatGuid,

@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { assertWebCredsPathRegularFileOrMissing, resolveWebCredsPath } from "./creds-files.js";
 
@@ -49,7 +50,7 @@ export function enqueueCredsSave(
   const previous = credsSaveQueues.get(authDir) ?? Promise.resolve();
   const next = previous
     .then(() => saveCreds())
-    .catch((error) => {
+    .catch((error: unknown) => {
       onError(error);
     })
     .finally(() => {
@@ -71,11 +72,12 @@ export async function waitForCredsSaveQueueWithTimeout(
   authDir: string,
   timeoutMs = CREDS_SAVE_FLUSH_TIMEOUT_MS,
 ): Promise<CredsQueueWaitResult> {
+  const boundedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, CREDS_SAVE_FLUSH_TIMEOUT_MS, 0);
   let flushTimeout: ReturnType<typeof setTimeout> | undefined;
   return await Promise.race([
     waitForCredsSaveQueue(authDir).then(() => "drained" as const),
     new Promise<CredsQueueWaitResult>((resolve) => {
-      flushTimeout = setTimeout(() => resolve("timed_out"), timeoutMs);
+      flushTimeout = setTimeout(() => resolve("timed_out"), boundedTimeoutMs);
     }),
   ]).finally(() => {
     if (flushTimeout) {
