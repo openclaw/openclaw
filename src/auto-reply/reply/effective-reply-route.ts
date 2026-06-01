@@ -43,7 +43,9 @@ function resolveTrustedInheritedThreadId(
   const routeThread = entry?.route?.thread;
   if (
     routeThread?.id != null &&
-    routeThread.source !== "session" &&
+    (routeThread.source === "explicit" ||
+      routeThread.source === "target" ||
+      routeThread.source === "turn") &&
     stringifyRouteThreadId(routeThread.id) === stringifyRouteThreadId(deliveryThreadId)
   ) {
     return deliveryThreadId;
