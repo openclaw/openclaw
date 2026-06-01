@@ -1299,7 +1299,7 @@ describe("stageSystemdService", () => {
     });
   });
 
-  it("does not re-stage unresolved file-backed values from preserved service env (#88274)", async () => {
+  it("does not re-stage unresolved inline-and-file values from preserved service env (#88274)", async () => {
     await withStageFixture(async ({ env, unitPath, envFilePath }) => {
       await fs.writeFile(envFilePath, "LLM_API_KEY=$SECRET_FROM_SHELL\n", {
         encoding: "utf8",
@@ -1318,7 +1318,7 @@ describe("stageSystemdService", () => {
           OPENCLAW_GATEWAY_PORT: "18789",
         },
         environmentValueSources: {
-          LLM_API_KEY: "file",
+          LLM_API_KEY: "inline-and-file",
         },
       });
 

@@ -864,7 +864,7 @@ async function writeSystemdUnit({
         environmentValueSources,
         key,
       });
-      if (isEnvironmentFileOnlySource(source) && isUnresolvedShellReference(value)) {
+      if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
         return false;
       }
       const normalizedKey = normalizeSystemdEnvironmentKey(key);
