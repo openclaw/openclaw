@@ -1,10 +1,12 @@
 // Chat transcript injection appends gateway-authored assistant rows while
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import {
+  appendTranscriptMessage,
+  publishTranscriptUpdate,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -119,15 +121,18 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
+    const transcriptScope = {
+      sessionFile: params.transcriptPath,
+      sessionKey: params.sessionKey ?? "",
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    };
+    const { messageId, message: appendedMessage } = await appendTranscriptMessage(transcriptScope, {
       message: messageBody,
       now,
       useRawWhenLinear: true,
-      config: params.config,
+      ...(params.config ? { config: params.config } : {}),
     });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
+    await publishTranscriptUpdate(transcriptScope, {
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       message: appendedMessage,

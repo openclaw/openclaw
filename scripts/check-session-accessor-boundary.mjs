@@ -29,6 +29,10 @@ const legacyWriterNames = new Set([
   "updateSessionStore",
   "updateSessionStoreEntry",
 ]);
+const legacyTranscriptWriterNames = new Set([
+  "appendSessionTranscriptMessage",
+  "emitSessionTranscriptUpdate",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
@@ -88,6 +92,13 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-usage.ts",
 ]);
 
+export const migratedTranscriptWriterFiles = new Set([
+  "src/agents/command/attempt-execution.ts",
+  "src/config/sessions/transcript.ts",
+  "src/gateway/server-methods/chat-transcript-inject.ts",
+  "src/sessions/user-turn-transcript.ts",
+]);
+
 function normalizeRelativePath(filePath) {
   return filePath.replaceAll(path.sep, "/");
 }
@@ -127,7 +138,7 @@ function bindingName(node) {
   return null;
 }
 
-function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyKind) {
+function findNamedBoundaryViolations(content, fileName, legacyNames, subject) {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
 
@@ -140,7 +151,7 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
           if (legacyNames.has(importedName)) {
             violations.push({
               line: toLine(sourceFile, specifier),
-              reason: `imports legacy session store ${legacyKind} "${importedName}"`,
+              reason: `imports ${subject} "${importedName}"`,
             });
           }
         }
@@ -152,7 +163,7 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
       if (name && legacyNames.has(name)) {
         violations.push({
           line: toLine(sourceFile, node),
-          reason: `aliases legacy session store ${legacyKind} "${name}"`,
+          reason: `aliases ${subject} "${name}"`,
         });
       }
     }
@@ -160,7 +171,7 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
     if (ts.isPropertyAccessExpression(node) && legacyNames.has(node.name.text)) {
       violations.push({
         line: toLine(sourceFile, node.name),
-        reason: `references legacy session store ${legacyKind} "${node.name.text}"`,
+        reason: `references ${subject} "${node.name.text}"`,
       });
     }
 
@@ -171,7 +182,7 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
     ) {
       violations.push({
         line: toLine(sourceFile, node.argumentExpression),
-        reason: `references legacy session store ${legacyKind} "${node.argumentExpression.text}"`,
+        reason: `references ${subject} "${node.argumentExpression.text}"`,
       });
     }
 
@@ -184,7 +195,7 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
       ) {
         violations.push({
           line: toLine(sourceFile, node.expression),
-          reason: `calls legacy session store ${legacyKind} "${calleeName}"`,
+          reason: `calls ${subject} "${calleeName}"`,
         });
       }
     }
@@ -196,6 +207,15 @@ function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyK
   return violations;
 }
 
+function findNamedSessionStoreViolations(content, fileName, legacyNames, legacyKind) {
+  return findNamedBoundaryViolations(
+    content,
+    fileName,
+    legacyNames,
+    `legacy session store ${legacyKind}`,
+  );
+}
+
 export function findSessionAccessorBoundaryViolations(content, fileName = "source.ts") {
   const legacyNames = legacyNamesForFile(fileName);
   const legacyKind = legacyNames === legacyWholeStoreAccessNames ? "access" : "reader";
@@ -204,6 +224,15 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
 
 export function findSessionAccessorWriteBoundaryViolations(content, fileName = "source.ts") {
   return findNamedSessionStoreViolations(content, fileName, legacyWriterNames, "writer");
+}
+
+export function findTranscriptWriterBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedBoundaryViolations(
+    content,
+    fileName,
+    legacyTranscriptWriterNames,
+    "legacy transcript writer",
+  );
 }
 
 export async function main() {
@@ -220,6 +249,12 @@ export async function main() {
     "src/infra",
   ]);
   const writeSourceRoots = resolveSourceRoots(repoRoot, ["src/agents", "src/auto-reply"]);
+  const transcriptWriterSourceRoots = resolveSourceRoots(repoRoot, [
+    "src/agents/command",
+    "src/config/sessions",
+    "src/gateway/server-methods",
+    "src/sessions",
+  ]);
   const readViolations = await collectFileViolations({
     repoRoot,
     sourceRoots: readSourceRoots,
@@ -241,7 +276,14 @@ export async function main() {
       ),
     findViolations: findSessionAccessorWriteBoundaryViolations,
   });
-  const violations = [...readViolations, ...writeViolations];
+  const transcriptWriterViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: transcriptWriterSourceRoots,
+    skipFile: (filePath) =>
+      !migratedTranscriptWriterFiles.has(normalizeRelativePath(path.relative(repoRoot, filePath))),
+    findViolations: findTranscriptWriterBoundaryViolations,
+  });
+  const violations = [...readViolations, ...writeViolations, ...transcriptWriterViolations];
 
   if (violations.length === 0) {
     console.log("session accessor boundary guard passed.");
@@ -253,7 +295,7 @@ export async function main() {
     console.error(`- ${violation.path}:${violation.line}: ${violation.reason}`);
   }
   console.error(
-    "Use src/config/sessions/session-accessor.ts helpers for migrated read/write paths. Expand this ratchet only after a slice migrates more files.",
+    "Use src/config/sessions/session-accessor.ts helpers for migrated read/write and transcript-writer paths. Expand this ratchet only after a slice migrates more files.",
   );
   process.exit(1);
 }

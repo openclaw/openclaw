@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   findSessionAccessorBoundaryViolations,
-  migratedBundledPluginSessionAccessorFiles,
   findSessionAccessorWriteBoundaryViolations,
+  findTranscriptWriterBoundaryViolations,
+  migratedBundledPluginSessionAccessorFiles,
   migratedSessionAccessorFiles,
   migratedSessionAccessorWriteFiles,
+  migratedTranscriptWriterFiles,
 } from "../../scripts/check-session-accessor-boundary.mjs";
 
 describe("session accessor boundary guard", () => {
@@ -74,6 +76,17 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/session-reset-model.ts",
         "src/auto-reply/reply/session-updates.ts",
         "src/auto-reply/reply/session-usage.ts",
+      ]),
+    );
+  });
+
+  it("ratchets only the files migrated by the transcript writer slice", () => {
+    expect(migratedTranscriptWriterFiles).toEqual(
+      new Set([
+        "src/agents/command/attempt-execution.ts",
+        "src/config/sessions/transcript.ts",
+        "src/gateway/server-methods/chat-transcript-inject.ts",
+        "src/sessions/user-turn-transcript.ts",
       ]),
     );
   });
@@ -174,6 +187,42 @@ describe("session accessor boundary guard", () => {
       findSessionAccessorWriteBoundaryViolations(`
         import { updateSessionEntry } from "../config/sessions/session-accessor.js";
         updateSessionEntry({ storePath, sessionKey }, () => undefined);
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags legacy transcript writer imports", () => {
+    expect(
+      findTranscriptWriterBoundaryViolations(`
+        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+        import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
+      { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
+    ]);
+  });
+
+  it("flags direct and namespace legacy transcript writer calls", () => {
+    expect(
+      findTranscriptWriterBoundaryViolations(`
+        appendSessionTranscriptMessage({ transcriptPath, message });
+        transcriptEvents.emitSessionTranscriptUpdate({ sessionFile });
+        transcriptAppend["appendSessionTranscriptMessage"]({ transcriptPath, message });
+      `),
+    ).toEqual([
+      { line: 2, reason: 'calls legacy transcript writer "appendSessionTranscriptMessage"' },
+      { line: 3, reason: 'references legacy transcript writer "emitSessionTranscriptUpdate"' },
+      { line: 4, reason: 'references legacy transcript writer "appendSessionTranscriptMessage"' },
+    ]);
+  });
+
+  it("allows migrated transcript writer helpers", () => {
+    expect(
+      findTranscriptWriterBoundaryViolations(`
+        import { appendTranscriptMessage, publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
+        appendTranscriptMessage(scope, { message });
+        publishTranscriptUpdate(scope, { messageId });
       `),
     ).toEqual([]);
   });

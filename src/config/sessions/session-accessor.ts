@@ -30,8 +30,8 @@ import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
 } from "./transcript-append.js";
+import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
-import { resolveSessionTranscriptFile } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
 /**

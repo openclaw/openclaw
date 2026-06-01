@@ -6,7 +6,10 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import {
+  appendTranscriptMessage,
+  publishTranscriptUpdate,
+} from "../../config/sessions/session-accessor.js";
 import {
   readTailAssistantTextFromSessionTranscript,
   resolveSessionTranscriptFile,
@@ -24,7 +27,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   appendUserTurnTranscriptMessage,
   type PersistedUserTurnMessage,
@@ -251,6 +253,12 @@ async function persistTextTurnTranscript(
     ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
+  const transcriptScope = {
+    sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.sessionAgentId,
+  };
   let transcriptMarkerUpdatedAt: number | undefined;
   try {
     let wroteTranscript = false;
@@ -287,9 +295,7 @@ async function persistTextTurnTranscript(
         }
       }
       if (appendAssistant) {
-        await appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
-          sessionId: params.sessionId,
+        await appendTranscriptMessage(transcriptScope, {
           cwd: params.sessionCwd,
           config: params.config,
           message: {
@@ -335,8 +341,7 @@ async function persistTextTurnTranscript(
     }
   }
 
-  emitSessionTranscriptUpdate({
-    sessionFile,
+  await publishTranscriptUpdate(transcriptScope, {
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
