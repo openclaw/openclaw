@@ -7,6 +7,7 @@
 
 import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
+import { isFileUriMediaPath } from "./decode-media-path.js";
 import {
   sendPhoto,
   sendVoice,
@@ -206,6 +207,10 @@ export function findFirstClosedMediaTag(
     const textBefore = text.slice(0, match.index);
     const tagName = match[1].toLowerCase();
     let mediaPath = match[2]?.trim() ?? "";
+    if (isFileUriMediaPath(mediaPath)) {
+      log?.error?.(`findFirstClosedMediaTag: blocked file URI in <${tagName}> media tag`);
+      continue;
+    }
 
     mediaPath = normalizePath(mediaPath);
     mediaPath = fixPathEncoding(mediaPath, log);

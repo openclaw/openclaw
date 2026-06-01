@@ -44,6 +44,10 @@ function normalizePath(p: string): string {
   return result;
 }
 
+export function isFileUriMediaPath(raw: string): boolean {
+  return raw.trim().toLowerCase().startsWith("file://");
+}
+
 /**
  * Decode a media path by expanding `~` and unescaping octal/UTF-8 byte
  * sequences.

@@ -43,7 +43,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../utils/string-normalize.js";
-import { decodeMediaPath } from "./decode-media-path.js";
+import { decodeMediaPath, isFileUriMediaPath } from "./decode-media-path.js";
 import {
   isImageFile as coreIsImageFile,
   isVideoFile as coreIsVideoFile,
@@ -161,10 +161,14 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
       const tagName = normalizeLowercaseStringOrEmpty(match[1]);
 
-      const mediaPath = decodeMediaPath(
-        normalizeOptionalString(match[2]) ?? "",
-        mediaPathDecodeLog,
-      );
+      const rawMediaPath = normalizeOptionalString(match[2]) ?? "";
+      if (isFileUriMediaPath(rawMediaPath)) {
+        debugError(`[qqbot] sendText: Blocked file URI in <${tagName}> media tag`);
+        lastIndex = match.index + match[0].length;
+        continue;
+      }
+
+      const mediaPath = decodeMediaPath(rawMediaPath, mediaPathDecodeLog);
 
       if (mediaPath) {
         if (tagName === "qqmedia") {

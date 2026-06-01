@@ -16,7 +16,7 @@ import {
   normalizeOptionalString,
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
-import { decodeMediaPath } from "./decode-media-path.js";
+import { decodeMediaPath, isFileUriMediaPath } from "./decode-media-path.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -416,7 +416,13 @@ export async function parseAndSendMediaTags(
     }
 
     const tagName = normalizeLowercaseStringOrEmpty(match[1]);
-    const mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log);
+    const rawMediaPath = normalizeOptionalString(match[2]) ?? "";
+    if (isFileUriMediaPath(rawMediaPath)) {
+      log?.error?.(`Blocked file URI in <${tagName}> media tag`);
+      lastIndex = match.index + match[0].length;
+      continue;
+    }
+    const mediaPath = decodeMediaPath(rawMediaPath, log);
 
     if (mediaPath) {
       const typeMap: Record<string, QueueItem["type"]> = {

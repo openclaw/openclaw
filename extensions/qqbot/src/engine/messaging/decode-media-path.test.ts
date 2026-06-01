@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { decodeMediaPath } from "./decode-media-path.js";
+import { decodeMediaPath, isFileUriMediaPath } from "./decode-media-path.js";
 
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
@@ -18,6 +18,12 @@ afterEach(() => {
 });
 
 describe("decodeMediaPath", () => {
+  it("identifies file URI media paths before path normalization", () => {
+    expect(isFileUriMediaPath(" file:///etc/passwd")).toBe(true);
+    expect(isFileUriMediaPath("FILE:///etc/passwd")).toBe(true);
+    expect(isFileUriMediaPath("/tmp/file.txt")).toBe(false);
+  });
+
   it("preserves Windows home-relative paths with digit segments", () => {
     delete process.env.HOME;
     process.env.USERPROFILE = String.raw`C:\Users\operator`;
