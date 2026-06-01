@@ -200,6 +200,7 @@ async function installLocalSkillDir(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
   git?: SkillSourceOrigin["git"];
@@ -236,6 +237,7 @@ async function installLocalSkillDir(params: {
           : { kind: "local-path", authority: "user", mutable: true, network: false },
       requestedSpecifier: params.sourceSpec,
     },
+    allowSetupHooks: params.allowSetupHooks,
   });
   if (!install.ok) {
     return { ok: false, error: install.error };
@@ -267,6 +269,7 @@ async function installGitSkill(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
@@ -347,6 +350,7 @@ async function installGitSkill(params: {
       slug: params.slug,
       force: params.force,
       timeoutMs: params.timeoutMs,
+      allowSetupHooks: params.allowSetupHooks,
       logger: params.logger,
       config: params.config,
       git,
@@ -360,6 +364,7 @@ async function installPathSkill(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {
@@ -382,6 +387,7 @@ async function installPathSkill(params: {
     slug: params.slug,
     force: params.force,
     timeoutMs: params.timeoutMs,
+    allowSetupHooks: params.allowSetupHooks,
     logger: params.logger,
     config: params.config,
   });
@@ -404,6 +410,7 @@ export async function installSkillFromSource(params: {
   slug?: string;
   force?: boolean;
   timeoutMs?: number;
+  allowSetupHooks?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<SkillSourceInstallResult> {

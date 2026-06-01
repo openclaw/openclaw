@@ -158,6 +158,7 @@ async function makeSkillArchive(params: {
   rootDir?: string;
   skillFileName?: string;
   traversal?: boolean;
+  setupScript?: boolean;
   missingSkill?: boolean;
 }): Promise<Buffer> {
   const zip = new JSZip();
@@ -165,18 +166,28 @@ async function makeSkillArchive(params: {
   if (params.missingSkill) {
     zip.file(`${prefix}README.md`, "not a skill");
   } else {
+    const metadata = params.setupScript
+      ? [`metadata: '${JSON.stringify({ openclaw: { setup: { script: "scripts/setup.sh" } } })}'`]
+      : [];
     zip.file(
       `${prefix}${params.skillFileName ?? "SKILL.md"}`,
       [
         "---",
         `name: ${params.name ?? "Uploaded Demo"}`,
         `description: ${params.description ?? "Installed from upload"}`,
+        ...metadata,
         "---",
         "",
         params.body ?? "# Uploaded demo",
         "",
       ].join("\n"),
     );
+    if (params.setupScript) {
+      zip.file(
+        `${prefix}scripts/setup.sh`,
+        '#!/bin/sh\nprintf setup-ran > "$SKILL_DIR/setup-proof.txt"\n',
+      );
+    }
   }
   if (params.traversal) {
     zip.file("../evil.txt", "owned");
@@ -267,6 +278,44 @@ describe("skill upload gateway handlers", () => {
     expect(install.ok).toBe(false);
     expect(install.error?.code).toBe("UNAVAILABLE");
     expect(install.error?.message).toContain("skills.install.allowUploadedArchives");
+  });
+
+  it("runs uploaded skill setup hooks only when explicitly allowed", async () => {
+    const { handlers, workspaceDir } = await makeHarness();
+    const archive = await makeSkillArchive({ setupScript: true });
+    const skipped = await uploadArchive(handlers, {
+      archive,
+      slug: "upload-setup-skipped",
+    });
+
+    const skippedInstall = await call(handlers, "skills.install", {
+      source: "upload",
+      uploadId: skipped.uploadId,
+      slug: "upload-setup-skipped",
+      sha256: skipped.sha256,
+    });
+
+    expect(skippedInstall.ok).toBe(true);
+    await expectPathMissing(
+      path.join(workspaceDir, "skills", "upload-setup-skipped", "setup-proof.txt"),
+    );
+
+    const optedIn = await uploadArchive(handlers, {
+      archive,
+      slug: "upload-setup-run",
+    });
+    const optedInInstall = await call(handlers, "skills.install", {
+      source: "upload",
+      uploadId: optedIn.uploadId,
+      slug: "upload-setup-run",
+      sha256: optedIn.sha256,
+      allowSetupHooks: true,
+    });
+
+    expect(optedInInstall.ok).toBe(true);
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "upload-setup-run", "setup-proof.txt"), "utf8"),
+    ).resolves.toBe("setup-ran");
   });
 
   it("uploads, installs, cleans up, and reports the skill from status", async () => {

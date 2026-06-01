@@ -31,9 +31,11 @@ openclaw skills install git:owner/repo
 openclaw skills install git:owner/repo@main
 openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install <slug> --force
+openclaw skills install <slug> --allow-setup-hooks
 openclaw skills install <slug> --agent <id>
 openclaw skills install <slug> --global
 openclaw skills update <slug>
+openclaw skills update <slug> --allow-setup-hooks
 openclaw skills update <slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
@@ -97,12 +99,15 @@ Notes:
 - `install --version <version>` applies only to ClawHub skill slugs.
 - `install --force` overwrites an existing workspace skill folder for the same
   slug.
+- `install --allow-setup-hooks` runs a skill-defined `metadata.openclaw.setup.script`
+  after staging the install and before publishing the new skill directory.
 - `--global` targets the shared managed skills directory and cannot be combined
   with `--agent <id>`.
 - `--agent <id>` targets one configured agent workspace and overrides current
   working directory inference.
 - `update <slug>` updates a single tracked skill. Add `--global` to target the
   shared managed skills directory instead of the workspace.
+- `update --allow-setup-hooks` runs skill-defined setup scripts during the update.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
 - `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by

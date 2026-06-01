@@ -72,6 +72,14 @@ function installPolicyInput() {
     | undefined;
 }
 
+function expectClawHubSetupHookSkipped() {
+  const call = installPackageDirMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected installPackageDir call");
+  }
+  expect((call[0] as { afterInstall?: unknown }).afterInstall).toBeUndefined();
+}
+
 function expectClawHubSetupHookEnabled() {
   const call = installPackageDirMock.mock.calls.at(0);
   if (!call) {
@@ -225,7 +233,7 @@ describe("skills-clawhub", () => {
       origin: { registry: "https://clawhub.ai" },
       source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
     });
-    expectClawHubSetupHookEnabled();
+    expectClawHubSetupHookSkipped();
     expectInstalledSkill(result, {
       slug: "agentreceipt",
       version: "1.0.0",
@@ -249,6 +257,17 @@ describe("skills-clawhub", () => {
       origin: { registry: "https://clawhub.internal.example" },
       source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
     });
+  });
+
+  it("runs ClawHub setup hooks only when explicitly allowed", async () => {
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "agentreceipt",
+      allowSetupHooks: true,
+    });
+
+    expectInstalledSkill(result);
+    expectClawHubSetupHookEnabled();
   });
 
   it.each(["skill.md", "skills.md", "SKILL.MD"])(
@@ -339,6 +358,27 @@ describe("skills-clawhub", () => {
           version: "1.0.0",
           baseUrl: "https://legacy.clawhub.ai",
         });
+        expectLegacyUpdateSuccess(results, workspaceDir, slug);
+        expectClawHubSetupHookSkipped();
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("runs tracked update setup hooks only when explicitly allowed", async () => {
+      const slug = "re\u0430ct";
+      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: path.join(workspaceDir, "skills", slug),
+      });
+
+      try {
+        const results = await updateSkillsFromClawHub({
+          workspaceDir,
+          allowSetupHooks: true,
+        });
+
         expectLegacyUpdateSuccess(results, workspaceDir, slug);
         expectClawHubSetupHookEnabled();
       } finally {

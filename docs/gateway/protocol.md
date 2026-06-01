@@ -604,22 +604,30 @@ terminal summary, and sanitized error text.
   - Uploaded skill archives are zip archives containing a `SKILL.md` root. The
     archive's internal directory name never selects the install target.
 - Operators may call `skills.install` (`operator.admin`) in three modes:
-  - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
-    skill folder into the default agent workspace `skills/` directory.
-  - Upload mode: `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs? }`
+  - ClawHub mode:
+    `{ source: "clawhub", slug, version?, force?, allowSetupHooks? }` installs
+    a skill folder into the default agent workspace `skills/` directory.
+  - Upload mode:
+    `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs?, allowSetupHooks? }`
     installs a committed upload into the default agent workspace `skills/<slug>`
     directory. The slug and force value must match the original
     `skills.upload.begin` request. This mode is rejected unless
     `skills.install.allowUploadedArchives` is enabled. The setting does not
     affect ClawHub installs.
-  - Gateway installer mode: `{ name, installId, timeoutMs? }`
+  - Gateway installer mode:
+    `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs?, allowSetupHooks? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
     Older clients may still send `dangerouslyForceUnsafeInstall`; this field is
     deprecated, accepted only for protocol compatibility, and ignored. Use
     `security.installPolicy` for operator-owned install decisions.
+  - `allowSetupHooks` defaults to `false`. When set to `true`, the trusted admin
+    request may run `metadata.openclaw.setup.script` after the install payload is
+    staged and before publishing the new skill directory; hook failures fail the
+    install.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
-    the default agent workspace.
+    the default agent workspace. `allowSetupHooks: true` runs setup hooks for
+    updated ClawHub skill folders; the default is `false`.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
 

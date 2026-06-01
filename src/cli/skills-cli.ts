@@ -288,6 +288,7 @@ export function registerSkillsCli(program: Command) {
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
+    .option("--allow-setup-hooks", "Run skill-defined setup scripts after install", false)
     .action(
       async (
         slug: string,
@@ -297,6 +298,7 @@ export function registerSkillsCli(program: Command) {
           global?: boolean;
           agent?: string;
           as?: string;
+          allowSetupHooks?: boolean;
         },
         command: Command,
       ) => {
@@ -316,6 +318,7 @@ export function registerSkillsCli(program: Command) {
               spec: slug,
               slug: opts.as,
               force: Boolean(opts.force),
+              allowSetupHooks: opts.allowSetupHooks === true,
               logger: {
                 info: (message) => defaultRuntime.log(message),
                 warn: (message) => defaultRuntime.log(theme.warn(message)),
@@ -343,6 +346,7 @@ export function registerSkillsCli(program: Command) {
             slug,
             version: opts.version,
             force: Boolean(opts.force),
+            allowSetupHooks: opts.allowSetupHooks === true,
             logger: {
               info: (message) => defaultRuntime.log(message),
             },
@@ -367,10 +371,11 @@ export function registerSkillsCli(program: Command) {
     .option("--all", "Update all tracked ClawHub skills", false)
     .option("--global", "Update skills in the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .option("--allow-setup-hooks", "Run skill-defined setup scripts after update", false)
     .action(
       async (
         slug: string | undefined,
-        opts: { all?: boolean; global?: boolean; agent?: string },
+        opts: { all?: boolean; global?: boolean; agent?: string; allowSetupHooks?: boolean },
         command: Command,
       ) => {
         try {
@@ -396,6 +401,7 @@ export function registerSkillsCli(program: Command) {
           const results = await updateSkillsFromClawHub({
             workspaceDir,
             slug,
+            allowSetupHooks: opts.allowSetupHooks === true,
             logger: {
               info: (message) => defaultRuntime.log(message),
             },

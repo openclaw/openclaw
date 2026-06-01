@@ -392,6 +392,19 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("passes setup hook opt-in for ClawHub skill installs", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "calendar", "--allow-setup-hooks"]);
+
+    expect(mockFirstObjectArg(installSkillFromClawHubMock).allowSetupHooks).toBe(true);
+  });
+
   it("installs a skill from a git source into the active workspace", async () => {
     installSkillFromSourceMock.mockResolvedValue({
       ok: true,
@@ -456,6 +469,19 @@ describe("skills cli commands", () => {
         line.includes("Installed local-skill from path -> /tmp/workspace/skills/local-skill"),
       ),
     ).toBe(true);
+  });
+
+  it("passes setup hook opt-in for source skill installs", async () => {
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand(["skills", "install", "git:owner/tools", "--allow-setup-hooks"]);
+
+    expect(mockFirstObjectArg(installSkillFromSourceMock).allowSetupHooks).toBe(true);
   });
 
   it("passes --as as the source install slug override", async () => {
@@ -612,6 +638,24 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
   });
 
+  it("passes setup hook opt-in for ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "calendar", "--allow-setup-hooks"]);
+
+    expect(mockFirstObjectArg(updateSkillsFromClawHubMock).allowSetupHooks).toBe(true);
+  });
+
   it("updates tracked ClawHub skills in the cwd-inferred agent workspace", async () => {
     routeWorkspaceByAgent();
     resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
@@ -690,6 +734,7 @@ describe("skills cli commands", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/openclaw-config",
       slug: undefined,
+      allowSetupHooks: false,
       logger: expect.any(Object),
     });
   });
@@ -716,6 +761,7 @@ describe("skills cli commands", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/openclaw-config",
       slug: "calendar",
+      allowSetupHooks: false,
       logger: expect.any(Object),
     });
   });

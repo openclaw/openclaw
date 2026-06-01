@@ -6,20 +6,34 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { installSkillFromSource } from "./source-install.js";
 
-async function writeSkill(dir: string, params: { name?: string; description?: string } = {}) {
+async function writeSkill(
+  dir: string,
+  params: { name?: string; description?: string; setupScript?: boolean } = {},
+) {
   await fs.mkdir(dir, { recursive: true });
+  const metadata = params.setupScript
+    ? [`metadata: '${JSON.stringify({ openclaw: { setup: { script: "scripts/setup.sh" } } })}'`]
+    : [];
   await fs.writeFile(
     path.join(dir, "SKILL.md"),
     [
       "---",
       `name: ${params.name ?? path.basename(dir)}`,
       `description: ${params.description ?? "A local skill"}`,
+      ...metadata,
       "---",
       "",
       "# Skill",
       "",
     ].join("\n"),
   );
+  if (params.setupScript) {
+    await fs.mkdir(path.join(dir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "scripts", "setup.sh"),
+      '#!/bin/sh\nprintf setup-ran > "$SKILL_DIR/setup-proof.txt"\n',
+    );
+  }
 }
 
 async function initGitSkillRepo(repoDir: string, name = "git-skill") {
@@ -113,6 +127,36 @@ describe("installSkillFromSource", () => {
       await expect(
         fs.readFile(path.join(workspaceDir, "skills", "frontmatter-skill", "SKILL.md"), "utf8"),
       ).resolves.toContain("frontmatter-skill");
+    });
+  });
+
+  it("runs local source setup hooks only when explicitly allowed", async () => {
+    await withTempDir({ prefix: "openclaw-skill-source-setup-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "source-setup", setupScript: true });
+
+      const skipped = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+      });
+
+      expect(skipped).toMatchObject({ ok: true });
+      await expect(
+        fs.access(path.join(workspaceDir, "skills", "source-setup", "setup-proof.txt")),
+      ).rejects.toThrow();
+
+      const optedIn = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        force: true,
+        allowSetupHooks: true,
+      });
+
+      expect(optedIn).toMatchObject({ ok: true });
+      await expect(
+        fs.readFile(path.join(workspaceDir, "skills", "source-setup", "setup-proof.txt"), "utf8"),
+      ).resolves.toBe("setup-ran");
     });
   });
 

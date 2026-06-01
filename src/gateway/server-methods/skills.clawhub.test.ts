@@ -247,6 +247,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      allowSetupHooks: false,
       config: {},
     });
     expect(ok).toBe(true);
@@ -258,6 +259,30 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.message).toBe("Installed calendar@1.2.3");
     expect(result?.slug).toBe("calendar");
     expect(result?.version).toBe("1.2.3");
+  });
+
+  it("forwards ClawHub setup hook opt-in for skills.install", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await callSkillsHandler("skills.install", {
+      source: "clawhub",
+      slug: "calendar",
+      allowSetupHooks: true,
+    });
+
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+      version: undefined,
+      force: false,
+      allowSetupHooks: true,
+      config: {},
+    });
   });
 
   it("accepts deprecated unsafe override without forwarding it to skill installs", async () => {
@@ -282,12 +307,38 @@ describe("skills gateway handlers (clawhub)", () => {
       installId: "deps",
       timeoutMs: 120_000,
       config: {},
+      allowSetupHooks: false,
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     const result = response as { ok?: boolean; message?: string } | undefined;
     expect(result?.ok).toBe(true);
     expect(result?.message).toBe("Installed");
+  });
+
+  it("forwards setup hook opt-in for local skill installs", async () => {
+    installSkillMock.mockResolvedValue({
+      ok: true,
+      message: "Installed",
+      stdout: "",
+      stderr: "",
+      code: 0,
+    });
+
+    await callSkillsHandler("skills.install", {
+      name: "calendar",
+      installId: "deps",
+      allowSetupHooks: true,
+    });
+
+    expect(installSkillMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      skillName: "calendar",
+      installId: "deps",
+      timeoutMs: undefined,
+      config: {},
+      allowSetupHooks: true,
+    });
   });
 
   it("updates ClawHub skills through skills.update", async () => {
@@ -310,6 +361,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      allowSetupHooks: false,
       config: {},
     });
     expect(ok).toBe(true);
@@ -331,6 +383,23 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.config?.results?.[0]?.ok).toBe(true);
     expect(result?.config?.results?.[0]?.slug).toBe("calendar");
     expect(result?.config?.results?.[0]?.version).toBe("1.2.3");
+  });
+
+  it("forwards ClawHub setup hook opt-in for skills.update", async () => {
+    updateSkillsFromClawHubMock.mockResolvedValue([]);
+
+    await callSkillsHandler("skills.update", {
+      source: "clawhub",
+      all: true,
+      allowSetupHooks: true,
+    });
+
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: undefined,
+      allowSetupHooks: true,
+      config: {},
+    });
   });
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {

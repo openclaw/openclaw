@@ -56,6 +56,7 @@ export async function installUploadedSkillArchive(params: {
   timeoutMs?: number;
   workspaceDir: string;
   config: OpenClawConfig;
+  allowSetupHooks?: boolean;
   log?: ArchiveLogger;
   store?: SkillUploadStore;
 }): Promise<UploadedSkillInstallResult> {
@@ -109,6 +110,7 @@ export async function installUploadedSkillArchive(params: {
           source: { kind: "upload", authority: "user", mutable: false, network: false },
           requestedSpecifier: `upload:${params.uploadId}`,
         },
+        allowSetupHooks: params.allowSetupHooks,
       });
       if (!install.ok) {
         const errorKind = uploadInstallFailureErrorKind(install.failureKind);
