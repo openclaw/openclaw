@@ -2431,6 +2431,114 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.9);
   });
 
+  it("drops orphaned tool results before building chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "old request", timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "call_orphan",
+            toolName: "read",
+            content: [{ type: "text", text: "orphaned output" }],
+            isError: false,
+            timestamp: 2,
+          },
+          { role: "user", content: "continue after model switch", timestamp: 3 },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.messages).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "old request" },
+      { role: "user", content: "continue after model switch" },
+    ]);
+    expect(JSON.stringify(params.messages)).not.toContain("call_orphan");
+  });
+
+  it("drops failed assistant tool-call turns before chat completions serialization", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const abortedToolCall = {
+      role: "assistant",
+      provider: "openai",
+      api: "openai-completions",
+      model: "gpt-5.4",
+      stopReason: "aborted",
+      content: [{ type: "toolCall", id: "call_aborted", name: "read", arguments: {} }],
+      timestamp: 1,
+    };
+
+    const missingResultParams = buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          abortedToolCall,
+          { role: "user", content: "continue after abort", timestamp: 2 },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    );
+    const pairedResultParams = buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          abortedToolCall,
+          {
+            role: "toolResult",
+            toolCallId: "call_aborted",
+            toolName: "read",
+            content: [{ type: "text", text: "No result provided" }],
+            isError: true,
+            timestamp: 2,
+          },
+          { role: "user", content: "continue after abort", timestamp: 3 },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    for (const params of [missingResultParams, pairedResultParams]) {
+      const messages = params.messages as Array<{ role?: string }>;
+      expect(params.messages).toEqual([
+        { role: "system", content: "system" },
+        { role: "user", content: "continue after abort" },
+      ]);
+      expect(messages.some((message) => message.role === "tool")).toBe(false);
+      expect(JSON.stringify(messages)).not.toContain("call_aborted");
+    }
+  });
+
   it("forwards penalty params and seed to chat completions request params", () => {
     const params = buildOpenAICompletionsParams(
       {

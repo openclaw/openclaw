@@ -16,6 +16,24 @@ function textMessage(role: "user" | "assistant", text: string, timestamp: number
   } as AgentMessage;
 }
 
+function assistantToolCallMessage(id: string, timestamp: number): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+    timestamp,
+  } as AgentMessage;
+}
+
+function toolResultMessage(id: string, text: string, timestamp: number): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    timestamp,
+  } as AgentMessage;
+}
+
 function runtimeContextMessage(content: string, timestamp: number): AgentMessage {
   // Runtime context is hidden harness metadata. Context engines should see
   // user/assistant transcript messages, not this internal custom channel.
@@ -141,6 +159,28 @@ describe("harness context engine lifecycle", () => {
     it("passes through a well-formed AssembleResult unchanged", async () => {
       const wellFormed = { messages: [visibleUser], estimatedTokens: 0 };
       await expect(runAssembleWithEngineResult(wellFormed)).resolves.toBe(wellFormed);
+    });
+
+    it("drops orphan tool results returned by assemble()", async () => {
+      const orphanToolResult = toolResultMessage("call_dropped", "orphaned output", 2);
+      const assembled = await runAssembleWithEngineResult({
+        messages: [visibleUser, orphanToolResult],
+        estimatedTokens: 1,
+      });
+
+      expect(assembled?.messages).toEqual([visibleUser]);
+      expect(JSON.stringify(assembled?.messages)).not.toContain("call_dropped");
+    });
+
+    it("keeps assembled assistant tool calls paired with their tool results", async () => {
+      const assistant = assistantToolCallMessage("call_keep", 2);
+      const result = toolResultMessage("call_keep", "kept output", 3);
+      const assembled = await runAssembleWithEngineResult({
+        messages: [visibleUser, assistant, result],
+        estimatedTokens: 1,
+      });
+
+      expect(assembled?.messages).toEqual([visibleUser, assistant, result]);
     });
 
     it("rejects an undefined assemble result with the engine id", async () => {

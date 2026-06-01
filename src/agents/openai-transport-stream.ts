@@ -79,6 +79,7 @@ import {
 } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import type { StreamFn } from "./runtime/index.js";
+import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -4054,8 +4055,16 @@ export function buildOpenAICompletionsParams(
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
-  let messages = convertMessages(model as never, completionsContext, compat as never);
-  injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  const repairedContextMessages = sanitizeToolUseResultPairing(completionsContext.messages, {
+    erroredAssistantResultPolicy: "drop",
+    missingToolResultText: "No result provided",
+  }) as Context["messages"];
+  const repairedCompletionsContext =
+    repairedContextMessages === completionsContext.messages
+      ? completionsContext
+      : ({ ...completionsContext, messages: repairedContextMessages } satisfies Context);
+  let messages = convertMessages(model as never, repairedCompletionsContext, compat as never);
+  injectToolCallThoughtSignatures(messages as unknown[], repairedCompletionsContext, model);
   sanitizeCompletionsReasoningReplayFields(messages, {
     preserveOpenRouterReasoning:
       compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),

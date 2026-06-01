@@ -12,6 +12,7 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "bedrock-converse-stream",
   "google-generative-ai",
   "openclaw-google-generative-ai-transport",
+  "openai-completions",
   "openai-responses",
   "openai-chatgpt-responses",
   "azure-openai-responses",

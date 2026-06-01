@@ -99,6 +99,48 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(toolResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 
+  it("drops orphaned tool results before OpenAI Chat Completions conversion", () => {
+    const messages: Context["messages"] = [
+      { role: "user", content: "old request", timestamp: Date.now() },
+      {
+        role: "toolResult",
+        toolCallId: "call_orphan",
+        toolName: "read",
+        content: [{ type: "text", text: "orphaned result" }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+      { role: "user", content: "continue after model switch", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("openai-completions", "openai", "gpt-5.4"),
+    );
+
+    expect(result.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(JSON.stringify(result)).not.toContain("call_orphan");
+    expect(JSON.stringify(result)).not.toContain("orphaned result");
+  });
+
+  it("synthesizes missing results for surviving OpenAI Chat Completions tool calls", () => {
+    const messages: Context["messages"] = [
+      assistantToolCall("call_chat_1"),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("openai-completions", "openai", "gpt-5.4"),
+    );
+
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
+    const toolResult = requireToolResultMessage(result[1]);
+    expect(toolResult.toolCallId).toBe("call_chat_1");
+    expect(toolResult.isError).toBe(true);
+    expect(toolResult.content).toEqual([{ type: "text", text: "No result provided" }]);
+  });
+
   it("preserves real OpenAI transport results and aborts missing parallel siblings", () => {
     const messages: Context["messages"] = [
       {

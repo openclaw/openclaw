@@ -14,6 +14,7 @@ import {
 } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 export type HarnessContextEngine = ContextEngine;
@@ -90,7 +91,9 @@ export async function assembleHarnessContextEngine(params: {
     model: params.modelId,
     ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
   });
-  return ensureAssembleResultShape(result, params.contextEngine.info.id);
+  return repairAssembleResultMessages(
+    ensureAssembleResultShape(result, params.contextEngine.info.id),
+  );
 }
 
 /**
@@ -116,6 +119,14 @@ function ensureAssembleResultShape(result: unknown, engineId: string): AssembleR
     );
   }
   return result as AssembleResult;
+}
+
+function repairAssembleResultMessages(result: AssembleResult): AssembleResult {
+  const repair = repairToolUseResultPairing(result.messages);
+  if (repair.messages === result.messages) {
+    return result;
+  }
+  return { ...result, messages: repair.messages };
 }
 
 function describeAssembleResultType(value: unknown): string {
