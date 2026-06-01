@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Outbound: sanitize `message.send` arguments through `stripInboundMetadata` so weak models that echo runtime delivery hints and untrusted-metadata blocks into tool arguments no longer leak internal scaffolding (chat_id, sender_id, inbound_event_kind, sender display name/phone) into real conversations on WhatsApp, Signal, Telegram, and SMS channels. (#89100)
 - Agents/TUI: keep local custom provider runs from loading plugin runtime and auth alias metadata when plugins are disabled.
 - Agents/TUI: restore in-flight TUI run switch-back behavior, keep no-policy native hook fallback available, guard vanished workspaces, and keep lightweight isolated subagents lightweight.
 - Agents/media: keep async image, music, and video generation starts from ending the Codex turn, so mixed requests can continue with summaries or other work while media renders in the background.
