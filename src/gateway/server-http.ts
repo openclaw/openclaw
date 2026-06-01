@@ -16,7 +16,6 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -33,7 +32,11 @@ import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
-import { isGatewayShuttingDown } from "./server-close.js";
+import {
+  isGatewayShuttingDown,
+  noteShuttingDownProbeResponse,
+  resetShuttingDownProbeResponseLogForTest,
+} from "./gateway-shutdown-state.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import {
   isProtectedPluginRoutePathFromContext,
@@ -44,23 +47,11 @@ import type { PreauthConnectionBudget } from "./server/preauth-connection-budget
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-const gatewayProbeLog = createSubsystemLogger("gateway/probe");
-// Logging the shutting-down 503 response once per shutdown sequence is enough to
-// trace the zombie cascade; bursts add noise without value because every callers'
-// probe round-trips during the same window.
-let shuttingDownResponseLogged = false;
-function noteShuttingDownProbeResponse(requestPath: string): void {
-  if (shuttingDownResponseLogged) {
-    return;
-  }
-  shuttingDownResponseLogged = true;
-  gatewayProbeLog.warn(
-    `gateway.healthz.shutting_down_response path=${requestPath}; returning 503 so supervised lock recovery treats this gateway as draining`,
-  );
-}
-export function resetGatewayHealthzShuttingDownLogForTest(): void {
-  shuttingDownResponseLogged = false;
-}
+// Re-export for source compatibility; backing impl now lives in
+// `gateway-shutdown-state.ts` so the per-cycle reset happens at the
+// state-transition site (markGatewayShuttingDown / resetGatewayShuttingDownState).
+// Per ClawSweeper review P3 on #88908.
+export const resetGatewayHealthzShuttingDownLogForTest = resetShuttingDownProbeResponseLogForTest;
 
 // Strict-mode live probe: only the supervised lock-recovery preflight uses
 // `?strict=1` to opt into shutdown-aware 503 responses. Public probes (external
