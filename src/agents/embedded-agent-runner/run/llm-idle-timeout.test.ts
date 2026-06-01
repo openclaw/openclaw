@@ -94,13 +94,13 @@ describe("resolveLlmIdleTimeoutMs", () => {
 
   it("honors provider request timeout when run timeout is the NO_TIMEOUT sentinel", () => {
     // Regression: when `runTimeoutSeconds` is treated as 0, `resolveAgentTimeoutMs`
-    // hands back NO_TIMEOUT_MS (= MAX_SAFE_TIMEOUT_MS). An explicit per-model idle
-    // timeout must still take effect — "run is unlimited" does not imply "skip
+    // hands back the max timer sentinel. An explicit per-model idle timeout
+    // must still take effect: "run is unlimited" does not imply "skip
     // chunk-level hang detection".
     expect(
       resolveLlmIdleTimeoutMs({
         modelRequestTimeoutMs: 180_000,
-        runTimeoutMs: 2_147_000_000,
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       }),
     ).toBe(180_000);
   });
