@@ -1,11 +1,24 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-05-31T23:28:06.068Z",
+  "fallbackKeys": [
+    "workboard.detailAddNote",
+    "workboard.detailDiagnostics",
+    "workboard.detailNoNotes",
+    "workboard.detailNotePlaceholder",
+    "workboard.detailOperatorNotes",
+    "workboard.detailProof",
+    "workboard.detailRun",
+    "workboard.detailTask",
+    "workboard.detailTitle",
+    "workboard.detailUpdated",
+    "workboard.detailWorkerLogs",
+    "workboard.viewDetails"
+  ],
+  "generatedAt": "2026-06-01T02:10:29.747Z",
   "locale": "it",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "21d07eb018c81914c212ea2dff7f7174db30e25cf1d70dac9b269cf982d7cd8b",
-  "totalKeys": 1284,
+  "sourceHash": "3c3eaac0aad97b7c204f0bf099dd5357eb3bba80eccfad98b4231e4ad8c00cf6",
+  "totalKeys": 1296,
   "translatedKeys": 1284,
   "workflow": 1
 }
