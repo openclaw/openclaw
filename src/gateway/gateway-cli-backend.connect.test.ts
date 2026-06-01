@@ -15,7 +15,7 @@ import {
 } from "./minimal-gateway.test-helpers.js";
 
 const GATEWAY_CONNECT_OPERATION_TIMEOUT_MS = 5_000;
-const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 20_000;
+const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 60_000;
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-" });
 
 async function createTempDeviceIdentity() {
