@@ -692,6 +692,19 @@ describe("renderWorkboard", () => {
           failureCount: 1,
           comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 3 }],
           links: [{ id: "link-1", type: "relates_to", url: "https://example.com", createdAt: 4 }],
+          workerProtocol: {
+            state: "blocked",
+            detail: "Worker asked for owner input.",
+            updatedAt: 12,
+          },
+          automation: {
+            tenant: "ops",
+            boardId: "quality",
+            skills: ["review", "test"],
+            workspace: { kind: "worktree", path: "/tmp/workboard", branch: "proof" },
+            dispatchCount: 3,
+            summary: "Ready for review.",
+          },
           proof: Array.from({ length: 7 }, (_, index) => ({
             id: `proof-${index + 1}`,
             status: "passed",
@@ -757,6 +770,18 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "https://example.com/proof-7",
+    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Worker protocol");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "Worker asked for owner input.",
+    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Automation");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Tenant: ops");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "Skills: review, test",
+    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "Workspace: worktree /tmp/workboard proof",
     );
   });
 

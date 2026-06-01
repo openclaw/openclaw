@@ -842,6 +842,8 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const attachments = card.metadata?.attachments ?? [];
   const diagnostics = card.metadata?.diagnostics ?? [];
   const workerLogs = card.metadata?.workerLogs ?? [];
+  const workerProtocol = card.metadata?.workerProtocol;
+  const automation = card.metadata?.automation;
   const events = (card.events ?? []).slice(-6).toReversed();
   const busy = state.busyCardId === card.id;
   const showStartControls = writable && cardCanStart(state, props.sessions, card);
@@ -940,6 +942,48 @@ function renderCardDetailsPanel(props: WorkboardProps) {
           t("workboard.detailWorkerLogs"),
           workerLogs.map((entry) => `${entry.level}: ${entry.message}`),
         )}
+        ${workerProtocol
+          ? renderDetailList(t("workboard.detailWorkerProtocol"), [
+              workerProtocol.state,
+              workerProtocol.detail ?? "",
+              workerProtocol.updatedAt
+                ? t("workboard.detailUpdatedValue", { time: formatTime(workerProtocol.updatedAt) })
+                : "",
+            ])
+          : nothing}
+        ${automation
+          ? renderDetailList(t("workboard.detailAutomation"), [
+              automation.tenant
+                ? t("workboard.detailAutomationTenant", { tenant: automation.tenant })
+                : "",
+              automation.boardId
+                ? t("workboard.detailAutomationBoard", { board: automation.boardId })
+                : "",
+              automation.skills?.length
+                ? t("workboard.detailAutomationSkills", { skills: automation.skills.join(", ") })
+                : "",
+              automation.workspace
+                ? t("workboard.detailAutomationWorkspace", {
+                    workspace: [
+                      automation.workspace.kind,
+                      automation.workspace.path,
+                      automation.workspace.branch,
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                  })
+                : "",
+              automation.dispatchCount
+                ? t("workboard.badgeDispatches", { count: String(automation.dispatchCount) })
+                : "",
+              automation.lastDispatchAt
+                ? t("workboard.detailUpdatedValue", { time: formatTime(automation.lastDispatchAt) })
+                : "",
+              automation.summary
+                ? t("workboard.detailAutomationSummary", { summary: automation.summary })
+                : "",
+            ])
+          : nothing}
         ${renderDetailList(
           t("workboard.eventsLabel"),
           events.map((event) => `${formatEventLabel(event)} ${formatTime(event.at)}`),
