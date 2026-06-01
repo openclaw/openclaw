@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isAbortError,
   isBenignUncaughtExceptionError,
+  isDistModuleRotationError,
   isTransientFileWatchError,
   isTransientNetworkError,
   isTransientSqliteError,
@@ -463,5 +464,188 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isTransientUnhandledRejectionError(new Error("ENOSPC: no space left on device"))).toBe(
       false,
     );
+  });
+});
+
+describe("isDistModuleRotationError", () => {
+  it("matches the export-name mismatch from a rotated dist runtime boundary (#88857)", () => {
+    const error = new SyntaxError(
+      "The requested module './provider-discovery.runtime.js' does not provide an export named 'n'",
+    );
+    // Real Node ESM stack shape: the importing module URL is the leading code-frame line
+    // (the openclaw/dist chunk), and the `at async` frames below are internal/caller frames.
+    error.stack =
+      "file:///opt/homebrew/lib/node_modules/openclaw/dist/provider-runtime-Cp-fJ4cK.js:13\n" +
+      'import { n as resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";\n' +
+      "         ^\n" +
+      "SyntaxError: The requested module './provider-discovery.runtime.js' does not provide an export named 'n'\n" +
+      "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)\n" +
+      "    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)\n" +
+      "    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)";
+    expect(isDistModuleRotationError(error)).toBe(true);
+  });
+
+  it("matches ERR_MODULE_NOT_FOUND for a rotated dist chunk", () => {
+    const error = Object.assign(
+      new Error(
+        "Cannot find module '/opt/homebrew/lib/node_modules/openclaw/dist/provider-discovery.runtime.js' imported from /opt/homebrew/lib/node_modules/openclaw/dist/provider-runtime-Old.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistModuleRotationError(error)).toBe(true);
+  });
+
+  it("matches when the rotation error is wrapped in a cause chain", () => {
+    const inner = new SyntaxError(
+      "The requested module './model-catalog.runtime.js' does not provide an export named 'a'",
+    );
+    inner.stack =
+      "file:///opt/homebrew/lib/node_modules/openclaw/dist/agents/model-catalog-Abc123.js:9\n" +
+      'import { a } from "./model-catalog.runtime.js";\n' +
+      "         ^\n" +
+      "SyntaxError: The requested module './model-catalog.runtime.js' does not provide an export named 'a'\n" +
+      "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)\n" +
+      "    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)";
+    expect(isDistModuleRotationError(new Error("startup failed", { cause: inner }))).toBe(true);
+  });
+
+  it("does not match a genuine source SyntaxError without a dist boundary", () => {
+    const error = new SyntaxError("Unexpected token ')'");
+    error.stack = "SyntaxError: Unexpected token ')'\n    at /home/user/project/src/thing.ts:5:1";
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match an export-mismatch SyntaxError outside the bundled dist", () => {
+    const error = new SyntaxError(
+      "The requested module './local-helper.js' does not provide an export named 'foo'",
+    );
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match ERR_MODULE_NOT_FOUND for a third-party module", () => {
+    const error = Object.assign(new Error("Cannot find module 'some-missing-package'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a third-party package's own dist/runtime.js (ERR_MODULE_NOT_FOUND)", () => {
+    const error = Object.assign(
+      new Error(
+        "Cannot find module '/app/node_modules/some-plugin/dist/runtime.js' imported from /app/node_modules/some-plugin/dist/index.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a third-party export-mismatch for its own runtime.js", () => {
+    const error = new SyntaxError(
+      "The requested module '/app/node_modules/some-plugin/dist/runtime.js' does not provide an export named 'foo'",
+    );
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a third-party chunk's own relative runtime.js export mismatch", () => {
+    // The importer (leading code-frame) is a third-party package, so keep the fatal path.
+    const error = new SyntaxError(
+      "The requested module './client-runtime.js' does not provide an export named 'foo'",
+    );
+    error.stack =
+      "file:///app/node_modules/some-plugin/dist/index-Xyz789.js:5\n" +
+      'import { foo } from "./client-runtime.js";\n' +
+      "         ^\n" +
+      "SyntaxError: The requested module './client-runtime.js' does not provide an export named 'foo'\n" +
+      "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)";
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a third-party runtime mismatch whose stack has an OpenClaw dist async caller", () => {
+    // Real Node shape (verified): an OpenClaw dist module dynamically imports a third-party
+    // module whose own ./runtime.mjs is missing an export. The importer is the leading
+    // code-frame (third-party); openclaw/dist appears only as a deeper `at async` caller, so
+    // this must stay on the fatal path — matching a caller frame would misclassify it.
+    const error = new SyntaxError(
+      "The requested module './runtime.mjs' does not provide an export named 'n'",
+    );
+    error.stack =
+      "file:///app/node_modules/some-plugin/dist/index.mjs:1\n" +
+      'import { n } from "./runtime.mjs";\n' +
+      "         ^\n" +
+      "SyntaxError: The requested module './runtime.mjs' does not provide an export named 'n'\n" +
+      "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)\n" +
+      "    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)\n" +
+      "    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)\n" +
+      "    at async file:///opt/homebrew/lib/node_modules/openclaw/dist/plugins/host-XyZ.js:13:1";
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a third-party bare-specifier runtime.js export mismatch", () => {
+    const error = new SyntaxError(
+      "The requested module 'some-pkg/runtime.js' does not provide an export named 'x'",
+    );
+    error.stack =
+      "file:///app/node_modules/host-pkg/dist/index.js:5\n" +
+      "import { x } from 'some-pkg/runtime.js';\n" +
+      "         ^\n" +
+      "SyntaxError: The requested module 'some-pkg/runtime.js' does not provide an export named 'x'\n" +
+      "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)";
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a local plugin's own dist/runtime.js outside node_modules", () => {
+    const error = Object.assign(
+      new Error(
+        "Cannot find module '/home/user/.openclaw/plugins/demo/dist/runtime.js' imported from /home/user/.openclaw/plugins/demo/dist/index.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("matches OpenClaw's own installed dist runtime boundary under node_modules/openclaw", () => {
+    const error = Object.assign(
+      new Error(
+        "Cannot find module '/opt/homebrew/lib/node_modules/openclaw/dist/provider-discovery.runtime.js' imported from /opt/homebrew/lib/node_modules/openclaw/dist/provider-runtime-Old.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistModuleRotationError(error)).toBe(true);
+  });
+
+  it("does not match a genuinely missing dependency imported BY an own-dist runtime module", () => {
+    // The importer is our `*.runtime` boundary but the MISSING module is a real third-party
+    // dep (unquoted `imported from` must not satisfy ownership). Verified Node shape.
+    const error = Object.assign(
+      new Error(
+        "Cannot find package 'some-missing-dep' imported from /opt/homebrew/lib/node_modules/openclaw/dist/foo.runtime.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a lookalike package whose name ends in openclaw (ERR_MODULE_NOT_FOUND)", () => {
+    // `openclaw/dist` must be a full path segment: `evil-openclaw/dist` is a different package.
+    const error = Object.assign(
+      new Error(
+        "Cannot find module '/app/node_modules/evil-openclaw/dist/foo.runtime.js' imported from /app/node_modules/evil-openclaw/dist/index.js",
+      ),
+      { code: "ERR_MODULE_NOT_FOUND" },
+    );
+    expect(isDistModuleRotationError(error)).toBe(false);
+  });
+
+  it("does not match a lookalike package whose importer frame ends in openclaw (export mismatch)", () => {
+    const error = new SyntaxError(
+      "The requested module './x.runtime.js' does not provide an export named 'n'",
+    );
+    error.stack =
+      "file:///app/node_modules/evil-openclaw/dist/index.mjs:3\n" +
+      'import { n } from "./x.runtime.js";\n' +
+      "         ^\n" +
+      "SyntaxError: The requested module './x.runtime.js' does not provide an export named 'n'\n" +
+      "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)";
+    expect(isDistModuleRotationError(error)).toBe(false);
   });
 });

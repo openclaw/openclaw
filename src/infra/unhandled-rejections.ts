@@ -438,6 +438,65 @@ export function isTransientUnhandledRejectionError(err: unknown): boolean {
   );
 }
 
+const DIST_MODULE_EXPORT_MISMATCH_RE = /does not provide an export named/i;
+// The MISSING module of an ERR_MODULE_NOT_FOUND must be our own dist `*runtime.js` boundary.
+// It is the quoted token; anchoring to the quotes excludes the unquoted `imported from`
+// importer (so a real missing dep imported BY an own-dist runtime stays fatal). The leading
+// separator anchors `openclaw` to a full path segment vs. a lookalike like `evil-openclaw`.
+const OPENCLAW_OWN_DIST_RUNTIME_RE =
+  /['"][^'"]*[/\\]openclaw[/\\]dist[/\\][^'"]*runtime\.m?js['"]/i;
+// Export-mismatch names the rotated boundary only as a relative specifier (no ownership); the
+// importer (matched separately) proves ownership. Same segment anchor on the frame match.
+const RELATIVE_RUNTIME_SPECIFIER_RE = /['"]\.{1,2}[/\\][^'"]*runtime\.m?js['"]/;
+const OPENCLAW_OWN_DIST_FRAME_RE = /[/\\]openclaw[/\\]dist[/\\]/i;
+
+// Node names the importing module as the leading code-frame line of an ESM export-mismatch
+// stack; the `at async` frames below are dynamic-import callers (possibly OpenClaw's dist even
+// when a dependency imported the broken boundary). Match the importer URL, not a caller frame.
+function importingModuleIsOwnDist(stack: string): boolean {
+  for (const rawLine of stack.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith("file://")) {
+      continue;
+    }
+    return OPENCLAW_OWN_DIST_FRAME_RE.test(line);
+  }
+  return false;
+}
+
+// In-place upgrade swaps `dist/` under a running process: an in-memory chunk imports a rotated
+// `*runtime.js` whose minified export name changed -> SyntaxError / ERR_MODULE_NOT_FOUND. The
+// module graph can't be patched live, so restart; scoped to our own dist (plugin/dep stays fatal).
+export function isDistModuleRotationError(err: unknown): boolean {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const name = "name" in candidate ? String((candidate as { name?: unknown }).name) : "";
+    const code = extractErrorCodeOrErrno(candidate);
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage : "";
+    const rawStack = (candidate as { stack?: unknown }).stack;
+    const stack = typeof rawStack === "string" ? rawStack : "";
+
+    // Export-mismatch: the rotated boundary is a relative `*runtime.js` specifier in the
+    // message; the importer is the leading code-frame, required to be our own dist.
+    if (
+      name === "SyntaxError" &&
+      DIST_MODULE_EXPORT_MISMATCH_RE.test(message) &&
+      RELATIVE_RUNTIME_SPECIFIER_RE.test(message) &&
+      importingModuleIsOwnDist(stack)
+    ) {
+      return true;
+    }
+    // Rotated/renamed chunk gone missing: the message carries the absolute own-dist path.
+    if (code === "ERR_MODULE_NOT_FOUND" && OPENCLAW_OWN_DIST_RUNTIME_RE.test(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isBenignUncaughtNetworkException(err: unknown): boolean {
   for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     const code = extractErrorCodeOrErrno(candidate);
@@ -552,6 +611,18 @@ export function installUnhandledRejectionHandler(): void {
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),
       );
+      return;
+    }
+
+    if (isDistModuleRotationError(reason)) {
+      // Expected in-place-upgrade restart, not a crash: skip the fatal hooks (the
+      // lone one writes a crash stability bundle) and exit for a clean restart.
+      console.error(
+        "[openclaw] Bundled dist changed under the running gateway (in-place upgrade); restarting to load the new build:",
+        formatUncaughtError(reason),
+      );
+      restoreTerminalState("dist module rotation", { resumeStdinIfPaused: false });
+      process.exit(1);
       return;
     }
 

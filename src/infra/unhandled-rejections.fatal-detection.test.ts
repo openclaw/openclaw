@@ -7,7 +7,7 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 
-import { resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
+import { registerFatalErrorHook, resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
 import {
   installUnhandledRejectionHandler,
   isUncaughtExceptionHandled,
@@ -245,6 +245,37 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         "[openclaw] Suppressed AbortError:",
         "This operation was aborted",
       );
+    });
+  });
+
+  describe("dist module rotation", () => {
+    it("restarts cleanly without running fatal hooks (no crash stability bundle)", () => {
+      const fatalHook = vi.fn();
+      registerFatalErrorHook(fatalHook);
+
+      const error = new SyntaxError(
+        "The requested module './provider-discovery.runtime.js' does not provide an export named 'n'",
+      );
+      // Real Node ESM stack: importer URL is the leading code-frame (openclaw/dist chunk).
+      error.stack =
+        "file:///opt/homebrew/lib/node_modules/openclaw/dist/provider-runtime-Cp-fJ4cK.js:13\n" +
+        'import { n } from "./provider-discovery.runtime.js";\n' +
+        "         ^\n" +
+        "SyntaxError: The requested module './provider-discovery.runtime.js' does not provide an export named 'n'\n" +
+        "    at ModuleJob._instantiate (node:internal/modules/esm/module_job:226:21)\n" +
+        "    at async ModuleJob.run (node:internal/modules/esm/module_job:335:5)";
+      expectExitCodeFromUnhandled(error, [1], "dist module rotation");
+      // The stability-bundle fatal hook must NOT run for an expected in-place
+      // upgrade restart.
+      expect(fatalHook).not.toHaveBeenCalled();
+    });
+
+    it("still runs fatal hooks for an unrelated unhandled rejection", () => {
+      const fatalHook = vi.fn();
+      registerFatalErrorHook(fatalHook);
+
+      expectExitCodeFromUnhandled(new Error("boom"), [1], "unhandled rejection");
+      expect(fatalHook).toHaveBeenCalled();
     });
   });
 });
