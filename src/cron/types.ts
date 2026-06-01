@@ -49,8 +49,20 @@ export type CronFailureDestination = {
   mode?: "announce" | "webhook";
 };
 
-export type CronDeliveryPatch = Partial<Omit<CronDelivery, "completionDestination">> & {
+export type CronFailureDestinationPatch = {
+  channel?: CronMessageChannel | null;
+  to?: string | null;
+  accountId?: string | null;
+  mode?: "announce" | "webhook" | null;
+};
+
+export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
+  channel?: CronMessageChannel | null;
+  to?: string | null;
+  threadId?: string | number | null;
+  accountId?: string | null;
   completionDestination?: CronCompletionDestination | null;
+  failureDestination?: CronFailureDestinationPatch | null;
 };
 
 export type CronRunStatus = "ok" | "error" | "skipped";

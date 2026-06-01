@@ -439,6 +439,10 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
+        preToolUseUnavailable:
+          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
+            ? "noop"
+            : undefined,
         nice: params.command?.nice,
         timeoutMs: params.command?.timeoutMs,
         executable: params.command?.executable,
@@ -517,6 +521,7 @@ export function buildNativeHookRelayCommand(params: {
   relayId: string;
   generation?: string;
   event: NativeHookRelayEvent;
+  preToolUseUnavailable?: "noop";
   timeoutMs?: number;
   executable?: string;
   nice?: number | false;
@@ -541,6 +546,9 @@ export function buildNativeHookRelayCommand(params: {
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
+    ...(params.event === "pre_tool_use" && params.preToolUseUnavailable
+      ? ["--pre-tool-use-unavailable", params.preToolUseUnavailable]
+      : []),
     "--timeout",
     String(timeoutMs),
   ]);
@@ -752,6 +760,7 @@ export async function invokeNativeHookRelayBridge(
 export function renderNativeHookRelayUnavailableResponse(params: {
   provider: unknown;
   event: unknown;
+  preToolUseUnavailable?: unknown;
   message?: string;
 }): NativeHookRelayProcessResponse {
   const provider = readNativeHookRelayProvider(params.provider);
@@ -759,6 +768,12 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
+    // The standalone CLI cannot reconstruct the originating registration after
+    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
+    // generated command explicitly recorded that no before-tool policy existed.
+    if (params.preToolUseUnavailable === "noop") {
+      return adapter.renderNoopResponse(event);
+    }
     return adapter.renderPreToolUseBlockResponse(message);
   }
   if (event === "permission_request") {

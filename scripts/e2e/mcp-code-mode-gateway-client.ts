@@ -1,6 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
+import { pathToFileURL } from "node:url";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+
+type FetchJsonOptions = {
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
+
+export type McpCodeModeClientFetchLimits = {
+  bodyMaxBytes: number;
+  timeoutMs: number;
+};
+
+export function readMcpCodeModeClientFetchLimits(
+  env: NodeJS.ProcessEnv = process.env,
+): McpCodeModeClientFetchLimits {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES",
+      1024 * 1024,
+      env,
+    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS", 300_000, env),
+  };
+}
+
+const DEFAULT_FETCH_LIMITS = readMcpCodeModeClientFetchLimits();
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -8,23 +37,59 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> {
-  const timeoutMs = Number(process.env.OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS ?? 300_000);
+function taggedError(message: string, code: string) {
+  return Object.assign(new Error(message), { code });
+}
+
+export async function fetchJson(
+  url: string,
+  init: RequestInit = {},
+  options: FetchJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_LIMITS.timeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_LIMITS.bodyMaxBytes);
   const controller = new AbortController();
+  const timeoutError = taggedError(
+    `HTTP request to ${url} timed out after ${timeoutMs}ms`,
+    "ETIMEDOUT",
+  );
   let timeout: ReturnType<typeof setNodeTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setNodeTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  let response: Response | undefined;
+  let text = "";
   try {
-    timeout = setNodeTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(url, { ...init, signal: controller.signal });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} from ${url}: ${text}`);
-    }
-    return text ? JSON.parse(text) : {};
+    response = await Promise.race([
+      (options.fetchImpl ?? fetch)(url, { ...init, signal: controller.signal }),
+      timeoutPromise,
+    ]);
+    text = await readBoundedResponseText(response, url, maxBodyBytes, {
+      createTooLargeError(message) {
+        return taggedError(message, "ETOOBIG");
+      },
+      formatTooLargeMessage(targetUrl, byteLimit) {
+        return `HTTP response from ${targetUrl} exceeded ${byteLimit} bytes`;
+      },
+      signal: controller.signal,
+      timeoutPromise,
+    });
   } finally {
     if (timeout) {
       clearNodeTimeout(timeout);
     }
   }
+  if (!response) {
+    throw new Error(`HTTP request to ${url} did not return a response`);
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${url}: ${text}`);
+  }
+  return text ? JSON.parse(text) : {};
 }
 
 function outputText(response: unknown): string {
@@ -169,4 +234,6 @@ async function main() {
   );
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

@@ -76,8 +76,12 @@ import type { Tab } from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
@@ -470,19 +474,8 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   });
 }
 
-function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
-  return sessionKey?.trim().toLowerCase() === "global";
-}
-
 function resolveDefaultAgentId(host: GatewayHost): string {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  return normalizeAgentId(
-    host.agentsList?.defaultId?.trim() ||
-      snapshot?.sessionDefaults?.defaultAgentId?.trim() ||
-    "main",
-  );
+  return resolveUiDefaultAgentId(host);
 }
 
 function resolveFreshDefaultAgentId(host: GatewayHost): string | undefined {
@@ -499,20 +492,7 @@ function resolveFreshDefaultAgentId(host: GatewayHost): string | undefined {
 }
 
 function resolveSelectedGlobalAgentId(host: GatewayHost): string {
-  return normalizeAgentId(host.assistantAgentId?.trim() || resolveDefaultAgentId(host));
-}
-
-function resolveGlobalAliasAgentId(host: GatewayHost, sessionKey: string | undefined | null) {
-  const parsed = parseAgentSessionKey(sessionKey ?? "");
-  if (!parsed) {
-    return undefined;
-  }
-  const rest = parsed.rest.trim().toLowerCase();
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim().toLowerCase() || "main";
-  return rest === "main" || rest === mainKey ? normalizeAgentId(parsed.agentId) : undefined;
+  return resolveUiSelectedGlobalAgentId(host);
 }
 
 function resolveSelectedGlobalEventAgentId(
@@ -527,12 +507,12 @@ function globalAgentScopeMatches(
   sessionKey: string | undefined | null,
   agentId: string | undefined | null,
 ): boolean {
-  if (!isGlobalSessionKey(sessionKey)) {
+  if (!isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const selectedAgentId = isGlobalSessionKey(host.sessionKey)
+  const selectedAgentId = isUiGlobalSessionKey(host.sessionKey)
     ? resolveSelectedGlobalAgentId(host)
-    : resolveGlobalAliasAgentId(host, host.sessionKey);
+    : resolveUiGlobalAliasAgentId(host, host.sessionKey);
   if (!selectedAgentId) {
     return true;
   }
@@ -550,10 +530,10 @@ function sessionMessageMatchesHost(
   if (areUiSessionKeysEquivalent(sessionKey, host.sessionKey)) {
     return true;
   }
-  const hostAliasAgentId = resolveGlobalAliasAgentId(host, host.sessionKey);
+  const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
   return Boolean(
     hostAliasAgentId &&
-    isGlobalSessionKey(sessionKey) &&
+    isUiGlobalSessionKey(sessionKey) &&
     resolveSelectedGlobalEventAgentId(host, agentId) === hostAliasAgentId,
   );
 }
@@ -592,7 +572,7 @@ function canRefreshActiveTabBeforeAgents(host: GatewayHost): boolean {
   if (host.tab !== "chat") {
     return false;
   }
-  if (isGlobalSessionKey(host.sessionKey)) {
+  if (isUiGlobalSessionKey(host.sessionKey)) {
     return false;
   }
   const parsed = parseAgentSessionKey(host.sessionKey);
@@ -610,9 +590,11 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
   const initialRefresh = refreshBeforeAgents
-    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).catch((err: unknown) => {
-        initialRefreshError = normalizeStartupRefreshError(err);
-      })
+    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).catch(
+        (err: unknown) => {
+          initialRefreshError = normalizeStartupRefreshError(err);
+        },
+      )
     : Promise.resolve();
   let refreshAfterAgents = !refreshBeforeAgents;
   let agentsError: Error | undefined;

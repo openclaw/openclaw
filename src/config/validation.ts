@@ -42,6 +42,7 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -1724,6 +1725,13 @@ function validateConfigObjectWithPluginsBase(
       } else {
         issues.push({ path: pathLocal, message });
       }
+      return;
+    }
+    if (
+      normalizePluginId(pluginId) === "codex" &&
+      pathLocal === "plugins.entries.codex" &&
+      shouldSuppressMissingCodexPluginDiagnostics(config)
+    ) {
       return;
     }
     if (optsLocal?.warnOnly && optsLocal.officialInstallHint !== false) {

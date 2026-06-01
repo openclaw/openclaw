@@ -242,7 +242,7 @@ async function runCommandWithExternalOutput(params: {
 }
 
 function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
 function buildVisualDriverArgs(params: {

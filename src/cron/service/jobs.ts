@@ -54,6 +54,10 @@ export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
 }
 
+export function resolveJobLastRunStatus(job: Pick<CronJob, "state">) {
+  return job.state.lastRunStatus ?? job.state.lastStatus;
+}
+
 export function errorBackoffMs(
   consecutiveErrors: number,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -66,7 +70,7 @@ export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number | undefined {
-  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+  if (resolveJobLastRunStatus(job) !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
     return undefined;
   }
   const consecutiveErrorsRaw = job.state.consecutiveErrors;
@@ -403,7 +407,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     const atMs = parseAbsoluteTimeMs(job.schedule.at);
     // One-shot jobs stay due until they successfully finish, but if the
     // schedule was updated to a time after the last run, re-arm the job.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
+    if (resolveJobLastRunStatus(job) === "ok" && job.state.lastRunAtMs) {
       if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
         return atMs;
       }
@@ -565,7 +569,7 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
     if (
       params.job.schedule.kind !== "at" &&
-      params.job.state.lastStatus === "error" &&
+      resolveJobLastRunStatus(params.job) === "error" &&
       isFiniteTimestamp(params.job.state.lastRunAtMs)
     ) {
       const backoffFloor = resolveJobErrorBackoffUntilMs(
@@ -950,7 +954,7 @@ function mergeCronDelivery(
     }
   }
   if ("failureDestination" in patch) {
-    if (patch.failureDestination === undefined) {
+    if (patch.failureDestination == null) {
       next.failureDestination = undefined;
     } else {
       const existingFd = next.failureDestination;
@@ -979,7 +983,12 @@ function mergeCronDelivery(
           nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
         }
       }
-      next.failureDestination = nextFd;
+      const hasFailureDestination =
+        nextFd.channel !== undefined ||
+        nextFd.to !== undefined ||
+        nextFd.accountId !== undefined ||
+        nextFd.mode !== undefined;
+      next.failureDestination = hasFailureDestination ? nextFd : undefined;
     }
   }
 

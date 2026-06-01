@@ -64,11 +64,31 @@ function isMissingOrEmptyObject(value: unknown): boolean {
 }
 
 function nullableStringSchema(description: string) {
-  return Type.Optional(Type.String({ description }));
+  return Type.Optional(Type.Union([Type.String(), Type.Null()], { description }));
 }
 
 function nullableStringArraySchema(description: string) {
-  return Type.Optional(Type.Array(Type.String(), { description }));
+  return Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()], { description }));
+}
+
+function deliveryStringSchema(params: { description: string; nullableClears: boolean }) {
+  return params.nullableClears
+    ? nullableStringSchema(params.description)
+    : Type.Optional(Type.String({ description: params.description }));
+}
+
+function deliveryThreadIdSchema(params: { nullableClears: boolean }) {
+  const variants = params.nullableClears
+    ? [Type.String(), Type.Number(), Type.Null()]
+    : [Type.String(), Type.Number()];
+  return Type.Optional(Type.Union(variants, { description: "Thread/topic id" }));
+}
+
+function failureDestinationModeSchema(params: { nullableClears: boolean }) {
+  const variants = params.nullableClears
+    ? [Type.Literal("announce"), Type.Literal("webhook"), Type.Null()]
+    : [Type.Literal("announce"), Type.Literal("webhook")];
+  return Type.Optional(Type.Union(variants));
 }
 
 function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
@@ -122,34 +142,59 @@ const CronPayloadSchema = Type.Optional(
   }),
 );
 
-const CronDeliverySchema = Type.Optional(
-  Type.Object(
+function cronDeliverySchema(params: { nullableClears: boolean }) {
+  const failureDestinationObject = Type.Object(
     {
-      mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
-      channel: Type.Optional(Type.String({ description: "Delivery channel" })),
-      to: Type.Optional(Type.String({ description: "Delivery target" })),
-      threadId: Type.Optional(
-        Type.Union([Type.String(), Type.Number()], {
-          description: "Thread/topic id",
-        }),
-      ),
-      bestEffort: Type.Optional(Type.Boolean()),
-      accountId: Type.Optional(Type.String({ description: "Delivery account" })),
-      failureDestination: Type.Optional(
-        Type.Object(
-          {
-            channel: Type.Optional(Type.String()),
-            to: Type.Optional(Type.String()),
-            accountId: Type.Optional(Type.String()),
-            mode: optionalStringEnum(["announce", "webhook"] as const),
-          },
-          { additionalProperties: true },
-        ),
-      ),
+      channel: deliveryStringSchema({
+        description: "Failure delivery channel",
+        nullableClears: params.nullableClears,
+      }),
+      to: deliveryStringSchema({
+        description: "Failure delivery target",
+        nullableClears: params.nullableClears,
+      }),
+      accountId: deliveryStringSchema({
+        description: "Failure delivery account",
+        nullableClears: params.nullableClears,
+      }),
+      mode: failureDestinationModeSchema({ nullableClears: params.nullableClears }),
     },
     { additionalProperties: true },
-  ),
-);
+  );
+
+  return Type.Optional(
+    Type.Object(
+      {
+        mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
+        channel: deliveryStringSchema({
+          description: "Delivery channel",
+          nullableClears: params.nullableClears,
+        }),
+        to: deliveryStringSchema({
+          description: "Delivery target",
+          nullableClears: params.nullableClears,
+        }),
+        threadId: deliveryThreadIdSchema({ nullableClears: params.nullableClears }),
+        bestEffort: Type.Optional(Type.Boolean()),
+        accountId: deliveryStringSchema({
+          description: "Delivery account",
+          nullableClears: params.nullableClears,
+        }),
+        failureDestination: params.nullableClears
+          ? Type.Optional(
+              Type.Union([failureDestinationObject, Type.Null()], {
+                description: "Failure destination, or null to clear",
+              }),
+            )
+          : Type.Optional(failureDestinationObject),
+      },
+      { additionalProperties: true },
+    ),
+  );
+}
+
+const CronDeliverySchema = cronDeliverySchema({ nullableClears: false });
+const CronDeliveryPatchSchema = cronDeliverySchema({ nullableClears: true });
 
 // Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
 // Runtime handles `failureAlert === false` in cron/service/timer.ts.
@@ -211,7 +256,7 @@ const CronPatchObjectSchema = Type.Optional(
           toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
         }),
       ),
-      delivery: CronDeliverySchema,
+      delivery: CronDeliveryPatchSchema,
       description: Type.Optional(Type.String()),
       enabled: Type.Optional(Type.Boolean()),
       deleteAfterRun: Type.Optional(Type.Boolean()),

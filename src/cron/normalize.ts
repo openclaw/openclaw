@@ -203,25 +203,42 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("mode" in next) {
     delete next.mode;
   }
-  if (parsed.channel !== undefined) {
+  if ("channel" in delivery && delivery.channel === null) {
+    next.channel = null;
+  } else if (parsed.channel !== undefined) {
     next.channel = parsed.channel;
   } else if ("channel" in next) {
     delete next.channel;
   }
-  if (parsed.to !== undefined) {
+  if ("to" in delivery && delivery.to === null) {
+    next.to = null;
+  } else if (parsed.to !== undefined) {
     next.to = parsed.to;
   } else if ("to" in next) {
     delete next.to;
   }
-  if (parsed.threadId !== undefined) {
+  if ("threadId" in delivery && delivery.threadId === null) {
+    next.threadId = null;
+  } else if (parsed.threadId !== undefined) {
     next.threadId = parsed.threadId;
   } else if ("threadId" in next) {
     delete next.threadId;
   }
-  if (parsed.accountId !== undefined) {
+  if ("accountId" in delivery && delivery.accountId === null) {
+    next.accountId = null;
+  } else if (parsed.accountId !== undefined) {
     next.accountId = parsed.accountId;
   } else if ("accountId" in next) {
     delete next.accountId;
+  }
+  if ("failureDestination" in next) {
+    if (next.failureDestination === null) {
+      next.failureDestination = null;
+    } else if (isRecord(next.failureDestination)) {
+      next.failureDestination = coerceFailureDestination(next.failureDestination);
+    } else {
+      delete next.failureDestination;
+    }
   }
   if ("completionDestination" in next) {
     if (next.completionDestination === null) {
@@ -250,6 +267,59 @@ function coerceCompletionDestination(value: UnknownRecord) {
     mode,
     ...(to ? { to } : {}),
   } satisfies UnknownRecord;
+}
+
+function coerceFailureDestination(value: UnknownRecord) {
+  const next: UnknownRecord = { ...value };
+  if ("channel" in next) {
+    if (next.channel === null) {
+      next.channel = null;
+    } else {
+      const channel = normalizeOptionalLowercaseString(next.channel);
+      if (channel) {
+        next.channel = channel;
+      } else {
+        delete next.channel;
+      }
+    }
+  }
+  if ("to" in next) {
+    if (next.to === null) {
+      next.to = null;
+    } else {
+      const to = normalizeOptionalString(next.to);
+      if (to) {
+        next.to = to;
+      } else {
+        delete next.to;
+      }
+    }
+  }
+  if ("accountId" in next) {
+    if (next.accountId === null) {
+      next.accountId = null;
+    } else {
+      const accountId = normalizeOptionalString(next.accountId);
+      if (accountId) {
+        next.accountId = accountId;
+      } else {
+        delete next.accountId;
+      }
+    }
+  }
+  if ("mode" in next) {
+    if (next.mode === null) {
+      next.mode = null;
+    } else {
+      const mode = normalizeOptionalLowercaseString(next.mode);
+      if (mode === "announce" || mode === "webhook") {
+        next.mode = mode;
+      } else {
+        delete next.mode;
+      }
+    }
+  }
+  return next;
 }
 
 function normalizeSessionTarget(raw: unknown) {

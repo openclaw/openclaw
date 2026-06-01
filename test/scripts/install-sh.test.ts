@@ -959,6 +959,59 @@ describe("install.sh", () => {
     expect(output).toContain("version=v22.22.0");
   });
 
+  it("uses the package engine floor when accepting existing Node runtimes", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      engines?: { node?: string };
+    };
+    const engineMatch = /^>=22\.(\d+)\.0$/.exec(pkg.engines?.node ?? "");
+    expect(engineMatch).not.toBeNull();
+
+    const minMinor = Number(engineMatch?.[1]);
+    expect(script).toContain(`NODE_MIN_MINOR=${minMinor}`);
+
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
+    const bin = join(tmp, "bin");
+    mkdirSync(bin, { recursive: true });
+
+    const nodePath = join(bin, "node");
+    writeFileSync(
+      nodePath,
+      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
+    );
+    chmodSync(nodePath, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "set +e",
+          `FAKE_NODE_VERSION="v22.${minMinor - 1}.0"`,
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_below_floor=$?",
+          `FAKE_NODE_VERSION="v22.${minMinor}.0"`,
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_at_floor=$?",
+          'printf "node_below_floor=%s\\nnode_at_floor=%s\\n" "$node_below_floor" "$node_at_floor"',
+          "exit 0",
+        ].join("\n"),
+        {
+          PATH: `${bin}:/usr/bin:/bin`,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain("node_below_floor=1");
+    expect(result?.stdout).toContain("node_at_floor=0");
+  });
+
   it("persists a supported Linux Node path before noninteractive shell guards", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-linux-node-path-"));
     const home = join(tmp, "home");

@@ -498,6 +498,27 @@ describe("normalizeCronJobCreate", () => {
       anchorMs: 123,
     });
     expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
+
+    const nested = normalizeCronJobPatch({
+      delivery: {
+        failureDestination: {
+          channel: null,
+          to: null,
+          accountId: null,
+          mode: null,
+        },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(nested.delivery).toEqual({
+      failureDestination: {
+        channel: null,
+        to: null,
+        accountId: null,
+        mode: null,
+      },
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: nested })).toBe(true);
   });
 
   it("keeps invalid every schedule numbers invalid for validation", () => {
@@ -755,6 +776,27 @@ describe("normalizeCronJobPatch", () => {
         mode: "webhook",
         to: "https://example.invalid/complete",
       },
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
+  });
+
+  it("preserves nullable delivery field clears in patches", () => {
+    const normalized = normalizeCronJobPatch({
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        failureDestination: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.delivery).toEqual({
+      channel: null,
+      to: null,
+      threadId: null,
+      accountId: null,
+      failureDestination: null,
     });
     expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
   });

@@ -489,6 +489,99 @@ describe("tui session actions", () => {
     expect(listSessions).not.toHaveBeenCalled();
   });
 
+  it("restores an in-flight run reported by chat.history on switch-back", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-bg",
+      messages: [],
+      inFlightRun: { runId: "run-bg", text: "still working in the background" },
+    });
+    const updateAssistant = vi.fn();
+    const setActivityStatus = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      updateAssistant,
+      startTool: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ currentSessionKey: "agent:main:other" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    await setSession("agent:main:main");
+
+    expect(updateAssistant).toHaveBeenCalledWith("still working in the background", "run-bg");
+    expect(state.activeChatRunId).toBe("run-bg");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
+  });
+
+  it("adopts an in-flight run with no buffered text (Codex) and shows streaming", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-bg",
+      messages: [],
+      inFlightRun: { runId: "run-bg", text: "" },
+    });
+    const updateAssistant = vi.fn();
+    const setActivityStatus = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      updateAssistant,
+      startTool: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ currentSessionKey: "agent:main:other" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    await setSession("agent:main:main");
+
+    // No partial bubble (none exists), but the run is adopted and shows streaming.
+    expect(updateAssistant).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-bg");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
+  });
+
+  it("stays idle when chat.history reports no in-flight run", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({ sessionId: "session-x", messages: [] });
+    const updateAssistant = vi.fn();
+    const setActivityStatus = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      updateAssistant,
+      startTool: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ currentSessionKey: "agent:main:other" });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+      setActivityStatus,
+    });
+
+    await setSession("agent:main:main");
+
+    expect(updateAssistant).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

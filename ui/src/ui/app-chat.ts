@@ -45,8 +45,13 @@ import { normalizeBasePath } from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   DEFAULT_AGENT_ID,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
+  resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
@@ -219,10 +224,6 @@ function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
-function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
-  return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
-}
-
 function readHelloDefaultAgentId(host: Pick<ChatHost, "hello">): string | undefined {
   const snapshot = host.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -230,50 +231,10 @@ function readHelloDefaultAgentId(host: Pick<ChatHost, "hello">): string | undefi
   return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
 }
 
-function readHelloMainKey(host: Pick<ChatHost, "hello">): string | undefined {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  return snapshot?.sessionDefaults?.mainKey?.trim() || undefined;
-}
-
-function resolveGlobalAliasAgentId(
-  host: Pick<ChatHost, "agentsList" | "hello">,
-  sessionKey: string | undefined | null,
-): string | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return undefined;
-  }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  const configuredMainKey = normalizeLowercaseStringOrEmpty(
-    host.agentsList?.mainKey ?? readHelloMainKey(host) ?? "main",
-  );
-  return rest === "global" || rest === "main" || rest === configuredMainKey
-    ? normalizeAgentId(parsed.agentId)
-    : undefined;
-}
-
-function resolveSelectedGlobalAgentId(
-  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
-): string | undefined {
-  const agentId =
-    host.assistantAgentId?.trim() ||
-    host.agentsList?.defaultId?.trim() ||
-    readHelloDefaultAgentId(host);
-  return agentId ? normalizeAgentId(agentId) : undefined;
-}
-
-function resolveDefaultAgentIdForList(host: Pick<ChatHost, "agentsList" | "hello">): string {
-  return normalizeAgentId(
-    host.agentsList?.defaultId ?? readHelloDefaultAgentId(host) ?? DEFAULT_AGENT_ID,
-  );
-}
-
 function scopedAgentIdForSession(host: ChatHost, sessionKey: string | undefined | null) {
-  return isGlobalSessionKey(sessionKey)
-    ? resolveSelectedGlobalAgentId(host)
-    : resolveGlobalAliasAgentId(host, sessionKey);
+  return isUiGlobalSessionKey(sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : (resolveUiGlobalAliasAgentId(host, sessionKey) ?? undefined);
 }
 
 function visibleSessionMatches(
@@ -282,8 +243,8 @@ function visibleSessionMatches(
   agentId: string | undefined,
 ): boolean {
   if (host.sessionKey !== sessionKey) {
-    const hostAliasAgentId = resolveGlobalAliasAgentId(host, host.sessionKey);
-    if (!hostAliasAgentId || !isGlobalSessionKey(sessionKey)) {
+    const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
+    if (!hostAliasAgentId || !isUiGlobalSessionKey(sessionKey)) {
       return false;
     }
     const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
@@ -291,10 +252,10 @@ function visibleSessionMatches(
       ? hostAliasAgentId === normalizeAgentId(expectedAgentId)
       : hostAliasAgentId === normalizeAgentId("main");
   }
-  if (!isGlobalSessionKey(sessionKey)) {
+  if (!isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const selectedAgentId = resolveSelectedGlobalAgentId(host);
+  const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(host);
   const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
   return expectedAgentId
     ? selectedAgentId === normalizeAgentId(expectedAgentId)
@@ -305,9 +266,9 @@ export function scopedAgentParamsForSession(
   host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
   sessionKey: string,
 ) {
-  const agentId = isGlobalSessionKey(sessionKey)
-    ? resolveSelectedGlobalAgentId(host)
-    : resolveGlobalAliasAgentId(host, sessionKey);
+  const agentId = isUiGlobalSessionKey(sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : resolveUiGlobalAliasAgentId(host, sessionKey);
   return agentId ? { agentId } : {};
 }
 
@@ -320,10 +281,10 @@ export function scopedAgentListParamsForSession(
   const agentId =
     parsed?.agentId ??
     (normalizedSessionKey === "global"
-      ? resolveSelectedGlobalAgentId(host)
+      ? resolveUiKnownSelectedGlobalAgentId(host)
       : normalizedSessionKey === "unknown"
         ? undefined
-        : resolveDefaultAgentIdForList(host));
+        : resolveUiDefaultAgentId(host));
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 
@@ -986,8 +947,8 @@ function isHistorySessionInfoForRequestedSession(
   }
   return Boolean(
     historySessionKey &&
-    isGlobalSessionKey(historySessionKey) &&
-    resolveGlobalAliasAgentId(host, requestedSessionKey),
+    isUiGlobalSessionKey(historySessionKey) &&
+    resolveUiGlobalAliasAgentId(host, requestedSessionKey),
   );
 }
 
@@ -998,8 +959,8 @@ function findSelectedSessionRow(
   historySessionKey: string | undefined,
 ): GatewaySessionRow | undefined {
   const requestedGlobalAgentId =
-    historySessionKey && isGlobalSessionKey(historySessionKey)
-      ? resolveGlobalAliasAgentId(host, sessionKey)
+    historySessionKey && isUiGlobalSessionKey(historySessionKey)
+      ? resolveUiGlobalAliasAgentId(host, sessionKey)
       : undefined;
   return sessionsResult?.sessions.find((session) => {
     if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
@@ -1007,7 +968,7 @@ function findSelectedSessionRow(
     }
     return (
       requestedGlobalAgentId != null &&
-      resolveGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+      resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
     );
   });
 }
@@ -1558,8 +1519,8 @@ function resolveAgentIdForSession(host: ChatHost): string | null {
   if (parsed?.agentId) {
     return parsed.agentId;
   }
-  if (isGlobalSessionKey(host.sessionKey)) {
-    return resolveSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
+  if (isUiGlobalSessionKey(host.sessionKey)) {
+    return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
   }
   return readHelloDefaultAgentId(host) || DEFAULT_AGENT_ID;
 }

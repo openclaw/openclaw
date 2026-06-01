@@ -34,4 +34,65 @@ describe("applyJobPatch delivery merge", () => {
       threadId: "99",
     });
   });
+
+  it("clears nullable delivery fields", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: "99",
+        accountId: "bot-a",
+        failureDestination: {
+          mode: "announce",
+          channel: "slack",
+          to: "C123",
+          accountId: "bot-b",
+        },
+      },
+    });
+    const patch = {
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        failureDestination: null,
+      },
+    } as Parameters<typeof applyJobPatch>[1];
+
+    applyJobPatch(job, patch);
+
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("clears nullable failure destination fields", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        failureDestination: {
+          mode: "announce",
+          channel: "slack",
+          to: "C123",
+          accountId: "bot-b",
+        },
+      },
+    });
+    const patch = {
+      delivery: {
+        failureDestination: {
+          channel: null,
+          to: null,
+          accountId: null,
+          mode: null,
+        },
+      },
+    } as Parameters<typeof applyJobPatch>[1];
+
+    applyJobPatch(job, patch);
+
+    expect(job.delivery?.failureDestination).toBeUndefined();
+  });
 });

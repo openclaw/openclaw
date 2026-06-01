@@ -12,7 +12,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
-import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
+import {
+  removePath,
+  removeStateAndLinkedPaths,
+  removeWorkspaceAttestationPaths,
+  removeWorkspaceDirs,
+} from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -199,6 +204,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   if (scopes.has("workspace")) {
     await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceAttestationPaths(workspaceDirs, runtime, { dryRun });
   }
 
   if (scopes.has("app")) {

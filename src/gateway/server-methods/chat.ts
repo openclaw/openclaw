@@ -99,10 +99,12 @@ import {
 } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
+  boundInFlightRunSnapshotForChatHistory,
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
   registerChatAbortController,
+  resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "../chat-abort.js";
 import {
@@ -2531,19 +2533,36 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: selectedAgent.agentId,
       modelCatalog,
     });
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const activeRunAgentId =
+      canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
     sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
       context,
       requestedKey: sessionKey,
       canonicalKey,
-      ...(canonicalKey === "global" && selectedAgent.agentId
-        ? { agentId: selectedAgent.agentId }
-        : {}),
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
+      defaultAgentId,
     });
     const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
     const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     sessionInfo.verboseLevel = verboseLevel;
+    // Surface any run still streaming for this session+agent so a client that
+    // switched away (and stopped receiving the run's per-agent-delivered events)
+    // can restore the in-flight assistant text on switch-back.
+    const inFlightRun = resolveInFlightRunSnapshot({
+      chatAbortControllers: context.chatAbortControllers,
+      chatRunBuffers: context.chatRunBuffers,
+      requestedSessionKey: sessionKey,
+      canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
+      agentId: activeRunAgentId,
+      defaultAgentId,
+    });
+    const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+      snapshot: inFlightRun,
+      messages: bounded.messages,
+      maxBytes: maxHistoryBytes,
+    });
     respond(true, {
       sessionKey,
       sessionId,
@@ -2553,6 +2572,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+      ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     });
   },
   "chat.message.get": async ({ params, respond, context }) => {
