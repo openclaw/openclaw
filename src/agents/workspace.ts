@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate as yieldImmediate, setTimeout as delay } from "node:timers/promises";
 import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -79,6 +79,20 @@ const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 // Git availability is process-stable; cache the probe result, including failure, until restart.
 let gitAvailabilityPromise: Promise<boolean> | null = null;
+const EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES = new Set([
+  ".git",
+  "node_modules",
+  ".openclaw",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  "__pycache__",
+  ".cache",
+]);
+const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
+const EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT = 20_000;
+const EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT = 128;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -129,7 +143,19 @@ export function workspaceFilesShareSourceIdentity(left: object, right: object): 
   );
 }
 
-async function readWorkspaceFileWithGuards(params: {
+async function closeFdAsync(fd: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    syncFs.close(fd, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
   useCache?: boolean;
@@ -137,10 +163,12 @@ async function readWorkspaceFileWithGuards(params: {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
     // read must not drop the agent's bootstrap file for the turn — this reader
-    // runs every turn for AGENTS/SOUL/TOOLS/etc. Retry the whole open+read so
-    // each attempt uses a fresh fd (retrying readFileSync on the same fd could
+    // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
+    // each attempt uses a fresh fd (retrying the read on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
+    // Use the async fd read/close helpers so the bootstrap reader never blocks
+    // the event loop during embedded_run bootstrap-context.
     return await retryAsync(
       async () => {
         const opened = await openRootFileFollowingParents({
@@ -165,7 +193,7 @@ async function readWorkspaceFileWithGuards(params: {
         const cached =
           params.useCache === false ? undefined : workspaceFileCache.get(params.filePath);
         if (cached?.identity === identity) {
-          syncFs.closeSync(opened.fd);
+          await closeFdAsync(opened.fd).catch(() => {});
           return { ok: true, content: cached.content, sourceIdentity };
         }
 
@@ -176,7 +204,9 @@ async function readWorkspaceFileWithGuards(params: {
           }
           return { ok: true, content, sourceIdentity };
         } finally {
-          syncFs.closeSync(opened.fd);
+          // Suppress close errors to avoid masking the original read error
+          // or causing unhandled rejections on NFS/FUSE filesystems.
+          await closeFdAsync(opened.fd).catch(() => {});
         }
       },
       {
@@ -1167,32 +1197,32 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    if (
-      (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
-    ) {
-      continue;
-    }
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
-    if (loaded.ok) {
-      const file: WorkspaceBootstrapFile = {
-        name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
-      };
-      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
-      result.push(file);
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
-    }
-  }
-  return result;
+  const results = await Promise.all(
+    entries.map(async (entry): Promise<WorkspaceBootstrapFile | null> => {
+      if (
+        (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
+        !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
+      ) {
+        return null;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
+      });
+      if (loaded.ok) {
+        const file: WorkspaceBootstrapFile = {
+          name: entry.name,
+          path: entry.filePath,
+          content: loaded.content,
+          missing: false,
+        };
+        setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+        return file;
+      }
+      return { name: entry.name, path: entry.filePath, missing: true };
+    }),
+  );
+  return results.filter((file): file is WorkspaceBootstrapFile => file !== null);
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME]);
@@ -1286,6 +1316,12 @@ function resolveGlobWalkRoot(pattern: string): string {
   return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
 }
 
+function hasIgnoredExtraBootstrapDir(relativePath: string): boolean {
+  return normalizeWorkspacePatternPath(relativePath)
+    .split("/")
+    .some((segment) => EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(segment));
+}
+
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
@@ -1293,8 +1329,12 @@ async function* walkWorkspaceFiles(
   matcher: Minimatch,
 ): AsyncGenerator<string> {
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
+  let visitedEntries = 0;
   while (stack.length > 0) {
     const currentRelativeDir = stack.pop() ?? "";
+    if (hasIgnoredExtraBootstrapDir(currentRelativeDir)) {
+      continue;
+    }
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
     if (!isPathInside(workspaceDir, currentDir)) {
       continue;
@@ -1311,6 +1351,13 @@ async function* walkWorkspaceFiles(
     }
 
     for (const entry of entries) {
+      visitedEntries += 1;
+      if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
+        await yieldImmediate();
+      }
+      if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+        return;
+      }
       const childRelativePath = currentRelativeDir
         ? path.join(currentRelativeDir, entry.name)
         : entry.name;
@@ -1336,8 +1383,27 @@ async function resolveExtraBootstrapPatternPaths(
   if (!strictRead && typeof fs.glob === "function") {
     try {
       const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+      let visitedEntries = 0;
+      for await (const match of fs.glob(pattern, {
+        cwd: workspaceDir,
+        exclude: (candidate) => hasIgnoredExtraBootstrapDir(candidate),
+      })) {
+        visitedEntries += 1;
+        if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
+          await yieldImmediate();
+        }
+        if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+          break;
+        }
+        // Belt-and-suspenders: fs.glob exclude support varies by Node version,
+        // so re-check ignored dirs on each yielded match.
+        if (hasIgnoredExtraBootstrapDir(match)) {
+          continue;
+        }
         matches.push(match);
+        if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
+          break;
+        }
       }
       return matches;
     } catch {
@@ -1362,6 +1428,9 @@ async function resolveExtraBootstrapPatternPaths(
     strictRead,
     matcher,
   )) {
+    if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
+      break;
+    }
     matches.push(candidate);
   }
   return matches.length > 0 ? matches : [pattern];
