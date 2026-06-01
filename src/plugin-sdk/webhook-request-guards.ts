@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
+/** Body-read budget profile for unauthenticated versus already-authenticated webhook phases. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 
 export {
@@ -21,6 +22,7 @@ export {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 
+/** Default request body caps shared by webhook plugin handlers. */
 export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   /** Strict limit for unauthenticated requests before signature/auth checks complete. */
   preAuth: {
@@ -34,6 +36,7 @@ export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   },
 });
 
+/** Default per-key concurrency caps for webhook request pipelines. */
 export const WEBHOOK_IN_FLIGHT_DEFAULTS = Object.freeze({
   /** Maximum concurrent handlers for one resolved account, peer, route, or IP key. */
   maxInFlightPerKey: 8,
@@ -57,6 +60,8 @@ function resolveWebhookBodyReadLimits(params: {
   timeoutMs?: number;
   profile?: WebhookBodyReadProfile;
 }): { maxBytes: number; timeoutMs: number } {
+  // Pre-auth readers stay intentionally small and fast; post-auth handlers can
+  // opt into provider payload sizes after the source has been verified.
   const defaults =
     params.profile === "pre-auth"
       ? WEBHOOK_BODY_READ_DEFAULTS.preAuth
@@ -80,6 +85,8 @@ function respondWebhookBodyReadError(params: {
   invalidMessage?: string;
 }): { ok: false } {
   const { res, code, invalidMessage } = params;
+  // Keep low-level body-reader error codes mapped to stable webhook HTTP
+  // responses so every plugin rejects malformed traffic consistently.
   if (code === "PAYLOAD_TOO_LARGE") {
     res.statusCode = 413;
     res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
@@ -121,6 +128,8 @@ export function createWebhookInFlightLimiter(options?: {
 
   return {
     tryAcquire: (key: string) => {
+      // Empty keys mean the caller could not derive a stable account/peer/IP
+      // identity; skip accounting instead of collapsing all traffic together.
       if (!key) {
         return true;
       }
