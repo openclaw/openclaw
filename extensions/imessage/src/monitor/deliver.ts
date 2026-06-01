@@ -16,6 +16,10 @@ import {
 import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
+type ReplyPayloadWithReplySource = ReplyPayload & {
+  replyToIdSource?: "explicit" | "implicit";
+};
+
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -39,6 +43,7 @@ export async function deliverReplies(params: {
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
+    const replyPayload = payload as ReplyPayloadWithReplySource;
     const rawText = sanitizeOutboundText(payload.text ?? "");
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(rawText, tableMode),
@@ -54,6 +59,9 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
+          ...(replyPayload.replyToIdSource
+            ? { replyToIdSource: replyPayload.replyToIdSource }
+            : {}),
           ...(params.replyRequesterSender
             ? { replyRequesterSender: params.replyRequesterSender }
             : {}),
@@ -75,6 +83,9 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
+          ...(replyPayload.replyToIdSource
+            ? { replyToIdSource: replyPayload.replyToIdSource }
+            : {}),
           ...(params.replyRequesterSender
             ? { replyRequesterSender: params.replyRequesterSender }
             : {}),
