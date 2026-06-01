@@ -11,15 +11,25 @@ export type MessageAckState = "pending" | "acked" | "nacked";
 
 /** Mutable receive context passed through durable inbound message processing. */
 export type MessageReceiveContext<TMessage = unknown> = {
+  /** Provider-native inbound message id. */
   id: string;
+  /** Channel id that received the inbound message. */
   channel: string;
+  /** Optional account scope for multi-account channels. */
   accountId?: string;
+  /** Provider-native or normalized inbound message payload. */
   message: TMessage;
+  /** Policy controlling when the message should be acknowledged. */
   ackPolicy: MessageAckPolicy;
+  /** Current acknowledgement state. */
   ackState: MessageAckState;
+  /** Timestamp recorded when ack succeeds. */
   ackedAt?: number;
+  /** Human-readable nack error when acknowledgement fails. */
   nackErrorMessage?: string;
+  /** Timestamp when core accepted the inbound message for processing. */
   receivedAt: number;
+  /** Cancellation signal for downstream receive processing. */
   signal: AbortSignal;
   shouldAckAfter(stage: MessageAckStage): boolean;
   ack(): Promise<void>;
