@@ -16,16 +16,19 @@ public struct DeviceIdentity: Codable, Sendable {
 }
 
 enum DeviceIdentityPaths {
+    private static let deviceStateDirEnv = ["OPENCLAW_DEVICE_STATE_DIR"]
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
+    private static let nativeStateDirIdentityOptInEnv = "OPENCLAW_MAC_ALLOW_STATE_DIR_IDENTITY"
 
-    static func stateDirURL() -> URL {
-        for key in self.stateDirEnv {
-            if let raw = getenv(key) {
-                let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !value.isEmpty {
-                    return URL(fileURLWithPath: value, isDirectory: true)
-                }
-            }
+    static func stateDirURL(bundleIdentifier: String? = Bundle.main.bundleIdentifier) -> URL {
+        if let override = self.envPath(for: self.deviceStateDirEnv) {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+
+        if self.shouldHonorSharedStateDir(bundleIdentifier: bundleIdentifier),
+           let override = self.envPath(for: self.stateDirEnv)
+        {
+            return URL(fileURLWithPath: override, isDirectory: true)
         }
 
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
@@ -33,6 +36,36 @@ enum DeviceIdentityPaths {
         }
 
         return FileManager.default.temporaryDirectory.appendingPathComponent("openclaw", isDirectory: true)
+    }
+
+    private static func envPath(for keys: [String]) -> String? {
+        for key in keys {
+            if let raw = getenv(key) {
+                let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func shouldHonorSharedStateDir(bundleIdentifier: String?) -> Bool {
+        if let raw = getenv(self.nativeStateDirIdentityOptInEnv) {
+            let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["1", "true", "yes", "on"].contains(value) {
+                return true
+            }
+        }
+        if bundleIdentifier == "ai.openclaw.mac" {
+            return false
+        }
+        if let raw = getenv("__CFBundleIdentifier"),
+           String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines) == "ai.openclaw.mac"
+        {
+            return false
+        }
+        return true
     }
 }
 
