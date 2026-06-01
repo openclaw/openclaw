@@ -27,6 +27,8 @@ MODE="${MODE:-byok}"
 # ROCKIELAB_API_BASE defaults to the prod control-plane; per-tenant Fly
 # env can override (e.g. https://api.dev.rockielab.com).
 export ROCKIELAB_API_BASE="${ROCKIELAB_API_BASE:-https://api.rockielab.com}"
+export OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-${PLATFORM_TARGET_DIR:-${TARGET_DIR:-/home/runtime}}}"
+export OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-${HOME:-/home/runtime}/.claude/skills}"
 # ROCKIELAB_TENANT_ID is the sole tenant identity source. The context
 # API reads X-Tenant-Token literally as the tenant id, so broker tokens
 # and legacy ROCKIELAB_TENANT_TOKEN secrets must never supply identity.
@@ -59,6 +61,85 @@ log() {
   printf '[entrypoint] %s\n' "$*" >&2
 }
 
+sync_named_children() {
+  local src_parent="${1:?source parent required}"
+  local dest_parent="${2:?destination parent required}"
+  if [ ! -d "$src_parent" ]; then
+    return 0
+  fi
+  mkdir -p "$dest_parent"
+  local src_child name dest_child
+  for src_child in "$src_parent"/*; do
+    [ -e "$src_child" ] || continue
+    name="$(basename "$src_child")"
+    dest_child="$dest_parent/$name"
+    if [ -d "$src_child" ]; then
+      mkdir -p "$dest_child"
+      rsync -a --delete "$src_child/" "$dest_child/"
+    else
+      rsync -a "$src_child" "$dest_child"
+    fi
+  done
+}
+
+sync_platform_tree() {
+  local src="${1:?source path required}"
+  local dest="${2:?destination path required}"
+  if [ ! -d "$src" ]; then
+    return 0
+  fi
+  mkdir -p "$dest"
+  rsync -a --delete "$src/" "$dest/"
+}
+
+# Tenant volumes mount over $HOME, so image-baked ~/.claude and ~/.codex
+# content is invisible at runtime. Hydrate only platform-owned overlay paths
+# from the immutable image bundle. Tenant files such as settings.json,
+# mcp.json, backups/, .openclaw/, and unknown top-level data are untouched.
+#
+# skills/ and commands/ are copied one child directory/file at a time so a
+# tenant-added sibling skill remains present. A same-name skill is treated as
+# a platform skill collision and is reconciled to the image copy.
+hydrate_platform_home_bundle() {
+  local bundle="${ROCKIE_HOME_BUNDLE:-/opt/rockielab/home-bundle}"
+  if [ ! -d "$bundle" ]; then
+    log "WARN: hydrate_platform_home_bundle: ${bundle} not present; skipping"
+    return 0
+  fi
+
+  local home_dir="${HOME:-/home/runtime}"
+  local bundle_claude="$bundle/.claude"
+  local bundle_codex="$bundle/.codex"
+  local claude_home="$home_dir/.claude"
+  local codex_home="$home_dir/.codex"
+
+  if [ -d "$bundle_claude" ]; then
+    mkdir -p "$claude_home"
+    sync_named_children "$bundle_claude/skills" "$claude_home/skills"
+    sync_named_children "$bundle_claude/commands" "$claude_home/commands"
+    sync_platform_tree "$bundle_claude/hooks" "$claude_home/hooks"
+    sync_platform_tree "$bundle_claude/platform-memory" "$claude_home/platform-memory"
+    sync_platform_tree "$bundle_claude/platform-templates" "$claude_home/platform-templates"
+    sync_platform_tree "$bundle_claude/platform-scripts" "$claude_home/platform-scripts"
+    sync_platform_tree "$bundle_claude/platform-docs" "$claude_home/platform-docs"
+  fi
+
+  if [ -d "$bundle_codex" ]; then
+    mkdir -p "$codex_home"
+    sync_named_children "$bundle_codex/skills" "$codex_home/skills"
+    sync_named_children "$bundle_codex/commands" "$codex_home/commands"
+  fi
+
+  local claude_skill_count=0 codex_skill_count=0
+  if [ -d "$claude_home/skills" ]; then
+    claude_skill_count="$(find "$claude_home/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  fi
+  if [ -d "$codex_home/skills" ]; then
+    codex_skill_count="$(find "$codex_home/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  fi
+  log "hydrate_platform_home_bundle: synced claude_skills=${claude_skill_count:-0} codex_skills=${codex_skill_count:-0} from ${bundle}"
+}
+
 # Render /home/runtime/.claude/settings.json.j2 → settings.json with the
 # tenant/lab/target-dir placeholders substituted. Missing env vars are
 # best-effort: log a WARN, substitute empty, do NOT exit (byok/dev may
@@ -66,9 +147,21 @@ log() {
 # specs/runtime-platform-lab-id-env-2026-05-21.md).
 render_settings_json() {
   local template="/home/runtime/.claude/settings.json.j2"
+  local bundle_template="${ROCKIE_HOME_BUNDLE:-/opt/rockielab/home-bundle}/.claude/settings.json.j2"
   local output="/home/runtime/.claude/settings.json"
+  if [ ! -f "$template" ] && [ -f "$bundle_template" ]; then
+    template="$bundle_template"
+  fi
   if [ ! -f "$template" ]; then
     log "WARN: settings.json.j2 render: template ${template} not present; skipping"
+    return 0
+  fi
+  local current_settings=""
+  if [ -f "$output" ]; then
+    current_settings="$(tr -d '[:space:]' < "$output")"
+  fi
+  if [ -f "$output" ] && [ -n "$current_settings" ] && [ "$current_settings" != "{}" ]; then
+    log "settings.json render: ${output} already exists; preserving tenant-managed file"
     return 0
   fi
   local lab_id="${PLATFORM_LAB_ID:-${LAB_ID:-}}"
@@ -121,7 +214,8 @@ if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
 
-# --- settings.json render (must precede broker + any subscription CLI) -----
+# --- platform-owned home overlay + settings render (must precede broker) ----
+hydrate_platform_home_bundle
 render_settings_json
 
 # --- broker (always-on) -----------------------------------------------------

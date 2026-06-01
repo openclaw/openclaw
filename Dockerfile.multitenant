@@ -285,14 +285,21 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw && chmod 755 /app/openclaw.
 # Run as a dedicated non-root `runtime` user so ~/.claude/ and ~/.codex/
 # are writable and can be remounted with tenant-scoped volumes later.
 RUN useradd --create-home --shell /bin/bash --uid 1100 runtime && \
-    install -d -m 0755 -o runtime -g runtime /home/runtime/workspace
+    install -d -m 0755 -o runtime -g runtime \
+      /home/runtime/workspace \
+      /home/runtime/.claude \
+      /home/runtime/.codex
 
-# Drop in the assembled platform-skills overlay (~/.claude/, ~/.codex/).
-COPY --from=skills-assembly --chown=runtime:runtime /work/home/.claude /home/runtime/.claude
-COPY --from=skills-assembly --chown=runtime:runtime /work/home/.codex /home/runtime/.codex
+# Drop in the assembled platform-skills overlay outside /home/runtime.
+# Tenant Fly apps mount a persistent volume at /home/runtime, so image-layer
+# files copied there are hidden on existing tenants. The entrypoint hydrates
+# this bundle into the writable volume at boot.
+COPY --from=skills-assembly --chown=runtime:runtime /work/home/.claude /opt/rockielab/home-bundle/.claude
+COPY --from=skills-assembly --chown=runtime:runtime /work/home/.codex /opt/rockielab/home-bundle/.codex
 
 # Drop in the multitenant overlay files (entrypoint + settings template).
 COPY --chown=root:root overlay/multitenant/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=runtime:runtime overlay/multitenant/settings.json.j2 /opt/rockielab/home-bundle/.claude/settings.json.j2
 COPY --chown=runtime:runtime overlay/multitenant/settings.json.j2 /home/runtime/.claude/settings.json.j2
 RUN chmod 755 /usr/local/bin/entrypoint.sh
 
