@@ -1264,6 +1264,61 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("lets isolated ingress drain same-lane text follow-ups while a reply is active", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const events: string[] = [];
+      let releaseFirstTurn: (() => void) | undefined;
+      const firstTurnCanFinish = new Promise<void>((resolve) => {
+        releaseFirstTurn = resolve;
+      });
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "active topic 10 turn"),
+        topicUpdate(43, 10, "same topic follow-up"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            events.push("topic10:first:start");
+            const controller = new AbortController();
+            const fenceKey = "topic10:first";
+            beginTelegramReplyFence({
+              key: fenceKey,
+              laneKey: buildTelegramReplyFenceLaneKey({
+                accountId: "default",
+                sequentialKey: "telegram:-100:topic:10",
+              }),
+              supersede: false,
+              abortController: controller,
+            });
+            try {
+              await firstTurnCanFinish;
+              events.push("topic10:first:end");
+            } finally {
+              endTelegramReplyFence(fenceKey, controller);
+            }
+            abort.abort();
+            return;
+          }
+          if (update.update_id === 43) {
+            events.push("topic10:follow-up");
+            releaseFirstTurn?.();
+          }
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(events).toEqual(["topic10:first:start", "topic10:follow-up", "topic10:first:end"]),
+      );
+      await runPromise;
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      stopWorker();
+    });
+  });
+
   it("lets isolated ingress drain interleave different Telegram topic lanes", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -2139,7 +2194,7 @@ describe("TelegramPollingSession", () => {
     createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
     await writeSpooledTestUpdates(tempDir, [
       topicUpdate(42, 10, "wedged topic 10 turn"),
-      topicUpdate(43, 10, "later topic 10 turn"),
+      topicUpdate(43, 10, "/later topic 10 turn"),
     ]);
 
     const worker = createIdleIngressWorker();
@@ -2203,7 +2258,7 @@ describe("TelegramPollingSession", () => {
     });
     await writeSpooledTestUpdates(tempDir, [
       topicUpdate(42, 10, "wedged topic 10 turn"),
-      topicUpdate(43, 10, "later topic 10 turn"),
+      topicUpdate(43, 10, "/later topic 10 turn"),
     ]);
 
     const worker = createIdleIngressWorker();
@@ -2325,7 +2380,7 @@ describe("TelegramPollingSession", () => {
     createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
     await writeSpooledTestUpdates(tempDir, [
       topicUpdate(42, 10, "wedged topic 10 turn"),
-      topicUpdate(43, 10, "later topic 10 turn"),
+      topicUpdate(43, 10, "/later topic 10 turn"),
     ]);
 
     let releaseFirstWorker: (() => void) | undefined;
@@ -2429,7 +2484,7 @@ describe("TelegramPollingSession", () => {
     });
     await writeSpooledTestUpdates(tempDir, [
       topicUpdate(42, 10, "wedged topic 10 turn"),
-      topicUpdate(43, 10, "later topic 10 turn"),
+      topicUpdate(43, 10, "/later topic 10 turn"),
     ]);
     const workerListeners: WorkerPollSuccessListener[] = [];
     let stopWorker: (() => void) | undefined;
@@ -2537,7 +2592,10 @@ describe("TelegramPollingSession", () => {
         spoolDir: tempDir,
         update: {
           update_id: updateId,
-          message: { text: `dm ${updateId}`, chat: { id: 123, type: "private" } },
+          message: {
+            text: updateId === 43 ? "/dm 43" : `dm ${updateId}`,
+            chat: { id: 123, type: "private" },
+          },
         },
       });
     }

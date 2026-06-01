@@ -17,6 +17,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTelegramSequentialKeyForAccount } from "./active-run-ingress.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
@@ -195,6 +196,7 @@ type TelegramPollingSessionOpts = {
 type SpooledUpdateHandlerState = {
   handlerKey: string;
   laneKey: string;
+  replyFenceLaneKey: string;
   task: Promise<boolean>;
   update: ClaimedTelegramSpooledUpdate;
   updateId: number;
@@ -530,17 +532,28 @@ export class TelegramPollingSession {
   }
 
   #spooledUpdateLaneKey(update: TelegramSpooledUpdate): string {
+    return getTelegramSequentialKeyForAccount(
+      {
+        update: update.update as Parameters<typeof getTelegramSequentialKeyForAccount>[0]["update"],
+        ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
+      },
+      this.opts.accountId,
+    );
+  }
+
+  #spooledUpdateReplyFenceLaneKey(update: TelegramSpooledUpdate): string {
     return getTelegramSequentialKey({
       update: update.update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
       ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
     });
   }
 
-  #activeSpooledUpdateLaneKeysForSpool(spoolDir: string): Set<string> {
+  #activeSpooledUpdateRecoveryKeysForSpool(spoolDir: string): Set<string> {
     const laneKeys = new Set<string>();
     for (const [handlerKey, handler] of activeSpooledUpdateHandlersByLane) {
       if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
         laneKeys.add(handler.laneKey);
+        laneKeys.add(handler.replyFenceLaneKey);
       }
     }
     return laneKeys;
@@ -550,12 +563,13 @@ export class TelegramPollingSession {
     bot: TelegramBot;
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
-    const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
+    const activeRecoveryKeys = this.#activeSpooledUpdateRecoveryKeysForSpool(params.spoolDir);
     await recoverStaleTelegramSpooledUpdateClaims({
       spoolDir: params.spoolDir,
       staleMs: 0,
       shouldRecover: (claim) =>
-        !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
+        !activeRecoveryKeys.has(this.#spooledUpdateLaneKey(claim)) &&
+        !activeRecoveryKeys.has(this.#spooledUpdateReplyFenceLaneKey(claim)) &&
         !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
     });
     const claimedLaneKeys = new Set(
@@ -596,6 +610,7 @@ export class TelegramPollingSession {
       const state: SpooledUpdateHandlerState = {
         handlerKey,
         laneKey,
+        replyFenceLaneKey: this.#spooledUpdateReplyFenceLaneKey(update),
         task: handler,
         update: claimedUpdate,
         updateId: update.updateId,
@@ -677,7 +692,7 @@ export class TelegramPollingSession {
     }
     const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
       accountId: this.opts.accountId,
-      sequentialKey: handler.laneKey,
+      sequentialKey: handler.replyFenceLaneKey,
     });
     const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
     if (!abortedReplyWork) {
