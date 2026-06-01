@@ -198,7 +198,7 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
   }
   liveState = markLiveMessageCancelled(liveState);
 
-  let delivered = false;
+  let delivered;
   try {
     const result = await params.deliverNormally(params.payload);
     delivered = result !== false;

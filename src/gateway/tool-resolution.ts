@@ -1,11 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
-} from "../agents/pi-tools.policy.js";
+} from "../agents/agent-tools.policy.js";
+import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -36,8 +36,12 @@ export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
   accountId?: string;
   inboundEventKind?: InboundEventKind;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentTo?: string;
   agentThreadId?: string;
   senderIsOwner?: boolean;
@@ -62,8 +66,12 @@ export function resolveGatewayScopedTools(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
+  const messageProvider = params.messageProvider?.trim().toLowerCase();
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
-    params.inboundEventKind === "room_event" ? "message_tool_only" : undefined;
+    params.sourceReplyDeliveryMode ??
+    (params.inboundEventKind === "room_event" && messageProvider !== "webchat"
+      ? "message_tool_only"
+      : undefined);
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
@@ -145,6 +153,9 @@ export function resolveGatewayScopedTools(params: {
     sourceReplyDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
+    currentChannelId: params.currentChannelId ?? params.agentTo,
+    currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
+    currentMessageId: params.currentMessageId,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,

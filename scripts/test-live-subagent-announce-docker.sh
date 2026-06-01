@@ -76,11 +76,7 @@ if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" || -n "${GEMINI_API_
   DOCKER_EXTRA_ENV_FILES+=(--env-file "$docker_env_file")
 fi
 
-CONTAINER_NODE_OPTIONS="${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}"
-if [[ -z "$(openclaw_live_trim "$CONTAINER_NODE_OPTIONS")" ]]; then
-  CONTAINER_NODE_OPTIONS="--max-old-space-size=4096"
-fi
-CONTAINER_NODE_OPTIONS="$CONTAINER_NODE_OPTIONS --disable-warning=ExperimentalWarning"
+CONTAINER_NODE_OPTIONS="$(openclaw_live_container_node_options)"
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
@@ -128,7 +124,9 @@ echo "==> Run subagent announce live test in Docker"
 echo "==> Target: src/agents/subagent-announce.live.test.ts"
 echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.5}"
 echo "==> Profile file: $PROFILE_STATUS"
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_SUBAGENT_DOCKER_RUN_TIMEOUT:-1200s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \

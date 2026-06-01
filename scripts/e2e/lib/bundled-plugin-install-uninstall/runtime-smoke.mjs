@@ -11,6 +11,10 @@ const OUTPUT_CAPTURE_CHARS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS,
   1024 * 1024,
 );
+const LOG_SCAN_BYTES = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES,
+  256 * 1024,
+);
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
@@ -21,9 +25,28 @@ const RPC_READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
   210000,
 );
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS,
+  120000,
+);
+const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
+  5000,
+);
+const GATEWAY_READY_LOG_NEEDLE = Buffer.from("[gateway] ready");
+const READY_OFFSET_LOG_NEEDLES = [
+  GATEWAY_READY_LOG_NEEDLE,
+  Buffer.from("listening on ws://"),
+  Buffer.from("[gateway] http server listening"),
+];
+const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
 
 function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -36,11 +59,135 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function readFileChunk(file, startOffset, maxBytes) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: stat.size };
+  }
+
+  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
+  const safeStartOffset = Math.min(Math.max(0, Math.floor(Number(startOffset) || 0)), stat.size);
+  const bytesToRead = Math.min(safeMaxBytes, stat.size - safeStartOffset);
+  if (bytesToRead <= 0) {
+    return { buffer: Buffer.alloc(0), startOffset: safeStartOffset, size: stat.size };
+  }
+
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(file, "r");
+  try {
+    const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, safeStartOffset);
+    return { buffer: buffer.subarray(0, bytesRead), startOffset: safeStartOffset, size: stat.size };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readFileTailBuffer(file, maxBytes = LOG_SCAN_BYTES) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+  }
+  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
+  const startOffset = Math.max(0, stat.size - safeMaxBytes);
+  return readFileChunk(file, startOffset, safeMaxBytes);
+}
+
+export function readFileTail(file, maxBytes = LOG_SCAN_BYTES) {
+  return readFileTailBuffer(file, maxBytes).buffer.toString("utf8");
+}
+
+function findFirstNeedleOffset(file, needles) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return 0;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return 0;
+  }
+
+  const carryBytes = Math.max(0, ...needles.map((needle) => needle.length - 1));
+  const chunk = Buffer.alloc(Math.min(LOG_SCAN_BYTES, stat.size));
+  const fd = fs.openSync(file, "r");
+  let carry = Buffer.alloc(0);
+  let offset = 0;
+  try {
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(chunk.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, chunk, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const view = chunk.subarray(0, bytesRead);
+      const combined = carry.length > 0 ? Buffer.concat([carry, view]) : view;
+      const combinedOffset = offset - carry.length;
+      const indexes = needles
+        .map((needle) => combined.indexOf(needle))
+        .filter((index) => index >= 0);
+      if (indexes.length > 0) {
+        return combinedOffset + Math.min(...indexes);
+      }
+      carry = combined.subarray(Math.max(0, combined.length - carryBytes));
+      offset += bytesRead;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return 0;
+}
+
+export function createReadyLogScanner(file) {
+  const carryBytes = GATEWAY_READY_LOG_NEEDLE.length - 1;
+  let carry = Buffer.alloc(0);
+  let offset = 0;
+  let seen = false;
+
+  return () => {
+    if (seen) {
+      return true;
+    }
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      return false;
+    }
+    if (!stat.isFile() || stat.size <= 0) {
+      return false;
+    }
+    if (stat.size < offset) {
+      carry = Buffer.alloc(0);
+      offset = 0;
+    }
+    while (offset < stat.size) {
+      const { buffer } = readFileChunk(file, offset, LOG_SCAN_BYTES);
+      if (buffer.length === 0) {
+        break;
+      }
+      const combined = carry.length > 0 ? Buffer.concat([carry, buffer]) : buffer;
+      const matched = combined.includes(GATEWAY_READY_LOG_NEEDLE);
+      if (matched) {
+        seen = true;
+        return true;
+      }
+      carry = combined.subarray(Math.max(0, combined.length - carryBytes));
+      offset += buffer.length;
+    }
+    return false;
+  };
+}
+
 function manifestPath(pluginDir, pluginRoot) {
   const candidates = [
-    ...(isNonEmptyString(pluginRoot)
-      ? [path.join(pluginRoot, "openclaw.plugin.json")]
-      : []),
+    ...(isNonEmptyString(pluginRoot) ? [path.join(pluginRoot, "openclaw.plugin.json")] : []),
     path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json"),
     path.join(process.cwd(), "dist-runtime", "extensions", pluginDir, "openclaw.plugin.json"),
   ];
@@ -161,22 +308,47 @@ function formatCapturedOutput(label, buffer) {
   return `${prefix}${buffer.text}`;
 }
 
-function runCommand(command, args, options = {}) {
+export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const { timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
     });
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
+    let timedOut = false;
+    let settled = false;
     child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr?.on("data", (chunk) => {
       stderr = appendBoundedOutput(stderr, chunk);
     });
-    child.on("error", reject);
+    const clearCommandTimer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, timeoutMs)
+      : undefined;
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (clearCommandTimer) {
+        clearTimeout(clearCommandTimer);
+      }
+      reject(error);
+    });
     child.on("close", (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (clearCommandTimer) {
+        clearTimeout(clearCommandTimer);
+      }
       if (status === 0) {
         resolve({
           stdout: stdout.text,
@@ -193,11 +365,10 @@ function runCommand(command, args, options = {}) {
         .filter(Boolean)
         .join("\n")
         .trim();
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} failed with ${signal || status}${detail ? `\n${detail}` : ""}`,
-        ),
-      );
+      const outcome = timedOut
+        ? `timed out after ${timeoutMs}ms`
+        : `failed with ${signal || status}`;
+      reject(new Error(`${command} ${args.join(" ")} ${outcome}${detail ? `\n${detail}` : ""}`));
     });
   });
 }
@@ -231,29 +402,37 @@ function startGateway(params) {
   return child;
 }
 
-async function stopGateway(child) {
-  if (!child || child.exitCode !== null) {
+export function hasChildExited(child) {
+  return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export async function stopGateway(child) {
+  if (!child || hasChildExited(child)) {
     return;
   }
   child.kill("SIGTERM");
   const started = Date.now();
-  while (child.exitCode === null && Date.now() - started < 10000) {
+  while (!hasChildExited(child) && Date.now() - started < 10000) {
     await delay(100);
   }
-  if (child.exitCode === null) {
+  if (!hasChildExited(child)) {
     child.kill("SIGKILL");
   }
 }
 
-async function waitForReady(params) {
+export async function waitForReady(params) {
   const started = Date.now();
   let lastError = "";
+  const readyLogSeen = createReadyLogScanner(params.logPath);
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (params.child.exitCode !== null) {
+    const remainingMs = Math.max(1, READY_TIMEOUT_MS - (Date.now() - started));
+    if (hasChildExited(params.child)) {
       throw new Error(`gateway exited before ready\n${tailFile(params.logPath)}`);
     }
     try {
-      const res = await fetch(`http://127.0.0.1:${params.port}/readyz`);
+      const res = await fetchHttpProbeStatus(params.port, "/readyz", {
+        timeoutMs: Math.min(HTTP_PROBE_TIMEOUT_MS, remainingMs),
+      });
       if (res.ok) {
         return;
       }
@@ -261,22 +440,45 @@ async function waitForReady(params) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    if (logShowsGatewayReady(params.logPath) && (await httpOk(params.port, "/healthz"))) {
+    const healthRemainingMs = Math.max(1, READY_TIMEOUT_MS - (Date.now() - started));
+    if (
+      readyLogSeen() &&
+      (await httpOk(params.port, "/healthz", {
+        timeoutMs: Math.min(HTTP_PROBE_TIMEOUT_MS, healthRemainingMs),
+      }))
+    ) {
       return;
     }
-    await delay(250);
+    await delay(Math.min(250, Math.max(1, READY_TIMEOUT_MS - (Date.now() - started))));
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(params.logPath)}`);
 }
 
-function logShowsGatewayReady(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  return log.includes("[gateway] ready");
+async function fetchHttpProbeStatus(port, pathName, options = {}) {
+  const { timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
+  const controller = new AbortController();
+  const clearProbeTimer = timeoutMs
+    ? setTimeout(() => {
+        controller.abort();
+      }, timeoutMs)
+    : undefined;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
+      signal: controller.signal,
+    });
+    const status = { ok: res.ok, status: res.status };
+    await res.body?.cancel().catch(() => {});
+    return status;
+  } finally {
+    if (clearProbeTimer) {
+      clearTimeout(clearProbeTimer);
+    }
+  }
 }
 
-async function httpOk(port, pathName) {
+export async function httpOk(port, pathName, options = {}) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+    const res = await fetchHttpProbeStatus(port, pathName, options);
     return res.ok;
   } catch {
     return false;
@@ -288,7 +490,7 @@ async function assertHttpOk(port, pathName) {
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+      const res = await fetchHttpProbeStatus(port, pathName);
       if (res.ok) {
         return;
       }
@@ -298,7 +500,10 @@ async function assertHttpOk(port, pathName) {
     }
     await delay(500);
   }
-  throw lastError ?? new Error(`${pathName} did not return HTTP 200`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`${pathName} did not return HTTP 200`),
+    "Non-Error thrown",
+  );
 }
 
 async function assertReadyzProbe(options) {
@@ -306,7 +511,7 @@ async function assertReadyzProbe(options) {
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
+      const res = await fetchHttpProbeStatus(options.port, "/readyz");
       if (res.ok) {
         return;
       }
@@ -322,7 +527,10 @@ async function assertReadyzProbe(options) {
     }
     await delay(500);
   }
-  throw lastError ?? new Error("/readyz did not return HTTP 200");
+  throw toLintErrorObject(
+    lastError ?? new Error("/readyz did not return HTTP 200"),
+    "Non-Error thrown",
+  );
 }
 
 async function rpcCall(method, params, options) {
@@ -367,7 +575,10 @@ async function retryRpcCall(method, params, options) {
       await delay(500);
     }
   }
-  throw lastError ?? new Error(`gateway RPC ${method} timed out before retry`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
+    "Non-Error thrown",
+  );
 }
 
 function isRetryableGatewayCallError(error) {
@@ -496,14 +707,7 @@ async function runManifestProbes(plan, options) {
     }
   }
   if (plan.runtimeSlashAliases.length > 0 && plan.activeInThisProbe) {
-    const commands = await retryRpcCall(
-      "commands.list",
-      { scope: "both", includeArgs: true },
-      options,
-    );
-    for (const alias of plan.runtimeSlashAliases) {
-      assertCommandVisible(commands, alias);
-    }
+    await retryCommandsListWithAliases(plan.runtimeSlashAliases, options);
   } else if (plan.runtimeSlashAliases.length > 0) {
     console.log(
       `Runtime slash command smoke skipped for ${options.pluginId}: plugin is lazy in this probe`,
@@ -539,10 +743,10 @@ function isChannelVisible(payload, channel) {
   return false;
 }
 
-function assertCommandVisible(payload, alias) {
+export function isCommandVisible(payload, alias) {
   const expected = alias.replace(/^\//u, "").toLowerCase();
   const commands = Array.isArray(payload.commands) ? payload.commands : [];
-  const found = commands.some((command) => {
+  return commands.some((command) => {
     const names = [
       command?.name,
       command?.nativeName,
@@ -552,11 +756,32 @@ function assertCommandVisible(payload, alias) {
       .map((value) => value.replace(/^\//u, "").toLowerCase());
     return names.includes(expected);
   });
-  if (!found) {
+}
+
+function assertCommandVisible(payload, alias) {
+  const expected = alias.replace(/^\//u, "").toLowerCase();
+  if (!isCommandVisible(payload, alias)) {
     throw new Error(
       `commands.list did not include /${expected}: ${JSON.stringify(payload).slice(0, 2000)}`,
     );
   }
+}
+
+async function retryCommandsListWithAliases(aliases, options) {
+  const started = Date.now();
+  let commands;
+  while (Date.now() - started < COMMAND_TIMEOUT_MS) {
+    commands = await retryRpcCall("commands.list", { scope: "both", includeArgs: true }, options);
+    const missing = aliases.filter((alias) => !isCommandVisible(commands, alias));
+    if (missing.length === 0) {
+      return commands;
+    }
+    await delay(500);
+  }
+  for (const alias of aliases) {
+    assertCommandVisible(commands, alias);
+  }
+  return commands;
 }
 
 function assertToolVisible(payload, tool) {
@@ -586,32 +811,47 @@ function assertSpeechProviderVisible(payload, provider, label) {
 }
 
 async function runWatchdog(options) {
-  const readyIndex = findReadyLogIndex(options.logPath);
+  const readyOffset = findReadyLogOffset(options.logPath);
   await delay(WATCHDOG_MS);
-  if (options.child.exitCode !== null) {
+  if (hasChildExited(options.child)) {
     throw new Error(
       `gateway exited after ready for ${options.pluginId}\n${tailFile(options.logPath)}`,
     );
   }
   await retryRpcCall("health", {}, options);
-  assertNoPostReadyRuntimeDepsWork(options.logPath, readyIndex);
+  assertNoPostReadyRuntimeDepsWork(options.logPath, readyOffset);
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
-function findReadyLogIndex(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const candidates = ["[gateway] ready", "listening on ws://", "[gateway] http server listening"];
-  const indexes = candidates.map((needle) => log.indexOf(needle)).filter((index) => index >= 0);
-  return indexes.length > 0 ? Math.min(...indexes) : 0;
+export function findReadyLogOffset(logPath) {
+  return findFirstNeedleOffset(logPath, READY_OFFSET_LOG_NEEDLES);
 }
 
-function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const postReady = log.slice(Math.max(0, readyIndex));
-  const forbidden = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
-  const match = forbidden.find((pattern) => pattern.test(postReady));
-  if (match) {
-    throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(postReady)}`);
+export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
+  let stat;
+  try {
+    stat = fs.statSync(logPath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return;
+  }
+
+  let offset = Math.min(Math.max(0, Math.floor(Number(readyOffset) || 0)), stat.size);
+  let carry = "";
+  while (offset < stat.size) {
+    const { buffer } = readFileChunk(logPath, offset, LOG_SCAN_BYTES);
+    if (buffer.length === 0) {
+      break;
+    }
+    const text = carry + buffer.toString("utf8");
+    const match = FORBIDDEN_POST_READY_DEPS_WORK.find((pattern) => pattern.test(text));
+    if (match) {
+      throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(text)}`);
+    }
+    carry = text.slice(-256);
+    offset += buffer.length;
   }
 }
 
@@ -779,10 +1019,7 @@ export function createIsolatedStateEnv(label) {
 }
 
 function tailFile(file) {
-  if (!fs.existsSync(file)) {
-    return "";
-  }
-  return tailText(fs.readFileSync(file, "utf8"));
+  return tailText(readFileTail(file));
 }
 
 function tailText(text) {
@@ -807,4 +1044,18 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -53,6 +53,7 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
+const spanProcessorCtor = vi.hoisted(() => vi.fn());
 const unhandledRejectionHandlerState = vi.hoisted(() => {
   let handlers: Array<(reason: unknown) => boolean> = [];
   return {
@@ -136,6 +137,9 @@ vi.mock("@opentelemetry/sdk-metrics", () => ({
 }));
 
 vi.mock("@opentelemetry/sdk-trace-base", () => ({
+  BatchSpanProcessor: function BatchSpanProcessor(exporter?: unknown, options?: unknown) {
+    spanProcessorCtor(exporter, options);
+  },
   ParentBasedSampler: function ParentBasedSampler() {},
   TraceIdRatioBasedSampler: function TraceIdRatioBasedSampler() {},
 }));
@@ -261,6 +265,10 @@ function firstExporterOptions(mock: { mock: { calls: unknown[][] } }): { url?: s
   return mockCallArg(mock, 0) as { url?: string };
 }
 
+function firstSpanProcessorOptions(): { scheduledDelayMillis?: number } {
+  return mockCallArg(spanProcessorCtor, 1) as { scheduledDelayMillis?: number };
+}
+
 function firstSetSpanContext(): Record<string, unknown> {
   return mockCallArg(telemetryState.tracer.setSpanContext, 1) as Record<string, unknown>;
 }
@@ -338,7 +346,9 @@ async function emitAndCaptureLog(
 }
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function emitTrustedModelCallCompletedWithContent(
@@ -390,6 +400,7 @@ describe("diagnostics-otel service", () => {
     traceExporterCtor.mockClear();
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
+    spanProcessorCtor.mockClear();
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -1192,6 +1203,18 @@ describe("diagnostics-otel service", () => {
 
     const options = firstExporterOptions(traceExporterCtor);
     expect(options.url).toBe("https://collector.example.com/v1/Traces");
+    await service.stop?.(ctx);
+  });
+
+  test("applies flush interval to trace batching", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
+    ctx.config.diagnostics!.otel!.flushIntervalMs = 250;
+
+    await service.start(ctx);
+
+    expect(spanProcessorCtor).toHaveBeenCalledTimes(1);
+    expect(firstSpanProcessorOptions().scheduledDelayMillis).toBe(1000);
     await service.stop?.(ctx);
   });
 
@@ -3276,24 +3299,26 @@ describe("diagnostics-otel service", () => {
       },
       {
         inputMessages: [
-        { role: "user", content: "what changed?", timestamp: 1 },
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } }],
-        },
-        { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
-      ],
+          { role: "user", content: "what changed?", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "trace" } },
+            ],
+          },
+          { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
+        ],
         outputMessages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "the trace changed" }],
-          stopReason: "stop",
-        },
-      ],
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "the trace changed" }],
+            stopReason: "stop",
+          },
+        ],
         systemPrompt: "be exact",
         toolDefinitions: [
-        { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
-      ],
+          { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
+        ],
       },
     );
     await flushDiagnosticEvents();

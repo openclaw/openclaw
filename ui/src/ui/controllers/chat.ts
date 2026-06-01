@@ -10,9 +10,14 @@ import {
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import { formatConnectError } from "../connect-error.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
-import { areUiSessionKeysEquivalent } from "../session-key.ts";
+import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { GatewaySessionRow, GatewaySessionsDefaults } from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -24,7 +29,6 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
-const CHAT_HISTORY_REQUEST_MAX_CHARS = 4_000;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
@@ -45,8 +49,12 @@ function shouldApplyChatHistoryResult(
   state: ChatState,
   version: number,
   sessionKey: string,
+  agentId?: string,
 ): boolean {
-  return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
+  if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
+    return false;
+  }
+  return !isSelectedGlobalEventSessionKey(sessionKey) || resolveSelectedAgentId(state) === agentId;
 }
 
 function isSilentReplyStream(text: string): boolean {
@@ -186,6 +194,36 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
+function messageTimestampMs(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
+  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+}
+
+function historyHasSameOrNewerDisplayMessage(
+  historyMessages: unknown[],
+  signature: string,
+  message: unknown,
+): boolean {
+  const timestamp = messageTimestampMs(message);
+  if (timestamp == null) {
+    return false;
+  }
+  return historyMessages.some((historyMessage) => {
+    if (messageDisplaySignature(historyMessage) !== signature) {
+      return false;
+    }
+    const historyTimestamp = messageTimestampMs(historyMessage);
+    return historyTimestamp != null && historyTimestamp >= timestamp;
+  });
+}
+
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
@@ -239,6 +277,34 @@ export function preserveOptimisticTailMessages(
   return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
 }
 
+function collectLateOptimisticTailMessages(
+  previousMessages: unknown[],
+  currentMessages: unknown[],
+  historyMessages: unknown[],
+): unknown[] {
+  if (currentMessages === previousMessages || currentMessages.length <= previousMessages.length) {
+    return [];
+  }
+  if (previousMessages.some((message, index) => currentMessages[index] !== message)) {
+    return [];
+  }
+  const lateTail: unknown[] = [];
+  for (const message of currentMessages.slice(previousMessages.length)) {
+    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+      return [];
+    }
+    const signature = messageDisplaySignature(message);
+    if (!signature) {
+      return [];
+    }
+    if (historyHasSameOrNewerDisplayMessage(historyMessages, signature, message)) {
+      continue;
+    }
+    lateTail.push(message);
+  }
+  return lateTail;
+}
+
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
   if (!(err instanceof GatewayRequestError)) {
     return false;
@@ -261,7 +327,9 @@ function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type ChatState = {
@@ -279,16 +347,116 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  chatError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null } | null;
+  hello?: GatewayHelloOk | null;
+};
+
+export type ChatHistoryResult = {
+  messages?: Array<unknown>;
+  sessionId?: string;
+  thinkingLevel?: string;
+  defaults?: GatewaySessionsDefaults;
+  sessionInfo?: GatewaySessionRow;
 };
 
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
+  agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
+
+function setChatError(state: ChatState, error: string | null) {
+  state.lastError = error;
+  state.chatError = error;
+}
+
+function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalized === "global";
+}
+
+function isSelectedGlobalEventSessionKey(sessionKey: string | undefined | null): boolean {
+  if (isGlobalSessionKey(sessionKey)) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest) === "main";
+}
+
+function resolveSelectedAgentId(state: ChatState): string | undefined {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const assistantAgentId =
+    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
+      ? state.assistantAgentId
+      : undefined;
+  const defaultAgentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : undefined;
+  const helloDefaultAgentId =
+    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+    snapshot.sessionDefaults.defaultAgentId.trim()
+      ? snapshot.sessionDefaults.defaultAgentId
+      : undefined;
+  const selectedAgentId = assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId;
+  return selectedAgentId ? normalizeAgentId(selectedAgentId) : undefined;
+}
+
+function resolveDefaultAgentId(state: ChatState): string | undefined {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const agentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+          snapshot.sessionDefaults.defaultAgentId.trim()
+        ? snapshot.sessionDefaults.defaultAgentId
+        : undefined;
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+function chatEventAgentScopeMatches(state: ChatState, payload: ChatEventPayload): boolean {
+  if (
+    !isSelectedGlobalEventSessionKey(state.sessionKey) ||
+    !isGlobalSessionKey(payload.sessionKey)
+  ) {
+    return true;
+  }
+  const payloadAgentId =
+    typeof payload.agentId === "string" && payload.agentId.trim()
+      ? normalizeAgentId(payload.agentId)
+      : undefined;
+  const selectedAgentId = resolveSelectedAgentId(state);
+  return payloadAgentId
+    ? selectedAgentId !== undefined && payloadAgentId === selectedAgentId
+    : selectedAgentId === undefined || selectedAgentId === resolveDefaultAgentId(state);
+}
+
+function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
+  if (areUiSessionKeysEquivalent(payload.sessionKey, state.sessionKey)) {
+    return chatEventAgentScopeMatches(state, payload);
+  }
+  return (
+    isGlobalSessionKey(payload.sessionKey) &&
+    isSelectedGlobalEventSessionKey(state.sessionKey) &&
+    chatEventAgentScopeMatches(state, payload)
+  );
+}
 
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
@@ -302,78 +470,160 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+function resolveDeltaChatStreamText(
+  currentStream: string | null,
+  payload: ChatEventPayload,
+): string | null {
+  const snapshot = payload.message == null ? null : extractText(payload.message);
+  if (typeof payload.deltaText === "string") {
+    if (payload.replace === true) {
+      return payload.deltaText;
+    }
+    if (currentStream === null) {
+      return typeof snapshot === "string" ? snapshot : payload.deltaText;
+    }
+    if (typeof snapshot === "string") {
+      const prefixLength = snapshot.length - payload.deltaText.length;
+      if (
+        prefixLength !== currentStream.length ||
+        snapshot.slice(0, prefixLength) !== currentStream
+      ) {
+        return snapshot;
+      }
+    }
+    return `${currentStream}${payload.deltaText}`;
+  }
+  return typeof snapshot === "string" ? snapshot : null;
+}
+
+type InFlightChatHistoryRequest = {
+  client: NonNullable<ChatState["client"]>;
+  key: string;
+  messages: unknown[];
+  promise: Promise<ChatHistoryResult | undefined>;
+};
+
+const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
+
+export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
-    return;
+    return undefined;
   }
   const sessionKey = state.sessionKey;
+  const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
+    ? resolveSelectedAgentId(state)
+    : undefined;
+  const requestKey = `${sessionKey}\0${requestAgentId ?? ""}`;
+  const inFlight = inFlightChatHistoryRequests.get(state);
+  if (
+    inFlight?.key === requestKey &&
+    inFlight.client === state.client &&
+    inFlight.messages === state.chatMessages
+  ) {
+    return inFlight.promise;
+  }
+  const promise = loadChatHistoryUncached(state, state.client, sessionKey, requestAgentId).finally(
+    () => {
+      if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
+        inFlightChatHistoryRequests.delete(state);
+      }
+    },
+  );
+  inFlightChatHistoryRequests.set(state, {
+    client: state.client,
+    key: requestKey,
+    messages: state.chatMessages,
+    promise,
+  });
+  return promise;
+}
+
+async function loadChatHistoryUncached(
+  state: ChatState,
+  client: NonNullable<ChatState["client"]>,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+): Promise<ChatHistoryResult | undefined> {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
+  const previousRunId = state.chatRunId;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  state.lastError = null;
+  setChatError(state, null);
   try {
-    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
+    let res: ChatHistoryResult;
     for (;;) {
       try {
-        res = await state.client.request<{
-          messages?: Array<unknown>;
-          sessionId?: string;
-          thinkingLevel?: string;
-        }>("chat.history", {
+        res = await client.request<ChatHistoryResult>("chat.history", {
           sessionKey,
+          ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
-          maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
         });
         break;
       } catch (err) {
-        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
-          return;
+        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+          return undefined;
         }
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
         if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
           await sleep(resolveStartupRetryDelayMs(err));
           if (!state.client || !state.connected) {
-            return;
+            return undefined;
           }
           continue;
         }
         throw err;
       }
     }
-    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
-      return;
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+      return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const lateOptimisticTail = collectLateOptimisticTailMessages(
+      previousMessages,
+      state.chatMessages,
+      visibleMessages,
+    );
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    if (lateOptimisticTail.length > 0) {
+      state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
+    }
     state.currentSessionId =
-      typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
-    state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+      typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
+        ? res.sessionInfo.sessionId
+        : typeof res.sessionId === "string" && res.sessionId.trim()
+          ? res.sessionId
+          : null;
+    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
+    if (!state.chatRunId || state.chatRunId === previousRunId) {
+      // Clear all streaming state — history includes tool results and text
+      // inline, so keeping streaming artifacts would cause duplicates.
+      maybeResetToolStream(state);
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    }
+    return res;
   } catch (err) {
-    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
-      return;
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+      return undefined;
     }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
-      state.lastError = formatMissingOperatorReadScopeMessage("existing chat history");
+      setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
-      state.lastError = String(err);
+      setChatError(state, String(err));
     }
   } finally {
     if (isLatestChatHistoryRequest(state, requestVersion)) {
       state.chatLoading = false;
     }
   }
+  return undefined;
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -414,22 +664,60 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-async function requestChatSend(
+export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+
+export type ChatSendAck = {
+  runId: string;
+  status: ChatSendAckStatus;
+};
+
+function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
+  if (!payload || typeof payload !== "object") {
+    return { runId: fallbackRunId, status: "started" };
+  }
+  const record = payload as Record<string, unknown>;
+  const runId =
+    typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
+  const status = record.status;
+  return {
+    runId,
+    status: status === "in_flight" || status === "ok" ? status : "started",
+  };
+}
+
+export async function requestChatSend(
   state: ChatState,
-  params: { message: string; attachments?: ChatAttachment[]; runId: string },
-) {
+  params: {
+    message: string;
+    attachments?: ChatAttachment[];
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+  },
+): Promise<ChatSendAck> {
+  const sessionKey = params.sessionKey ?? state.sessionKey;
+  const selectedAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveSelectedAgentId(state);
+  const currentSessionId = state.currentSessionId;
+  const canReuseCurrentSessionId =
+    sessionKey === state.sessionKey &&
+    (!isGlobalSessionKey(sessionKey) ||
+      (selectedAgentId !== undefined && selectedAgentId === resolveSelectedAgentId(state)));
   const sessionId =
-    typeof state.currentSessionId === "string" && state.currentSessionId.trim()
-      ? state.currentSessionId.trim()
+    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
+      ? currentSessionId.trim()
       : undefined;
-  await state.client!.request("chat.send", {
-    sessionKey: state.sessionKey,
+  const payload = await state.client!.request("chat.send", {
+    sessionKey,
+    ...(isGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
   });
+  return normalizeChatSendAck(payload, params.runId);
 }
 
 type AssistantMessageNormalizationOptions = {
@@ -481,6 +769,27 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function buildErrorAssistantMessage(payload: ChatEventPayload): Record<string, unknown> | null {
+  const normalized = normalizeFinalAssistantMessage(payload.message);
+  if (normalized && !shouldHideAssistantChatMessage(normalized)) {
+    return normalized;
+  }
+  const error = payload.errorMessage?.trim();
+  if (!error) {
+    return null;
+  }
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: error.startsWith("⚠️") || error.startsWith("Error:") ? error : `Error: ${error}`,
+      },
+    ],
+    timestamp: Date.now(),
+  };
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -499,8 +808,61 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
+  appendUserChatMessage(state, msg, attachments, now);
 
-  // Build user message content blocks
+  state.chatSending = true;
+  setChatError(state, null);
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    clearRunStatus: true,
+  });
+  const runId = generateUUID();
+  state.chatRunId = runId;
+  state.chatStream = "";
+  state.chatStreamStartedAt = now;
+
+  try {
+    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    if (ack.status === "ok") {
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    } else {
+      state.chatRunId = ack.runId;
+    }
+    return ack.status === "ok" ? ack.runId : runId;
+  } catch (err) {
+    const error = formatConnectError(err);
+    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      outcome: "interrupted",
+      sessionStatus: "failed",
+      runId,
+      sessionKey: state.sessionKey,
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+    setChatError(state, error);
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Error: " + error }],
+        timestamp: Date.now(),
+      },
+    ];
+    return null;
+  } finally {
+    state.chatSending = false;
+  }
+}
+
+export function appendUserChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+  timestamp = Date.now(),
+) {
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
   const contentBlocks: Array<{
     type: string;
     text?: string;
@@ -516,7 +878,6 @@ export async function sendChatMessage(
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
       const previewUrl = getChatAttachmentPreviewUrl(att);
@@ -546,51 +907,37 @@ export async function sendChatMessage(
       });
     }
   }
-
   state.chatMessages = [
     ...state.chatMessages,
     {
       role: "user",
       content: contentBlocks,
-      timestamp: now,
+      timestamp,
     },
   ];
+}
 
-  state.chatSending = true;
-  state.lastError = null;
-  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
-    clearRunStatus: true,
-  });
-  const runId = generateUUID();
-  state.chatRunId = runId;
-  state.chatStream = "";
-  state.chatStreamStartedAt = now;
-
-  try {
-    await requestChatSend(state, { message: msg, attachments, runId });
-    return runId;
-  } catch (err) {
-    const error = formatConnectError(err);
-    reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
-      outcome: "interrupted",
-      sessionStatus: "failed",
-      runId,
-      sessionKey: state.sessionKey,
-      clearLocalRun: true,
-      clearChatStream: true,
-    });
-    state.lastError = error;
-    state.chatMessages = [
-      ...state.chatMessages,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
-        timestamp: Date.now(),
-      },
-    ];
+async function sendChatMessageWithGeneratedRunId(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
     return null;
-  } finally {
-    state.chatSending = false;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
+  setChatError(state, null);
+  const runId = generateUUID();
+  try {
+    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    return ack.runId;
+  } catch (err) {
+    setChatError(state, formatConnectError(err));
+    return null;
   }
 }
 
@@ -599,23 +946,7 @@ export async function sendDetachedChatMessage(
   message: string,
   attachments?: ChatAttachment[],
 ): Promise<string | null> {
-  if (!state.client || !state.connected) {
-    return null;
-  }
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
-    return null;
-  }
-  state.lastError = null;
-  const runId = generateUUID();
-  try {
-    await requestChatSend(state, { message: msg, attachments, runId });
-    return runId;
-  } catch (err) {
-    state.lastError = formatConnectError(err);
-    return null;
-  }
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
 export async function sendSteerChatMessage(
@@ -623,23 +954,7 @@ export async function sendSteerChatMessage(
   message: string,
   attachments?: ChatAttachment[],
 ): Promise<string | null> {
-  if (!state.client || !state.connected) {
-    return null;
-  }
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
-    return null;
-  }
-  state.lastError = null;
-  const runId = generateUUID();
-  try {
-    await requestChatSend(state, { message: msg, attachments, runId });
-    return runId;
-  } catch (err) {
-    state.lastError = formatConnectError(err);
-    return null;
-  }
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
 export async function abortChatRun(state: ChatState): Promise<boolean> {
@@ -650,11 +965,26 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   try {
     await state.client.request(
       "chat.abort",
-      runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
+      runId
+        ? {
+            sessionKey: state.sessionKey,
+            ...(() => {
+              const agentId = resolveSelectedAgentId(state);
+              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
+            })(),
+            runId,
+          }
+        : {
+            sessionKey: state.sessionKey,
+            ...(() => {
+              const agentId = resolveSelectedAgentId(state);
+              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
+            })(),
+          },
     );
     return true;
   } catch (err) {
-    state.lastError = formatConnectError(err);
+    setChatError(state, formatConnectError(err));
     return false;
   }
 }
@@ -663,7 +993,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  const sessionMatches = areUiSessionKeysEquivalent(payload.sessionKey, state.sessionKey);
+  const hadActiveRunBeforeEvent = state.chatRunId !== null;
+  const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
@@ -704,10 +1035,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
       clearLocalRun: true,
       clearChatStream: true,
+      armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
 
   if (payload.state === "delta") {
-    const next = extractText(payload.message);
+    const next = resolveDeltaChatStreamText(state.chatStream, payload);
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&
@@ -757,8 +1089,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
+    const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
+    if (errorMessage) {
+      state.chatMessages = [...state.chatMessages, errorMessage];
+    }
     reconcileTerminalRun("interrupted", "failed");
-    state.lastError = payload.errorMessage ?? "chat error";
+    setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
 }

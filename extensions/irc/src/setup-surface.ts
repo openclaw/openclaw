@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type {
   ChannelSetupDmPolicy,
@@ -271,8 +272,9 @@ export const ircSetupWizard: ChannelSetupWizard = {
         return String(defaultPort);
       },
       validate: ({ value }) => {
-        const parsed = Number.parseInt(normalizeStringifiedOptionalString(value) ?? "", 10);
-        return Number.isFinite(parsed) && parsed >= 1 && parsed <= 65535
+        const raw = normalizeStringifiedOptionalString(value) ?? "";
+        const parsed = parseStrictPositiveInteger(raw);
+        return parsed !== undefined && parsed <= 65535
           ? undefined
           : "Use a port between 1 and 65535";
       },

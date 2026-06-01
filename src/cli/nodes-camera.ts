@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveCliName } from "./cli-name.js";
 import {
   asBoolean,
@@ -124,7 +125,7 @@ export async function writeUrlToFile(
     }
 
     const contentLengthRaw = res.headers.get("content-length");
-    const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+    const contentLength = parseStrictNonNegativeInteger(contentLengthRaw);
     if (
       typeof contentLength === "number" &&
       Number.isFinite(contentLength) &&
@@ -168,7 +169,7 @@ export async function writeUrlToFile(
 
     if (thrown) {
       await fs.unlink(filePath).catch(() => {});
-      throw thrown;
+      throw toLintErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
     await release();
@@ -248,4 +249,18 @@ export async function writeCameraClipPayloadToFile(params: {
     invalidPayloadMessage: "invalid camera.clip payload",
   });
   return filePath;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

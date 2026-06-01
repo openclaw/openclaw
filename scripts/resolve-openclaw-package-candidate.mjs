@@ -12,12 +12,15 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
 const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
 const PACKAGE_URL_MAX_REDIRECTS = 5;
+const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
+const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const TRUSTED_PACKAGE_SOURCE_POLICY = ".github/package-trusted-sources.json";
 const TRUSTED_PACKAGE_SOURCE_TOKEN_ENV = "OPENCLAW_TRUSTED_PACKAGE_TOKEN";
 const BLOCKED_PACKAGE_HOSTNAMES = new Set([
@@ -110,30 +113,52 @@ export function validateOpenClawPackageSpec(spec) {
   }
 }
 
+export function resolveNpmPackageCandidatePackRunner(packageSpec, outputDir, params = {}) {
+  validateOpenClawPackageSpec(packageSpec);
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: ["pack", packageSpec, "--ignore-scripts", "--json", "--pack-destination", outputDir],
+    platform: params.platform,
+  });
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const spawnOptions = {
       cwd: options.cwd ?? ROOT_DIR,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"],
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.shell !== undefined ? { shell: options.shell } : {}),
+      ...(options.windowsVerbatimArguments !== undefined
+        ? { windowsVerbatimArguments: options.windowsVerbatimArguments }
+        : {}),
+    };
+    const child = spawn(command, args, {
+      ...spawnOptions,
     });
     let timedOut = false;
+    let killTimer;
     const timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
             child.kill("SIGTERM");
-            setTimeout(() => child.kill("SIGKILL"), 5_000).unref?.();
+            killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+            killTimer.unref?.();
           }, options.timeoutMs);
     timeout?.unref?.();
-    let stdout = "";
-    let stderr = "";
+    let stdout = { text: "", truncatedChars: 0 };
+    let stderr = { text: "", truncatedChars: 0 };
     if (options.capture) {
       child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
+        stdout = appendBoundedCommandOutput(stdout, chunk, COMMAND_STDOUT_CAPTURE_MAX_CHARS);
       });
       child.stderr.on("data", (chunk) => {
-        stderr += String(chunk);
+        stderr = appendBoundedCommandOutput(stderr, chunk, COMMAND_STDERR_CAPTURE_MAX_CHARS);
       });
     }
     child.on("error", reject);
@@ -141,19 +166,49 @@ function run(command, args, options = {}) {
       if (timeout) {
         clearTimeout(timeout);
       }
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       if (timedOut) {
         reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
         return;
       }
       if (status === 0) {
-        resolve(stdout);
+        if (stdout.truncatedChars > 0) {
+          reject(
+            new Error(
+              `${command} ${args.join(" ")} produced more than ${COMMAND_STDOUT_CAPTURE_MAX_CHARS} captured stdout chars`,
+            ),
+          );
+          return;
+        }
+        resolve(stdout.text);
         return;
       }
-      const detail = stderr.trim() ? `\n${stderr.trim()}` : "";
+      const stderrText = formatCapturedCommandOutput(stderr).trim();
+      const detail = stderrText ? `\n${stderrText}` : "";
       reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}${detail}`));
     });
   });
 }
+
+function appendBoundedCommandOutput(buffer, chunk, maxChars) {
+  const nextText = buffer.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: buffer.truncatedChars };
+  }
+  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedCommandOutput(buffer) {
+  if (buffer.truncatedChars === 0) {
+    return buffer.text;
+  }
+  return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
+}
+
+export const runCommandForTest = run;
 
 async function walkFiles(dir) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -214,7 +269,7 @@ async function findSingleTarball(dir) {
 
 export async function readArtifactPackageCandidateMetadata(dir) {
   const metadataPath = path.join(path.resolve(ROOT_DIR, dir), "package-candidate.json");
-  let raw = "";
+  let raw;
   try {
     raw = await fs.readFile(metadataPath, "utf8");
   } catch (error) {
@@ -416,10 +471,7 @@ function ipv4FromHextets(high, low) {
 }
 
 function ipv4OctetsToHextets(octets) {
-  return [
-    ((octets[0] << 8) | octets[1]).toString(16),
-    ((octets[2] << 8) | octets[3]).toString(16),
-  ];
+  return [((octets[0] << 8) | octets[1]).toString(16), ((octets[2] << 8) | octets[3]).toString(16)];
 }
 
 function parseIpv6Parts(address) {
@@ -791,19 +843,24 @@ async function openFetchPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
   timeout.unref?.();
-  const response = await options.fetchImpl(parsed, {
-    headers: options.headers,
-    redirect: "manual",
-    signal: controller.signal,
-  }).catch((error) => {
-    clearTimeout(timeout);
-    if (error?.name === "AbortError") {
-      throw new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  });
+  const response = await options
+    .fetchImpl(parsed, {
+      headers: options.headers,
+      redirect: "manual",
+      signal: controller.signal,
+    })
+    .catch((error) => {
+      clearTimeout(timeout);
+      if (error?.name === "AbortError") {
+        throw new Error(
+          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      throw error;
+    });
   return {
     close: async () => closeResponseBody(response.body),
     response,
@@ -843,15 +900,20 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
     );
     request.on("error", reject);
     request.end();
-  }).catch((error) => {
-    clearTimeout(timeout);
-    if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-      throw new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  });
+  }).catch(
+    /** @param {unknown} error */ (error) => {
+      clearTimeout(timeout);
+      if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
+        throw new Error(
+          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      throw error;
+    },
+  );
   return {
     close: async () => closeResponseBody(response.body),
     response,
@@ -1006,19 +1068,15 @@ async function resolveCandidate(options) {
         options.outputName || DEFAULT_OUTPUT_NAME,
       ]);
     } else if (options.source === "npm") {
-      validateOpenClawPackageSpec(options.packageSpec);
-      const packOutput = await run(
-        "npm",
-        [
-          "pack",
-          options.packageSpec,
-          "--ignore-scripts",
-          "--json",
-          "--pack-destination",
-          outputDir,
-        ],
-        { capture: true },
-      );
+      const npmPackRunner = resolveNpmPackageCandidatePackRunner(options.packageSpec, outputDir, {
+        env: process.env,
+      });
+      const packOutput = await run(npmPackRunner.command, npmPackRunner.args, {
+        capture: true,
+        env: npmPackRunner.env,
+        shell: npmPackRunner.shell,
+        windowsVerbatimArguments: npmPackRunner.windowsVerbatimArguments,
+      });
       await moveNewestPackedTarball(
         outputDir,
         packOutput,
@@ -1141,9 +1199,11 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    console.error(usage());
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      console.error(usage());
+      process.exit(1);
+    },
+  );
 }

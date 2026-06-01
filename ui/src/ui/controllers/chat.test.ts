@@ -8,6 +8,7 @@ import {
   abortChatRun,
   handleChatEvent,
   loadChatHistory,
+  requestChatSend,
   sendChatMessage,
   type ChatEventPayload,
   type ChatState,
@@ -113,6 +114,95 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("does not arm stale active-row suppression for an unowned selected-session final", () => {
+    const state = createState({ sessionKey: "main" }) as ChatState & {
+      lastLocalTerminalReconcile?: unknown;
+    };
+    const payload: ChatEventPayload = {
+      runId: "observed-run",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Observed reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.lastLocalTerminalReconcile).toBeUndefined();
+  });
+
+  it("ignores selected-agent global events for another agent", () => {
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("ignores canonical global events for another selected agent main alias", () => {
+    const state = createState({
+      sessionKey: "agent:work:main",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("treats unscoped global events as default-agent events only", () => {
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-default-global",
+      sessionKey: "global",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("adopts canonical global deltas for the selected agent main alias", () => {
+    const state = createState({
+      sessionKey: "agent:work:main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Work reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-work-global");
+    expect(state.chatStream).toBe("Work reply");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
   it("accepts delta events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
       sessionKey: "main",
@@ -132,6 +222,129 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe("Live reply");
     expect(state.chatRunId).toBe("run-1");
+  });
+
+  it("appends gateway deltaText when the cumulative snapshot matches the current prefix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+  });
+
+  it("uses the cumulative snapshot when the first observed delta joins mid-stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+  });
+
+  it("appends gateway deltaText when no full message snapshot is present", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+  });
+
+  it("uses the cumulative snapshot when a missed delta would make append stale", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "!",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world!" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello world!");
+  });
+
+  it("uses the cumulative snapshot when a same-length missed replacement changes the prefix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "AB",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "E",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "CDE" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("CDE");
+  });
+
+  it("replaces the stream when gateway deltaText marks a replacement", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Alpha beta",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "Alpha",
+      replace: true,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "ignored snapshot" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Alpha");
   });
 
   it("adopts the run id for selected-session live deltas observed from another channel", () => {
@@ -725,6 +938,82 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage]);
   });
 
+  it("appends visible assistant text for error events with an error message", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Ping" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: 'No API key found for provider "openai".',
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(
+      state.chatMessages[1],
+      "assistant",
+      'Error: No API key found for provider "openai".',
+    );
+    expect(state.lastError).toBe('No API key found for provider "openai".');
+  });
+
+  it("prefers server-provided assistant error messages", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Configure provider auth, then try again." }],
+      timestamp: 10,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "raw gateway error",
+      message,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([message]);
+    expect(state.lastError).toBe("raw gateway error");
+  });
+
+  it("does not append an orphan error bubble when no run was active", () => {
+    const existingMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Error: request failed before start" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: null,
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-failed-before-start",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "request failed before start",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([existingMessage]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.lastError).toBe("request failed before start");
+  });
+
   it("drops NO_REPLY final payload from another run", () => {
     const state = createActiveStreamingState();
     const payload = createOtherRunNoReplyFinalPayload();
@@ -994,6 +1283,70 @@ describe("loadChatHistory filtering", () => {
 
     expect(state.chatMessages).toEqual(messages);
   });
+
+  it("applies current session metadata from chat history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionId: "legacy-session",
+      thinkingLevel: "low",
+      sessionInfo: {
+        key: "main",
+        sessionId: "session-main",
+        thinkingLevel: "medium",
+        modelProvider: "openai",
+        model: "gpt-5",
+        updatedAt: 123,
+      },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    const result = await loadChatHistory(state);
+
+    expect(result?.sessionInfo?.sessionId).toBe("session-main");
+    expect(state.currentSessionId).toBe("session-main");
+    expect(state.chatThinkingLevel).toBe("medium");
+  });
+
+  it("omits literal global agentId until selected/default agent is known", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const state = createState({
+      sessionKey: "global",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+  });
+
+  it("uses hello default agent for literal global history before agents list loads", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const state = createState({
+      sessionKey: "global",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    );
+  });
 });
 
 describe("sendChatMessage", () => {
@@ -1043,6 +1396,96 @@ describe("sendChatMessage", () => {
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
     expect(sendParams.message).toBe("continue");
+  });
+
+  it("does not reuse another global agent's visible session id for queued sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-work", status: "started" });
+    const state = createState({
+      assistantAgentId: "main",
+      currentSessionId: "session-main-visible",
+      sessionKey: "global",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestChatSend(state, {
+      message: "queued",
+      runId: "run-work",
+      sessionKey: "global",
+      agentId: "work",
+    });
+
+    expect(result).toEqual({ runId: "run-work", status: "started" });
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        message: "queued",
+        idempotencyKey: "run-work",
+      }),
+    );
+    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    expect(sendParams.sessionId).toBeUndefined();
+  });
+
+  it("omits literal global send agentId until selected/default agent is known", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
+    const state = createState({
+      sessionKey: "global",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await requestChatSend(state, {
+      message: "queued",
+      runId: "run-global",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+  });
+
+  it("uses hello default agent for literal global sends before agents list loads", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
+    const state = createState({
+      sessionKey: "global",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await requestChatSend(state, {
+      message: "queued",
+      runId: "run-global",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    );
+  });
+
+  it("adopts the run id and terminal status from the chat.send ack", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "gateway-complete-run", status: "ok" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "already handled");
+
+    expect(result).toBe("gateway-complete-run");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
   });
 
   it("serializes non-image chat attachments as files", async () => {
@@ -1336,7 +1779,6 @@ describe("loadChatHistory retry handling", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
       limit: 100,
-      maxChars: 4000,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
@@ -1494,6 +1936,171 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
+  it("coalesces duplicate in-flight history loads for the selected session", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    history.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+      thinkingLevel: "low",
+    });
+    await firstLoad;
+    await secondLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "ready" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("preserves a first send appended while the startup history request is in flight", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const optimisticMessage = {
+      role: "user",
+      content: [{ type: "text", text: "send before history settles" }],
+      timestamp: 123,
+    };
+    state.chatMessages = [optimisticMessage];
+    state.chatRunId = "run-after-history-start";
+    state.chatStream = "";
+    state.chatStreamStartedAt = 456;
+
+    history.resolve({ messages: [], thinkingLevel: "low" });
+    await load;
+
+    expect(state.chatMessages).toEqual([optimisticMessage]);
+    expect(state.chatRunId).toBe("run-after-history-start");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(456);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("preserves late assistant messages when startup history only catches up to the user turn", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "send before history settles" }],
+      timestamp: 123,
+    };
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "answer before history catches up" }],
+      timestamp: 456,
+    };
+    state.chatMessages = [userMessage, assistantMessage];
+
+    history.resolve({ messages: [userMessage], thinkingLevel: "low" });
+    await load;
+
+    expect(state.chatMessages).toEqual([userMessage, assistantMessage]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("keeps repeated late prompts when startup history only has an older matching prompt", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const repeatedPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 200,
+    };
+    state.chatMessages = [repeatedPrompt];
+
+    history.resolve({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "continue" }],
+          timestamp: 100,
+        },
+      ],
+      thinkingLevel: "low",
+    });
+    await load;
+
+    expect(state.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "continue" }],
+        timestamp: 100,
+      },
+      repeatedPrompt,
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("starts a fresh same-session history load after local messages change", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.chatMessages = [{ role: "user", content: [{ type: "text", text: "new local ask" }] }];
+    const freshLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "old history" }] }],
+    });
+    await staleLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "user", content: [{ type: "text", text: "new local ask" }] },
+    ]);
+
+    freshRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+    });
+    await freshLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+    ]);
+  });
+
   it("ignores stale history responses after switching sessions", async () => {
     const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
     const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
@@ -1539,5 +2146,37 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+  });
+
+  it("ignores stale global history responses after switching selected agents", async () => {
+    const workRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn((_method: string, params?: { agentId?: string; sessionKey?: string }) => {
+      if (params?.sessionKey === "global" && params.agentId === "work") {
+        return workRequest.promise;
+      }
+      throw new Error(`Unexpected request: ${JSON.stringify(params)}`);
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+    });
+
+    const load = loadChatHistory(state);
+    state.assistantAgentId = "main";
+    workRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "work history" }] }],
+      thinkingLevel: "high",
+    });
+    await load;
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBeNull();
   });
 });

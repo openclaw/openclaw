@@ -1,10 +1,19 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
+  resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
+  resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
+  resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
+  resolveRunVitestSpawnEnv,
+  resolveTestProjectsDelegationArgs,
+  resolveTestProjectsRunnerEnv,
+  resolveVitestCliEntry,
+  resolveVitestNoOutputHeartbeatMs,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -26,6 +35,36 @@ describe("scripts/run-vitest", () => {
       ]),
     ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
+  });
+
+  it("reports an actionable error when Vitest cannot be resolved", () => {
+    const error = new Error("Cannot find module 'vitest/package.json'");
+    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
+
+    expect(() =>
+      resolveVitestCliEntry({
+        baseDir: "/repo",
+        fsImpl: { existsSync: () => false },
+        requireResolve: () => {
+          throw error;
+        },
+      }),
+    ).toThrow(
+      [
+        "[vitest] node_modules is missing; Vitest cannot be resolved.",
+        "Install dependencies before running scripts/run-vitest.mjs:",
+        "  pnpm install --frozen-lockfile",
+        "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
+      ].join("\n"),
+    );
+  });
+
+  it("distinguishes missing Vitest from a completely missing dependency install", () => {
+    expect(
+      resolveMissingVitestDependencyMessage("/repo", {
+        existsSync: (filePath: string) => filePath.replaceAll("\\", "/").endsWith("node_modules"),
+      }),
+    ).toContain("[vitest] Vitest is not installed in node_modules.");
   });
 
   it("routes explicit unit ui tests through the narrow unit ui config", () => {
@@ -53,6 +92,103 @@ describe("scripts/run-vitest", () => {
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
+  it("routes explicit tooling tests through the tooling config", () => {
+    expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/scripts/run-vitest.test.ts",
+    ]);
+  });
+
+  it("keeps tooling-excluded explicit tests on existing routing", () => {
+    const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("keeps boundary tests on existing routing", () => {
+    const argv = ["run", "test/web-provider-boundary.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("fails explicit test-file runs when scoped configs would otherwise pass with no tests", () => {
+    expect(
+      resolveExplicitTestFileNoPassArgs([
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest.test.ts",
+      ]),
+    ).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/scripts/run-vitest.test.ts",
+      "--passWithNoTests=false",
+    ]);
+  });
+
+  it("inserts explicit no-test failure before Vitest passthrough args", () => {
+    expect(
+      resolveExplicitTestFileNoPassArgs(["run", "test/scripts/run-vitest.test.ts", "--", "-x"]),
+    ).toEqual(["run", "test/scripts/run-vitest.test.ts", "--passWithNoTests=false", "--", "-x"]);
+  });
+
+  it("does not force no-test failure for globs or basename filters", () => {
+    const argv = ["run", "run-vitest.test.ts", "test/**/*.test.ts"];
+    expect(resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
+  });
+
+  it("delegates bare explicit test files to the project router", () => {
+    const file = "test/scripts/run-vitest.test.ts";
+    for (const [argv, expected] of [
+      [[file], [file]],
+      [["run", file], [file]],
+      [
+        ["run", file, "--reporter=verbose"],
+        [file, "--reporter=verbose"],
+      ],
+      [
+        ["--reporter=verbose", "run", file],
+        ["--reporter=verbose", file],
+      ],
+      [
+        ["run", file, "--", "--watch"],
+        [file, "--", "--watch"],
+      ],
+      [
+        ["run", file, "--", "--reporter=verbose"],
+        [file, "--", "--reporter=verbose"],
+      ],
+    ] as const) {
+      expect(resolveTestProjectsDelegationArgs([...argv])).toEqual(expected);
+    }
+  });
+
+  it("keeps direct Vitest runs when project routing could change option semantics", () => {
+    const directArgvCases = [
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest.test.ts",
+      ],
+      ["--root", "packages/example", "src/example.test.ts"],
+      ["--project", "tooling", "test/scripts/run-vitest.test.ts"],
+      ["watch", "test/scripts/run-vitest.test.ts"],
+      ["dev", "test/scripts/run-vitest.test.ts"],
+      ["--watch", "test/scripts/run-vitest.test.ts"],
+      ["--run=false", "test/scripts/run-vitest.test.ts"],
+      ["--no-run", "test/scripts/run-vitest.test.ts"],
+      ["--run", "false", "test/scripts/run-vitest.test.ts"],
+      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
+      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
+    ];
+    for (const argv of directArgvCases) {
+      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+    }
+  });
+
   it("reports missing explicit test files before Vitest can silently ignore them", () => {
     const fsImpl = {
       existsSync: (filePath: string) =>
@@ -61,10 +197,7 @@ describe("scripts/run-vitest", () => {
 
     expect(
       resolveMissingExplicitTestFiles(
-        [
-          "src/agents/bash-tools.test.ts",
-          "test/agents/bash-tools.exec.background-abort.test.ts",
-        ],
+        ["src/agents/bash-tools.test.ts", "test/agents/bash-tools.exec.background-abort.test.ts"],
         "/repo",
         fsImpl,
       ),
@@ -166,6 +299,138 @@ describe("scripts/run-vitest", () => {
     expect(
       resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }),
     ).toBeNull();
+  });
+
+  it("defaults direct non-watch runs to the stall watchdog", () => {
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "-t", "watch"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=false"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch", "false"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--no-watch"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+    });
+    expect(resolveRunVitestSpawnEnv({ CI: "true", PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual(
+      {
+        CI: "true",
+        PATH: "/usr/bin",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+      },
+    );
+    expect(
+      resolveRunVitestSpawnEnv({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0", PATH: "/usr/bin" }, [
+        "run",
+      ]),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("uses a longer default stall watchdog for broad e2e configs", () => {
+    const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "run",
+        "--config",
+        "test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "run",
+        "--config=./test/vitest/vitest.ui-e2e.config.ts",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+    });
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "-c",
+        "/repo/test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+  });
+
+  it("does not default implicit interactive runs to the stall watchdog", () => {
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "--config",
+        "test/vitest/vitest.unit.config.ts",
+        "-t",
+        "watch",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("does not default explicit watch runs to the stall watchdog", () => {
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "--watch"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["-w"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=0"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--run=false"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["watch"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["dev"])).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("does not force the stall watchdog into delegated runner environments", () => {
+    expect(resolveTestProjectsRunnerEnv({ PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveTestProjectsRunnerEnv({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
+        PATH: "/usr/bin",
+      }),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
+      PATH: "/usr/bin",
+    });
   });
 
   it("spawns vitest in a detached process group on Unix hosts", () => {
@@ -307,6 +572,44 @@ describe("scripts/run-vitest", () => {
     }
   });
 
+  it("prints bounded heartbeats before killing silent vitest runs", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const logSpy = vi.fn();
+
+      installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 1000,
+        heartbeatMs: 400,
+        forceKillAfterMs: 0,
+        log: logSpy,
+        onTimeout: timeoutSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      vi.advanceTimersByTime(400);
+      expect(logSpy).toHaveBeenCalledWith("[vitest] still running with no output for 400ms.");
+
+      vi.advanceTimersByTime(400);
+      expect(logSpy).toHaveBeenCalledWith("[vitest] still running with no output for 800ms.");
+
+      stdout.emit("data", "still alive");
+      vi.advanceTimersByTime(400);
+      expect(logSpy).toHaveBeenCalledWith("[vitest] still running with no output for 400ms.");
+
+      vi.advanceTimersByTime(600);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        "[vitest] no output for 1000ms; terminating stalled Vitest process group.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("includes the runner label in watchdog logs when provided", () => {
     vi.useFakeTimers();
     try {
@@ -329,5 +632,14 @@ describe("scripts/run-vitest", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("parses the optional watchdog heartbeat interval", () => {
+    expect(
+      resolveVitestNoOutputHeartbeatMs({ OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "120000" }),
+    ).toBe(120000);
+    expect(
+      resolveVitestNoOutputHeartbeatMs({ OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "0" }),
+    ).toBeNull();
   });
 });

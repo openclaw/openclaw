@@ -319,22 +319,6 @@ function expectStringNotContaining(value: unknown, text: string) {
   expect(typeof value).toBe("string");
   expect(value as string).not.toContain(text);
 }
-
-function findMockCallArg(
-  mock: ReturnType<typeof vi.fn>,
-  predicate: (arg: Record<string, unknown>) => boolean,
-  argIndex = 0,
-) {
-  const call = mock.mock.calls.find((candidate) => {
-    const arg = candidate[argIndex];
-    return typeof arg === "object" && arg !== null && predicate(arg as Record<string, unknown>);
-  });
-  if (!call) {
-    throw new Error("Expected matching mock call");
-  }
-  return call[argIndex];
-}
-
 function createEnoentError() {
   const err = new Error("ENOENT") as NodeJS.ErrnoException;
   err.code = "ENOENT";

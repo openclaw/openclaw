@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
@@ -101,11 +101,11 @@ function resetWebAutoReplySessionSockets() {
 }
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   appendCronStyleCurrentTimeLine: (text: string) => text,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveAgentIdentity: (
     cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
@@ -118,7 +118,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     cfg.messages?.responsePrefix,
   resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
     cfg.messages?.messagePrefix,
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedAgent: vi.fn(),
 }));
 
 async function rmDirWithRetries(
@@ -136,7 +136,6 @@ async function rmDirWithRetries(
       maxRetries: attempts,
       retryDelay: delayMs,
     });
-    return;
   } catch {
     // Fall back for older Node implementations (or unexpected retry behavior).
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -149,7 +148,9 @@ async function rmDirWithRetries(
             ? String((retryErr as { code?: unknown }).code)
             : null;
         if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
           continue;
         }
         throw retryErr;

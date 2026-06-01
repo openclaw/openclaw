@@ -3,7 +3,9 @@ import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
+import type { listCodexAppServerModels } from "./src/app-server/models.js";
 import {
+  createIsolatedCodexAppServerClient,
   getSharedCodexAppServerClient,
   resetSharedCodexAppServerClientForTests,
 } from "./src/app-server/shared-client.js";
@@ -23,9 +25,41 @@ function createFakeCodexClient(): CodexAppServerClient {
   return {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
+    setActiveSharedLeaseCountProviderForUnscopedNotifications: vi.fn(),
     addCloseHandler: vi.fn(() => () => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
+}
+
+const TEST_CODEX_APP_SERVER_CONFIG = {
+  appServer: {
+    command: "/tmp/openclaw-test-codex",
+  },
+};
+
+async function listTestCodexAppServerModels(
+  options: Parameters<typeof listCodexAppServerModels>[0] = {},
+) {
+  expect(options.sharedClient).toBe(false);
+  const client = await createIsolatedCodexAppServerClient({
+    startOptions: options.startOptions,
+    timeoutMs: options.timeoutMs,
+    authProfileId: null,
+  });
+  try {
+    await client.request(
+      "model/list",
+      {
+        limit: options.limit ?? null,
+        cursor: options.cursor ?? null,
+        includeHidden: options.includeHidden ?? null,
+      },
+      { timeoutMs: options.timeoutMs },
+    );
+    return { models: [] };
+  } finally {
+    client.close();
+  }
 }
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
@@ -78,7 +112,7 @@ describe("codex provider", () => {
     });
     expectRecordFields(result.provider, {
       auth: "token",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
     });
     expect(result.provider.models).toHaveLength(1);
     expectRecordFields(result.provider.models[0], {
@@ -228,9 +262,11 @@ describe("codex provider", () => {
 
     await buildCodexProviderCatalog({
       env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+      pluginConfig: TEST_CODEX_APP_SERVER_CONFIG,
+      listModels: listTestCodexAppServerModels,
     });
 
-    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(client["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not close an active shared app-server client during live discovery", async () => {
@@ -240,13 +276,25 @@ describe("codex provider", () => {
       .mockReturnValueOnce(activeClient)
       .mockReturnValueOnce(discoveryClient);
 
-    await getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await getSharedCodexAppServerClient({
+      startOptions: {
+        transport: "stdio",
+        command: "/tmp/openclaw-test-codex",
+        commandSource: "config",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      timeoutMs: 1000,
+      authProfileId: null,
+    });
     await buildCodexProviderCatalog({
       env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+      pluginConfig: TEST_CODEX_APP_SERVER_CONFIG,
+      listModels: listTestCodexAppServerModels,
     });
 
-    expect(activeClient.close).not.toHaveBeenCalled();
-    expect(discoveryClient.close).toHaveBeenCalledTimes(1);
+    expect(activeClient["close"]).not.toHaveBeenCalled();
+    expect(discoveryClient["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("resolves arbitrary Codex app-server model ids as text-only until discovered", () => {
@@ -261,7 +309,7 @@ describe("codex provider", () => {
     expectRecordFields(model, {
       id: "custom-model",
       provider: "codex",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       input: ["text"],
     });

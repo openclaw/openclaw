@@ -1,3 +1,5 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { formatCliCommand } from "../cli/command-format.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
@@ -5,10 +7,10 @@ import {
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
-} from "./pi-embedded-helpers/errors.js";
-import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
-import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+} from "./embedded-agent-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
@@ -132,8 +134,8 @@ function readDirectStatusCode(err: unknown): number | undefined {
   if (typeof candidate === "number") {
     return candidate;
   }
-  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
-    return Number(candidate);
+  if (typeof candidate === "string") {
+    return parseStrictNonNegativeInteger(candidate);
   }
   return undefined;
 }
@@ -166,6 +168,46 @@ function readDirectErrorCode(err: unknown): string | undefined {
 
 function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
+}
+
+function isStableProviderErrorType(value: string): boolean {
+  if (
+    /^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+}
+
+function readDirectErrorType(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const directType = (err as { errorType?: unknown }).errorType;
+  if (typeof directType === "string") {
+    const trimmed = directType.trim();
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
+  if (typeof detailType === "string") {
+    const trimmed = detailType.trim();
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  const type = (err as { type?: unknown }).type;
+  if (typeof type === "string") {
+    const trimmed = type.trim();
+    if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
+      return undefined;
+    }
+    return isStableProviderErrorType(trimmed) ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+function getErrorType(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorType);
 }
 
 function readDirectProvider(err: unknown): string | undefined {
@@ -215,13 +257,14 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   return {
     status: readDirectStatusCode(err),
     code: readDirectErrorCode(err),
+    errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
   };
 }
 
-function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set()): boolean {
-  if (isSessionWriteLockTimeoutError(err)) {
+function hasSessionWriteLockContention(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isSessionWriteLockAcquireError(err)) {
     return true;
   }
   if (!err || typeof err !== "object") {
@@ -233,14 +276,14 @@ function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set())
   seen.add(err);
   const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
   return (
-    hasSessionWriteLockTimeout(candidate.error, seen) ||
-    hasSessionWriteLockTimeout(candidate.cause, seen) ||
-    hasSessionWriteLockTimeout(candidate.reason, seen)
+    hasSessionWriteLockContention(candidate.error, seen) ||
+    hasSessionWriteLockContention(candidate.cause, seen) ||
+    hasSessionWriteLockContention(candidate.reason, seen)
   );
 }
 
 function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
-  // Match by name to avoid importing pi-embedded-runner here (would create a cycle).
+  // Match by name to avoid importing embedded-agent-runner here (would create a cycle).
   return Boolean(
     err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
   );
@@ -273,7 +316,7 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
  * See #83510.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockTimeout(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
     return false;
   }
   if (isFailoverError(err)) {
@@ -289,7 +332,7 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (hasSessionWriteLockTimeout(err)) {
+  if (hasSessionWriteLockContention(err)) {
     return false;
   }
   if (readErrorName(err) === "TimeoutError") {
@@ -309,7 +352,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (readErrorName(err) !== "AbortError") {
     return false;
   }
-  if (hasSessionWriteLockTimeout(err)) {
+  if (hasSessionWriteLockContention(err)) {
     return false;
   }
   const message = getErrorMessage(err);
@@ -332,6 +375,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
   return {
     status: getStatusCode(err),
     code: getErrorCode(err),
+    errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
   };
@@ -417,7 +461,7 @@ function resolveFailoverClassificationFromErrorInternal(
   const hasExplicitFailoverMetadata =
     typeof inferSignalStatus(signal) === "number" ||
     (codeReason !== null && codeReason !== "timeout");
-  const hasSessionLock = hasSessionWriteLockTimeout(err);
+  const hasSessionLock = hasSessionWriteLockContention(err);
 
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
@@ -490,6 +534,59 @@ export function resolveFailoverReasonFromError(
   return failoverReasonFromClassification(
     resolveFailoverClassificationFromError(err, providerHint),
   );
+}
+
+/**
+ * Build an actionable remediation hint for a failover error when the failure
+ * reason is `auth` / `auth_permanent` and we have enough provider attribution
+ * to suggest a re-authentication command. Returns `undefined` for any other
+ * failure shape so callers can opportunistically append the hint without
+ * branching on every reason themselves.
+ *
+ * Keep the string short and copy-pasteable — operators see it in fallback
+ * summary errors and TUI status lines.
+ */
+export function buildFailoverRemediationHint(err: unknown): string | undefined {
+  if (!isFailoverError(err)) {
+    return undefined;
+  }
+  if (err.reason !== "auth" && err.reason !== "auth_permanent") {
+    return undefined;
+  }
+  const provider = err.provider?.trim();
+  if (!provider) {
+    return undefined;
+  }
+  const command = buildProviderReauthCommand(provider);
+  return command ? `Re-authenticate with: ${command}` : undefined;
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function buildProviderReauthCommand(
+  provider: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string | undefined {
+  const trimmed = provider.trim();
+  if (!trimmed || hasControlCharacter(trimmed)) {
+    return undefined;
+  }
+  return formatCliCommand(
+    `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`,
+    env,
+  );
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function describeFailoverError(err: unknown): {

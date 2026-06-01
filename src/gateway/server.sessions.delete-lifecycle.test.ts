@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "vitest";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { afterEach, expect, test } from "vitest";
+import {
+  readAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../acp/runtime/session-meta.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -18,6 +23,10 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
 
 function expectObject(value: unknown) {
   if (!value || typeof value !== "object") {
@@ -135,6 +144,72 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
   expect(deleted.payload?.deleted).toBe(true);
 });
 
+test("sessions.delete scopes selected global deletes to the requested agent", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await writeSessionStore({
+    entries: {},
+    storePath: path.join(dir, "prime-sessions.json"),
+  });
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
+    "utf-8",
+  );
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: "global",
+    agentId: "work",
+    deleteTranscript: false,
+  });
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as {
+    global?: { sessionId?: string };
+  };
+  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as {
+    global?: { sessionId?: string };
+  };
+  expect(mainStore.global?.sessionId).toBe("sess-main-global");
+  expect(workStore.global).toBeUndefined();
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -143,16 +218,18 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main"),
-      "discord:group:dev": sessionStoreEntry("sess-acp", {
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "runtime:delete",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      }),
+      "discord:group:dev": sessionStoreEntry("sess-acp"),
+    },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:discord:group:dev",
+    meta: {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:delete",
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: Date.now(),
     },
   });
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
@@ -191,6 +268,7 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
   expectObject(cancelSessionCall?.cfg);
   expect(cancelSessionCall?.reason).toBe("session-delete");
   expect(cancelSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
+  expect(readAcpSessionMeta({ sessionKey: "agent:main:discord:group:dev" })).toBeUndefined();
 });
 
 test("sessions.delete closes child ACP runtimes spawned from the deleted parent", async () => {
@@ -211,12 +289,19 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main"),
-      "acp-parent": sessionStoreEntry("sess-parent", { acp: acpMeta("agent:main:acp-parent") }),
+      "acp-parent": sessionStoreEntry("sess-parent"),
       "acp-child": sessionStoreEntry("sess-child", {
         spawnedBy: "agent:main:acp-parent",
-        acp: acpMeta("agent:main:acp-child"),
       }),
     },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:acp-parent",
+    meta: acpMeta("agent:main:acp-parent"),
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:acp-child",
+    meta: acpMeta("agent:main:acp-child"),
   });
 
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
@@ -232,6 +317,8 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
   ).map((call) => call[0]?.sessionKey);
   expect(closedKeys).toContain("agent:main:acp-parent");
   expect(closedKeys).toContain("agent:main:acp-child");
+  expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-parent" })).toBeUndefined();
+  expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-child" })).toBeUndefined();
 });
 
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {

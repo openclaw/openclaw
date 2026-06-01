@@ -137,7 +137,9 @@ export async function waitForDescendantSubagentSummary(params: {
     if (latest) {
       return latest;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, timings.gracePollMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, timings.gracePollMs);
+    });
   }
 
   // Final read after grace period expires.

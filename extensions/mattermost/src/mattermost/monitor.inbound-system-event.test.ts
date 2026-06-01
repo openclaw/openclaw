@@ -158,7 +158,7 @@ function createRuntimeCore(
     createInboundDebouncer?: typeof createInboundDebouncer;
   } = {},
 ) {
-  const runPrepared = vi.fn(
+  const dispatchPreparedForTest = vi.fn(
     async (turn: {
       storePath: string;
       routeSessionKey: string;
@@ -203,7 +203,7 @@ function createRuntimeCore(
           input: unknown,
           eventClass: { kind: "message"; canStartAgentTurn: true },
           preflight: Record<string, never>,
-        ) => Parameters<typeof runPrepared>[0];
+        ) => Parameters<typeof dispatchPreparedForTest>[0];
       };
     }) => {
       const input = params.adapter.ingest(params.raw);
@@ -212,7 +212,7 @@ function createRuntimeCore(
         { kind: "message", canStartAgentTurn: true },
         {},
       );
-      return await runPrepared(turn);
+      return await dispatchPreparedForTest(turn);
     },
   );
   return {
@@ -321,9 +321,8 @@ function createRuntimeCore(
         ),
         updateLastRoute: vi.fn(async () => {}),
       },
-      turn: {
+      inbound: {
         run,
-        runPrepared,
       },
       text: {
         chunkMarkdownTextWithMode: (text: string) => [text],
@@ -905,9 +904,10 @@ describe("mattermost inbound user posts", () => {
       team_id: "team-1",
       type: "D",
     });
-    const { monitorMattermostProvider } = await import("./monitor.js");
+    const { monitorMattermostProvider: monitorMattermostProviderLocal } =
+      await import("./monitor.js");
 
-    const monitor = monitorMattermostProvider({
+    const monitor = monitorMattermostProviderLocal({
       config: directConfig,
       runtime: testRuntime(),
       abortSignal: abortController.signal,

@@ -11,16 +11,16 @@ import {
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticModelStartedForTest,
+  markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
-  getDiagnosticSessionStateCountForTest,
   getDiagnosticSessionState,
+  getDiagnosticSessionStateCountForTest,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
@@ -31,15 +31,14 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 import {
-  logSessionStateChange,
-  logMessageQueued,
   diagnosticLogger,
+  logMessageQueued,
+  logSessionStateChange,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
 } from "./diagnostic.js";
 
 function createEmitMemorySampleMock() {
@@ -53,7 +52,9 @@ function createEmitMemorySampleMock() {
 }
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
@@ -381,6 +382,34 @@ describe("stuck session diagnostics threshold", () => {
     expectRecoveryCall(
       recoverStuckSession,
       { sessionId: "s1", sessionKey: "main", queueDepth: 1 },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("threads session files from heartbeat state into stuck-session recovery", () => {
+    const recoverStuckSession = vi.fn();
+    const sessionFile = "/tmp/openclaw-heartbeat-session.jsonl";
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({
+      sessionId: "s1",
+      sessionKey: "main",
+      sessionFile,
+      state: "processing",
+    });
+    vi.advanceTimersByTime(61_000);
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", sessionFile, queueDepth: 0 },
       ["ageMs", "stateGeneration"],
     );
   });
@@ -880,14 +909,25 @@ describe("stuck session diagnostics threshold", () => {
       },
       { recoverStuckSession },
     );
-    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    logSessionStateChange({
+      sessionId: "s1",
+      sessionKey: "main",
+      sessionFile: "/tmp/openclaw-active-abort-session.jsonl",
+      state: "processing",
+    });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
     vi.advanceTimersByTime(61_000);
 
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      {
+        sessionId: "s1",
+        sessionKey: "main",
+        sessionFile: "/tmp/openclaw-active-abort-session.jsonl",
+        queueDepth: 0,
+        allowActiveAbort: true,
+      },
       ["ageMs", "stateGeneration"],
     );
   });
@@ -1006,6 +1046,200 @@ describe("stuck session diagnostics threshold", () => {
       },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("recovers idle queued work blocked by stale model activity without active ownership", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "released",
+      action: "release_lane",
+      sessionId: "s1",
+      sessionKey: "main",
+      released: 0,
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5",
+      });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+      vi.advanceTimersByTime(59_000);
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stuck"),
+        "idle stale model activity event",
+      ),
+      {
+        type: "session.stuck",
+        state: "idle",
+        classification: "stale_session_state",
+        reason: "queued_work_without_active_run",
+        queueDepth: 1,
+        lastProgressReason: "model_call:started",
+      },
+    );
+    expectRecoveryCall(
+      recoverStuckSession,
+      {
+        sessionId: "s1",
+        sessionKey: "main",
+        queueDepth: 1,
+        expectedState: "idle",
+      },
+      ["ageMs", "stateGeneration"],
+    );
+    const recoveryParams = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    expect(recoveryParams.allowActiveAbort).toBeUndefined();
+  });
+
+  it("recovers idle queued work blocked by stale orphaned tool_call activity", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "released",
+      action: "release_lane",
+      sessionId: "s1",
+      sessionKey: "main",
+      released: 0,
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "shell",
+        toolCallId: "tc-1",
+      });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+      vi.advanceTimersByTime(59_000);
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stuck"),
+        "idle stale tool activity event",
+      ),
+      {
+        type: "session.stuck",
+        state: "idle",
+        classification: "stale_session_state",
+        reason: "queued_work_without_active_run",
+        queueDepth: 1,
+      },
+    );
+    const recoveryParams = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+    expect(recoveryParams.expectedState).toBe("idle");
+    expect(recoveryParams.allowActiveAbort).toBeUndefined();
+  });
+
+  it("recovers multiple stalled sessions independently without cross-session interference", async () => {
+    const recoverStuckSession = vi.fn().mockImplementation((params: { sessionId: string }) =>
+      Promise.resolve({
+        status: "released",
+        action: "release_lane",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionId === "s1" ? "agent-a" : "agent-b",
+        released: 0,
+      }),
+    );
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+
+    // Set up two independent sessions that both stall with orphaned model activity.
+    logSessionStateChange({ sessionId: "s1", sessionKey: "agent-a", state: "processing" });
+    markDiagnosticModelStartedForTest({
+      sessionId: "s1",
+      sessionKey: "agent-a",
+      runId: "run-a",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "agent-a", state: "idle" });
+
+    logSessionStateChange({ sessionId: "s2", sessionKey: "agent-b", state: "processing" });
+    markDiagnosticModelStartedForTest({
+      sessionId: "s2",
+      sessionKey: "agent-b",
+      runId: "run-b",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    logSessionStateChange({ sessionId: "s2", sessionKey: "agent-b", state: "idle" });
+
+    // Queue work on both sessions.
+    vi.advanceTimersByTime(59_000);
+    logMessageQueued({ sessionId: "s1", sessionKey: "agent-a", source: "user-a" });
+    logMessageQueued({ sessionId: "s2", sessionKey: "agent-b", source: "user-b" });
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+
+    // Both sessions should get independent recovery calls.
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
+    const calls = recoverStuckSession.mock.calls.map(
+      (c: unknown[]) => c[0] as Record<string, unknown>,
+    );
+    const s1Call = calls.find((c) => c.sessionId === "s1");
+    const s2Call = calls.find((c) => c.sessionId === "s2");
+    expect(s1Call).toBeDefined();
+    expect(s2Call).toBeDefined();
+    expect(s1Call!.sessionKey).toBe("agent-a");
+    expect(s2Call!.sessionKey).toBe("agent-b");
+    expect(s1Call!.expectedState).toBe("idle");
+    expect(s2Call!.expectedState).toBe("idle");
+    expect(s1Call!.allowActiveAbort).toBeUndefined();
+    expect(s2Call!.allowActiveAbort).toBeUndefined();
   });
 
   it("preserves queued idle work when abort reset releases active lane work", async () => {
@@ -1252,6 +1486,89 @@ describe("stuck session diagnostics threshold", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  it("does not re-emit session.recovery.requested when generation bumps mid-flight (idle-queued stall)", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    // Pin recover() to an unresolved Promise so the in-flight window spans two
+    // heartbeat ticks (production awaits abort/drain, settleMs up to 15s). Same
+    // seam as the already_in_flight dedup test above.
+    let resolveRecovery:
+      | ((outcome: {
+          status: "skipped";
+          action: "observe_only";
+          reason: "already_in_flight";
+          sessionId: string;
+          sessionKey: string;
+        }) => void)
+      | undefined;
+    const recoverStuckSession = vi.fn(
+      () =>
+        new Promise<{
+          status: "skipped";
+          action: "observe_only";
+          reason: "already_in_flight";
+          sessionId: string;
+          sessionKey: string;
+        }>((resolve) => {
+          resolveRecovery = resolve;
+        }),
+    );
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      // idle-queued-recoverable-stall setup: embedded run ownership + idle + queued.
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+      // T1 tick: lastProgressAgeMs > staleMs -> recoveryEligible -> coordinator key
+      // add, requested #1 emitted, recover() in-flight (pending).
+      vi.advanceTimersByTime(59_000);
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "t1" });
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+
+      // New message queued during the in-flight window -> state.generation +1 (but
+      // lastProgressAt not refreshed). Next tick the coordinator key becomes S:G+1.
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "t2-followup" });
+
+      // T2 tick (30s later): same session still idle-queued-stall -> re-classified.
+      vi.advanceTimersByTime(30_000);
+      await Promise.resolve();
+    } finally {
+      resolveRecovery?.({
+        status: "skipped",
+        action: "observe_only",
+        reason: "already_in_flight",
+        sessionId: "s1",
+        sessionKey: "main",
+      });
+      await Promise.resolve();
+      unsubscribe();
+    }
+
+    const requestedEvents = events.filter((event) => event.type === "session.recovery.requested");
+    // Before the fix (RED): coordinator key = `${ref}:${generation}`, so S:G and
+    //   S:G+1 are distinct -> a second requested event is emitted ->
+    //   requestedEvents.length === 2. The runtime sees the same ref and skips the
+    //   actual recovery as already_in_flight, leaving only a duplicate event.
+    // After the fix (GREEN): coordinator key is ref-only -> S:G+1 collides with the
+    //   in-flight S -> the coordinator also absorbs it as already_in_flight ->
+    //   requestedEvents.length === 1 (both dedup layers share granularity).
+    expect(requestedEvents).toHaveLength(1);
   });
 
   it("reports long-running sessions separately when active work is making progress", () => {
