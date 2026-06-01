@@ -3087,18 +3087,17 @@ export function renderApp(state: AppViewState) {
                 state.skillWorkshopStatusFilter,
                 state.skillWorkshopQuery,
               );
-              const selectedIndex = Math.max(
-                0,
-                visibleProposals.findIndex(
-                  (proposal) => proposal.key === state.skillWorkshopSelectedKey,
-                ),
+              const selectedIndex = visibleProposals.findIndex(
+                (proposal) => proposal.key === state.skillWorkshopSelectedKey,
               );
               const selectRelativeProposal = (delta: -1 | 1) => {
                 if (visibleProposals.length === 0) {
                   return;
                 }
                 const nextIndex =
-                  (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
+                  selectedIndex < 0
+                    ? 0
+                    : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
                 selectSkillWorkshopProposal(state, visibleProposals[nextIndex].key);
               };
               return m.renderSkillWorkshop({
@@ -3123,7 +3122,6 @@ export function renderApp(state: AppViewState) {
                 onQueryChange: (query) => (state.skillWorkshopQuery = query),
                 onFilePreviewQueryChange: (query) => (state.skillWorkshopFilePreviewQuery = query),
                 onQueueWidthChange: (width) => (state.skillWorkshopQueueWidth = width),
-                onQueueWidthCommit: (width) => (state.skillWorkshopQueueWidth = width),
                 onModeChange: (mode) => (state.skillWorkshopMode = mode),
                 onSelect: (key) => {
                   state.skillWorkshopFilePreviewKey = null;
@@ -3144,7 +3142,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onRevisionSubmit: (key) =>
                   void requestSkillWorkshopRevision(state, key, async (message) => {
-                    state.setTab("chat" as import("./navigation.ts").Tab);
+                    state.setTab("chat" as Tab);
                     await state.handleSendChat(message, { restoreDraft: true });
                   }),
                 onPreviewFile: (key, path) => {
