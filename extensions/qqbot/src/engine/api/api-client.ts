@@ -10,7 +10,6 @@
  */
 
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
-import { formatQqbotApiNetworkError } from "../errors.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
@@ -130,7 +129,7 @@ export class ApiClient {
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
       this.logger?.error?.(`[qqbot:api] <<< Network error: ${formatErrorMessage(err)}`);
-      throw new ApiError(formatQqbotApiNetworkError(path, formatErrorMessage(err)), 0, path);
+      throw new ApiError(`Network error [${path}]: ${formatErrorMessage(err)}`, 0, path);
     } finally {
       clearTimeout(timeoutId);
     }

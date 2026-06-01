@@ -25,11 +25,3 @@ export function formatQqbotTokenNetworkError(details: string): string {
     `Cause: ${details}`,
   ].join(" ");
 }
-
-export function formatQqbotApiNetworkError(path: string, details: string): string {
-  return [
-    `QQBot API request failed [${path}]. Check your network connection, server egress, and QQ Open Platform IP whitelist.`,
-    `Docs: ${QQBOT_DOCS_URL}`,
-    `Cause: ${details}`,
-  ].join(" ");
-}
