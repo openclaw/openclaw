@@ -1,3 +1,4 @@
+/** Effective model-content capture switches after diagnostics/OTel gates are applied. */
 export type DiagnosticModelContentCapturePolicy = {
   inputMessages: boolean;
   outputMessages: boolean;
@@ -27,6 +28,8 @@ function withDerivedFields(
 ): DiagnosticModelContentCapturePolicy {
   return {
     ...policy,
+    // Tool input/output capture is handled separately from prompt/response
+    // capture, so only model-visible content contributes to anyModelContent.
     anyModelContent:
       policy.inputMessages ||
       policy.outputMessages ||
@@ -35,6 +38,7 @@ function withDerivedFields(
   };
 }
 
+/** Resolves safe default-off LLM content capture policy from raw config. */
 export function resolveDiagnosticModelContentCapturePolicy(
   config: unknown,
 ): DiagnosticModelContentCapturePolicy {
@@ -52,6 +56,8 @@ export function resolveDiagnosticModelContentCapturePolicy(
 
   const captureContent = otel.captureContent;
   if (captureContent === true) {
+    // Boolean opt-in captures request/response content and tool definitions,
+    // but keeps system prompts behind the more explicit object form.
     return withDerivedFields({
       inputMessages: true,
       outputMessages: true,
