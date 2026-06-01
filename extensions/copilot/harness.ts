@@ -273,26 +273,15 @@ async function compactTrackedSdkSession(params: {
   const request = params.customInstructions?.trim()
     ? { customInstructions: params.customInstructions }
     : undefined;
-  let disconnected = false;
-  const disconnectSession = async (): Promise<void> => {
-    disconnected = true;
-    await session.disconnect();
-  };
   try {
     throwIfAborted(params.abortSignal);
-    const result = await session.rpc.history.compact(request);
-    await disconnectSession();
-    return result;
-  } catch (error) {
-    if (disconnected) {
-      throw error;
-    }
+    return await session.rpc.history.compact(request);
+  } finally {
     try {
-      await disconnectSession();
+      await session.disconnect();
     } catch {
-      // Preserve the compaction or cancellation failure; cleanup is best-effort here.
+      // Preserve the compaction or cancellation outcome; cleanup is best-effort here.
     }
-    throw error;
   }
 }
 

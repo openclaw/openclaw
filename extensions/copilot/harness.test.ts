@@ -1183,7 +1183,9 @@ describe("createCopilotAgentHarness", () => {
         tokensRemoved: 123,
         messagesRemoved: 4,
       }));
-      const disconnect = vi.fn(async () => undefined);
+      const disconnect = vi.fn(async () => {
+        throw new Error("disconnect failed");
+      });
       const resumeSession = vi.fn(async () => ({
         disconnect,
         rpc: { history: { compact } },
