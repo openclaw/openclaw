@@ -115,6 +115,7 @@ jobs:
               issue_number: pullRequest.number,
               per_page: 100,
             });
+            const labelNames = new Set(currentLabels.map((label) => label.name ?? ""));
 
             for (const label of currentLabels) {
               const name = label.name ?? "";
@@ -132,12 +133,14 @@ jobs:
               });
             }
 
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: [targetSizeLabel],
-            });
+            if (!labelNames.has(targetSizeLabel)) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [targetSizeLabel],
+              });
+            }
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@v9
         with:
