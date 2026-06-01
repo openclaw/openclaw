@@ -228,6 +228,26 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(JSON.stringify(payload)).not.toContain("alice");
   });
 
+  it("does not trust reply-route destination as requester identity", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:123456789",
+        OriginatingChannel: "telegram",
+        Provider: "cron-event",
+        Surface: "cron-event",
+        ChatType: "direct",
+      } as TemplateContext,
+      {
+        identityLinks: {
+          alice: ["telegram:123456789"],
+        },
+      },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["requester_identity"]).toBeUndefined();
+  });
+
   it("can resolve trusted requester identity from native direct user id", () => {
     const prompt = buildInboundMetaSystemPrompt(
       {

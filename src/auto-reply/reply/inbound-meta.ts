@@ -25,7 +25,7 @@ type TrustedRequesterIdentity = {
   canonical_id: string;
   source: "session.identityLinks";
   confidence: "trusted_config_match";
-  matched_by: "native_direct_user_id" | "sender_id" | "sender_e164" | "originating_to";
+  matched_by: "native_direct_user_id" | "sender_id" | "sender_e164";
 };
 
 function stripNullBytes(value: string): string {
@@ -436,18 +436,6 @@ function resolveTrustedRequesterIdentity(params: {
     value: params.ctx.SenderE164,
     matchedBy: "sender_e164",
   });
-  const chatType = normalizeChatType(params.ctx.ChatType);
-  const originatingTo = normalizeIdentityToken(params.ctx.OriginatingTo);
-  const normalizedChannel = normalizeIdentityToken(channel);
-  if ((chatType === "direct" || !chatType) && originatingTo && normalizedChannel) {
-    const token = originatingTo.startsWith(`${normalizedChannel}:`)
-      ? originatingTo
-      : `${normalizedChannel}:${originatingTo}`;
-    if (!seen.has(token)) {
-      seen.add(token);
-      candidates.push({ token, matchedBy: "originating_to" });
-    }
-  }
   if (candidates.length === 0) {
     return undefined;
   }
