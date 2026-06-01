@@ -780,7 +780,7 @@ function getDispatcherFinalOutcomeCounts(dispatcher: ReplyDispatcher): {
 } {
   return {
     cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
-    failed: dispatcher.getFailedCounts().final,
+    failed: dispatcher.getFailedCounts?.().final ?? 0,
   };
 }
 
