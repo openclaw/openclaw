@@ -368,6 +368,28 @@ async function workspaceRequiredBootstrapLooksCustomized(
   return fileDiffs.some(Boolean);
 }
 
+async function workspaceAttestedGeneratedFilesIntact(
+  dir: string,
+  attestationPath: string,
+): Promise<boolean> {
+  const generatedHashes = await readWorkspaceAttestationGeneratedHashes(attestationPath);
+  if (!generatedHashes) {
+    return false;
+  }
+  for (const [fileName, generatedHash] of generatedHashes) {
+    try {
+      const content = await fs.readFile(path.join(dir, fileName), "utf-8");
+      const contentHash = createHash("sha256").update(content).digest("hex");
+      if (contentHash !== generatedHash) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
   return await workspaceProfileLooksConfigured(params);
 }
@@ -862,15 +884,17 @@ export async function ensureAgentWorkspace(params?: {
       persistLegacyMigration: true,
     });
     const hasSetupState = Boolean(state.bootstrapSeededAt || state.setupCompletedAt);
+    const hasCustomizedRequiredBootstrap = await workspaceRequiredBootstrapLooksCustomized(dir, {
+      attestationPath: recentAttestationPath,
+    });
+    const hasConfiguredProfile = await workspaceProfileLooksConfigured({
+      dir,
+    });
     const hasWorkspaceEvidence =
-      hasSetupState ||
       bootstrapExists ||
-      (await workspaceRequiredBootstrapLooksCustomized(dir, {
-        attestationPath: recentAttestationPath,
-      })) ||
-      (await workspaceProfileLooksConfigured({
-        dir,
-      }));
+      hasCustomizedRequiredBootstrap ||
+      hasConfiguredProfile ||
+      (hasSetupState && (await workspaceAttestedGeneratedFilesIntact(dir, recentAttestationPath)));
     if (!hasWorkspaceEvidence) {
       throw new WorkspaceVanishedError({
         workspaceDir: dir,
