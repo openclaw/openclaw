@@ -23,6 +23,7 @@ import {
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -282,23 +283,17 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
-      const preserveSessionKeys = new Set<string>();
-      if (opts?.activeSessionKey) {
-        preserveSessionKeys.add(opts.activeSessionKey);
-      }
-      if (maintenance.preserveKeys) {
-        for (const key of maintenance.preserveKeys) {
-          preserveSessionKeys.add(key);
-        }
-      }
-      const finalPreserveKeys = preserveSessionKeys.size > 0 ? preserveSessionKeys : undefined;
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
+        opts?.activeSessionKey,
+        ...(maintenance.preserveKeys ?? []),
+      ]);
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         onPruned: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
         },
-        preserveKeys: finalPreserveKeys,
+        preserveKeys: preserveSessionKeys,
       });
       const countAfterPrune = Object.keys(store).length;
       const shouldRunCapMaintenance =
@@ -312,7 +307,7 @@ async function saveSessionStoreUnlocked(
             onCapped: ({ entry }) => {
               rememberRemovedSessionFile(removedSessionFiles, entry);
             },
-            preserveKeys: finalPreserveKeys,
+            preserveKeys: preserveSessionKeys,
           })
         : 0;
       const archivedDirs = new Set<string>();

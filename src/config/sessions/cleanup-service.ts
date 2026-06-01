@@ -17,6 +17,7 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -276,31 +277,25 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  // Build preserve set from active key and configured preserveKeys
-  const preserveSessionKeys = new Set<string>();
-  if (params.activeKey) {
-    preserveSessionKeys.add(params.activeKey);
-  }
-  if (params.maintenance.preserveKeys) {
-    for (const key of params.maintenance.preserveKeys) {
-      preserveSessionKeys.add(key);
-    }
-  }
-  const finalPreserveKeys = preserveSessionKeys.size > 0 ? preserveSessionKeys : undefined;
+  // Build preserve set from active key and configured preserveKeys using the existing collector
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
+    params.activeKey,
+    ...(params.maintenance.preserveKeys ?? []),
+  ]);
 
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     onPruned: ({ key }) => {
       staleKeys.add(key);
     },
-    preserveKeys: finalPreserveKeys,
+    preserveKeys: preserveSessionKeys,
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
-    preserveKeys: finalPreserveKeys,
+    preserveKeys: preserveSessionKeys,
   });
   const entryCleanupArtifactPaths = new Set<string>();
   addEntryArtifactPathsToSet({
