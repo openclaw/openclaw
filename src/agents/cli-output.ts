@@ -18,6 +18,7 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;
+  allowEmptySuccess?: boolean;
 };
 
 export type CliStreamingDelta = {
@@ -369,7 +370,12 @@ function parseClaudeCliJsonlResult(params: {
     }
     // Claude may finish with an empty result after tool-only work. Keep the
     // resolved session handle and usage instead of dropping them.
-    return { text: "", sessionId: params.sessionId, usage: params.usage };
+    return {
+      text: "",
+      sessionId: params.sessionId,
+      usage: params.usage,
+      allowEmptySuccess: true,
+    };
   }
   return null;
 }

@@ -131,13 +131,14 @@ function buildPreparedContext(params?: {
   openClawHistoryPrompt?: string;
   provider?: string;
   model?: string;
+  output?: "json" | "jsonl" | "text";
 }): PreparedCliRunContext {
   const provider = params?.provider ?? "codex-cli";
   const model = params?.model ?? "gpt-5.4";
   const backend = {
     command: "codex",
     args: ["exec", "--json"],
-    output: "text" as const,
+    output: params?.output ?? ("text" as const),
     input: "arg" as const,
     modelArg: "--model",
     sessionMode: "existing" as const,
@@ -1709,6 +1710,47 @@ describe("runCliAgent reliability", () => {
     await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
       "CLI backend returned an empty response.",
     );
+    expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+  });
+
+  it("accepts an empty Claude CLI result as a successful no-reply turn", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: `${JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "",
+          session_id: "claude-session-1",
+        })}\n`,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        output: "jsonl",
+      }),
+    );
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.executionTrace.fallbackUsed).toBe(false);
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 
