@@ -54,6 +54,7 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   },
 };
 
+/** Normalizes configured safe-bin names to executable-family identifiers. */
 export function normalizeSafeBinName(raw: string): string {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
@@ -69,10 +70,12 @@ function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefin
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }
 
+/** Applies command-family semantic deny rules that path trust alone cannot cover. */
 export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {
   return getSafeBinSemanticRule(params.binName)?.validate?.(params) ?? true;
 }
 
+/** Lists configured safe bins that are risky enough to warn operators at config time. */
 export function listRiskyConfiguredSafeBins(entries: Iterable<string>): Array<{
   bin: string;
   warning: string;

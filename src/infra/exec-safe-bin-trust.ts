@@ -27,8 +27,11 @@ type TrustedSafeBinCache = {
 };
 
 export type WritableTrustedSafeBinDir = {
+  /** Explicit trusted directory that is writable by group or world. */
   dir: string;
+  /** True when group write permission is set. */
   groupWritable: boolean;
+  /** True when world write permission is set. */
   worldWritable: boolean;
 };
 
@@ -73,6 +76,8 @@ function pathCaseInsensitive(value: string): boolean {
 
 function normalizeTrustComparisonPath(value: string): string {
   const resolved = path.resolve(value);
+  // Trust comparisons must match the filesystem's case behavior, not the
+  // platform default, because macOS volumes can be either sensitive or folded.
   return pathCaseInsensitive(resolved) ? resolved.toLowerCase() : resolved;
 }
 
@@ -84,6 +89,7 @@ function normalizeTrustedDir(value: string, forComparison = true): string | null
   return forComparison ? normalizeTrustComparisonPath(trimmed) : path.resolve(trimmed);
 }
 
+/** Trims and dedupes configured trusted safe-bin directories without resolving them. */
 export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null): string[] {
   if (!Array.isArray(entries)) {
     return [];
@@ -165,6 +171,7 @@ function buildTrustedSafeBinCacheKey(
   return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
 }
 
+/** Builds the trusted safe-bin directory set without using the process-local cache. */
 export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): Set<string> {
   const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
   const extraDirs = params.extraDirs ?? [];
@@ -178,6 +185,7 @@ export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): 
   return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
 }
 
+/** Returns cached trusted safe-bin directories for the current config inputs. */
 export function getTrustedSafeBinDirs(
   params: {
     baseDirs?: readonly string[];
@@ -205,12 +213,14 @@ export function getTrustedSafeBinDirs(
   return dirs;
 }
 
+/** Checks whether a resolved executable path lives in a trusted safe-bin directory. */
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
   const resolvedDir = normalizeTrustComparisonPath(path.dirname(path.resolve(params.resolvedPath)));
   return trustedDirs.has(resolvedDir);
 }
 
+/** Reports explicit trusted directories whose permissions allow replacement attacks. */
 export function listWritableExplicitTrustedSafeBinDirs(
   entries?: readonly string[] | null,
 ): WritableTrustedSafeBinDir[] {
