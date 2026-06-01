@@ -1,7 +1,13 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import {
+  adaptMessagePresentationForChannel,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
@@ -135,13 +141,23 @@ export default definePluginEntry({
           const accountId =
             replyEvent.accountId ?? replyCtx.accountId ?? replyCtx.pluginBinding?.accountId;
           if (adapter.sendPayload) {
-            await adapter.sendPayload({
+            const payloadContext = {
               cfg,
               to,
               text: payload.text ?? "",
               payload,
               ...(accountId ? { accountId } : {}),
               ...(threadId != null ? { threadId } : {}),
+            };
+            const renderedPayload = await renderCodexProgressReplyPayload({
+              adapter,
+              payload,
+              payloadContext,
+            });
+            await adapter.sendPayload({
+              ...payloadContext,
+              text: renderedPayload.text ?? "",
+              payload: renderedPayload,
             });
             return;
           }
@@ -164,6 +180,40 @@ export default definePluginEntry({
 type CodexInteractiveResult = {
   handled?: boolean;
 };
+
+type CodexProgressReplyPayloadContext = Parameters<
+  NonNullable<ChannelOutboundAdapter["sendPayload"]>
+>[0];
+
+async function renderCodexProgressReplyPayload(params: {
+  adapter: Pick<ChannelOutboundAdapter, "presentationCapabilities" | "renderPresentation">;
+  payload: ReplyPayload;
+  payloadContext: CodexProgressReplyPayloadContext;
+}): Promise<ReplyPayload> {
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  if (!presentation) {
+    return params.payload;
+  }
+  const adaptedPresentation = adaptMessagePresentationForChannel({
+    presentation,
+    capabilities: params.adapter.presentationCapabilities,
+  });
+  const adaptedPayload = { ...params.payload, presentation: adaptedPresentation };
+  const renderContext = {
+    ...params.payloadContext,
+    text: adaptedPayload.text ?? "",
+    payload: adaptedPayload,
+  };
+  return (
+    (params.adapter.renderPresentation
+      ? await params.adapter.renderPresentation({
+          payload: adaptedPayload,
+          presentation: adaptedPresentation,
+          ctx: renderContext,
+        })
+      : null) ?? adaptedPayload
+  );
+}
 
 type CodexInteractiveRegistration = {
   channel: "telegram" | "discord" | "slack";

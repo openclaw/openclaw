@@ -10,12 +10,18 @@ import {
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
+const handleCodexConversationInboundClaimMock = vi.hoisted(() => vi.fn());
+const handleCodexConversationBindingResolvedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt: runCodexAppServerAttemptMock,
 }));
 vi.mock("./src/app-server/side-question.js", () => ({
   runCodexAppServerSideQuestion: runCodexAppServerSideQuestionMock,
+}));
+vi.mock("./src/conversation-binding.js", () => ({
+  handleCodexConversationBindingResolved: handleCodexConversationBindingResolvedMock,
+  handleCodexConversationInboundClaim: handleCodexConversationInboundClaimMock,
 }));
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
@@ -29,6 +35,8 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 describe("codex plugin", () => {
   afterEach(() => {
     resetCodexConversationChatControlsForTests();
+    handleCodexConversationInboundClaimMock.mockReset();
+    handleCodexConversationBindingResolvedMock.mockReset();
   });
 
   it("is opt-in by default", () => {
@@ -202,6 +210,180 @@ describe("codex plugin", () => {
 
     expect(reply).toHaveBeenCalledWith({ text: "Sent answer to Codex." });
     await expect(answered).resolves.toBe("2");
+  });
+
+  it("renders progress reply presentations before channel payload delivery", async () => {
+    const renderPresentation = vi.fn(async ({ payload }) => ({
+      ...payload,
+      channelData: {
+        discord: {
+          presentationComponents: { blocks: [{ type: "actions" }] },
+        },
+      },
+    }));
+    const sendPayload = vi.fn(async () => ({ messageId: "message-1", channelId: "channel-1" }));
+    const loadAdapter = vi.fn(async () => ({
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        limits: { actions: { maxActionsPerRow: 5, maxLabelLength: 80, maxValueBytes: 100 } },
+      },
+      renderPresentation,
+      sendPayload,
+    }));
+    const on = vi.fn();
+    handleCodexConversationInboundClaimMock.mockImplementationOnce(async (event, ctx, options) => {
+      await options.sendProgressReply({
+        event,
+        ctx,
+        payload: {
+          text: "Codex needs input:",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Plan", value: "codex:input:token:1" }],
+              },
+            ],
+          },
+        },
+      });
+      return { handled: true, reply: { text: "done" } };
+    });
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {
+          channel: { outbound: { loadAdapter } },
+          config: { current: () => ({}) },
+        } as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on,
+      }),
+    );
+    const inboundHandler = mockCall(on)?.[1] as (event: unknown, ctx: unknown) => Promise<unknown>;
+
+    await expect(
+      inboundHandler(
+        {
+          channel: "discord",
+          conversationId: "channel-1",
+          accountId: "default",
+          threadId: "thread-1",
+        },
+        { accountId: "default" },
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+
+    expect(renderPresentation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        presentation: expect.objectContaining({
+          blocks: [
+            expect.objectContaining({
+              buttons: [expect.objectContaining({ label: "Plan" })],
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          channelData: {
+            discord: {
+              presentationComponents: { blocks: [{ type: "actions" }] },
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("preserves adapted progress reply presentations when the channel has no renderer", async () => {
+    const sendPayload = vi.fn(async () => ({ messageId: "message-1", chatId: "chat-1" }));
+    const loadAdapter = vi.fn(async () => ({
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        limits: { actions: { maxActionsPerRow: 3, maxLabelLength: 64, maxValueBytes: 64 } },
+      },
+      sendPayload,
+    }));
+    const on = vi.fn();
+    handleCodexConversationInboundClaimMock.mockImplementationOnce(async (event, ctx, options) => {
+      await options.sendProgressReply({
+        event,
+        ctx,
+        payload: {
+          text: "Codex needs input:",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Plan", value: "codex:input:token:1" }],
+              },
+            ],
+          },
+        },
+      });
+      return { handled: true, reply: { text: "done" } };
+    });
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {
+          channel: { outbound: { loadAdapter } },
+          config: { current: () => ({}) },
+        } as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on,
+      }),
+    );
+    const inboundHandler = mockCall(on)?.[1] as (event: unknown, ctx: unknown) => Promise<unknown>;
+
+    await inboundHandler(
+      {
+        channel: "telegram",
+        conversationId: "chat-1",
+        accountId: "default",
+        threadId: "thread-1",
+      },
+      { accountId: "default" },
+    );
+
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          presentation: expect.objectContaining({
+            blocks: [
+              expect.objectContaining({
+                buttons: [expect.objectContaining({ label: "Plan" })],
+              }),
+            ],
+          }),
+        }),
+      }),
+    );
   });
 
   it("claims the Codex routing providers by default", () => {
