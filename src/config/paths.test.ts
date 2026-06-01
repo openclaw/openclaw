@@ -291,11 +291,28 @@ describe("state + config path candidates", () => {
       const implicitEnv = {} as NodeJS.ProcessEnv;
       expect(isExplicitOpenClawHomeStateDir(explicitEnv, openclawHome)).toBe(true);
       expect(
-        isExplicitOpenClawHomeStateDir({ OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv, "/srv/openclaw-home"),
+        isExplicitOpenClawHomeStateDir(
+          { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
+          "/srv/openclaw-home",
+        ),
       ).toBe(false);
       // Implicit `$HOME` ending in `.openclaw` keeps the documented
       // parent-home convention.
       expect(isExplicitOpenClawHomeStateDir(implicitEnv, openclawHome)).toBe(false);
+    });
+
+    it("treats OPENCLAW_HOME='undefined' / 'null' as unset to match home-dir.ts normalization", () => {
+      // `home-dir.ts` normalizes the literal strings `"undefined"` / `"null"`
+      // to undefined, so `resolveRequiredHomeDir` falls back to the OS home.
+      // The guard must apply the same sentinel rule, otherwise an OS home
+      // whose basename happens to be a state-dir name (e.g. user account
+      // literally named `.openclaw`) would incorrectly return the home dir
+      // itself as the state dir when the explicit env was effectively unset.
+      const homeEndingInStateDir = "/home/.openclaw";
+      for (const sentinel of ["undefined", "null", "", "   "]) {
+        const env = { OPENCLAW_HOME: sentinel } as NodeJS.ProcessEnv;
+        expect(isExplicitOpenClawHomeStateDir(env, homeEndingInStateDir)).toBe(false);
+      }
     });
 
     it("returns OPENCLAW_HOME directly when it already names .openclaw", () => {
