@@ -494,13 +494,13 @@ describe("mattermostPlugin", () => {
             readFile: mediaReadFile,
             workspaceDir: "/tmp/workspace",
           },
-          mediaLocalRoots: ["/tmp/workspace"],
-          mediaReadFile,
         }),
       );
 
       const options = expectSingleMattermostSend("channel:CHAN1", "report");
       expect(options.mediaUrl).toBe("report.md");
+      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
+      expect(options.mediaReadFile).toBe(mediaReadFile);
       expect(options.workspaceDir).toBe("/tmp/workspace");
       expect(options.requireMediaUpload).toBe(true);
     });
@@ -852,9 +852,11 @@ describe("mattermostPlugin", () => {
         to: "channel:CHAN1",
         text: "",
         payload: rendered!,
-        mediaAccess: { workspaceDir: "/tmp/workspace" },
-        mediaLocalRoots: ["/tmp/workspace"],
-        mediaReadFile,
+        mediaAccess: {
+          localRoots: ["/tmp/workspace"],
+          readFile: mediaReadFile,
+          workspaceDir: "/tmp/workspace",
+        },
       });
 
       const options = expectSingleMattermostSend("channel:CHAN1", "- Open");
@@ -921,6 +923,31 @@ describe("mattermostPlugin", () => {
       expect(options.mediaUrl).toBe("/tmp/workspace/image.png");
       expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
       expect(options.mediaReadFile).toBe(mediaReadFile);
+      expect(options.requireMediaUpload).toBe(true);
+    });
+
+    it("falls back to structured mediaAccess on sendMedia", async () => {
+      const sendMedia = requireMattermostSendMedia();
+      const cfg = createMattermostTestConfig();
+      const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+
+      await sendMedia({
+        cfg,
+        to: "channel:CHAN1",
+        text: "hello",
+        mediaUrl: "image.png",
+        mediaAccess: {
+          localRoots: ["/tmp/workspace"],
+          readFile: mediaReadFile,
+          workspaceDir: "/tmp/workspace",
+        },
+      });
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.mediaUrl).toBe("image.png");
+      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
+      expect(options.mediaReadFile).toBe(mediaReadFile);
+      expect(options.workspaceDir).toBe("/tmp/workspace");
       expect(options.requireMediaUpload).toBe(true);
     });
 
