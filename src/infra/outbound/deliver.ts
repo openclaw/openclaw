@@ -94,8 +94,10 @@ export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
+/** Queue durability mode requested by outbound delivery callers. */
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
+/** Durable delivery intent emitted after write-ahead queue persistence. */
 export type OutboundDeliveryIntent = {
   id: string;
   channel: Exclude<OutboundChannel, "none">;
@@ -104,14 +106,17 @@ export type OutboundDeliveryIntent = {
   queuePolicy: OutboundDeliveryQueuePolicy;
 };
 
+/** Named durable-final channel capability required by a delivery path. */
 export type DurableFinalDeliveryRequirement = keyof NonNullable<
   ChannelDeliveryCapabilities["durableFinal"]
 >;
 
+/** Set of durable-final capabilities that must be supported before sending. */
 export type DurableFinalDeliveryRequirements = Partial<
   Record<DurableFinalDeliveryRequirement, boolean>
 >;
 
+/** Preflight result for durable outbound delivery support on a channel. */
 export type OutboundDurableDeliverySupport =
   | { ok: true }
   | {
@@ -298,6 +303,7 @@ async function runChannelMessageSendWithLifecycle<
   }
 }
 
+/** Checks whether a channel can satisfy the requested durable-final guarantees. */
 export async function resolveOutboundDurableFinalDeliverySupport(params: {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
@@ -1237,6 +1243,7 @@ export async function deliverOutboundPayloads(
   return await deliverOutboundPayloadsInternal(params);
 }
 
+/** Internal outbound delivery substrate used by durable send and recovery paths. */
 export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
