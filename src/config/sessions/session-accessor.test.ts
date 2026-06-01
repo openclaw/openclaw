@@ -2,12 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptEvent,
   listSessionEntries,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
+  publishTranscriptUpdate,
+  readSessionUpdatedAt,
   replaceSessionEntry,
   updateSessionEntry,
   upsertSessionEntry,
@@ -47,6 +51,7 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+    expect(readSessionUpdatedAt(scope)).toEqual(expect.any(Number));
     expect(listSessionEntries({ storePath })).toEqual([
       {
         sessionKey: "agent:main:main",
@@ -225,6 +230,75 @@ describe("session accessor file-backed seam", () => {
       event,
     ]);
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("appends messages and publishes updates through a session scope", async () => {
+    const scope = {
+      agentId: "main",
+      sessionFile: transcriptPath,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const updates: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      updates.push(update);
+    });
+
+    const appended = await appendTranscriptMessage(scope, {
+      cwd: tempDir,
+      idempotencyLookup: "scan",
+      message: {
+        role: "assistant",
+        content: "hello",
+        idempotencyKey: "assistant-once",
+      },
+    });
+    const replayed = await appendTranscriptMessage(scope, {
+      cwd: tempDir,
+      idempotencyLookup: "scan",
+      message: {
+        role: "assistant",
+        content: "hello again",
+        idempotencyKey: "assistant-once",
+      },
+    });
+    await publishTranscriptUpdate(scope, {
+      agentId: "main",
+      message: appended.message,
+      messageId: appended.messageId,
+      sessionKey: scope.sessionKey,
+    });
+    unsubscribe();
+
+    expect(replayed).toMatchObject({
+      appended: false,
+      messageId: appended.messageId,
+      message: expect.objectContaining({
+        content: "hello",
+        idempotencyKey: "assistant-once",
+      }),
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        id: appended.messageId,
+        message: expect.objectContaining({
+          content: "hello",
+          idempotencyKey: "assistant-once",
+        }),
+        type: "message",
+      }),
+    ]);
+    expect(updates).toEqual([
+      {
+        agentId: "main",
+        message: appended.message,
+        messageId: appended.messageId,
+        sessionFile: transcriptPath,
+        sessionKey: scope.sessionKey,
+      },
+    ]);
   });
 
   it("honors thread fallback paths when resolving transcript scope from the store", async () => {

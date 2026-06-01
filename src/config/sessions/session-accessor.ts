@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionTranscriptPathInDir, resolveStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import {
@@ -9,11 +12,15 @@ import {
   listSessionEntries as listFileSessionEntries,
   loadSessionStore,
   patchSessionEntry as patchFileSessionEntry,
+  readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
 } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
-import { appendSessionTranscriptEvent } from "./transcript-append.js";
+import {
+  appendSessionTranscriptEvent,
+  appendSessionTranscriptMessage,
+} from "./transcript-append.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import { resolveSessionTranscriptFile } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
@@ -33,12 +40,34 @@ export type SessionTranscriptAccessScope = SessionAccessScope & {
   threadId?: string | number;
 };
 
+export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
+  sessionId?: string;
+};
+
 export type SessionEntrySummary = {
   sessionKey: string;
   entry: SessionEntry;
 };
 
 export type TranscriptEvent = unknown;
+
+export type TranscriptMessageAppendOptions<TMessage> = {
+  config?: OpenClawConfig;
+  cwd?: string;
+  idempotencyLookup?: "scan" | "caller-checked";
+  message: TMessage;
+  now?: number;
+  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  useRawWhenLinear?: boolean;
+};
+
+export type TranscriptMessageAppendResult<TMessage> = {
+  appended: boolean;
+  message: TMessage;
+  messageId: string;
+};
+
+export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
 
 export type SessionEntryUpdateOptions = {
   skipMaintenance?: boolean;
@@ -79,6 +108,17 @@ export function listSessionEntries(
     ).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   }
   return listFileSessionEntries(scope);
+}
+
+/** Reads a session activity timestamp through the storage-neutral accessor seam. */
+export function readSessionUpdatedAt(scope: SessionAccessScope): number | undefined {
+  if (scope.storePath) {
+    return readFileSessionUpdatedAt({
+      storePath: scope.storePath,
+      sessionKey: scope.sessionKey,
+    });
+  }
+  return loadSessionEntry(scope)?.updatedAt;
 }
 
 /** Applies a partial entry update through the storage-neutral accessor seam. */
@@ -164,6 +204,51 @@ export async function appendTranscriptEvent(
   });
 }
 
+/** Appends one transcript message through the storage-neutral writer seam. */
+export async function appendTranscriptMessage<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage> & {
+    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
+  },
+): Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+export async function appendTranscriptMessage<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): Promise<TranscriptMessageAppendResult<TMessage>>;
+export async function appendTranscriptMessage<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
+  const transcript = await resolveTranscriptAccess(scope);
+  return await appendSessionTranscriptMessage({
+    transcriptPath: transcript.sessionFile,
+    message: options.message,
+    ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(options.config ? { config: options.config } : {}),
+    ...(options.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.prepareMessageAfterIdempotencyCheck
+      ? { prepareMessageAfterIdempotencyCheck: options.prepareMessageAfterIdempotencyCheck }
+      : {}),
+    ...(options.useRawWhenLinear !== undefined
+      ? { useRawWhenLinear: options.useRawWhenLinear }
+      : {}),
+  });
+}
+
+/** Publishes a transcript update after resolving the current storage target. */
+export async function publishTranscriptUpdate(
+  scope: SessionTranscriptWriteScope,
+  update: TranscriptUpdatePayload = {},
+): Promise<void> {
+  const transcript = await resolveTranscriptAccess(scope);
+  emitSessionTranscriptUpdate({
+    ...update,
+    sessionFile: transcript.sessionFile,
+  });
+}
+
 function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   const now = Date.now();
   return {
@@ -184,11 +269,14 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
   });
 }
 
-async function resolveTranscriptAccess(scope: SessionTranscriptAccessScope): Promise<{
+async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{
   sessionFile: string;
 }> {
   if (scope.sessionFile?.trim()) {
     return { sessionFile: scope.sessionFile };
+  }
+  if (!scope.sessionId) {
+    throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
   }
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
