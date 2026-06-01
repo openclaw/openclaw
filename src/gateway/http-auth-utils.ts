@@ -15,6 +15,7 @@ import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Returns the first HTTP header value after Node lowercases header names. */
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
   if (typeof raw === "string") {
@@ -26,6 +27,7 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
   return undefined;
 }
 
+/** Extracts a normalized bearer token from the Authorization header. */
 export function getBearerToken(req: IncomingMessage): string | undefined {
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
@@ -50,6 +52,7 @@ export type GatewayHttpRequestAuthCheckResult =
       authResult: GatewayAuthResult;
     };
 
+/** Builds the browser-origin policy passed into shared Gateway HTTP auth checks. */
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
@@ -84,6 +87,7 @@ function shouldTrustDeclaredHttpOperatorScopes(
   return !isGatewayBearerHttpRequest(req, authOrRequest);
 }
 
+/** Authorizes an HTTP request or writes the Gateway auth failure response. */
 export async function authorizeGatewayHttpRequestOrReply(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -100,6 +104,7 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   return result.requestAuth;
 }
 
+/** Runs Gateway HTTP auth and returns structured auth/trust state without writing a response. */
 export async function checkGatewayHttpRequestAuth(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
@@ -138,6 +143,7 @@ export async function checkGatewayHttpRequestAuth(params: {
   };
 }
 
+/** Authorizes HTTP auth plus a required operator method scope, writing failures to the response. */
 export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -178,6 +184,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   return { cfg, requestAuth, operatorScopes };
 }
 
+/** Returns true when the request uses shared-secret bearer auth for this Gateway auth config. */
 export function isGatewayBearerHttpRequest(
   req: IncomingMessage,
   auth?: SharedSecretGatewayAuth,
@@ -185,6 +192,7 @@ export function isGatewayBearerHttpRequest(
   return usesSharedSecretHttpAuth(auth) && Boolean(getBearerToken(req));
 }
 
+/** Resolves trusted operator scopes from headers, defaulting only on trusted request surfaces. */
 export function resolveTrustedHttpOperatorScopes(
   req: IncomingMessage,
   authOrRequest?:
@@ -213,6 +221,7 @@ export function resolveTrustedHttpOperatorScopes(
     .filter((scope) => scope.length > 0);
 }
 
+/** Scope resolver for OpenAI-compatible HTTP routes that opt into shared-secret trust. */
 export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
@@ -220,6 +229,7 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   return resolveSharedSecretHttpOperatorScopes(req, requestAuth);
 }
 
+/** Restores default operator scopes for shared-secret HTTP surfaces that explicitly trust them. */
 export function resolveSharedSecretHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
@@ -234,6 +244,7 @@ export function resolveSharedSecretHttpOperatorScopes(
   return resolveTrustedHttpOperatorScopes(req, requestAuth);
 }
 
+/** Returns whether the trusted HTTP scope set carries owner/admin semantics. */
 export function resolveHttpSenderIsOwner(
   req: IncomingMessage,
   authOrRequest?:
@@ -243,6 +254,7 @@ export function resolveHttpSenderIsOwner(
   return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
 }
 
+/** Owner resolver for OpenAI-compatible HTTP routes with shared-secret owner semantics. */
 export function resolveOpenAiCompatibleHttpSenderIsOwner(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,

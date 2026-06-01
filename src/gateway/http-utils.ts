@@ -45,6 +45,7 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   return normalizeAgentId(raw);
 }
 
+/** Resolves OpenAI-compatible model ids like `openclaw/<agentId>` into Gateway agent ids. */
 export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
@@ -68,6 +69,7 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Validates the optional `x-openclaw-model` override against the agent's visible model catalog. */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
   agentId: string;
@@ -124,6 +126,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+/** Resolves the target agent from explicit headers, OpenAI-compatible model ids, then config. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
@@ -154,6 +157,7 @@ function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+/** Builds the agent/session/channel context shared by HTTP compatibility endpoints. */
 export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;

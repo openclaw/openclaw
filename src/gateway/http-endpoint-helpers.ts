@@ -13,6 +13,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Handles authenticated POST+JSON Gateway endpoints with optional operator-scope enforcement. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
