@@ -967,6 +967,7 @@ async function getSession(
     throw signal.reason ?? new Error("aborted");
   }
 
+  let staleReadySessionRetries = 0;
   for (;;) {
     let session = sessions.get(cacheKey);
     if (session && session.transport.pid === null) {
@@ -1001,6 +1002,13 @@ async function getSession(
         if (pendingLease) {
           await pendingLease.release(true);
           pendingLease = undefined;
+        }
+        staleReadySessionRetries += 1;
+        if (staleReadySessionRetries > 1) {
+          throw new BrowserProfileUnavailableError(
+            `Chrome MCP existing-session attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". ` +
+              "The Chrome MCP subprocess exited before it became usable.",
+          );
         }
         continue;
       }

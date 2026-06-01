@@ -989,6 +989,29 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
   });
 
+  it("bounds retries when ready sessions keep losing their transport", async () => {
+    let factoryCalls = 0;
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      (session.transport as { pid: number | null }).pid = null;
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      closeMocks.push(closeMock);
+      session.client.close = closeMock as typeof session.client.close;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
+      /subprocess exited before it became usable/,
+    );
+
+    expect(factoryCalls).toBe(2);
+    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalled());
+    await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalled());
+  });
+
   it("does not reuse a stale ready-pending session for ephemeral probes", async () => {
     let factoryCalls = 0;
     let firstSession: ChromeMcpSession | undefined;
