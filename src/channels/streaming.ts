@@ -860,16 +860,22 @@ function removeUnbalancedInlineBackticks(value: string): string {
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
 }
 
-function removeUnbalancedLeadingItalics(value: string): string {
-  const underscoreCount = Array.from(value).filter((char) => char === "_").length;
-  if (underscoreCount % 2 === 0 || !value.trimStart().startsWith("_")) {
+function removeUnbalancedLeadingItalicMarker(value: string): string {
+  const leadingItalicMatch = value.match(/^(\s*)_(?!_)(.*)$/su);
+  if (!leadingItalicMatch) {
     return value;
   }
-  return value.replaceAll("_", "");
+
+  const [, leadingWhitespace, detail] = leadingItalicMatch;
+  const hasClosingItalicMarker = /_(?=\s|$|[.,;:!?…])/u.test(detail);
+  if (hasClosingItalicMarker) {
+    return value;
+  }
+  return `${leadingWhitespace}${detail}`;
 }
 
 function removeUnbalancedInlineMarkdown(value: string): string {
-  return removeUnbalancedLeadingItalics(removeUnbalancedInlineBackticks(value));
+  return removeUnbalancedLeadingItalicMarker(removeUnbalancedInlineBackticks(value));
 }
 
 function compactPlainProgressLine(line: string, maxChars: number): string {

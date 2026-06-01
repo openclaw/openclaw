@@ -363,6 +363,38 @@ describe("channel-streaming", () => {
     ).toBe("Checking whether the Discord progress draft keeps markdown…");
   });
 
+  it("preserves underscores inside truncated commentary after dropping the italic marker", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 52 } } },
+        lines: [
+          {
+            kind: "item",
+            text: "_Checking the test_name path before the Discord progress draft truncates._",
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe("Checking the test_name path before the Discord…");
+  });
+
+  it("keeps compacted commentary when a leading italic span still has a closer", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 52 } } },
+        lines: [
+          {
+            kind: "item",
+            text: "_Reviewed_ the Discord progress draft before continuing with follow-up verification.",
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe("_Reviewed_ the Discord progress draft before…");
+  });
+
   it("honors configured progress draft line length and cuts prose on word boundaries", () => {
     expect(
       formatChannelProgressDraftText({
