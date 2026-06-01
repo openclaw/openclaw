@@ -1,22 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseAndSendMediaTags, type DeliverDeps } from "./outbound-deliver.js";
 
-function makeDeps(): DeliverDeps {
+function makeDeps(): {
+  deps: DeliverDeps;
+  sendDocument: ReturnType<typeof vi.fn>;
+} {
+  const sendDocument = vi.fn(async () => ({ channel: "qqbot" }));
   return {
-    chunkText: (text) => [text],
-    mediaSender: {
-      sendPhoto: vi.fn(async () => ({ channel: "qqbot" })),
-      sendVoice: vi.fn(async () => ({ channel: "qqbot" })),
-      sendVideoMsg: vi.fn(async () => ({ channel: "qqbot" })),
-      sendDocument: vi.fn(async () => ({ channel: "qqbot" })),
-      sendMedia: vi.fn(async () => ({ channel: "qqbot" })),
+    deps: {
+      chunkText: (text) => [text],
+      mediaSender: {
+        sendPhoto: vi.fn(async () => ({ channel: "qqbot" })),
+        sendVoice: vi.fn(async () => ({ channel: "qqbot" })),
+        sendVideoMsg: vi.fn(async () => ({ channel: "qqbot" })),
+        sendDocument,
+        sendMedia: vi.fn(async () => ({ channel: "qqbot" })),
+      },
     },
+    sendDocument,
   };
 }
 
 describe("parseAndSendMediaTags", () => {
   it("blocks file URI media tags before they reach document sending", async () => {
-    const deps = makeDeps();
+    const { deps, sendDocument } = makeDeps();
     const log = { info: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
     const result = await parseAndSendMediaTags(
@@ -43,7 +50,7 @@ describe("parseAndSendMediaTags", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(deps.mediaSender.sendDocument).not.toHaveBeenCalled();
+    expect(sendDocument).not.toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledWith("Blocked file URI in <qqfile> media tag");
   });
 });

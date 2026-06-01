@@ -21,6 +21,7 @@ describe("decodeMediaPath", () => {
   it("identifies file URI media paths before path normalization", () => {
     expect(isFileUriMediaPath(" file:///etc/passwd")).toBe(true);
     expect(isFileUriMediaPath("FILE:///etc/passwd")).toBe(true);
+    expect(isFileUriMediaPath("file://%2Fetc%2Fpasswd")).toBe(true);
     expect(isFileUriMediaPath("/tmp/file.txt")).toBe(false);
   });
 
