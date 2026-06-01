@@ -62,7 +62,7 @@ type AccessorAdapter = {
       entry: SessionEntry,
       context: { existingEntry?: SessionEntry },
     ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-    options?: { fallbackEntry?: SessionEntry; replaceEntry?: boolean },
+    options?: { fallbackEntry?: SessionEntry; preserveActivity?: boolean; replaceEntry?: boolean },
   ): Promise<SessionEntry | null>;
   updateSessionEntry(
     scope: SessionAccessScope,
@@ -235,6 +235,23 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       expect(adapter.loadSessionEntry(scope)).toMatchObject({
         model: "gpt-5.5",
         sessionId: "session-1",
+      });
+
+      const beforePreservePatch = adapter.loadSessionEntry(scope);
+      await adapter.patchSessionEntry(
+        scope,
+        () => ({
+          providerOverride: "anthropic",
+          updatedAt: 40,
+        }),
+        { preserveActivity: true },
+      );
+
+      expect(adapter.loadSessionEntry(scope)).toMatchObject({
+        model: "gpt-5.5",
+        providerOverride: "anthropic",
+        sessionId: "session-1",
+        updatedAt: beforePreservePatch?.updatedAt,
       });
     });
 

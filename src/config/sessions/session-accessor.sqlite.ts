@@ -35,7 +35,7 @@ import type {
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { SessionEntry } from "./types.js";
-import { mergeSessionEntry } from "./types.js";
+import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -153,7 +153,9 @@ export async function patchSqliteSessionEntry(
   }
   const next = options.replaceEntry
     ? cloneSessionEntry(patch as SessionEntry)
-    : mergeSessionEntry(base, patch);
+    : options.preserveActivity
+      ? mergeSessionEntryPreserveActivity(base, patch)
+      : mergeSessionEntry(base, patch);
   runOpenClawAgentWriteTransaction((database) => {
     writeSessionEntry(database, resolved.sessionKey, next);
   }, toDatabaseOptions(resolved));
