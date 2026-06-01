@@ -102,9 +102,13 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  // Reset the shutting-down flag before any startup work so an in-process
-  // restart starts answering live probes as healthy again.
-  const { resetGatewayShuttingDownState } = await loadGatewayCloseModule();
+  // Reset the shutting-down flag before any startup work so in-process restart
+  // (close handler already ran in the prior cycle, then we re-enter startup
+  // without process exit) starts answering /healthz as 200 again. Pull from
+  // the lightweight `gateway-shutdown-state` module instead of the close
+  // runtime so startup does not load shutdown-only agent/channel/plugin
+  // cleanup code. Per ClawSweeper review P2 on #88908.
+  const { resetGatewayShuttingDownState } = await import("./gateway-shutdown-state.js");
   resetGatewayShuttingDownState();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
