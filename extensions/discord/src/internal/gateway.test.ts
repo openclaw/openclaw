@@ -10,6 +10,27 @@ import {
   type GatewaySendPayload,
 } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { WebSocketMock } = vi.hoisted(() => ({
+  WebSocketMock: vi.fn(
+    function MockWebSocket(this: {
+      close: ReturnType<typeof vi.fn>;
+      on: ReturnType<typeof vi.fn>;
+      readyState: number;
+      send: ReturnType<typeof vi.fn>;
+    }) {
+      this.readyState = 0;
+      this.send = vi.fn();
+      this.close = vi.fn();
+      this.on = vi.fn();
+    },
+  ),
+}));
+
+vi.mock("ws", () => ({
+  WebSocket: WebSocketMock,
+}));
+
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayPlugin } from "./gateway.js";
 
@@ -83,6 +104,12 @@ class TestGatewayPlugin extends GatewayPlugin {
   }
 }
 
+class BaseWebSocketGatewayPlugin extends GatewayPlugin {
+  open(url: string) {
+    return this.createWebSocket(url);
+  }
+}
+
 type GatewaySessionState = {
   sessionId: string | null;
   resumeGatewayUrl: string | null;
@@ -96,7 +123,20 @@ function gatewaySessionState(gateway: GatewayPlugin): GatewaySessionState {
 describe("GatewayPlugin", () => {
   afterEach(() => {
     vi.useRealTimers();
+    WebSocketMock.mockClear();
     sharedGatewayIdentifyLimiter.reset();
+  });
+
+  it("disables ws receiver buffered-part limits for base gateway sockets", () => {
+    const gateway = new BaseWebSocketGatewayPlugin({ autoInteractions: false });
+
+    gateway.open("wss://gateway.example.test/?v=10&encoding=json");
+
+    expect(WebSocketMock).toHaveBeenCalledWith("wss://gateway.example.test/?v=10&encoding=json", {
+      maxPayload: 16 * 1024 * 1024,
+      maxBufferedChunks: 0,
+      maxFragments: 0,
+    });
   });
 
   it("does not auto-handle interactions when autoInteractions is disabled", async () => {

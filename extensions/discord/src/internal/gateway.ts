@@ -49,9 +49,15 @@ const DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES = 4096;
 // Discord can send multi-megabyte member chunks. Keep generous headroom while
 // bounding ws's 100 MiB default before an inbound payload reaches JSON parsing.
+// ws 8.21.0 added receiver retained-part limits (maxBufferedChunks/maxFragments)
+// that reject large fragmented gateway frames with WS_ERR_TOO_MANY_BUFFERED_PARTS;
+// disable them (0 = unlimited) since maxPayload already bounds inbound size.
 export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
   maxPayload: 16 * 1024 * 1024,
-}) satisfies ws.ClientOptions;
+  maxBufferedChunks: 0,
+  maxFragments: 0,
+  // @types/ws 8.18 lacks the receiver part limits ws 8.21 accepts at runtime.
+}) satisfies ws.ClientOptions & { maxBufferedChunks: number; maxFragments: number };
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 
