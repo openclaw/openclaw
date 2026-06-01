@@ -1714,7 +1714,11 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("arms the post-shutdown exit watchdog with the clean reason and duration", async () => {
-    const armPostShutdownExitWatchdog = vi.fn(() => null);
+    // Typed mock signature mirrors the production injection point so the
+    // `mock.calls[0][0]` access stays index-safe under tsgo's strict mode.
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
     const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
     const close = createGatewayCloseHandler(deps);
 
