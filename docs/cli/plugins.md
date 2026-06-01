@@ -329,14 +329,16 @@ openclaw plugins install -l ./my-plugin
 Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
 
 <Note>
-Workspace-origin plugins, including linked local plugins, are not imported or
-executed until they are explicitly enabled. For local development, run
-`openclaw plugins enable <plugin-id>` or set
+Workspace-origin plugins discovered from a workspace extensions root are not
+imported or executed until they are explicitly enabled. For local development,
+run `openclaw plugins enable <plugin-id>` or set
 `plugins.entries.<plugin-id>.enabled: true`; if your config uses
-`plugins.allow`, include the same plugin id there too. This fail-closed rule also
-applies when channel setup explicitly targets a plugin for setup-only loading, so
-local channel plugin setup code will not run while the workspace plugin remains
-disabled or excluded from the allowlist. See
+`plugins.allow`, include the same plugin id there too. This fail-closed rule
+also applies when channel setup explicitly targets a workspace-origin plugin for
+setup-only loading, so local channel plugin setup code will not run while that
+workspace plugin remains disabled or excluded from the allowlist. Linked installs
+and explicit `plugins.load.paths` entries follow the normal policy for their
+resolved plugin origin. See
 [Configure plugin policy](/tools/plugin#configure-plugin-policy)
 and [Configuration reference](/gateway/configuration-reference#plugins).
 
