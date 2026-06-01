@@ -151,7 +151,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
   });
 
-  it("keeps durable dynamic tool fingerprints independent from presentation mode", () => {
+  it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
     const inputSchema = {
       type: "object",
       additionalProperties: false,
@@ -177,7 +177,7 @@ describe("Codex app-server native code mode config", () => {
       },
     ]);
 
-    expect(searchableFingerprint).toBe(directFingerprint);
+    expect(searchableFingerprint).not.toBe(directFingerprint);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
