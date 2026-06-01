@@ -1044,23 +1044,34 @@ function isPublicNpmRegistry(value: string | undefined | null): boolean {
   }
 }
 
-function readRegistryEnv(env: NodeJS.ProcessEnv, pattern: RegExp): string | null {
-  let registry: string | null = null;
+function readRegistryEnv(env: NodeJS.ProcessEnv, preferredNames: string[]): string | null {
+  const preferredLowerNames = new Set(preferredNames.map((name) => name.toLowerCase()));
+  const registries: string[] = [];
   for (const [key, value] of Object.entries(env)) {
-    if (!pattern.test(key) || value === "") {
+    if (!preferredLowerNames.has(key.toLowerCase())) {
       continue;
     }
-    registry = normalizeOptionalString(value) ?? registry;
+    const next = normalizeOptionalString(value);
+    if (next) {
+      registries.push(next);
+    }
   }
-  return registry;
+  const customRegistry = registries.find((registry) => !isPublicNpmRegistry(registry));
+  if (registries.length > 1 && customRegistry) {
+    return customRegistry;
+  }
+  return registries.at(-1) ?? null;
 }
 
 function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
-  return readRegistryEnv(env, /^npm_config_registry$/iu);
+  return readRegistryEnv(env, ["NPM_CONFIG_REGISTRY", "npm_config_registry"]);
 }
 
 function readBunRegistryEnv(env: NodeJS.ProcessEnv): string | null {
-  return readRegistryEnv(env, /^(?:bun_config_registry|npm_config_registry)$/iu);
+  return (
+    readRegistryEnv(env, ["BUN_CONFIG_REGISTRY", "bun_config_registry"]) ??
+    readNpmRegistryEnv(env)
+  );
 }
 
 function resolvePackageManagerRegistryConfigArgs(params: {

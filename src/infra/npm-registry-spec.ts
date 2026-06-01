@@ -50,6 +50,9 @@ function isSemverRangeSelector(value: string): boolean {
   if (!trimmed || isExactSemverVersion(trimmed)) {
     return false;
   }
+  if (/^V(?=\d)/u.test(trimmed)) {
+    return false;
+  }
   const lowered = trimmed.toLowerCase();
   const wildcardPrereleaseCore = lowered
     .slice(0, lowered.indexOf("-"))

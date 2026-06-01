@@ -30,6 +30,8 @@ describe("npm registry spec validation", () => {
     "@openclaw/voice-call@2026q2",
     "@openclaw/voice-call@1.x-beta",
     "@openclaw/voice-call@x-beta",
+    "@openclaw/voice-call@V1",
+    "@openclaw/voice-call@V1.x",
   ])("accepts %s", (spec) => {
     expect(validateRegistryNpmSpec(spec)).toBeNull();
   });
