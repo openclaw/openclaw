@@ -2265,10 +2265,7 @@ describe("config cli", () => {
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
       try {
         writeSecurePluginEntrypoint(path.join(rootDir, "index.js"), "export default {};\n");
-        writeSecurePluginEntrypoint(
-          path.join(rootDir, "resolve.mjs"),
-          "process.stdin.resume();\n",
-        );
+        writeSecurePluginEntrypoint(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
         const resolved = {
           secrets: {
             providers: {},

@@ -1,8 +1,4 @@
 import { describe, expect, it } from "vitest";
-
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
-
 import {
   mapTaskFlowDetail,
   mapTaskFlowView,
@@ -10,6 +6,8 @@ import {
   mapTaskRunDetail,
   mapTaskRunView,
 } from "./task-domain-views.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
 function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {

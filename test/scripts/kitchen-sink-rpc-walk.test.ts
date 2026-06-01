@@ -137,7 +137,9 @@ describe("kitchen-sink RPC gateway teardown", () => {
       throw error;
     });
 
-    await expect(stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 })).resolves.toBeUndefined();
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -152,7 +154,9 @@ describe("kitchen-sink RPC gateway teardown", () => {
     child.signalCode = null;
     child.kill = vi.fn(() => false);
 
-    await expect(stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 })).resolves.toBeUndefined();
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
   });

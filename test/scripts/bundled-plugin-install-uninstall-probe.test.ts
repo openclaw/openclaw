@@ -198,9 +198,7 @@ describe("bundled plugin install/uninstall probe", () => {
         "qa-channel",
       ),
     ).not.toThrow();
-    expect(() =>
-      runtimeSmoke.assertChannelVisible({}, "qa-channel", "qa-channel"),
-    ).toThrow(
+    expect(() => runtimeSmoke.assertChannelVisible({}, "qa-channel", "qa-channel")).toThrow(
       "Runtime channel status missing manifest channel qa-channel for qa-channel",
     );
   });
@@ -380,11 +378,15 @@ describe("bundled plugin install/uninstall probe", () => {
     );
 
     await expect(
-      runtimeSmoke.rpcCall("health", {}, {
-        entrypoint,
-        env: { OPENCLAW_TEST_RPC_STATE_PATH: statePath },
-        port: 19001,
-      }),
+      runtimeSmoke.rpcCall(
+        "health",
+        {},
+        {
+          entrypoint,
+          env: { OPENCLAW_TEST_RPC_STATE_PATH: statePath },
+          port: 19001,
+        },
+      ),
     ).resolves.toEqual({ status: "ok" });
 
     const rpcStateDir = fs.readFileSync(statePath, "utf8");

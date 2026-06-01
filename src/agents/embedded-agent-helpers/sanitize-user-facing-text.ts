@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../../packages/normalization-core/src/string-coerce.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
@@ -10,10 +14,6 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../../packages/normalization-core/src/string-coerce.js";
 import {
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,

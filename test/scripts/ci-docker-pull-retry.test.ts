@@ -128,7 +128,9 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
     const result = runPullHelper(binDir);
 
     expect(result.status).toBe(127);
-    expect(result.stderr).toContain("timeout command not found; cannot bound Docker pull after 42s");
+    expect(result.stderr).toContain(
+      "timeout command not found; cannot bound Docker pull after 42s",
+    );
     expect(existsSync(dockerArgsPath)).toBe(false);
   });
 
@@ -162,6 +164,8 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
 
     expect(result.status).toBe(42);
     expect(result.stderr).toContain("Docker pull failed or timed out after 42s: status=42");
-    expect(execFileSync("wc", ["-l", dockerArgsPath], { encoding: "utf8" }).trim()).toMatch(/^2\b/u);
+    expect(execFileSync("wc", ["-l", dockerArgsPath], { encoding: "utf8" }).trim()).toMatch(
+      /^2\b/u,
+    );
   });
 });

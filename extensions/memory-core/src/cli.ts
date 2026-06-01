@@ -10,6 +10,9 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MemoryCommandOptions,
+  MemoryExportOptions,
+  MemoryImportOptions,
+  MemoryPrivacyAuditOptions,
   MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
   MemoryRemBackfillOptions,
@@ -69,6 +72,21 @@ async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
 async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemBackfill(opts);
+}
+
+async function runMemoryPrivacyAudit(opts: MemoryPrivacyAuditOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryPrivacyAudit(opts);
+}
+
+async function runMemoryExport(opts: MemoryExportOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryExport(opts);
+}
+
+async function runMemoryImport(opts: MemoryImportOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryImport(opts);
 }
 
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
@@ -148,6 +166,11 @@ export function registerMemoryCli(program: Command) {
           [
             "openclaw memory rem-backfill --path ./memory --stage-short-term",
             "Also seed durable grounded candidates into the live short-term promotion store.",
+          ],
+          ["openclaw memory privacy audit", "Show memory privacy surfaces and risks."],
+          [
+            "openclaw memory export --encrypted --out memory-backup.age",
+            "Create an encrypted memory backup.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
@@ -264,6 +287,51 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
       await runMemoryRemBackfill(opts);
+    });
+
+  const privacy = memory.command("privacy").description("Audit memory privacy surfaces");
+
+  privacy
+    .command("audit")
+    .description("Show memory storage, embedding, transcript, and backup privacy risks")
+    .option("--agent <id>", "Agent id (default: all configured agents)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: MemoryPrivacyAuditOptions) => {
+      await runMemoryPrivacyAudit(opts);
+    });
+
+  memory
+    .command("export")
+    .description("Export memory artifacts")
+    .requiredOption("--encrypted", "Encrypt the backup")
+    .requiredOption("--out <file>", "Output backup file")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option(
+      "--passphrase-env <name>",
+      "Environment variable containing the backup passphrase",
+      "OPENCLAW_MEMORY_BACKUP_PASSPHRASE",
+    )
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryExportOptions) => {
+      await runMemoryExport(opts);
+    });
+
+  memory
+    .command("import")
+    .description("Import memory artifacts")
+    .requiredOption("--encrypted", "Decrypt an encrypted backup")
+    .requiredOption("--in <file>", "Input backup file")
+    .requiredOption("--target <dir>", "Target directory for restored memory artifacts")
+    .option(
+      "--passphrase-env <name>",
+      "Environment variable containing the backup passphrase",
+      "OPENCLAW_MEMORY_BACKUP_PASSPHRASE",
+    )
+    .option("--overwrite", "Overwrite existing target files", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryImportOptions) => {
+      await runMemoryImport(opts);
     });
 
   memory.action(() => {

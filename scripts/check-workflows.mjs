@@ -7,6 +7,14 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const ACTIONLINT_VERSION = "1.7.11";
+const ZIZMOR_VERSION = "1.22.0";
+const ZIZMOR_ARGS = [
+  "--config",
+  ".github/zizmor.yml",
+  "--persona=regular",
+  "--min-severity=medium",
+  "--min-confidence=medium",
+];
 const WORKFLOW_DIR = ".github/workflows";
 
 function commandExists(command, args = ["--version"]) {
@@ -49,6 +57,22 @@ function runPreCommitHook(hook, files) {
   process.exit(1);
 }
 
+function runZizmor(files) {
+  if (commandExists("pre-commit") || commandExists("python3", ["-m", "pre_commit", "--version"])) {
+    runPreCommitHook("zizmor", files);
+    return;
+  }
+  if (commandExists("uvx")) {
+    run("uvx", ["--from", `zizmor==${ZIZMOR_VERSION}`, "zizmor", ...ZIZMOR_ARGS, ...files]);
+    return;
+  }
+
+  console.error(
+    `[check-workflows] missing zizmor runner: install pre-commit, python3 pre_commit, or uvx for pinned zizmor ${ZIZMOR_VERSION}.`,
+  );
+  process.exit(1);
+}
+
 const workflows = workflowFiles();
 
 if (commandExists("actionlint")) {
@@ -67,7 +91,7 @@ if (commandExists("actionlint")) {
   process.exit(1);
 }
 
-runPreCommitHook("zizmor", workflows);
+runZizmor(workflows);
 
 run("python3", ["scripts/check-composite-action-input-interpolation.py"]);
 run("node", ["scripts/check-no-conflict-markers.mjs"]);

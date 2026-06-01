@@ -1517,9 +1517,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
     expect(remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
-    expect(remoteCommand).toContain(
-      'mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"',
-    );
+    expect(remoteCommand).toContain('mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"');
     expect(remoteCommand).toContain("corepack pnpm check:changed");
   });
 

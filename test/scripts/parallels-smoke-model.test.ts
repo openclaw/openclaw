@@ -775,30 +775,24 @@ if (isPrlctl) {
     expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "throws checked timed host command timeouts",
-    () => {
-      expect(() =>
-        run(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
-          quiet: true,
-          timeoutMs: 50,
-        }),
-      ).toThrow(/timed out after 50ms/u);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "preserves child exit 124 in timed host commands",
-    () => {
-      const result = run(process.execPath, ["-e", "process.exit(124)"], {
-        check: false,
+  it.runIf(process.platform !== "win32")("throws checked timed host command timeouts", () => {
+    expect(() =>
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
         quiet: true,
-        timeoutMs: 1_000,
-      });
+        timeoutMs: 50,
+      }),
+    ).toThrow(/timed out after 50ms/u);
+  });
 
-      expect(result.status).toBe(124);
-    },
-  );
+  it.runIf(process.platform !== "win32")("preserves child exit 124 in timed host commands", () => {
+    const result = run(process.execPath, ["-e", "process.exit(124)"], {
+      check: false,
+      quiet: true,
+      timeoutMs: 1_000,
+    });
+
+    expect(result.status).toBe(124);
+  });
 
   it.runIf(process.platform !== "win32")(
     "kills timed-out host command process groups",
@@ -843,18 +837,15 @@ setInterval(() => {}, 1000);
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "preserves timed host command spawn errors",
-    () => {
-      expect(() =>
-        run("openclaw-definitely-missing-host-command", [], {
-          check: false,
-          quiet: true,
-          timeoutMs: 50,
-        }),
-      ).toThrow(/ENOENT/u);
-    },
-  );
+  it.runIf(process.platform !== "win32")("preserves timed host command spawn errors", () => {
+    expect(() =>
+      run("openclaw-definitely-missing-host-command", [], {
+        check: false,
+        quiet: true,
+        timeoutMs: 50,
+      }),
+    ).toThrow(/ENOENT/u);
+  });
 
   it.runIf(process.platform !== "win32")(
     "does not treat timed command stderr as wrapper control data",
@@ -873,20 +864,17 @@ setInterval(() => {}, 1000);
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "preserves timed host command output capture",
-    () => {
-      const expected = "x".repeat(256 * 1024);
-      const result = run(process.execPath, ["-e", "process.stdout.write('x'.repeat(256 * 1024))"], {
-        check: false,
-        quiet: true,
-        timeoutMs: 1_000,
-      });
+  it.runIf(process.platform !== "win32")("preserves timed host command output capture", () => {
+    const expected = "x".repeat(256 * 1024);
+    const result = run(process.execPath, ["-e", "process.stdout.write('x'.repeat(256 * 1024))"], {
+      check: false,
+      quiet: true,
+      timeoutMs: 1_000,
+    });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(expected);
-    },
-  );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(expected);
+  });
 
   it.runIf(process.platform !== "win32")(
     "ignores broken stdin pipes from timed host commands that exit early",

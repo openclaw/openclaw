@@ -455,7 +455,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "scripts/mcp-code-mode-gateway-e2e.ts",
-    ["test/scripts/mcp-code-mode-gateway-client.test.ts", "test/scripts/session-log-mentions.test.ts"],
+    [
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
   ],
   ["scripts/dependency-changes-report.mjs", ["test/scripts/dependency-changes-report.test.ts"]],
   [

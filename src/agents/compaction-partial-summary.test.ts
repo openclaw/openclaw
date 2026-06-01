@@ -1,6 +1,6 @@
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const compactionMocks = vi.hoisted(() => {
   function readText(value: unknown): string {

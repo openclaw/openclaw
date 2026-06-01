@@ -39,3 +39,20 @@ export type MemoryRemBackfillOptions = MemoryCommandOptions & {
   stageShortTerm?: boolean;
   rollbackShortTerm?: boolean;
 };
+
+export type MemoryPrivacyAuditOptions = MemoryCommandOptions;
+
+export type MemoryExportOptions = MemoryCommandOptions & {
+  encrypted?: boolean;
+  out?: string;
+  passphraseEnv?: string;
+};
+
+export type MemoryImportOptions = {
+  encrypted?: boolean;
+  in?: string;
+  target?: string;
+  passphraseEnv?: string;
+  overwrite?: boolean;
+  json?: boolean;
+};

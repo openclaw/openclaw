@@ -30,7 +30,7 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
-      name: "blocks script wrappers before evaluating nested shell payloads",
+      name: "fails closed for script wrappers before evaluating nested shell payloads",
       enabled: process.platform === "darwin" || process.platform === "freebsd",
       argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
       expected: {

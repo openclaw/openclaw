@@ -1196,7 +1196,9 @@ async function disposeCronRunContext(params: {
       sessionId: params.sessionId,
       reason: "isolated-cron-dispose",
       onError: (error, sid) => {
-        logWarn(`[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`);
+        logWarn(
+          `[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`,
+        );
       },
     }).catch(() => {});
   }

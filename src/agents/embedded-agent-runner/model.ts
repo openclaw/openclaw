@@ -497,6 +497,14 @@ function readModelParams(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+function readThinkingCompat(value: unknown): { thinkingFormat?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const thinkingFormat = (value as { thinkingFormat?: unknown }).thinkingFormat;
+  return typeof thinkingFormat === "string" ? { thinkingFormat } : undefined;
+}
+
 function mergeModelParams(
   ...entries: Array<Record<string, unknown> | undefined>
 ): Record<string, unknown> | undefined {
@@ -1056,7 +1064,7 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: metadataModel?.params,
+    configuredParams: configuredModel?.params,
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
@@ -1089,7 +1097,7 @@ function resolveConfiguredFallbackModel(params: {
   });
   const fallbackReasoning = resolveConfiguredFallbackReasoning({
     provider,
-    compat: fallbackCompat,
+    compat: readThinkingCompat(fallbackCompat),
     reasoning: metadataModel?.reasoning,
   });
   return normalizeResolvedModel({
@@ -1122,8 +1130,7 @@ function resolveConfiguredFallbackModel(params: {
           contextTokens:
             configuredModel?.contextTokens ??
             providerConfig?.contextTokens ??
-            providerConfig?.models?.[0]?.contextTokens ??
-            staticCatalogModel?.contextTokens,
+            providerConfig?.models?.[0]?.contextTokens,
           maxTokens:
             configuredModel?.maxTokens ??
             providerConfig?.maxTokens ??

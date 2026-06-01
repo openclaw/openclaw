@@ -179,7 +179,7 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsPnpm.run).toContain('"--filter",');
     expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
     expect(hydrateWindowsPnpm.run).toContain(
-      'New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR',
+      "New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR",
     );
     expect(hydrateWindowsPnpm.run).toContain(".pnpm-workspace-state-v1.json");
     expect(hydrateWindowsPnpm.run).not.toContain("Remove-Item -Recurse -Force");

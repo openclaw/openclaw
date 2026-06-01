@@ -21,9 +21,10 @@ type DeepInfraTtsExtraConfig = {
 export function buildDeepInfraSpeechProvider(options?: {
   ttsModels?: readonly DeepInfraSurfaceModel[];
 }): SpeechProviderPlugin {
-  const ids = options?.ttsModels && options.ttsModels.length > 0
-    ? options.ttsModels.map((model) => model.id)
-    : [...DEEPINFRA_TTS_FALLBACK_MODELS];
+  const ids =
+    options?.ttsModels && options.ttsModels.length > 0
+      ? options.ttsModels.map((model) => model.id)
+      : [...DEEPINFRA_TTS_FALLBACK_MODELS];
   const defaultModel = ids[0] ?? DEEPINFRA_TTS_FALLBACK_MODELS[0];
   return createOpenAiCompatibleSpeechProvider<DeepInfraTtsExtraConfig>({
     id: "deepinfra",

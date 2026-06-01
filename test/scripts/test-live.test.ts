@@ -35,13 +35,7 @@ describe("scripts/test-live", () => {
   });
 
   it("preserves vitest flags after the passthrough separator", () => {
-    const args = parseTestLiveArgs([
-      "--quiet",
-      "--",
-      "--help",
-      "--no-quiet",
-      "--codex-harness",
-    ]);
+    const args = parseTestLiveArgs(["--quiet", "--", "--help", "--no-quiet", "--codex-harness"]);
 
     expect(args).toEqual({
       forceCodexHarness: false,

@@ -152,7 +152,12 @@ jobs:
           fi
 
       - name: Dispatch exact ClawSweeper review
-        if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
+        if: >-
+          ${{
+            (github.event_name == 'issues' || github.event_name == 'pull_request_target') &&
+            github.event.action != 'labeled' &&
+            github.event.action != 'unlabeled'
+          }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}

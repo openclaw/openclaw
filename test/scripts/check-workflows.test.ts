@@ -76,4 +76,70 @@ describe("check-workflows", () => {
       rmSync(tempDir, { force: true, recursive: true });
     }
   });
+
+  it("falls back to pinned uvx zizmor when pre-commit is unavailable", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "check-workflows-"));
+    try {
+      const binDir = path.join(tempDir, "bin");
+      const markerPath = path.join(tempDir, "go-run.txt");
+      const uvxMarkerPath = path.join(tempDir, "uvx.txt");
+      mkdirSync(binDir);
+      writeFileSync(
+        path.join(binDir, "go"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "version" ]; then exit 0; fi',
+          'if [ "$1" = "run" ]; then printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"; exit 0; fi',
+          "exit 1",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(binDir, "uvx"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "--version" ]; then exit 0; fi',
+          'printf "%s\\n" "$*" > "$UVX_MARKER"',
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(binDir, "python3"),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then exit 1; fi',
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      const result = spawnSync(process.execPath, [scriptPath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GO_FALLBACK_MARKER: markerPath,
+          PATH: binDir,
+          UVX_MARKER: uvxMarkerPath,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(markerPath, "utf8")).toContain(
+        "github.com/rhysd/actionlint/cmd/actionlint@v1.7.11",
+      );
+      const uvxArgs = readFileSync(uvxMarkerPath, "utf8");
+      expect(uvxArgs).toContain("--from zizmor==1.22.0 zizmor");
+      expect(uvxArgs).toContain("--config .github/zizmor.yml");
+      expect(uvxArgs).toContain("--persona=regular");
+      expect(uvxArgs).toContain(".github/workflows/ci.yml");
+      expect(uvxArgs).toContain(".github/workflows/windows-testbox-probe.yml");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
 });
