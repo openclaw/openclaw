@@ -31,6 +31,12 @@ export type SessionEntry = {
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
   sessionId: string;
+  /**
+   * App-supplied stable user id for app-initiated sessions (e.g. Havaya Clerk
+   * userId), forwarded on chat.send. Used by the save_user_section tool to key
+   * the per-user workspace file. Not set for normal channel sessions.
+   */
+  appUserId?: string;
   updatedAt: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */

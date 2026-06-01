@@ -8,7 +8,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -755,6 +755,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }>;
       timeoutMs?: number;
       idempotencyKey: string;
+      appUserId?: string;
     };
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
     if (!sanitizedMessageResult.ok) {
@@ -793,7 +794,29 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const {
+      cfg,
+      entry,
+      storePath: sessionStorePath,
+      canonicalKey: sessionKey,
+    } = loadSessionEntry(rawSessionKey);
+    // Persist an app-supplied user id (e.g. Havaya Clerk userId) onto the session
+    // so the save_user_section tool can resolve it server-side. Best effort: a
+    // failure here must never block the chat turn.
+    if (typeof p.appUserId === "string" && p.appUserId.trim() && sessionStorePath) {
+      const appUserId = p.appUserId.trim();
+      if (entry?.appUserId !== appUserId) {
+        try {
+          await updateSessionStoreEntry({
+            storePath: sessionStorePath,
+            sessionKey,
+            update: async () => ({ appUserId }),
+          });
+        } catch (err) {
+          context.logGateway.warn(`chat.send: failed to persist appUserId: ${String(err)}`);
+        }
+      }
+    }
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,

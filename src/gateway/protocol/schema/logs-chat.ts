@@ -40,6 +40,9 @@ export const ChatSendParamsSchema = Type.Object(
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     idempotencyKey: NonEmptyString,
+    /** App-supplied stable user id (e.g. Havaya Clerk userId) for app-initiated
+     * sessions; persisted on the session entry for per-user file tooling. */
+    appUserId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

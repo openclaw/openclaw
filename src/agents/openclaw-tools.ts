@@ -12,6 +12,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createSaveUserSectionTool } from "./tools/save-user-section.js";
 import { createSelfInfoTool } from "./tools/self-info-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -103,6 +104,11 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const saveUserSectionTool = createSaveUserSectionTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+    workspaceDir,
+  });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -167,6 +173,7 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...(saveUserSectionTool ? [saveUserSectionTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({
