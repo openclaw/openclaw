@@ -672,20 +672,46 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const stalePid = process.pid + 501;
       const events: string[] = [];
       events.push("initial-find");
+      let lsofCalls = 0;
+      let ssCalls = 0;
       installInitialBusyPoll(stalePid, (call) => {
         if (call === 2) {
-          // Permission/runtime error — status 2, should NOT be treated as free
+          // Permission/runtime error — status 2, should NOT be treated as free.
+          // `pollPortOnce` now falls through to `ss`, so keep `ss` inconclusive too.
           events.push("error-poll");
           return createLsofResult({ status: 2, stderr: "lsof: permission denied" });
         }
-        // Eventually port is free
         events.push("free-poll");
+        return createLsofResult({ status: 1 });
+      });
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command === "ss") {
+          ssCalls += 1;
+          if (ssCalls === 1) {
+            events.push("ss-transient");
+            return createLsofResult({ status: 2, stderr: "ss: permission denied" });
+          }
+          return createLsofResult({ status: 1 });
+        }
+        if (command === "lsof") {
+          lsofCalls += 1;
+          if (lsofCalls === 1) {
+            return createOpenClawBusyResult(stalePid);
+          }
+          if (lsofCalls === 2) {
+            events.push("error-poll");
+            return createLsofResult({ status: 2, stderr: "lsof: permission denied" });
+          }
+          events.push("free-poll");
+          return createLsofResult({ status: 1 });
+        }
         return createLsofResult({ status: 1 });
       });
       vi.spyOn(process, "kill").mockReturnValue(true);
       cleanStaleGatewayProcessesSync();
 
       // Must have continued polling after the status-2 error, not exited early
+      expect(events).toContain("ss-transient");
       expect(events).toContain("free-poll");
     });
 
@@ -964,14 +990,29 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const stalePid = process.pid + 301;
       const events: string[] = [];
       events.push("initial-find");
-      installInitialBusyPoll(stalePid, (call) => {
-        if (call === 2) {
-          // Transient: spawnSync timeout (no ENOENT code)
-          events.push("transient-error");
-          return createLsofResult({ error: new Error("timeout"), status: null });
+      let lsofCalls = 0;
+      let ssCalls = 0;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command === "ss") {
+          ssCalls += 1;
+          if (ssCalls === 1) {
+            events.push("ss-transient");
+            return createLsofResult({ error: new Error("ss timeout"), status: null });
+          }
+          return createLsofResult({ status: 1 });
         }
-        // Port free on the next poll
-        events.push("port-free");
+        if (command === "lsof") {
+          lsofCalls += 1;
+          if (lsofCalls === 1) {
+            return createOpenClawBusyResult(stalePid);
+          }
+          if (lsofCalls === 2) {
+            events.push("transient-error");
+            return createLsofResult({ error: new Error("timeout"), status: null });
+          }
+          events.push("port-free");
+          return createLsofResult({ status: 1 });
+        }
         return createLsofResult({ status: 1 });
       });
 
@@ -980,6 +1021,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
 
       // Must have kept polling after the transient error and reached port-free
       expect(events).toContain("transient-error");
+      expect(events).toContain("ss-transient");
       expect(events).toContain("port-free");
     });
 

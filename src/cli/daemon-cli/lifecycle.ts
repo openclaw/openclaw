@@ -18,16 +18,17 @@ import {
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
-import { createNullWriter } from "./response.js";
 import {
   runServiceRestart,
   runServiceStart,
   runServiceStop,
   runServiceUninstall,
 } from "./lifecycle-core.js";
+import { createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -45,6 +46,18 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
+const gatewayProbeAuthModuleLoader = createLazyImportLoader(
+  () => import("../../gateway/probe-auth.js"),
+);
+
+type GatewayProbeAuthResolution = {
+  auth: { token?: string; password?: string };
+  warning?: string;
+};
+
+function loadGatewayProbeAuthModule() {
+  return gatewayProbeAuthModuleLoader.load();
+}
 
 function postRestartHealthAttempts(): number {
   return process.platform === "win32"
@@ -89,13 +102,38 @@ function resolveGatewayPortFallback(): Promise<number> {
     .catch(() => resolveGatewayPort(undefined, process.env));
 }
 
-async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
+async function resolveGatewayRestartConfigContext(): Promise<{
+  cfg: Awaited<ReturnType<typeof readBestEffortConfig>> | undefined;
+  probeAuth?: GatewayProbeAuthResolution;
+}> {
   const cfg = await readBestEffortConfig().catch(() => undefined);
+  return {
+    cfg,
+    probeAuth: cfg
+      ? await loadGatewayProbeAuthModule()
+          .then(({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
+            resolveGatewayProbeAuthSafeWithSecretInputs({
+              cfg,
+              mode: "local",
+              env: process.env,
+            }),
+          )
+          .catch(() => undefined)
+      : undefined,
+  };
+}
+
+async function assertUnmanagedGatewayRestartEnabled(params: {
+  port: number;
+  cfg?: Awaited<ReturnType<typeof readBestEffortConfig>>;
+  probeAuth?: GatewayProbeAuthResolution;
+}): Promise<void> {
+  const cfg = params.cfg;
   const tlsEnabled = Boolean(cfg?.gateway?.tls?.enabled);
   const scheme = tlsEnabled ? "wss" : "ws";
   const probe = await probeGateway({
-    url: `${scheme}://127.0.0.1:${port}`,
-    auth: {
+    url: `${scheme}://127.0.0.1:${params.port}`,
+    auth: params.probeAuth?.auth ?? {
       token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN),
       password: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD),
     },
@@ -230,12 +268,16 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
 async function restartGatewayWithoutServiceManager(
   port: number,
   restartIntent?: GatewayRestartIntent,
+  context?: {
+    cfg?: Awaited<ReturnType<typeof readBestEffortConfig>>;
+    probeAuth?: GatewayProbeAuthResolution;
+  },
 ) {
   const managed = await handleSystemScopeSystemdGateway("restart");
   if (managed) {
     return managed;
   }
-  await assertUnmanagedGatewayRestartEnabled(port);
+  await assertUnmanagedGatewayRestartEnabled({ port, ...context });
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;
@@ -325,6 +367,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
+  let restartContextPromise:
+    | Promise<Awaited<ReturnType<typeof resolveGatewayRestartConfigContext>>>
+    | undefined;
+  const getRestartContext = () => (restartContextPromise ??= resolveGatewayRestartConfigContext());
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -345,7 +391,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return recovered;
         }
       }
-      const handled = await restartGatewayWithoutServiceManager(restartPort, restartIntent);
+      const handled = await restartGatewayWithoutServiceManager(
+        restartPort,
+        restartIntent,
+        await getRestartContext(),
+      );
       if (handled) {
         restartedWithoutServiceManager = true;
         return handled;
@@ -354,10 +404,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
+        const restartContext = await getRestartContext();
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          auth: restartContext.probeAuth?.auth,
         });
         if (health.healthy) {
           return undefined;
