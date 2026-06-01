@@ -121,6 +121,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
     encoding: "utf8",
     env: invocation.env ?? env,
     input: options.input,
+    killSignal: "SIGKILL",
     maxBuffer: 50 * 1024 * 1024,
     stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     shell: invocation.shell,
@@ -204,18 +205,20 @@ export async function runStreaming(
           }, options.timeoutMs);
 
     child.on("error", reject);
-    child.on("close", async (code, signal) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (options.logPath) {
-        await writeFile(options.logPath, log, "utf8");
-      }
-      if (timedOut) {
-        resolve(124);
-      } else {
-        resolve(code ?? (signal ? 128 : 1));
-      }
+    child.on("close", (code, signal) => {
+      void (async () => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (options.logPath) {
+          await writeFile(options.logPath, log, "utf8");
+        }
+        if (timedOut) {
+          resolve(124);
+        } else {
+          resolve(code ?? (signal ? 128 : 1));
+        }
+      })();
     });
   });
 }

@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   applyOpenAIResponsesPayloadPolicy,
@@ -55,6 +55,61 @@ describe("openai responses payload policy", () => {
     expect(payload).toEqual({
       store: true,
       context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+    });
+  });
+
+  it("does not coerce partial context windows for compaction thresholds", () => {
+    const model = {
+      id: "gpt-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: "200000tokens",
+    } satisfies {
+      api: unknown;
+      baseUrl: unknown;
+      contextWindow: unknown;
+      id: unknown;
+      provider: unknown;
+    };
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(model, {
+        enableServerCompaction: true,
+        storeMode: "provider-policy",
+      }),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 80_000 }],
+    });
+  });
+
+  it("accepts plus-signed responses compaction thresholds", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesCompactThreshold: "+120000" },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 120_000 }],
     });
   });
 
@@ -162,8 +217,23 @@ describe("openai responses payload policy", () => {
   it("emits store false for native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      { storeMode: "disable" },
+    );
+
+    expect(policy.explicitStore).toBe(false);
+    expect(policy.allowsServiceTier).toBe(true);
+    expect(policy.shouldStripStore).toBe(false);
+  });
+
+  it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openclaw-openai-responses-transport",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
       { storeMode: "disable" },

@@ -1,4 +1,4 @@
-import { completeSimple, type Model } from "@earendil-works/pi-ai";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
@@ -60,7 +60,9 @@ describeLive("moonshot live", () => {
       if (text.length > 0) {
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 500);
+      });
     }
 
     if (text.length === 0) {

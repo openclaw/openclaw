@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
+import { buildMcpToolSchema } from "./mcp-http.schema.js";
 
 type MockGatewayTool = {
   name: string;
@@ -21,7 +22,11 @@ type ScopedToolsCall = {
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
   inboundEventKind?: string;
+  sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
   surface?: string;
   excludeToolNames?: Iterable<string>;
@@ -71,7 +76,7 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
 
-vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
     runBeforeToolCallHookMock(...args),
 }));
@@ -123,6 +128,22 @@ function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
   return call as BeforeToolCallHookInput;
 }
 
+function makeMockTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
+  return {
+    name: "mockplugin_tool",
+    description: "mock tool",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({
+      content: [{ type: "text", text: "ok" }],
+    }),
+    ...overrides,
+  };
+}
+
+function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
+  return buildMcpToolSchema(tools as unknown as Parameters<typeof buildMcpToolSchema>[0]);
+}
+
 beforeEach(() => {
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
@@ -152,6 +173,129 @@ afterEach(async () => {
   server = undefined;
 });
 
+describe("buildMcpToolSchema", () => {
+  it("omits unreadable loopback tool names and parameters while preserving healthy siblings", () => {
+    const unreadableName = makeMockTool({
+      name: "fuzzplugin_unreadable",
+      description: "unreadable name",
+    });
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin loopback tool name getter exploded");
+      },
+    });
+    const unreadableDescription = makeMockTool({
+      name: "mockplugin_unreadable_description",
+      description: "optional",
+      parameters: { type: "object", properties: { value: { type: "string" } } },
+    });
+    Object.defineProperty(unreadableDescription, "description", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin loopback description getter exploded");
+      },
+    });
+    const unreadableParameters = makeMockTool({
+      name: "mockplugin_unreadable_parameters",
+      description: "unreadable parameters",
+    });
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin loopback parameters getter exploded");
+      },
+    });
+
+    expect(
+      buildMockMcpToolSchema([unreadableName, unreadableDescription, unreadableParameters]),
+    ).toEqual([
+      {
+        name: "mockplugin_unreadable_description",
+        description: undefined,
+        inputSchema: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+      },
+    ]);
+  });
+
+  it("flattens usable schemas from malformed and boolean union variants", () => {
+    const cases: Array<{
+      name: string;
+      parameters: Record<string, unknown>;
+      expected: Record<string, unknown>;
+    }> = [
+      {
+        name: "fuzzplugin_move_delta",
+        parameters: {
+          anyOf: [
+            { type: "object", properties: { angle: null }, required: ["angle"] },
+            {
+              type: "object",
+              properties: { angle: { type: "number" } },
+              required: ["angle"],
+            },
+          ],
+        },
+        expected: {
+          type: "object",
+          properties: { angle: { type: "number" } },
+          required: ["angle"],
+        },
+      },
+      {
+        name: "fuzzplugin_optional_delta",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { angle: { type: "number" } },
+              required: ["angle"],
+            },
+            true,
+          ],
+        },
+        expected: {
+          type: "object",
+          properties: { angle: { type: "number" } },
+          required: [],
+        },
+      },
+      {
+        name: "fuzzplugin_boolean_delta",
+        parameters: {
+          anyOf: [
+            { type: "object", properties: { angle: false } },
+            {
+              type: "object",
+              properties: { angle: { type: "number" } },
+              required: ["angle"],
+            },
+          ],
+        },
+        expected: {
+          type: "object",
+          properties: { angle: { type: "number" } },
+          required: [],
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      expect(
+        buildMockMcpToolSchema([
+          makeMockTool({
+            name: testCase.name,
+            parameters: testCase.parameters,
+          }),
+        ])[0]?.inputSchema,
+      ).toEqual(testCase.expected);
+    }
+  });
+});
+
 describe("mcp loopback server", () => {
   it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
     const port = await getFreePortBlockWithPermissionFallback({
@@ -169,7 +313,11 @@ describe("mcp loopback server", () => {
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-current-channel-id": "telegram:chat123",
+        "x-openclaw-current-thread-ts": "42",
+        "x-openclaw-current-message-id": "reply-message-1",
         "x-openclaw-inbound-event-kind": "room_event",
+        "x-openclaw-source-reply-delivery-mode": "message_tool_only",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
@@ -179,7 +327,11 @@ describe("mcp loopback server", () => {
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
+    expect(call.currentChannelId).toBe("telegram:chat123");
+    expect(call.currentThreadTs).toBe("42");
+    expect(call.currentMessageId).toBe("reply-message-1");
     expect(call.inboundEventKind).toBe("room_event");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
       "read",
@@ -191,10 +343,10 @@ describe("mcp loopback server", () => {
     ]);
   });
 
-  it("keeps loopback tool cache entries separate by inbound event kind", async () => {
+  it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
     server = await startMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
-    const sendToolsList = async (inboundEventKind: string) =>
+    const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
       await sendRaw({
         port: server?.port ?? 0,
         token: runtime?.ownerToken,
@@ -203,16 +355,21 @@ describe("mcp loopback server", () => {
           "x-session-key": "agent:main:telegram:group:chat123",
           "x-openclaw-message-channel": "telegram",
           "x-openclaw-inbound-event-kind": inboundEventKind,
+          ...(sourceReplyDeliveryMode
+            ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
+            : {}),
         },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
     expect((await sendToolsList("room_event")).status).toBe(200);
+    expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
+    expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -445,6 +602,106 @@ describe("mcp loopback server", () => {
     expect(cronExecute).toHaveBeenCalledTimes(1);
     expect(payload.result?.isError).not.toBe(true);
     expect(payload.result?.content?.[0]?.text).toBe("CRON_EXECUTED");
+  });
+
+  it("calls healthy tools when an earlier loopback tool name is unreadable", async () => {
+    const messageExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "MESSAGE_EXECUTED" }],
+    }));
+    const unreadableName = makeMockTool({
+      name: "fuzzplugin_unreadable_call",
+      description: "unreadable name",
+    });
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin loopback call name getter exploded");
+      },
+    });
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        unreadableName,
+        makeMockTool({
+          name: "message",
+          description: "send a message",
+          execute: messageExecute,
+        }),
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(messageExecute).toHaveBeenCalledTimes(1);
+    expect(payload.result?.isError).not.toBe(true);
+    expect(payload.result?.content?.[0]?.text).toBe("MESSAGE_EXECUTED");
+  });
+
+  it("does not execute loopback tools omitted from the advertised schema", async () => {
+    const unreadableExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "UNREADABLE_EXECUTED" }],
+    }));
+    const unreadableParameters = makeMockTool({
+      name: "mockplugin_unreadable_parameters",
+      description: "unreadable parameters",
+      execute: unreadableExecute,
+    });
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin loopback call parameters getter exploded");
+      },
+    });
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [unreadableParameters],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "mockplugin_unreadable_parameters", arguments: {} },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(unreadableExecute).not.toHaveBeenCalled();
+    expect(payload.result?.isError).toBe(true);
+    expect(payload.result?.content?.[0]?.text).toBe(
+      "Tool not available: mockplugin_unreadable_parameters",
+    );
   });
 
   it("honors before-tool-call hook blocks before loopback tool execution", async () => {
@@ -690,6 +947,18 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-thread-ts"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-message-id"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
+      "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });

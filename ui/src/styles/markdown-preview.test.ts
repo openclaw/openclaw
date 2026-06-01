@@ -41,5 +41,9 @@ describe("markdown preview styles", () => {
     expect(css).toContain(".sidebar-markdown-shell__toolbar");
     expect(css).toContain(".sidebar-markdown-reader");
     expect(css).toContain(".sidebar-markdown-shell__hint");
+    expect(css).toContain(".sidebar-markdown-empty");
+    expect(css).toMatch(
+      /\.sidebar-markdown-shell__eyebrow svg\s*\{[^}]*stroke:\s*currentColor;[^}]*fill:\s*none;/,
+    );
   });
 });

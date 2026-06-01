@@ -14,7 +14,11 @@ import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
-import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
+import {
+  BatchSpanProcessor,
+  ParentBasedSampler,
+  TraceIdRatioBasedSampler,
+} from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
   ATTR_GEN_AI_INPUT_MESSAGES,
@@ -894,11 +898,7 @@ function assignOtelModelContentAttributes(
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.system_prompt",
-      content?.systemPrompt,
-    );
+    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
   }
 }
 
@@ -1167,6 +1167,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               ...(headers ? { headers } : {}),
             })
           : undefined;
+        const spanProcessors =
+          traceExporter && typeof otel.flushIntervalMs === "number"
+            ? [
+                new BatchSpanProcessor(traceExporter, {
+                  scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs),
+                }),
+              ]
+            : undefined;
 
         const metricExporter = metricsEnabled
           ? new OTLPMetricExporter({
@@ -1186,7 +1194,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         sdk = new NodeSDK({
           resource,
-          ...(traceExporter ? { traceExporter } : {}),
+          ...(spanProcessors ? { spanProcessors } : traceExporter ? { traceExporter } : {}),
           ...(metricReader ? { metricReader } : {}),
           ...(sampleRate !== undefined
             ? {
@@ -1442,7 +1450,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         "openclaw.model_call.response_bytes",
         {
           unit: "By",
-          description: "UTF-8 byte size of streamed model response events",
+          description:
+            "UTF-8 byte size of streamed model response events excluding accumulated partial snapshots",
         },
       );
       const modelCallTimeToFirstByteHistogram = meter.createHistogram(
@@ -1463,13 +1472,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Tool execution duration",
         },
       );
-      const toolExecutionBlockedCounter = meter.createCounter(
-        "openclaw.tool.execution.blocked",
-        {
-          unit: "1",
-          description: "Tool executions blocked by policy or sandbox diagnostics",
-        },
-      );
+      const toolExecutionBlockedCounter = meter.createCounter("openclaw.tool.execution.blocked", {
+        unit: "1",
+        description: "Tool executions blocked by policy or sandbox diagnostics",
+      });
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
         unit: "ms",
         description: "Exec process duration",
@@ -3196,7 +3202,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "model.failover":
               recordModelFailover(evt, metadata);
-              return;
           }
         } catch (err) {
           ctx.logger.error(

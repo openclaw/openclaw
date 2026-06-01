@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
@@ -44,7 +45,7 @@ function writeManifestlessClaudeBundle(rootDir: string) {
   fs.writeFileSync(path.join(rootDir, "skills", "SKILL.md"), "# Workspace skill\n", "utf8");
 }
 
-function writePackagePlugin(rootDir: string) {
+function writePackagePlugin(rootDir: string, options: { configPaths?: readonly string[] } = {}) {
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
   fs.writeFileSync(
@@ -54,6 +55,7 @@ function writePackagePlugin(rootDir: string) {
       name: "Demo",
       description: "one",
       configSchema: { type: "object" },
+      ...(options.configPaths ? { activation: { onConfigPaths: options.configPaths } } : {}),
     }),
     "utf8",
   );
@@ -147,6 +149,21 @@ function requirePluginRecord(
     throw new Error(`expected plugin ${pluginId}`);
   }
   return plugin;
+}
+
+function dropStartupConfigPaths(
+  plugin: InstalledPluginIndex["plugins"][number],
+): InstalledPluginIndex["plugins"][number] {
+  return {
+    ...plugin,
+    startup: {
+      sidecar: plugin.startup.sidecar,
+      memory: plugin.startup.memory,
+      deferConfiguredChannelFullLoadUntilAfterListen:
+        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
+      agentHarnesses: plugin.startup.agentHarnesses,
+    },
+  };
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
@@ -428,6 +445,32 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toStrictEqual([]);
   });
 
+  it("refreshes a memoized derived snapshot when workspace plugins are installed", () => {
+    const tempRoot = makeTempDir();
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+
+    const first = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, workspaceDir });
+    expect(first.snapshot.plugins.map((plugin) => plugin.pluginId)).not.toContain("demo");
+
+    writePackagePlugin(path.join(workspaceDir, ".openclaw", "extensions", "demo"));
+
+    const second = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, workspaceDir });
+    expect(second.snapshot.plugins.map((plugin) => plugin.pluginId)).toContain("demo");
+  });
+
+  it("ignores malformed load paths while fingerprinting memoized snapshots", () => {
+    const tempRoot = makeTempDir();
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: "not-an-array" },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => loadPluginRegistrySnapshotWithMetadata({ config, env })).not.toThrow();
+  });
+
   it("keeps persisted package plugins when file hashes match", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
@@ -460,6 +503,35 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
+  });
+
+  it("rebuilds legacy config-path persisted registries before startup scoping", () => {
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: [rootDir] },
+      },
+    };
+    writePackagePlugin(rootDir, { configPaths: ["browser"] });
+    const index = loadInstalledPluginIndex({ config, env });
+    const legacyIndex: InstalledPluginIndex = {
+      ...index,
+      plugins: index.plugins.map(dropStartupConfigPaths),
+    };
+    writePersistedInstalledPluginIndexSync(legacyIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins[0]?.startup.configPaths).toEqual(["browser"]);
   });
 
   it("keeps persisted package plugins with dot-prefixed package metadata paths", () => {

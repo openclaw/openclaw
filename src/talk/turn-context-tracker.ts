@@ -143,7 +143,6 @@ export function createRealtimeVoiceTurnContextTracker<
       if (!turns.includes(handle)) {
         turns.push(handle);
         prune();
-        return;
       }
     },
     close(handle) {
@@ -175,7 +174,7 @@ export function createRealtimeVoiceTurnContextTracker<
       return turns.some((turn) => turn.hasAudio);
     },
     rememberIgnoredContext(context) {
-      if (!context) {
+      if (context === undefined) {
         return;
       }
       recentIgnoredContext = { context, createdAt: now() };

@@ -5,7 +5,7 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 const resolveCleanupPlanFromDisk = vi.fn();
 const removePath = vi.fn();
 const listAgentSessionDirs = vi.fn();
-const removeStateAndLinkedPaths = vi.fn();
+export const removeStateAndLinkedPaths = vi.fn();
 const removeWorkspaceDirs = vi.fn();
 
 vi.mock("../config/config.js", () => ({

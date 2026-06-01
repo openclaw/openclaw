@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  createTaskRecord,
+  createTaskRecord as createTaskRecordOrNull,
   markTaskTerminalById,
   recordTaskProgressByRunId,
   resetTaskRegistryForTests,
 } from "../../tasks/runtime-internal.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
@@ -20,6 +21,14 @@ type TaskResponsePayload = {
 };
 
 let stateDir: string;
+
+function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
+  const task = createTaskRecordOrNull(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));

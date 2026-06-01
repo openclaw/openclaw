@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
@@ -439,6 +439,55 @@ function expectCodexAppServerInstallState(params: {
 }
 
 describe("updateNpmInstalledPlugins", () => {
+  let timeoutBudgetCase: {
+    installCall: Record<string, unknown> | undefined;
+    npmViewTimeoutMs: unknown;
+  };
+
+  beforeAll(async () => {
+    installPluginFromNpmSpecMock.mockReset();
+    installPluginFromMarketplaceMock.mockReset();
+    installPluginFromClawHubMock.mockReset();
+    installPluginFromGitSpecMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    runCommandWithTimeoutMock.mockReset();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.10.0",
+      integrity: "sha512-next",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.10.0",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath,
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        resolvedVersion: "0.9.0",
+      }),
+      pluginIds: ["lossless-claw"],
+      timeoutMs: 1_800_000,
+    });
+
+    timeoutBudgetCase = {
+      installCall: npmInstallCall(),
+      npmViewTimeoutMs: npmViewCall()?.[1]?.timeoutMs,
+    };
+  });
+
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
@@ -528,38 +577,8 @@ describe("updateNpmInstalledPlugins", () => {
   );
 
   it("passes timeout budget to npm plugin metadata checks and installs", async () => {
-    const installPath = createInstalledPackageDir({
-      name: "@martian-engineering/lossless-claw",
-      version: "0.9.0",
-    });
-    mockNpmViewMetadata({
-      name: "@martian-engineering/lossless-claw",
-      version: "0.10.0",
-      integrity: "sha512-next",
-    });
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createSuccessfulNpmUpdateResult({
-        pluginId: "lossless-claw",
-        targetDir: installPath,
-        version: "0.10.0",
-      }),
-    );
-
-    await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "lossless-claw",
-        spec: "@martian-engineering/lossless-claw",
-        installPath,
-        resolvedName: "@martian-engineering/lossless-claw",
-        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
-        resolvedVersion: "0.9.0",
-      }),
-      pluginIds: ["lossless-claw"],
-      timeoutMs: 1_800_000,
-    });
-
-    expect(npmViewCall()?.[1]?.timeoutMs).toBe(1_800_000);
-    expectNpmUpdateCall({
+    expect(timeoutBudgetCase.npmViewTimeoutMs).toBe(1_800_000);
+    expectRecordFields(timeoutBudgetCase.installCall, {
       spec: "@martian-engineering/lossless-claw",
       expectedPluginId: "lossless-claw",
       timeoutMs: 1_800_000,
@@ -766,6 +785,7 @@ describe("updateNpmInstalledPlugins", () => {
       "version",
       "dist.integrity",
       "dist.shasum",
+      "openclaw",
       "--json",
     ]);
     if (npmViewCall()?.[1] === undefined) {
@@ -1157,6 +1177,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     expectRecordFields(result.config.plugins?.installs?.["lossless-claw"], {
       source: "npm",
+      spec: "@martian-engineering/lossless-claw",
       resolvedName: "@martian-engineering/lossless-claw",
       resolvedVersion: "0.9.0",
       resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
@@ -1931,6 +1952,7 @@ describe("updateNpmInstalledPlugins", () => {
         "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
       },
       expectedSpec: "openclaw-codex-app-server@beta",
+      expectedRecordSpec: "openclaw-codex-app-server@beta",
       expectedVersion: "0.2.0-beta.4",
       expectedResolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
     },
@@ -1941,6 +1963,7 @@ describe("updateNpmInstalledPlugins", () => {
       config,
       specOverrides,
       expectedSpec,
+      expectedRecordSpec,
       expectedVersion,
       expectedResolvedSpec,
     }) => {
@@ -1958,14 +1981,14 @@ describe("updateNpmInstalledPlugins", () => {
       });
       expectCodexAppServerInstallState({
         result,
-        spec: expectedSpec,
+        spec: expectedRecordSpec ?? expectedSpec,
         version: expectedVersion,
         ...(expectedResolvedSpec ? { resolvedSpec: expectedResolvedSpec } : {}),
       });
     },
   );
 
-  it("tries npm beta for default npm specs on beta channel without persisting the beta tag", async () => {
+  it("tries npm beta for default npm specs on beta channel and preserves the default selector", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
         pluginId: "openclaw-codex-app-server",

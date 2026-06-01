@@ -8,6 +8,10 @@ import {
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import {
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   computeBackoff,
   formatDurationPrecise,
   sleepWithAbort,
@@ -15,7 +19,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { type TelegramTransport } from "./fetch.js";
+import type { TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
@@ -32,6 +36,7 @@ import {
   recoverStaleTelegramSpooledUpdateClaims,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
+  writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
   type TelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
@@ -217,18 +222,12 @@ function resolveSpooledUpdateHandlerTimeoutMs(params: {
     Number(params.env?.[TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV]),
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
-      return Math.floor(candidate);
+    const timeoutMs = clampPositiveTimerTimeoutMs(candidate);
+    if (timeoutMs !== undefined) {
+      return timeoutMs;
     }
   }
   return ISOLATED_INGRESS_BACKLOG_STALL_MS;
-}
-
-function resolvePositiveFiniteMs(value: number | undefined, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  return fallback;
 }
 
 function buildSpooledUpdateHandlerKey(params: { spoolDir: string; laneKey: string }): string {
@@ -267,7 +266,7 @@ export class TelegramPollingSession {
         : {}),
       env: process.env,
     });
-    this.#spooledUpdateHandlerAbortGraceMs = resolvePositiveFiniteMs(
+    this.#spooledUpdateHandlerAbortGraceMs = resolvePositiveTimerTimeoutMs(
       opts.isolatedIngress?.spooledUpdateHandlerAbortGraceMs,
       TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS,
     );
@@ -375,7 +374,7 @@ export class TelegramPollingSession {
         bypassBackoff: false,
       }),
     })
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
       })
       .finally(() => {
@@ -631,7 +630,7 @@ export class TelegramPollingSession {
         continue;
       }
       const ageMs = now - handler.startedAt;
-      if (ageMs <= this.#spooledUpdateHandlerTimeoutMs) {
+      if (ageMs < this.#spooledUpdateHandlerTimeoutMs) {
         continue;
       }
       if (!timedOut || ageMs > timedOut.ageMs) {
@@ -769,6 +768,23 @@ export class TelegramPollingSession {
     });
     const stalledBacklogKeys = new Set<string>();
     const unsubscribe = worker.onMessage((message) => {
+      const ackSpooledUpdate = (
+        requestId: string,
+        result:
+          | { ok: true; updateId: number }
+          | {
+              ok: false;
+              message: string;
+            },
+      ): void => {
+        try {
+          worker.ackSpooledUpdate?.(requestId, result);
+        } catch (err) {
+          this.opts.log(
+            `[telegram][diag] isolated polling worker ack failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      };
       if (message.type === "poll-start") {
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
@@ -792,6 +808,23 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
+        return;
+      }
+      if (message.type === "update") {
+        void writeTelegramSpooledUpdate({
+          spoolDir,
+          update: message.update,
+        }).then(
+          (updateId) => {
+            ackSpooledUpdate(message.requestId, { ok: true, updateId });
+          },
+          (err: unknown) => {
+            ackSpooledUpdate(message.requestId, {
+              ok: false,
+              message: formatErrorMessage(err),
+            });
+          },
+        );
         return;
       }
       if (message.type === "spooled") {
@@ -1127,4 +1160,9 @@ const isGetUpdatesConflict = (err: unknown) => {
     .join(" ");
   const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
   return normalizedHaystack.includes("getupdates");
+};
+
+export const testing = {
+  resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
+    resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };

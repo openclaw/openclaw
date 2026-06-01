@@ -1,9 +1,12 @@
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -26,13 +29,13 @@ const {
   proxylineStopMock,
   proxylineUnregisterBypassMock,
 } = vi.hoisted(() => {
-  const proxylineStopMock = vi.fn();
-  const proxylineUnregisterBypassMock = vi.fn();
-  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
+  const proxylineStopMockLocal = vi.fn();
+  const proxylineUnregisterBypassMockLocal = vi.fn();
+  const proxylineRegisterBypassMockLocal = vi.fn(() => proxylineUnregisterBypassMockLocal);
   return {
-    proxylineRegisterBypassMock,
-    proxylineStopMock,
-    proxylineUnregisterBypassMock,
+    proxylineRegisterBypassMock: proxylineRegisterBypassMockLocal,
+    proxylineStopMock: proxylineStopMockLocal,
+    proxylineUnregisterBypassMock: proxylineUnregisterBypassMockLocal,
     installGlobalProxyMock: vi.fn(() => ({
       active: true,
       createNodeAgent: vi.fn(),
@@ -40,8 +43,8 @@ const {
       createWebSocketAgent: vi.fn(),
       explain: vi.fn(),
       mode: "managed",
-      registerBypass: proxylineRegisterBypassMock,
-      stop: proxylineStopMock,
+      registerBypass: proxylineRegisterBypassMockLocal,
+      stop: proxylineStopMockLocal,
       withBypass: vi.fn(),
     })),
   };
@@ -97,9 +100,7 @@ class MockWebSocket {
         return;
       case "error":
         this.errorHandlers.push(handler as WsEventHandlers["error"]);
-        return;
       default:
-        return;
     }
   }
 
@@ -230,21 +231,6 @@ function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
   }
   return arg;
 }
-
-async function expectGatewayRequestError(
-  promise: Promise<unknown>,
-  expected: Record<string, unknown>,
-): Promise<void> {
-  let rejected: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    rejected = error;
-  }
-  const error = expectRecordFields(rejected, expected, "gateway request error");
-  expectRecordFields(error.details, { method: "chat.history" }, "gateway request error details");
-}
-
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
@@ -355,6 +341,34 @@ describe("GatewayClient security checks", () => {
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1); // WebSocket created
     expect(getLatestWs().options).not.toHaveProperty("agent");
+    client.stop();
+  });
+
+  it("does not treat hostnames starting with 127 as loopback", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expectSecurityConnectError(onConnectError, { expectTailscaleHint: true });
+    expect(wsInstances.length).toBe(0);
+    client.stop();
+  });
+
+  it("allows ws:// to IPv4-mapped loopback addresses", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://[::ffff:127.0.0.1]:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
     client.stop();
   });
 
@@ -505,6 +519,20 @@ describe("GatewayClient security checks", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "ws://192.168.1.100:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+    client.stop();
+  });
+
+  it("allows ws:// to IPv6 link-local addresses across fe80::/10", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://[fe90::1]:18789",
       onConnectError,
     });
 
@@ -971,7 +999,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("surfaces connect assembly errors instead of waiting for the wrapper timeout", async () => {
     vi.useFakeTimers();
-    let client: GatewayClientInstance | null = null;
+    let client: GatewayClientInstance | null | undefined;
     try {
       const onClose = vi.fn();
       const onConnectError = vi.fn();
@@ -1097,10 +1125,16 @@ describe("GatewayClient connect auth payload", () => {
     firstWs: MockWebSocket;
     connectId: string | undefined;
     failureDetails: Record<string, unknown>;
+    failureMessage?: string;
   }) {
     vi.useFakeTimers();
     try {
-      emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+      emitConnectFailure(
+        params.firstWs,
+        params.connectId,
+        params.failureDetails,
+        params.failureMessage,
+      );
       await vi.advanceTimersByTimeAsync(30_000);
       expect(wsInstances).toHaveLength(1);
     } finally {
@@ -1534,6 +1568,34 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
+    });
+  });
+
+  it("does not auto-reconnect on CLIENT_VERSION_MISMATCH connect failures", async () => {
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "node",
+      scopes: [],
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: {
+        code: "CLIENT_VERSION_MISMATCH",
+        clientVersion: "2026.5.25",
+        gatewayVersion: "2026.5.26",
+      },
+      failureMessage: "client version mismatch",
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "CLIENT_VERSION_MISMATCH",
     });
   });
 

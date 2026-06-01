@@ -71,12 +71,13 @@ Live tests are split into two layers so we can isolate failures:
   - Run a small completion per model (and targeted regressions where needed)
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-- Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
+- Set `OPENCLAW_LIVE_MODELS=modern`, `small`, or `all` (alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
   - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.2 + Codex, Gemini 3, DeepSeek V4, GLM 4.7, MiniMax M2.7, Grok 4.3)
+  - `OPENCLAW_LIVE_MODELS=small` to run the constrained small-model allowlist (Qwen 8B/9B local-compatible routes, OpenRouter Qwen/GLM, and Z.AI GLM)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
-  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
-  - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
+  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - Modern/all and small sweeps default to their curated caps; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive selected-profile sweep or a positive number for a smaller cap.
   - Exhaustive sweeps use `OPENCLAW_LIVE_TEST_TIMEOUT_MS` for the whole direct-model test timeout. Default: 60 minutes.
   - Direct-model probes run with 20-way parallelism by default; set `OPENCLAW_LIVE_MODEL_CONCURRENCY` to override.
 - How to select providers:
@@ -296,7 +297,7 @@ Docker notes:
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
 - The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
-  harness cannot pass by silently falling back to PI.
+  harness cannot pass by silently falling back to OpenClaw.
 - Auth: Codex app-server auth from the local Codex subscription login. Docker
   smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
   plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.
@@ -329,7 +330,7 @@ Docker notes:
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
   run.
-- Docker uses the same explicit Codex runtime config, so legacy aliases or PI
+- Docker uses the same explicit Codex runtime config, so legacy aliases or OpenClaw
   fallback cannot hide a Codex harness regression.
 
 ### Recommended live recipes
@@ -339,11 +340,17 @@ Narrow, explicit allowlists are fastest and least flaky:
 - Single model, direct (no gateway):
   - `OPENCLAW_LIVE_MODELS="openai/gpt-5.5" pnpm test:live src/agents/models.profiles.live.test.ts`
 
+- Small-model direct profile:
+  - `OPENCLAW_LIVE_MODELS=small pnpm test:live src/agents/models.profiles.live.test.ts`
+
+- Ollama Cloud API smoke:
+  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 pnpm test:live -- extensions/ollama/ollama.live.test.ts`
+
 - Single model, gateway smoke:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -371,7 +378,7 @@ There is no fixed "CI model list" (live is opt-in), but these are the **recommen
 This is the "common models" run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.5`
-- OpenAI Codex OAuth: `openai-codex/gpt-5.5`
+- OpenAI ChatGPT/Codex OAuth: `openai/gpt-5.5`
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
@@ -380,7 +387,7 @@ This is the "common models" run we expect to keep working:
 - MiniMax: `minimax/MiniMax-M2.7`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
@@ -413,7 +420,7 @@ If you have keys enabled, we also support testing via:
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
