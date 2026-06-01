@@ -20,7 +20,9 @@ type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => bo
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
 
 async function flushAsyncSelect() {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function expectSendChatFields(

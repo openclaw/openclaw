@@ -462,7 +462,7 @@ function persistBindingsSafely(params: {
   bindings?: TelegramThreadBindingRecord[];
   reason: string;
 }): void {
-  void enqueuePersistBindings(params).catch((err) => {
+  void enqueuePersistBindings(params).catch((err: unknown) => {
     logVerbose(
       `telegram thread bindings persist failed (${params.accountId}, ${params.reason}): ${String(err)}`,
     );

@@ -696,7 +696,7 @@ export async function startCommandAgentAudioBridge(params: {
         });
         endTalkTurn();
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         params.logger.warn(`[google-meet] agent TTS failed: ${formatErrorMessage(error)}`);
       });
   };

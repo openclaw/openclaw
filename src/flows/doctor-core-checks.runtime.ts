@@ -547,7 +547,12 @@ function toolSchemaDiagnosticToFinding(params: {
   tools: readonly AnyAgentTool[];
   diagnostic: RuntimeToolSchemaDiagnostic;
 }): HealthFinding {
-  const tool = params.tools[params.diagnostic.toolIndex];
+  let tool: AnyAgentTool | undefined;
+  try {
+    tool = params.tools[params.diagnostic.toolIndex];
+  } catch {
+    tool = undefined;
+  }
   const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
   const owner = pluginId ? ` from plugin ${pluginId}` : "";
   const agent = `Agent ${params.agentId} `;
@@ -600,21 +605,153 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
     warn: () => {},
+    toolPolicyAuditLogLevel: "debug",
   });
-  const normalizedTools = normalizeAgentRuntimeTools({
-    tools: activeBundleTools,
-    provider: params.modelRef.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    modelId: params.modelRef.model,
-    modelApi: params.model.api,
-    model: params.model,
-  });
-  return collectToolSchemaFindings({
-    agentId: params.agentId,
-    tools: normalizedTools,
-  });
+  const preNormalizationFindings: HealthFinding[] = [];
+
+  let normalizedTools: AnyAgentTool[];
+  try {
+    normalizedTools = normalizeAgentRuntimeTools({
+      tools: activeBundleTools,
+      provider: params.modelRef.provider,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      modelId: params.modelRef.model,
+      modelApi: params.model.api,
+      model: params.model,
+      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
+        preNormalizationFindings.push(
+          ...diagnostics.map((diagnostic) =>
+            toolSchemaDiagnosticToFinding({
+              agentId: params.agentId,
+              tools: sourceTools,
+              diagnostic,
+            }),
+          ),
+        );
+      },
+    });
+  } catch (error) {
+    return [...preNormalizationFindings, bundleMcpRuntimeNormalizationFailureFinding(error)];
+  }
+
+  return [
+    ...preNormalizationFindings,
+    ...collectToolSchemaFindings({
+      agentId: params.agentId,
+      tools: normalizedTools,
+    }),
+  ];
+}
+
+function agentRuntimeToolLoadFailureFinding(params: {
+  agentId: string;
+  error: unknown;
+}): HealthFinding {
+  return {
+    checkId: "core/doctor/runtime-tool-schemas",
+    severity: "error",
+    message: `Agent ${params.agentId} runtime tool schema validation could not load the runtime tool set.`,
+    path: `agents.${params.agentId}.tools`,
+    requirement: formatErrorMessage(params.error),
+    fixHint:
+      "Fix provider/plugin tool loading errors, then rerun doctor before relying on assistant tool startup.",
+  };
+}
+
+function agentRuntimeToolNormalizationFailureFinding(params: {
+  agentId: string;
+  error: unknown;
+}): HealthFinding {
+  return {
+    checkId: "core/doctor/runtime-tool-schemas",
+    severity: "error",
+    message: `Agent ${params.agentId} runtime tool schema validation could not normalize the runtime tool set.`,
+    path: `agents.${params.agentId}.tools`,
+    requirement: formatErrorMessage(params.error),
+    fixHint:
+      "Fix provider/plugin schema normalization errors, then rerun doctor before relying on assistant tool startup.",
+  };
+}
+
+function collectAgentRuntimeToolSchemaFindings(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+  modelRef: { provider: string; model: string };
+  model: ProviderRuntimeModel;
+}): readonly HealthFinding[] {
+  let tools: AnyAgentTool[];
+  try {
+    tools = createOpenClawCodingTools({
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      modelProvider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+      modelApi: params.model.api,
+      modelCompat: params.model.compat,
+      modelContextWindowTokens: params.model.contextWindow,
+      allowGatewaySubagentBinding: true,
+      emitBeforeToolCallDiagnostics: false,
+      toolPolicyAuditLogLevel: "debug",
+    });
+  } catch (error) {
+    return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
+  }
+
+  const preNormalizationFindings: HealthFinding[] = [];
+
+  let normalizedTools: AnyAgentTool[];
+  try {
+    normalizedTools = normalizeAgentRuntimeTools({
+      tools,
+      provider: params.modelRef.provider,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      modelId: params.modelRef.model,
+      modelApi: params.model.api,
+      model: params.model,
+      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
+        preNormalizationFindings.push(
+          ...diagnostics.map((diagnostic) =>
+            toolSchemaDiagnosticToFinding({
+              agentId: params.agentId,
+              tools: sourceTools,
+              diagnostic,
+            }),
+          ),
+        );
+      },
+    });
+  } catch (error) {
+    return [
+      ...preNormalizationFindings,
+      agentRuntimeToolNormalizationFailureFinding({ agentId: params.agentId, error }),
+    ];
+  }
+
+  return [
+    ...preNormalizationFindings,
+    ...collectToolSchemaFindings({
+      agentId: params.agentId,
+      tools: normalizedTools,
+    }),
+  ];
+}
+
+function bundleMcpRuntimeNormalizationFailureFinding(error: unknown): HealthFinding {
+  return {
+    checkId: "core/doctor/runtime-tool-schemas",
+    severity: "error",
+    message: "Configured MCP tool schema validation could not normalize the runtime tool set.",
+    path: "mcp.servers",
+    requirement: formatErrorMessage(error),
+    fixHint:
+      "Fix provider/plugin schema normalization errors, then rerun doctor before relying on assistant tool startup.",
+  };
 }
 
 function bundleMcpRuntimeLoadFailureFinding(error: unknown): HealthFinding {
@@ -731,6 +868,7 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
       modelProvider: params.modelRef.provider,
       modelId: params.modelRef.model,
       warn: () => {},
+      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }
@@ -785,32 +923,13 @@ export async function collectRuntimeToolSchemaFindings(
       if (!supportsModelTools(model)) {
         continue;
       }
-      const tools = createOpenClawCodingTools({
-        agentId,
-        workspaceDir,
-        config: cfg,
-        modelProvider: modelRef.provider,
-        modelId: modelRef.model,
-        modelApi: model.api,
-        modelCompat: model.compat,
-        modelContextWindowTokens: model.contextWindow,
-        allowGatewaySubagentBinding: true,
-        emitBeforeToolCallDiagnostics: false,
-      });
-      const normalizedTools = normalizeAgentRuntimeTools({
-        tools,
-        provider: modelRef.provider,
-        config: cfg,
-        workspaceDir,
-        env: process.env,
-        modelId: modelRef.model,
-        modelApi: model.api,
-        model,
-      });
       findings.push(
-        ...collectToolSchemaFindings({
+        ...collectAgentRuntimeToolSchemaFindings({
+          cfg,
           agentId,
-          tools: normalizedTools,
+          workspaceDir,
+          modelRef,
+          model,
         }),
       );
       if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {

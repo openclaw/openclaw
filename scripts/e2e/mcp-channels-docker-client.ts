@@ -141,7 +141,7 @@ async function main() {
         );
       },
       240_000,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       throw new Error(
         `timeout waiting for seeded MCP conversation: ${JSON.stringify(
           lastMcpConversationList,
@@ -182,7 +182,7 @@ async function main() {
         return currentMessages.length >= 2 ? currentMessages : undefined;
       },
       240_000,
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       throw new Error(
         `timeout waiting for seeded transcript messages: ${JSON.stringify(lastHistory, null, 2)}`,
         { cause: error },

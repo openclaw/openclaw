@@ -230,7 +230,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
       dirs.push(packageRoot);
     }
   }
-  let proc: string | null = null;
+  let proc: string | null;
   try {
     proc = normalizeDir(process.cwd());
   } catch {
@@ -907,8 +907,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       if (fetchFailure) {
         return fetchFailure;
       }
-      let preflightBaseSha: string | null = null;
-      let candidatesLocal: string[] = [];
+      let preflightBaseSha: string | null;
+      let candidatesLocal: string[];
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {

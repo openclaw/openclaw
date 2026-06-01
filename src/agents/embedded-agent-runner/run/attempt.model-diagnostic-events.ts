@@ -568,7 +568,7 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
 ): T {
   const observedIterator = () =>
     observeModelCallIterator(createIterator(), eventBase, startedAt, state)[Symbol.asyncIterator]();
-  let hasNonConfigurableIterator = false;
+  let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
       Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;
@@ -635,7 +635,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, eventBase, startedAt, state),
-          (err) => {
+          (err: unknown) => {
             emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
             throw err;
           },

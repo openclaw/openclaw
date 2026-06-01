@@ -191,7 +191,7 @@ function getCachedPluginGatewayAuthBypassPaths(
   if (cached) {
     return cached;
   }
-  const resolved = resolvePluginGatewayAuthBypassPaths(configSnapshot).catch((error) => {
+  const resolved = resolvePluginGatewayAuthBypassPaths(configSnapshot).catch((error: unknown) => {
     pluginGatewayAuthBypassPathsCache.delete(configSnapshot);
     throw error;
   });
@@ -982,7 +982,7 @@ export function attachGatewayUpgradeHandler(opts: {
         releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);

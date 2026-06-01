@@ -7,6 +7,14 @@ import { describe, expect, it } from "vitest";
 import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
+const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+
+function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
+  const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
+  return current.includes(DISABLE_EXPERIMENTAL_WARNING)
+    ? current
+    : [current, DISABLE_EXPERIMENTAL_WARNING].filter(Boolean).join(" ");
+}
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -24,6 +32,7 @@ function runAssertion(
       ...process.env,
       HOME: home,
       ...options.env,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(options.env?.NODE_OPTIONS),
     },
     killSignal: "SIGKILL",
     timeout: options.timeoutMs,
@@ -60,7 +69,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
     socket.on("error", () => undefined);
     socket.on("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
   return {
     port: address.port,
@@ -68,9 +79,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

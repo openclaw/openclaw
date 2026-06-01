@@ -367,7 +367,7 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   if (cached) {
     return cached;
   }
-  let entries: CronRunLogEntry[] = [];
+  let entries: CronRunLogEntry[];
   try {
     entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync({
       storePath: context.storePath,
@@ -1068,7 +1068,9 @@ export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenance
  * synchronous task-registry maintenance work.
  */
 function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function startScheduledSweep() {

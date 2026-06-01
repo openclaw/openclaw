@@ -599,7 +599,6 @@ function satisfiesComparator(version: string, token: string): boolean {
       return cmp > 0;
     case "<":
       return cmp < 0;
-    case "=":
     default:
       return normalizedTarget.isPartial && !operator ? cmp >= 0 : cmp === 0;
   }

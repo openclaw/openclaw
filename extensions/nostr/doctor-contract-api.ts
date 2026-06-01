@@ -100,7 +100,7 @@ async function listLegacyFiles(params: {
   parse: (value: unknown) => unknown;
 }): Promise<Array<{ accountId: string; filePath: string; value: unknown }>> {
   const dir = path.join(params.stateDir, "nostr");
-  let entries: Dirent[] = [];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {

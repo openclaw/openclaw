@@ -149,6 +149,9 @@ function createMediaGenerationTaskRun(params: {
       lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
+    if (!task) {
+      return null;
+    }
     const handle = {
       taskId: task.taskId,
       runId,
@@ -294,7 +297,7 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
     queueMicrotask(() => {
-      void work().catch((error) => {
+      void work().catch((error: unknown) => {
         params.onCrash(`Detached ${params.toolName} job crashed`, { error });
       });
     });

@@ -225,7 +225,9 @@ async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Pro
   try {
     return await run();
   } finally {
-    await new Promise<void>((resolveLocal) => server.close(() => resolveLocal()));
+    await new Promise<void>((resolveLocal) => {
+      server.close(() => resolveLocal());
+    });
     await rm(socketPath, { force: true });
   }
 }

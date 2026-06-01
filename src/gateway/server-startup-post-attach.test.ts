@@ -1614,7 +1614,9 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(result.postReadySidecars).toHaveLength(1);
     await result.postReadySidecars[0]?.stop();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
@@ -1659,7 +1661,9 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       await result.postReadySidecars[0]?.stop();
       releaseImport?.();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     } finally {

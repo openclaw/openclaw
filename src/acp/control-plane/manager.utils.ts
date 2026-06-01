@@ -44,7 +44,7 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   if (resolution.kind === "ready") {
     return resolution.meta;
   }
-  throw resolveAcpSessionResolutionError(resolution);
+  throw toLintErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
 }
 
 function normalizeSessionKey(sessionKey: string): string {
@@ -120,4 +120,18 @@ export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
     Object.hasOwn(raw, "agentSessionId") ||
     Object.hasOwn(raw, "sessionIdsProvisional")
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

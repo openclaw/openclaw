@@ -171,6 +171,7 @@ export {
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
 export {
+  filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,
@@ -285,6 +286,7 @@ export {
 // timeout the built-in embedded-agent runner uses — one shared implementation, no
 // copy-pasted watchdog.
 export {
+  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";

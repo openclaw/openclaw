@@ -576,7 +576,9 @@ describe("scripts/test-extension.mjs", () => {
     await Promise.resolve();
     expect(started).toEqual(["heavy", "middle"]);
     resolvers.shift()?.();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(started).toEqual(["heavy", "middle", "light"]);
     while (resolvers.length > 0) {
       resolvers.shift()?.();

@@ -32,6 +32,8 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
@@ -52,7 +54,8 @@ import {
   isConfiguredAgent,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -71,41 +74,6 @@ const agentsHandlerDeps = {
   root,
   isWorkspaceSetupCompleted,
 };
-
-let loggedSlowAgentsListCatalog = false;
-
-const AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
-
-async function loadOptionalAgentsListModelCatalog(
-  context: GatewayRequestContext,
-): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = Symbol("agents-list-model-catalog-timeout");
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  try {
-    const result = await Promise.race([
-      context.loadGatewayModelCatalog().catch(() => undefined),
-      timeoutPromise,
-    ]);
-    if (result === timedOut) {
-      if (!loggedSlowAgentsListCatalog) {
-        loggedSlowAgentsListCatalog = true;
-        context.logGateway.debug(
-          `agents.list continuing without model catalog after ${AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
-        );
-      }
-      return undefined;
-    }
-    return Array.isArray(result) ? result : undefined;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
 
 export const testing = {
   setDepsForTests(
@@ -182,6 +150,21 @@ function isRegularWorkspaceFileStat(stat: {
   return isFile && !isSymbolicLink && stat.nlink <= 1;
 }
 
+function toWorkspaceFileMeta(
+  stat: {
+    size: number;
+    mtimeMs: number;
+  } & Parameters<typeof isRegularWorkspaceFileStat>[0],
+): FileMeta | null {
+  if (!isRegularWorkspaceFileStat(stat)) {
+    return null;
+  }
+  return {
+    size: stat.size,
+    updatedAtMs: Math.floor(stat.mtimeMs),
+  };
+}
+
 async function statWorkspaceFileSafely(
   workspaceRoot: WorkspaceRoot | null,
   workspaceDir: string,
@@ -191,13 +174,7 @@ async function statWorkspaceFileSafely(
     const stat = workspaceRoot
       ? await workspaceRoot.stat(name)
       : await fs.lstat(path.join(workspaceDir, name));
-    if (!isRegularWorkspaceFileStat(stat)) {
-      return null;
-    }
-    return {
-      size: stat.size,
-      updatedAtMs: Math.floor(stat.mtimeMs),
-    };
+    return toWorkspaceFileMeta(stat);
   } catch {
     if (!workspaceRoot) {
       return null;
@@ -205,13 +182,7 @@ async function statWorkspaceFileSafely(
     try {
       // fs-safe roots can reject fixtures that are still valid regular files for listing metadata.
       const stat = await fs.lstat(path.join(workspaceDir, name));
-      if (!isRegularWorkspaceFileStat(stat)) {
-        return null;
-      }
-      return {
-        size: stat.size,
-        updatedAtMs: Math.floor(stat.mtimeMs),
-      };
+      return toWorkspaceFileMeta(stat);
     } catch {
       return null;
     }
@@ -419,6 +390,37 @@ function normalizeIdentityForFile(
   return resolved;
 }
 
+function createAgentIdentityConfig(params: {
+  safeName?: string;
+  emoji?: unknown;
+  avatar?: unknown;
+}): IdentityConfig | undefined {
+  const emoji = resolveOptionalStringParam(params.emoji);
+  const avatar = resolveOptionalStringParam(params.avatar);
+  const identity = {
+    ...(params.safeName ? { name: params.safeName } : {}),
+    ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
+    ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
+  } satisfies IdentityConfig;
+  return identity.name || identity.emoji || identity.avatar ? identity : undefined;
+}
+
+function buildAgentConfigUpdate(params: {
+  agentId: string;
+  safeName?: string;
+  workspaceDir?: string;
+  model?: string;
+  identity?: IdentityConfig;
+}): Parameters<typeof updateAgentConfigEntry>[0] {
+  return {
+    agentId: params.agentId,
+    ...(params.safeName ? { name: params.safeName } : {}),
+    ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.identity ? { identity: params.identity } : {}),
+  };
+}
+
 async function readWorkspaceFileContent(
   workspaceDir: string,
   name: string,
@@ -488,34 +490,20 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 export const agentsHandlers: GatewayRequestHandlers = {
   "agents.list": async ({ params, respond, context }) => {
     if (!validateAgentsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agents.list params: ${formatValidationErrors(validateAgentsListParams.errors)}`,
-        ),
-      );
+      respondInvalidMethodParams(respond, "agents.list", validateAgentsListParams.errors);
       return;
     }
 
     const cfg = context.getRuntimeConfig();
-    const modelCatalog = await loadOptionalAgentsListModelCatalog(context);
+    const modelCatalog = await loadOptionalServerMethodModelCatalog(context, "agents.list", {
+      logOnceKey: "agents.list",
+    });
     const result = listAgentsForGateway(cfg, modelCatalog);
     respond(true, result, undefined);
   },
   "agents.create": async ({ params, respond, context }) => {
     if (!validateAgentsCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agents.create params: ${formatValidationErrors(
-            validateAgentsCreateParams.errors,
-          )}`,
-        ),
-      );
+      respondInvalidMethodParams(respond, "agents.create", validateAgentsCreateParams.errors);
       return;
     }
 
@@ -544,14 +532,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const safeName = sanitizeIdentityLine(rawName);
     const model = resolveOptionalStringParam(params.model);
-    const emoji = resolveOptionalStringParam(params.emoji);
-    const avatar = resolveOptionalStringParam(params.avatar);
-
-    const identity = {
-      name: safeName,
-      ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
-      ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
-    };
+    const identity = createAgentIdentityConfig({
+      safeName,
+      emoji: params.emoji,
+      avatar: params.avatar,
+    }) ?? { name: safeName };
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.
@@ -634,30 +619,27 @@ export const agentsHandlers: GatewayRequestHandlers = {
         : undefined;
 
     const model = resolveOptionalStringParam(params.model);
-    const emoji = resolveOptionalStringParam(params.emoji);
-    const avatar = resolveOptionalStringParam(params.avatar);
 
     const safeName =
       typeof params.name === "string" && params.name.trim()
         ? sanitizeIdentityLine(params.name.trim())
         : undefined;
 
-    const hasIdentityFields = Boolean(safeName || emoji || avatar);
-    const identity = hasIdentityFields
-      ? {
-          ...(safeName ? { name: safeName } : {}),
-          ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
-          ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
-        }
-      : undefined;
-
-    const nextConfig = applyAgentConfig(cfg, {
-      agentId,
-      ...(safeName ? { name: safeName } : {}),
-      ...(workspaceDir ? { workspace: workspaceDir } : {}),
-      ...(model ? { model } : {}),
-      ...(identity ? { identity } : {}),
+    const identity = createAgentIdentityConfig({
+      safeName,
+      emoji: params.emoji,
+      avatar: params.avatar,
     });
+    const hasIdentityFields = Boolean(identity);
+
+    const agentConfigUpdate = buildAgentConfigUpdate({
+      agentId,
+      safeName,
+      workspaceDir,
+      model,
+      identity,
+    });
+    const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
 
     let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
@@ -701,13 +683,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      await updateAgentConfigEntry({
-        agentId,
-        ...(safeName ? { name: safeName } : {}),
-        ...(workspaceDir ? { workspace: workspaceDir } : {}),
-        ...(model ? { model } : {}),
-        ...(identity ? { identity } : {}),
-      });
+      await updateAgentConfigEntry(agentConfigUpdate);
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentConfigPreconditionError(respond, error);
@@ -766,26 +742,30 @@ export const agentsHandlers: GatewayRequestHandlers = {
         deleteResult.workspaceDir,
       );
       const deleteWorkspace = workspaceSharedWith.length === 0;
-      await Promise.all([
-        ...(deleteWorkspace ? [moveToTrashBestEffort(deleteResult.workspaceDir)] : []),
-        moveToTrashBestEffort(deleteResult.agentDir),
-        moveToTrashBestEffort(deleteResult.sessionsDir),
-      ]);
+      const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
+      if (deleteWorkspace) {
+        pathsToTrash.unshift(deleteResult.workspaceDir);
+        for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+          deleteResult.workspaceDir,
+        ).entries()) {
+          if (
+            await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })
+          ) {
+            pathsToTrash.push(attestationPath);
+          }
+        }
+      }
+      await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
     }
 
     respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agents.files.list params: ${formatValidationErrors(
-            validateAgentsFilesListParams.errors,
-          )}`,
-        ),
+      respondInvalidMethodParams(
+        respond,
+        "agents.files.list",
+        validateAgentsFilesListParams.errors,
       );
       return;
     }

@@ -94,7 +94,9 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type GatewaySessionList = TuiSessionList;

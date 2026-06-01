@@ -58,7 +58,9 @@ async function flushTasks() {
 }
 
 async function waitMs(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function waitForQrRenderCallCount(count: number) {
@@ -302,7 +304,10 @@ describe("login-qr", () => {
   it("does not short-circuit on an existing QR when the waiter has no current QR image", async () => {
     const accountId = "wait-without-current-qr";
     waitForWaConnectionMock.mockImplementationOnce(
-      () => new Promise((resolve) => setTimeout(() => resolve(undefined), 20)),
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(undefined), 20);
+        }),
     );
 
     const start = await startWebLoginWithQr({

@@ -261,7 +261,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
+    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers|manager\.test-helpers)/u,
   },
   {
     code: "vitest-mock-api",
@@ -414,7 +414,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
       : collectUnitFastTestCandidates(cwd);
   const analysis = candidates.map((file) => {
     const absolutePath = path.join(cwd, file);
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(absolutePath, "utf8");
     } catch {
@@ -491,7 +491,7 @@ function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
     return false;
   }
 
-  let source = "";
+  let source;
   try {
     source = fs.readFileSync(path.join(cwd, normalized), "utf8");
   } catch {

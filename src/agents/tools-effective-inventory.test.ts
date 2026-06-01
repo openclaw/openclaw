@@ -321,8 +321,8 @@ describe("resolveEffectiveToolInventory", () => {
         tools: [
           mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
           mockTool({
-            name: "dofbot_move_angles",
-            label: "Dofbot Move Angles",
+            name: "fuzzplugin_move_angles",
+            label: "Fuzzplugin Move Angles",
             description: "Move robot joints",
             parameters: {
               type: "object",
@@ -332,7 +332,7 @@ describe("resolveEffectiveToolInventory", () => {
             },
           }),
         ],
-        pluginMeta: { dofbot_move_angles: { pluginId: "dofbot" } },
+        pluginMeta: { fuzzplugin_move_angles: { pluginId: "fuzzplugin" } },
       });
 
     const result = resolveEffectiveToolInventoryLocal7({ cfg: {} });
@@ -340,10 +340,70 @@ describe("resolveEffectiveToolInventory", () => {
     expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
     expect(result.notices).toEqual([
       {
-        id: "unsupported-tool-schema:dofbot_move_angles",
+        id: "unsupported-tool-schema:fuzzplugin_move_angles",
         severity: "warning",
         message:
-          'Tool "dofbot_move_angles" from plugin "dofbot" has an unsupported runtime input schema (dofbot_move_angles.parameters.properties.target.$dynamicRef) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+          'Tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema (fuzzplugin_move_angles.parameters.properties.target.$dynamicRef) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+      },
+    ]);
+  });
+
+  it("preserves plugin ownership for pre-normalization schema quarantines", async () => {
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal12 } =
+      await loadHarness({
+        tools: [
+          mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+          mockTool({
+            name: "fuzzplugin_move_angles",
+            label: "Fuzzplugin Move Angles",
+            description: "Move fixture joints",
+            parameters: { type: "array", items: { type: "number" } },
+          }),
+        ],
+        pluginMeta: { fuzzplugin_move_angles: { pluginId: "fuzzplugin" } },
+      });
+
+    const result = resolveEffectiveToolInventoryLocal12({ cfg: {} });
+
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
+    expect(result.notices).toEqual([
+      {
+        id: "unsupported-tool-schema:fuzzplugin_move_angles",
+        severity: "warning",
+        message:
+          'Tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema (fuzzplugin_move_angles.parameters.type must be "object") and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+      },
+    ]);
+  });
+
+  it("reports unreadable inventory tool entries without crashing", async () => {
+    const healthy = mockTool({ name: "exec", label: "Exec", description: "Run shell commands" });
+    const tools = new Proxy([healthy] as AnyAgentTool[], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("fuzzplugin inventory entry getter exploded");
+        }
+        if (property === "1") {
+          return healthy;
+        }
+        if (property === "length") {
+          return 2;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal13 } =
+      await loadHarness({ tools });
+
+    const result = resolveEffectiveToolInventoryLocal13({ cfg: {} });
+
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
+    expect(result.notices).toEqual([
+      {
+        id: "unsupported-tool-schema:tool[0]",
+        severity: "warning",
+        message:
+          'Tool "tool[0]" has an unsupported runtime input schema (tool[0] is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
       },
     ]);
   });

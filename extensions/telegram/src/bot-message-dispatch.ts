@@ -782,7 +782,7 @@ export const dispatchTelegramMessage = async ({
   let replyFenceGeneration: number | undefined;
   const replyAbortController = new AbortController();
   let replyAbortControllerQueued = false;
-  let dispatchWasSuperseded = false;
+  let dispatchWasSuperseded;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
     isTelegramReplyFenceSuperseded({
@@ -1071,7 +1071,7 @@ export const dispatchTelegramMessage = async ({
       }
       await task();
     });
-    draftLaneEventQueue = next.catch((err) => {
+    draftLaneEventQueue = next.catch((err: unknown) => {
       logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
     });
     return draftLaneEventQueue;

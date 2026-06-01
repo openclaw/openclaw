@@ -197,7 +197,7 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
-  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -240,7 +240,7 @@ export function emitGatewaySessionStartPluginHook(params: {
     cfg: params.cfg,
     resumedFrom: params.resumedFrom,
   });
-  void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+  void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
@@ -737,7 +737,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
         workspaceDir,
       },
     )
-    .catch((err) => {
+    .catch((err: unknown) => {
       logVerbose(`before_reset hook failed: ${String(err)}`);
     });
 }

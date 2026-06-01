@@ -3,7 +3,10 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
@@ -32,6 +35,7 @@ const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
   credential?: AuthProfileCredential;
   profileProvider?: string;
@@ -42,6 +46,7 @@ function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   }
   const providerKey = resolveProviderIdForAuth(params.profileProvider ?? "", {
     config: params.cfg,
+    ...params.authAliasLookupParams,
   });
   const mode = params.credential?.type ?? params.profileMode;
   return providerKey === OPENAI_PROVIDER_ID && mode === "api_key";
@@ -49,16 +54,19 @@ function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
 
 function isCredentialProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
   credential: AuthProfileCredential;
 }): boolean {
   const credentialProviderKey = resolveProviderIdForAuth(params.credential.provider, {
     config: params.cfg,
+    ...params.authAliasLookupParams,
   });
   return (
     credentialProviderKey === params.providerAuthKey ||
     isOpenAIApiKeyCompatibleWithCodexAuth({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       providerAuthKey: params.providerAuthKey,
       credential: params.credential,
       profileProvider: params.credential.provider,
@@ -68,12 +76,17 @@ function isCredentialProviderCompatibleWithAuthProvider(params: {
 
 export function isStoredCredentialCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
   return isCredentialProviderCompatibleWithAuthProvider({
     cfg: params.cfg,
-    providerAuthKey: resolveProviderIdForAuth(params.provider, { config: params.cfg }),
+    authAliasLookupParams: params.authAliasLookupParams,
+    providerAuthKey: resolveProviderIdForAuth(params.provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    }),
     credential: params.credential,
   });
 }

@@ -510,6 +510,7 @@ type StreamModelDescriptor = {
   api: string;
   provider: string;
   id: string;
+  reasoning?: boolean;
 };
 
 type OllamaUsageFallback = {
@@ -666,8 +667,12 @@ function estimateOllamaPromptTokens(params: {
   return estimateTokensFromChars(chars);
 }
 
-function estimateOllamaCompletionTokens(response: OllamaChatResponse): number {
+function estimateOllamaCompletionTokens(
+  response: OllamaChatResponse,
+  extraOutputChars = 0,
+): number {
   const chars =
+    extraOutputChars +
     response.message.content.length +
     (response.message.thinking?.length ?? 0) +
     (response.message.reasoning?.length ?? 0) +
@@ -1021,7 +1026,10 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
-  const thinking = response.message.thinking ?? response.message.reasoning ?? "";
+  const thinking =
+    modelInfo.reasoning === false
+      ? ""
+      : (response.message.thinking ?? response.message.reasoning ?? "");
   if (thinking) {
     content.push({ type: "thinking", thinking });
   }
@@ -1206,10 +1214,17 @@ function createRawOllamaStreamFn(
           let accumulatedRawContent = "";
           let accumulatedVisibleContent = "";
           let accumulatedThinking = "";
+          let suppressedThinking = "";
           const accumulatedToolCalls: OllamaToolCall[] = [];
           let finalResponse: OllamaChatResponse | undefined;
           let pendingFinalVisibleContent: string | undefined;
-          const modelInfo = { api: model.api, provider: model.provider, id: model.id };
+          const modelInfo = {
+            api: model.api,
+            provider: model.provider,
+            id: model.id,
+            reasoning: model.reasoning,
+          };
+          const shouldEmitThinking = model.reasoning ?? true;
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
           const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;
@@ -1334,7 +1349,7 @@ function createRawOllamaStreamFn(
           for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
-            if (thinkingDelta) {
+            if (thinkingDelta && shouldEmitThinking) {
               if (!streamStarted) {
                 streamStarted = true;
                 const emptyPartial = buildStreamAssistantMessage({
@@ -1368,6 +1383,9 @@ function createRawOllamaStreamFn(
                 delta: thinkingDelta,
                 partial,
               });
+            }
+            if (thinkingDelta && !shouldEmitThinking) {
+              suppressedThinking += thinkingDelta;
             }
 
             if (chunk.message?.content) {
@@ -1419,7 +1437,7 @@ function createRawOllamaStreamFn(
 
           const usageFallback = {
             input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
-            output: estimateOllamaCompletionTokens(finalResponse),
+            output: estimateOllamaCompletionTokens(finalResponse, suppressedThinking.length),
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,

@@ -85,7 +85,9 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   }
   await Promise.race([
     Promise.allSettled(attempts.map((attempt) => attempt.promise)),
-    new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 5_000);
+    }),
   ]);
 }
 
@@ -463,6 +465,7 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
+    vi.useRealTimers();
     clearInternalHooks();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();

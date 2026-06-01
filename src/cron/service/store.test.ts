@@ -89,7 +89,7 @@ describe("cron service store seam coverage", () => {
     expect(job.delivery?.mode).toBe("announce");
     expect(job.delivery?.channel).toBe("telegram");
     expect(job.delivery?.to).toBe("123");
-    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW);
+    expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW + 60_000);
 
     const persistedJob = (await loadCronStore(storePath)).jobs[0];
     const persistedPayload = persistedJob?.payload as

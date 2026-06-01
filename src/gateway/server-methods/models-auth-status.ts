@@ -409,9 +409,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       await refreshActiveSecretsRuntimeSnapshot();
       invalidateModelAuthStatusCache();
       clearCurrentProviderAuthState();
-      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch((err) => {
-        log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
-      });
+      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
+        (err: unknown) => {
+          log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
+        },
+      );
       const { runIds: abortedRunIds } = abortChatRunsForProvider(
         createAuthLogoutAbortOps(context),
         {

@@ -82,9 +82,35 @@ export type MockGatewayControls = {
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
+const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+const systemChromiumExecutableCandidates = [
+  "/snap/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+] as const;
+
 function resolveRepoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../..");
+}
+
+export function resolvePlaywrightChromiumExecutablePath(
+  defaultExecutablePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const executableOverride = env[chromiumExecutableOverrideEnvKey]?.trim();
+  if (executableOverride) {
+    return executableOverride;
+  }
+  if (existsSync(defaultExecutablePath)) {
+    return defaultExecutablePath;
+  }
+  return (
+    systemChromiumExecutableCandidates.find((candidate) => existsSync(candidate)) ??
+    defaultExecutablePath
+  );
 }
 
 export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
@@ -389,6 +415,17 @@ function installControlUiMockGateway(input: {
           mainKey: "main",
           scope: "agent",
         };
+      case "agents.files.list":
+        return {
+          agentId:
+            isRecord(params) && typeof params.agentId === "string"
+              ? params.agentId
+              : scenario.defaultAgentId,
+          files: [],
+          workspace: "",
+        };
+      case "agents.files.get":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,

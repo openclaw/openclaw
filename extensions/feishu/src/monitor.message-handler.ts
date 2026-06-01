@@ -329,7 +329,7 @@ export function createFeishuMessageReceiveHandler({
       await inboundDebouncer.enqueue(event);
     };
     if (fireAndForget) {
-      void processMessage().catch((err) => {
+      void processMessage().catch((err: unknown) => {
         releaseFeishuMessageProcessing(messageDedupeKey, accountId);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       });

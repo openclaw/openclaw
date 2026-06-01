@@ -51,9 +51,9 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
     url: `http://127.0.0.1:${port}/mcp`,
     close: async () => {
       await transport.close().catch(() => undefined);
-      await new Promise<void>((resolve, reject) =>
-        httpServer.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

@@ -232,7 +232,7 @@ export async function startDebugProxyServer(params: {
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
     let hostname = "127.0.0.1";
-    let port = 443;
+    let port;
     try {
       const parsed = parseConnectTarget(req.url);
       hostname = parsed.hostname;

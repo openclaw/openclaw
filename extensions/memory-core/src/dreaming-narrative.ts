@@ -149,12 +149,13 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
-function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
-  return (
-    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
-    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
-    "A memory trace surfaced, but details were unavailable in this run."
-  );
+// Raw snippets and promotions are pre-processing memory staging fragments
+// (session metadata, conversation summaries, operational logs). They must never
+// be persisted to the human-readable dream diary. When narrative generation
+// fails, always fall back to a generic placeholder so no staging content leaks
+// into DREAMS.md.
+function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string {
+  return "A memory trace surfaced, but details were unavailable in this run.";
 }
 
 async function appendFallbackNarrativeEntry(params: {
@@ -499,8 +500,8 @@ export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): str
 }
 
 async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
-  const stat = await fs.lstat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
+  const stat = await fs.lstat(dreamsPath).catch((err: unknown) => {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;
@@ -819,7 +820,7 @@ async function normalizeSessionEntryPathForComparison(params: {
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[] = [];
+  let agentEntries: Dirent[];
   try {
     agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
   } catch {
@@ -894,7 +895,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       });
     }
 
-    let sessionFiles: Dirent[] = [];
+    let sessionFiles: Dirent[];
     try {
       sessionFiles = await fs.readdir(sessionsDir, { withFileTypes: true });
     } catch {
@@ -923,7 +924,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (Date.now() - stat.mtimeMs < DREAMING_ORPHAN_MIN_AGE_MS) {
         continue;
       }
-      let content = "";
+      let content;
       try {
         content = await fs.readFile(transcriptPath, "utf-8");
       } catch {

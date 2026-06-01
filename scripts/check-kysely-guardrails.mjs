@@ -54,6 +54,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
+    "src/plugins/installed-plugin-index-record-reader.ts",
+    "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",

@@ -577,7 +577,9 @@ describe("isMaintainerTeamMember", () => {
   it("aborts stalled membership fetches", async () => {
     const fetch = vi.fn((_url: string, init: RequestInit) => {
       return new Promise((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        init.signal?.addEventListener("abort", () =>
+          reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
+        );
       });
     });
 
@@ -642,3 +644,17 @@ describe("readBoundedGitHubApiJson", () => {
     });
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

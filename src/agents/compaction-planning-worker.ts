@@ -55,7 +55,12 @@ function runCompactionPlanningWorker(params: {
   workerUrl?: URL;
 }): Promise<CompactionPlanningWorkerValue> {
   if (params.signal?.aborted) {
-    return Promise.reject(params.signal.reason ?? new Error("compaction planning aborted"));
+    return Promise.reject(
+      toLintErrorObject(
+        params.signal.reason ?? new Error("compaction planning aborted"),
+        "Non-Error rejection",
+      ),
+    );
   }
 
   const workerUrl = params.workerUrl ?? resolveCompactionPlanningWorkerUrl();
@@ -93,7 +98,16 @@ function runCompactionPlanningWorker(params: {
     );
 
     const abort = () => {
-      settle(() => reject(params.signal?.reason ?? new Error("compaction planning aborted")), true);
+      settle(
+        () =>
+          reject(
+            toLintErrorObject(
+              params.signal?.reason ?? new Error("compaction planning aborted"),
+              "Non-Error rejection",
+            ),
+          ),
+        true,
+      );
     };
 
     const settle = (finish: () => void, terminate: boolean) => {
@@ -343,3 +357,17 @@ export const compactionPlanningWorkerTesting = {
   runCompactionPlanningWorker,
   CompactionPlanningWorkerError,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

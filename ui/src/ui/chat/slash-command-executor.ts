@@ -34,15 +34,7 @@ export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
-  action?:
-    | "refresh"
-    | "export"
-    | "new-session"
-    | "reset"
-    | "stop"
-    | "clear"
-    | "toggle-focus"
-    | "navigate-usage";
+  action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
   /** Optional session-level directive changes that the caller should mirror locally. */
   sessionPatch?: {
     modelOverride?: ChatModelOverride | null;
@@ -103,8 +95,6 @@ export async function executeSlashCommand(
       return { content: "Stopping current run...", action: "stop" };
     case "clear":
       return { content: "Chat history cleared.", action: "clear" };
-    case "focus":
-      return { content: "Toggled focus mode.", action: "toggle-focus" };
     case "compact":
       return await executeCompact(client, sessionKey, context);
     case "model":

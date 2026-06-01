@@ -21,7 +21,7 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
   const cached = cronEvalCache.get(key);
   if (cached) {
-    // Move to end of Map iteration order for LRU eviction
+    // Move to the end of Map iteration order so the bounded cache behaves as LRU.
     cronEvalCache.delete(key);
     cronEvalCache.set(key, cached);
     return cached;
@@ -48,6 +48,7 @@ function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }): Cro
   return resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
 }
 
+/** Computes the next scheduled run timestamp after now for at/every/cron schedules. */
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
     const atMs = parseAbsoluteTimeMs(schedule.at);
@@ -69,7 +70,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
       return anchor;
     }
     const elapsed = nowMs - anchor;
-    const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
+    const steps = Math.floor(elapsed / everyMs) + 1;
     return anchor + steps * everyMs;
   }
 
@@ -114,6 +115,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   return nextMs;
 }
 
+/** Computes the previous cron-expression run timestamp before now. */
 export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind !== "cron") {
     return undefined;
@@ -137,18 +139,22 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return previousMs;
 }
 
+/** Clears the Croner expression cache for deterministic tests. */
 export function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }
 
+/** Returns the Croner expression cache size for tests. */
 export function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
 }
 
+/** Returns the Croner expression cache capacity for tests. */
 export function getCronScheduleCacheMaxForTest(): number {
   return CRON_EVAL_CACHE_MAX;
 }
 
+/** Returns whether an expression/timezone pair is present in the Croner cache for tests. */
 export function hasCronInCacheForTest(expr: string, tz: string): boolean {
   return cronEvalCache.has(`${tz}\u0000${expr}`);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactToolDetail } from "./browser-redact.ts";
+import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
 
 describe("browser tool detail redaction", () => {
   it("redacts tool detail credential families without Node config imports", () => {
@@ -28,5 +28,11 @@ describe("browser tool detail redaction", () => {
     expect(redacted).not.toContain("DUMMYGoogleApiKeyValue1234567890");
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("verySensitiveCookieValue");
+  });
+
+  it("exposes the tool payload redaction name used by shared display modules", () => {
+    expect(redactToolPayloadText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+      "OPENAI_API_KEY=sk-123...cdef",
+    );
   });
 });

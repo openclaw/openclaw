@@ -109,14 +109,14 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
             resolve({ exitCode: code });
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
             if (signal) {
               signal.removeEventListener("abort", onAbort);
             }
-            reject(err);
+            reject(toLintErrorObject(err, "Non-Error rejection"));
           });
       });
     },
@@ -467,4 +467,18 @@ export function createBashTool(
   options?: BashToolOptions,
 ): AgentTool<typeof bashSchema> {
   return wrapToolDefinition(createBashToolDefinition(cwd, options));
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

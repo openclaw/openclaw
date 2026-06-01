@@ -256,7 +256,7 @@ export async function handleSessionHistoryHttpRequest(
         }
         await work();
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         // Surface the underlying error so operators can distinguish transient
         // infrastructure failures (for example a `getRuntimeConfig()` read error
         // inside the reauth path) from deliberate revocation, then fail closed.

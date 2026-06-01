@@ -221,7 +221,9 @@ function isUnknownDiscordVoiceStateError(err: unknown): boolean {
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
-    .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+    .catch((err: unknown) =>
+      logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
+    );
 }
 
 function resolveDiscordVoiceAgentRoute(params: {
@@ -782,7 +784,7 @@ export class DiscordVoiceManager {
     }
 
     const speakingHandler: ((userId: string) => void) | undefined = (userId: string) => {
-      void this.handleSpeakingStart(entry, userId).catch((err) => {
+      void this.handleSpeakingStart(entry, userId).catch((err: unknown) => {
         logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
       });
     };
@@ -1134,7 +1136,7 @@ export class DiscordVoiceManager {
       return;
     }
     this.followUsersReconcileTimer = setInterval(() => {
-      void this.reconcileFollowedUsers("interval").catch((err) => {
+      void this.reconcileFollowedUsers("interval").catch((err: unknown) => {
         logger.warn(`discord voice: follow user reconciliation failed: ${formatErrorMessage(err)}`);
       });
     }, FOLLOW_USERS_RECONCILE_INTERVAL_MS);
@@ -1176,7 +1178,7 @@ export class DiscordVoiceManager {
           this.params.client.rest,
           plan.guildId,
           userId,
-        ).catch((err) => {
+        ).catch((err: unknown) => {
           if (!isUnknownDiscordVoiceStateError(err)) {
             logger.warn(
               `discord voice: follow user reconcile skipped transient voice state error guild=${plan.guildId} user=${userId} reason=${reason}: ${formatErrorMessage(err)}`,
@@ -1415,7 +1417,7 @@ export class DiscordVoiceManager {
       this.params.client.rest,
       guildId,
       this.botUserId,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       if (!isUnknownDiscordVoiceStateError(err)) {
         logger.warn(
           `discord voice: follow reconcile skipped transient bot voice state error guild=${guildId} reason=${reason}: ${formatErrorMessage(err)}`,
@@ -1473,13 +1475,17 @@ export class DiscordVoiceManager {
   private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.processingQueue = entry.processingQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`));
+      .catch((err: unknown) =>
+        logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
+      );
   }
 
   private enqueuePlayback(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.playbackQueue = entry.playbackQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`));
+      .catch((err: unknown) =>
+        logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`),
+      );
   }
 
   private clearCaptureFinalizeTimer(entry: VoiceSessionEntry, userId: string, generation?: number) {
@@ -1789,7 +1795,7 @@ export class DiscordVoiceManager {
       return;
     }
     void this.recoverFromDecryptFailures(entry)
-      .catch((recoverErr) =>
+      .catch((recoverErr: unknown) =>
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
       .finally(() => {

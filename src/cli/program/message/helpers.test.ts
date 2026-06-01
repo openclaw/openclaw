@@ -445,7 +445,7 @@ describe("runMessageAction", () => {
     vi.useFakeTimers();
     try {
       hasHooksMock.mockReturnValueOnce(true);
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => undefined));
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
       const runMessageAction = createRunMessageAction();
 
       const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");

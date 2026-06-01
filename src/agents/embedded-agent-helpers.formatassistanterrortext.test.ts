@@ -5,6 +5,7 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
@@ -115,6 +116,15 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("uses generic user-facing copy for escaped structured provider messages", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
@@ -236,6 +246,11 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
+  it("keeps plain HTTP rate-limit guidance user-facing", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    expect(formatAssistantErrorText(msg)).toContain("24 hours");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
+  });
 
   it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
     const msg = makeAssistantError(
@@ -254,6 +269,7 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("30 seconds");
     expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("30 seconds");
   });
 
   it("returns generic rate limit message when no specific details are present", () => {
@@ -537,6 +553,9 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
 });

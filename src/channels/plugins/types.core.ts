@@ -172,6 +172,7 @@ export type ChannelLegacyStateMigrationPlan =
       scopeKey: string;
       stateDir?: string;
       cleanupSource?: "rename";
+      cleanupWhenEmpty?: boolean;
       preview?: string;
       shouldReplaceExistingEntry?: (params: {
         key: string;

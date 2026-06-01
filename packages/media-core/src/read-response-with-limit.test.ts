@@ -7,7 +7,9 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
     async start(controller) {
       for (const chunk of chunks) {
         if (delayMs) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         controller.enqueue(chunk);
       }

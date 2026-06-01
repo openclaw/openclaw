@@ -520,7 +520,7 @@ export class FeishuStreamingSession {
       .then(async ({ release }) => {
         await release();
       })
-      .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
+      .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
   async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
@@ -584,7 +584,7 @@ export class FeishuStreamingSession {
       .then(async ({ release }) => {
         await release();
       })
-      .catch((e) => this.log?.(`Close failed: ${String(e)}`));
+      .catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
     const finalState = this.state;
     this.state = null;
     this.pendingText = null;

@@ -9,7 +9,8 @@ title: "Workboard plugin"
 
 The Workboard plugin adds an optional Kanban-style board to the
 [Control UI](/web/control-ui). Use it to collect agent-sized work cards, assign
-them to agents, and jump from a card into the linked dashboard session.
+them to agents, and track the linked background task, run, and dashboard
+session from one card.
 
 Workboard is intentionally small. It tracks local operating work for an
 OpenClaw Gateway; it is not a replacement for GitHub Issues, Linear, Jira, or
@@ -47,8 +48,8 @@ Each card stores:
 - priority: `low`, `normal`, `high`, or `urgent`
 - labels
 - optional agent id
-- optional linked session, run, task, or source URL
-- optional execution metadata for a Codex or Claude session started from the card
+- optional linked task, run, session, or source URL
+- optional execution metadata for a Codex or Claude run started from the card
 - compact metadata for attempts, comments, links, proof, artifacts, automation,
   attachments, worker logs, worker protocol state, claims, diagnostics,
   notifications, templates, archive state, and stale-session detection
@@ -65,25 +66,34 @@ proof snippets, related links, comments, archive markers, and stale-session
 markers are intentionally local metadata; they do not replace session
 transcripts or GitHub issue history.
 
-## Card executions
+## Card executions and tasks
 
-Unlinked cards can start work from the card. Start uses the Gateway's configured
+Unlinked cards can start work from the card. Autonomous starts use the
+Gateway's task-tracked agent run path, then Workboard links the resulting task,
+run id, and session key back onto the card. Start uses the Gateway's configured
 default agent and model. Codex and Claude actions are optional explicit model
 choices:
 
-- Run Codex or Run Claude creates a dashboard session, sends the card prompt,
-  and marks the card `running`.
+- Run Codex or Run Claude starts a task-backed agent run, sends the card
+  prompt, and marks the card `running`.
 - Open Codex or Open Claude creates a linked dashboard session without sending
   the card prompt or moving the card, so you can work manually while it stays
   attached to the board.
 
 Execution metadata stores the selected engine, mode, model ref, session key,
-run id, and lifecycle status on the card. Codex executions use
-`openai/gpt-5.5`; Claude executions use `anthropic/claude-sonnet-4-6`.
+run id, task id when available, and lifecycle status on the card. Codex
+executions use `openai/gpt-5.5`; Claude executions use
+`anthropic/claude-sonnet-4-6`.
 
 Each linked execution also records an attempt summary on the same card record.
 The attempt summary keeps the engine, mode, model, run id, timestamps, status,
 and rolling failure count so repeated failures remain visible on the board.
+
+The dashboard refreshes task status from the Gateway task ledger and matches
+tasks back to cards by task id, run id, or linked session key. If a task is
+queued or running, the card lifecycle shows active task state. If the task
+finishes, fails, times out, or is cancelled, the card lifecycle moves toward
+review or blocked status using the same lifecycle sync as linked sessions.
 
 ## Agent coordination
 
@@ -160,13 +170,15 @@ blocked cards that need attention, repeated failures, done cards without proof,
 and running cards that only have a loose session link.
 
 Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
-system processes; normal OpenClaw subagent sessions still own execution. A
-dispatch nudge promotes dependency-ready cards, records dispatch metadata on
+system processes; normal OpenClaw subagent sessions still own execution. The
+dispatch action promotes dependency-ready cards, records dispatch metadata on
 ready cards, blocks expired claims or timed-out runs, marks board-configured
 triage cards as orchestration candidates, then claims a small batch of ready
-cards and starts worker runs through the Gateway subagent runtime. Workers get
-bounded card context plus the claim token they need to heartbeat, complete, or
-block the card through the Workboard tools.
+cards and starts worker runs through the Gateway subagent runtime. Assigned
+cards use `agent:<id>:subagent:workboard-*` worker session keys; unassigned
+cards use unscoped `subagent:workboard-*` keys so the Gateway still resolves the
+configured default agent. Workers get bounded card context plus the claim token
+they need to heartbeat, complete, or block the card through the Workboard tools.
 
 ### Dispatch worker selection
 

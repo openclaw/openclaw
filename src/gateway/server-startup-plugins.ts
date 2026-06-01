@@ -118,7 +118,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   const baseMethods = listGatewayMethods();
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  let pluginRegistry = emptyPluginRegistry;
+  let pluginRegistry;
   let baseGatewayMethods = baseMethods;
   const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
   const shouldLoadSetupRuntimePlugins =

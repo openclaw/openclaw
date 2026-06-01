@@ -12,7 +12,9 @@ if (!url || !token) {
 const deadline = Date.now() + readGatewayNetworkClientConnectTimeoutMs();
 
 function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function openSocket(timeoutMs = 10_000) {

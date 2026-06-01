@@ -588,7 +588,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath = source;
+  let localPath;
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (!opened || handleClosed) {

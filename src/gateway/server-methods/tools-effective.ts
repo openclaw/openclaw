@@ -12,6 +12,7 @@ import type {
 } from "../../agents/tools-effective-inventory.types.js";
 import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effective-mcp-inventory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
@@ -190,7 +191,7 @@ function scheduleBaseToolsEffectiveRefresh(
         }
         resolve(value);
       } catch (err) {
-        reject(err);
+        reject(toErrorObject(err, "Non-Error rejection"));
       } finally {
         toolsEffectiveInflight.delete(key);
       }
@@ -204,7 +205,7 @@ function refreshBaseToolsEffectiveInBackground(
   key: string,
   context: TrustedToolsEffectiveContext,
 ): void {
-  void scheduleBaseToolsEffectiveRefresh(key, context).catch((err) => {
+  void scheduleBaseToolsEffectiveRefresh(key, context).catch((err: unknown) => {
     logWarn(`tools-effective: background refresh failed: ${String(err)}`);
   });
 }

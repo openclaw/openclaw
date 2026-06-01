@@ -38,7 +38,9 @@ function post(message: TelegramIngressWorkerMessage): void {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function formatErrorMessage(err: unknown): string {
@@ -212,7 +214,7 @@ main()
   .then(() => {
     parentPort?.close();
   })
-  .catch((err) => {
+  .catch((err: unknown) => {
     post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
     parentPort?.close();
     process.exitCode = stopped ? 0 : 1;

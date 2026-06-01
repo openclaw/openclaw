@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
-import type { WorkboardCard, WorkboardExecution, WorkboardStatus } from "./types.js";
+import type { WorkboardCard, WorkboardExecution } from "./types.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
@@ -45,12 +45,24 @@ function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
 }
 
+function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
+  const sanitized = (value ?? fallback)
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return (sanitized || fallback).slice(0, 96);
+}
+
 function cardIsArchived(card: WorkboardCard): boolean {
   return Boolean(card.metadata?.archivedAt);
 }
 
 function buildSessionKey(card: WorkboardCard): string {
-  return `workboard-${cardBoardId(card)}-${card.id}`.replace(/[^a-zA-Z0-9:_-]/g, "-");
+  const boardId = sanitizeSessionSegment(cardBoardId(card), "default");
+  const cardId = sanitizeSessionSegment(card.id, "card");
+  const suffix = `subagent:workboard-${boardId}-${cardId}`;
+  return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
 }
 
 function buildExecution(params: {
@@ -114,10 +126,13 @@ function selectStartableCards(cards: WorkboardCard[], limit: number): WorkboardC
   if (limit <= 0) {
     return [];
   }
-  const activeStatuses = new Set<WorkboardStatus>(["running", "review"]);
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
-    if (!activeStatuses.has(card.status) || cardIsArchived(card)) {
+    const consumesOwnerSlot =
+      card.status === "running" ||
+      Boolean(card.metadata?.claim) ||
+      card.execution?.status === "running";
+    if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
     const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;

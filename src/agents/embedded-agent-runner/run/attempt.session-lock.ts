@@ -377,7 +377,9 @@ function waitForSessionFileOwnerRelease(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
-    return Promise.reject(abortOwnerWaitReason(params.signal));
+    return Promise.reject(
+      toLintErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
+    );
   }
   return new Promise<void>((resolve, reject) => {
     const waiter: SessionFileOwnerWaiter = {
@@ -400,7 +402,7 @@ function waitForSessionFileOwnerRelease(params: {
     };
     waiter.reject = (error) => {
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
     if (params.timeoutMs !== undefined && Number.isFinite(params.timeoutMs)) {
       waiter.timer = setTimeout(
@@ -1043,4 +1045,18 @@ export function installPromptSubmissionLockRelease(params: {
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

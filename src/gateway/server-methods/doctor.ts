@@ -241,7 +241,7 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
 }
 
 async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = await fs.readdir(memoryDir);
   } catch (err) {

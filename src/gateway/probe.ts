@@ -498,7 +498,7 @@ export async function probeGateway(opts: {
           configSnapshot: null,
         });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (settled) {
           return;
         }

@@ -38,14 +38,13 @@ export async function runManagerGetSessionStatus(params: {
   const {
     runtime,
     handle: ensuredHandle,
-    meta: ensuredMeta,
+    meta: initialMeta,
   } = await params.ensureRuntimeHandle({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     meta: resolvedMeta,
   });
   let handle = ensuredHandle;
-  let meta = ensuredMeta;
   const capabilities = await params.resolveRuntimeCapabilities({ runtime, handle });
   let runtimeStatus: AcpRuntimeStatus | undefined;
   if (runtime.getStatus) {
@@ -63,15 +62,18 @@ export async function runManagerGetSessionStatus(params: {
       fallbackMessage: "Could not read ACP runtime status.",
     });
   }
-  ({ handle, meta, runtimeStatus } = await params.reconcileRuntimeSessionIdentifiers({
+  const reconciledSession = await params.reconcileRuntimeSessionIdentifiers({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     runtime,
     handle,
-    meta,
+    meta: initialMeta,
     runtimeStatus,
     failOnStatusError: true,
-  }));
+  });
+  handle = reconciledSession.handle;
+  const meta = reconciledSession.meta;
+  runtimeStatus = reconciledSession.runtimeStatus;
   const identity = resolveSessionIdentityFromMeta(meta);
   return {
     sessionKey: params.sessionKey,

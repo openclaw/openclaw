@@ -10,7 +10,7 @@ export function releaseEmbeddedAttemptSessionLockForAbort(params: {
   runId: string;
   abortKind: "abort" | "timeout abort";
 }): void {
-  void params.sessionLockController.releaseHeldLockForAbort().catch((err) => {
+  void params.sessionLockController.releaseHeldLockForAbort().catch((err: unknown) => {
     params.log.warn(
       `failed to release session lock on ${params.abortKind}: runId=${params.runId} ${String(err)}`,
     );

@@ -127,7 +127,7 @@ function isSshIMessageCliWrapper(cliPath: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
-  let detected = false;
+  let detected;
   try {
     const content = readFileSync(expandCliPathForInspection(cliPath), "utf8");
     detected = /\bssh\b[\s\S]*\bimsg\b/u.test(content);
@@ -732,7 +732,7 @@ async function trySendAttachmentForTarget(params: {
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
-  let attachmentChatTarget: string | null = null;
+  let attachmentChatTarget: string | null;
   try {
     attachmentChatTarget = await resolveAttachmentChatTarget({
       target: params.target,

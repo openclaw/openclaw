@@ -71,6 +71,9 @@ export {
 
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "LLM request failed: provider rejected the request schema or tool payload.";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -1332,7 +1335,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return "LLM request failed: provider rejected the request schema or tool payload.";
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "replay_invalid") {
@@ -1355,6 +1358,48 @@ export function formatAssistantErrorText(
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+}
+
+export function isRawAssistantErrorPassthrough(params: {
+  friendlyError?: string;
+  rawError?: string;
+}): boolean {
+  const friendlyError = params.friendlyError?.trim();
+  const rawError = params.rawError?.trim();
+  if (!friendlyError || !rawError) {
+    return false;
+  }
+  const parsedMessage = parseApiErrorInfo(rawError)?.message?.trim();
+  const leadingStatusRest = extractLeadingHttpStatus(rawError)?.rest?.trim();
+  const hasRawDerivedProviderPrefix =
+    friendlyError.startsWith("LLM request rejected:") ||
+    friendlyError.startsWith("LLM error") ||
+    friendlyError.startsWith("HTTP ");
+  return (
+    friendlyError === rawError ||
+    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
+    Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
+  );
+}
+
+export function formatUserFacingAssistantErrorText(
+  msg: AssistantMessage,
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+): string {
+  const friendlyError = formatAssistantErrorText(msg, opts);
+  const rawError = msg.errorMessage?.trim();
+  const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
+  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
+  const rawProviderSchemaError =
+    friendlyError?.startsWith("LLM request rejected:") ||
+    parsedErrorType.includes("invalid_request");
+  const safeFriendlyError = rawPassthrough
+    ? rawProviderSchemaError
+      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+      : undefined
+    : friendlyError;
+  return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

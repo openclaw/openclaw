@@ -31,7 +31,6 @@ export type PluginLookUpTableMetrics = {
 };
 
 export type PluginLookUpTable = PluginMetadataSnapshot & {
-  key: string;
   startup: PluginLookUpTableStartupPlan;
   metrics: PluginMetadataSnapshot["metrics"] &
     Pick<
@@ -141,16 +140,6 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
 
   const table: PluginLookUpTable = {
     ...metadataSnapshot,
-    key: hashJson({
-      policyHash: index.policyHash,
-      generatedAtMs: index.generatedAtMs,
-      plugins: index.plugins.map((plugin) => [
-        plugin.pluginId,
-        plugin.manifestHash,
-        plugin.installRecordHash,
-      ]),
-      startup,
-    }),
     startup,
     metrics: {
       ...metadataSnapshot.metrics,

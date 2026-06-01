@@ -582,7 +582,7 @@ export class AcpSessionManager {
         }
         settled = true;
         cleanup();
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       };
       const onAbort = () => {
         if (actorStarted) {
@@ -609,4 +609,18 @@ export class AcpSessionManager {
     }
     throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation aborted.");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

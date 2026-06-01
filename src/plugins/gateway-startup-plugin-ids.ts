@@ -1581,18 +1581,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     rootConfig: activationSourceConfig,
   };
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
-  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromPrepared({
-    config: params.config,
-    index: params.index,
-    configuredChannelIds,
-    pluginsConfig,
-    activationSource: {
-      plugins: pluginsConfig,
-      rootConfig: params.config,
-    },
-    manifestLookup,
-    platform: params.platform,
-  });
+  const configuredDeferredChannelPluginIds: string[] = [];
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
@@ -1620,154 +1609,171 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
-  const pluginIds = params.index.plugins
-    .filter((plugin) => {
-      const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
-      if (
-        hasConfiguredStartupChannel({
-          plugin,
-          manifestLookup,
-          configuredChannelIds,
-        })
-      ) {
-        return canStartConfiguredChannelPlugin({
-          plugin,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          manifestLookup,
-          platform: params.platform,
-        });
-      }
-      if (
-        canStartRequiredAgentHarnessPlugin({
-          plugin,
-          pluginsConfig,
-          activationSource,
-          config: params.config,
-          requiredAgentHarnessRuntimes,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredRootPlugin({
-          plugin,
-          manifest,
-          config: activationSourceConfig,
-          pluginsConfig,
-          activationSourcePlugins,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredSpeechProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredSpeechProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredWebSearchProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredWebSearchProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredModelProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredModelProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredGenerationProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredGenerationProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartConfiguredVoiceProviderPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          configuredVoiceProviderIds,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        canStartExplicitHookPlugin({
-          plugin,
-          manifest,
-          config: params.config,
-          pluginsConfig,
-          activationSource,
-          activationSourcePlugins,
-          platform: params.platform,
-        })
-      ) {
-        return true;
-      }
-      if (
-        !shouldConsiderForGatewayStartup({
-          plugin,
-          manifest,
-          startupDreamingPluginIds,
-          memorySlotStartupPluginId,
-          contextEngineSlotStartupPluginId,
-        })
-      ) {
-        return false;
-      }
-      const activationState = resolveEffectivePluginActivationState({
-        id: plugin.pluginId,
-        origin: plugin.origin,
-        config: pluginsConfig,
-        rootConfig: params.config,
-        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
+  const pluginIds: string[] = [];
+  for (const plugin of params.index.plugins) {
+    const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
+    if (
+      hasConfiguredStartupChannel({
+        plugin,
+        manifestLookup,
+        configuredChannelIds,
+      })
+    ) {
+      const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
+        plugin,
+        config: params.config,
+        pluginsConfig,
         activationSource,
+        manifestLookup,
+        platform: params.platform,
       });
-      if (!activationState.enabled) {
-        return false;
+      if (canStartConfiguredChannel) {
+        pluginIds.push(plugin.pluginId);
+        if (plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen) {
+          configuredDeferredChannelPluginIds.push(plugin.pluginId);
+        }
       }
-      if (plugin.origin !== "bundled") {
-        return activationState.explicitlyEnabled;
-      }
-      return activationState.source === "explicit" || activationState.source === "default";
-    })
-    .map((plugin) => plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartRequiredAgentHarnessPlugin({
+        plugin,
+        pluginsConfig,
+        activationSource,
+        config: params.config,
+        requiredAgentHarnessRuntimes,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredRootPlugin({
+        plugin,
+        manifest,
+        config: activationSourceConfig,
+        pluginsConfig,
+        activationSourcePlugins,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredSpeechProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredSpeechProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredWebSearchProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredWebSearchProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredModelProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredModelProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredGenerationProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredGenerationProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredVoiceProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredVoiceProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartExplicitHookPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        activationSourcePlugins,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      !shouldConsiderForGatewayStartup({
+        plugin,
+        manifest,
+        startupDreamingPluginIds,
+        memorySlotStartupPluginId,
+        contextEngineSlotStartupPluginId,
+      })
+    ) {
+      continue;
+    }
+    const activationState = resolveEffectivePluginActivationState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      config: pluginsConfig,
+      rootConfig: params.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
+      activationSource,
+    });
+    if (!activationState.enabled) {
+      continue;
+    }
+    if (
+      plugin.origin !== "bundled"
+        ? activationState.explicitlyEnabled
+        : activationState.source === "explicit" || activationState.source === "default"
+    ) {
+      pluginIds.push(plugin.pluginId);
+    }
+  }
   return {
     channelPluginIds,
     configuredDeferredChannelPluginIds,

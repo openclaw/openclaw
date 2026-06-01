@@ -129,7 +129,7 @@ async function readLegacyCallRecords(filePath: string): Promise<{
   entries: PreparedLegacyCallRecord[];
   warnings: string[];
 }> {
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(filePath, "utf8");
   } catch {

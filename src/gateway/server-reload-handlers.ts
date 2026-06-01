@@ -440,7 +440,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             import("../hooks/gmail-watcher-lifecycle.js"),
           ]);
           if (!restartAbortController.signal.aborted) {
-            await stopGmailWatcher().catch((err) => {
+            await stopGmailWatcher().catch((err: unknown) => {
               params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
             });
           }
@@ -500,7 +500,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
-    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err) => {
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
     });
 

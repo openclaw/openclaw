@@ -272,7 +272,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       if (!isPromiseLike<void>(maybeTask)) {
         return true;
       }
-      const task = Promise.resolve(maybeTask).catch((err) => {
+      const task = Promise.resolve(maybeTask).catch((err: unknown) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
       pendingBlockReplyTasks.add(task);
@@ -452,7 +452,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         state.compactionRetryReject = reject;
       });
       // Prevent unhandled rejection if rejected after all consumers have resolved
-      state.compactionRetryPromise.catch((err) => {
+      state.compactionRetryPromise.catch((err: unknown) => {
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }

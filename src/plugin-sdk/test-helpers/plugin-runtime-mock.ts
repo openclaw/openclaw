@@ -58,6 +58,7 @@ function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
     createManaged: vi.fn(),
+    tryCreateManaged: vi.fn(),
     get: vi.fn(),
     list: vi.fn(() => []),
     findLatest: vi.fn(),

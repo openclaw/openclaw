@@ -93,7 +93,9 @@ function createContextEngineRequiringAssembly(): ContextEngine {
 }
 
 async function flushDiagnosticEvents(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function captureDiagnosticEvents(): {

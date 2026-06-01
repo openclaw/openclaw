@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import {
+  agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -45,6 +46,8 @@ type SessionInfoDefaults = {
 };
 
 type SessionInfoEntry = SessionInfo & {
+  key?: string;
+  sessionId?: string;
   modelOverride?: string;
   providerOverride?: string;
 };
@@ -186,6 +189,7 @@ export function createSessionActions(context: SessionActionContext) {
     entry?: SessionInfoEntry | null;
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
+    clearMissingUsage?: boolean;
   }) => {
     const hasEntryUpdate = "entry" in params;
     const entry = params.entry ?? undefined;
@@ -243,6 +247,17 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
     }
+    if (params.clearMissingUsage) {
+      if (entry?.inputTokens === undefined) {
+        next.inputTokens = null;
+      }
+      if (entry?.outputTokens === undefined) {
+        next.outputTokens = null;
+      }
+      if (entry?.totalTokens === undefined) {
+        next.totalTokens = null;
+      }
+    }
     if (hasEntryUpdate) {
       next.goal = entry?.goal;
     }
@@ -298,15 +313,8 @@ export function createSessionActions(context: SessionActionContext) {
         includeUnknown: state.currentSessionKey === "unknown",
         agentId: listAgentId,
       });
-      const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
-      const currentMatchKey = normalizeMatchKey(state.currentSessionKey);
       const entry = result.sessions.find((row) => {
-        // Exact match
-        if (row.key === state.currentSessionKey) {
-          return true;
-        }
-        // Also match canonical keys like "agent:default:main" against "main"
-        return normalizeMatchKey(row.key) === currentMatchKey;
+        return agentSessionKeysMatchByRequestKey(row.key, state.currentSessionKey);
       });
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);
@@ -401,16 +409,44 @@ export function createSessionActions(context: SessionActionContext) {
       const record = history as {
         messages?: unknown[];
         sessionId?: string;
+        sessionInfo?: SessionInfoEntry;
+        defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: boolean;
         verboseLevel?: string;
         traceLevel?: string;
+        inFlightRun?: { runId?: unknown; text?: unknown };
       };
-      state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
-      state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
-      state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
-      state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
-      state.sessionInfo.traceLevel = record.traceLevel ?? state.sessionInfo.traceLevel;
+      const sessionInfo = record.sessionInfo;
+      if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
+        updateAgentFromSessionKey(sessionInfo.key);
+        state.currentSessionKey = sessionInfo.key;
+        updateHeader();
+      }
+      const historySessionInfo =
+        sessionInfo && sessionInfo.thinkingLevel === undefined && record.thinkingLevel !== undefined
+          ? { ...sessionInfo, thinkingLevel: record.thinkingLevel }
+          : sessionInfo;
+      state.currentSessionId =
+        typeof sessionInfo?.sessionId === "string"
+          ? sessionInfo.sessionId
+          : typeof record.sessionId === "string"
+            ? record.sessionId
+            : null;
+      applySessionInfo({
+        entry: historySessionInfo ?? {
+          sessionId: record.sessionId,
+          thinkingLevel: record.thinkingLevel,
+          fastMode: record.fastMode,
+          verboseLevel: record.verboseLevel,
+          traceLevel: record.traceLevel,
+        },
+        defaults: record.defaults,
+        clearMissingUsage: Boolean(historySessionInfo),
+      });
+      if (!sessionInfo) {
+        await refreshSessionInfo();
+      }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       btw.clear();
@@ -464,12 +500,29 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
+      // Restore a run still streaming for this session+agent that the gateway
+      // reports as in-flight. Its live deltas were delivered to a per-agent key
+      // we stopped watching after switching away, so the persisted history above
+      // does not contain it; render the partial and re-adopt the run so further
+      // deltas (now that this session is active again) continue it.
+      const inFlight = record.inFlightRun;
+      const inFlightRunId = asString(inFlight?.runId, "");
+      const inFlightText = asString(inFlight?.text, "");
+      if (inFlightRunId) {
+        // Render any buffered partial (embedded runtimes); Codex has none mid-run.
+        if (inFlightText) {
+          chatLog.updateAssistant(inFlightText, inFlightRunId);
+        }
+        // Adopt the run regardless so its status shows `streaming` (not idle) and
+        // its completion is handled here instead of an unowned error path.
+        state.activeChatRunId = inFlightRunId;
+        setActivityStatus("streaming");
+      }
       state.historyLoaded = true;
       void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
-    await refreshSessionInfo();
     tui.requestRender();
   };
 

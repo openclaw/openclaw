@@ -71,9 +71,9 @@ async function sleepWithAbort(
         signal.removeEventListener("abort", onAbort);
         resolve();
       },
-      (err) => {
+      (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       },
     );
   });
@@ -212,4 +212,18 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

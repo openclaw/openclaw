@@ -282,7 +282,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
         runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5000);
+        });
       }
     }
 

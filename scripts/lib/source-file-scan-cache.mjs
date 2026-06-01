@@ -10,7 +10,7 @@ function normalizeRepoPath(repoRoot, filePath) {
 
 async function walkFiles(params, rootDir) {
   const out = [];
-  let entries = [];
+  let entries;
   try {
     entries = await fs.readdir(rootDir, { withFileTypes: true });
   } catch (error) {

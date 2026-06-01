@@ -194,7 +194,7 @@ describe("dynamic tool execution helpers", () => {
       toolBridge: {
         handleToolCall: vi.fn((_call, options) => {
           capturedSignal = options?.signal;
-          return new Promise<never>(() => undefined);
+          return new Promise<never>(() => {});
         }),
       },
       signal: new AbortController().signal,
@@ -230,7 +230,7 @@ describe("dynamic tool execution helpers", () => {
         arguments: { action: "poll", sessionId: "process-session", timeout: 30_000 },
       },
       toolBridge: {
-        handleToolCall: vi.fn(() => new Promise<never>(() => undefined)),
+        handleToolCall: vi.fn(() => new Promise<never>(() => {})),
       },
       signal: new AbortController().signal,
       timeoutMs: 1,

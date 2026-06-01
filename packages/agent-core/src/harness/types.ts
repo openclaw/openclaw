@@ -26,7 +26,7 @@ export function err<TValue, TError>(error: TError): Result<TValue, TError> {
 /** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
 export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
   if (!result.ok) {
-    throw result.error;
+    throw toLintErrorObject(result.error, "Non-Error thrown");
   }
   return result.value;
 }
@@ -892,3 +892,17 @@ export interface AgentHarnessOptions<
 }
 
 export type { AgentHarness } from "./agent-harness.js";
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -2269,7 +2269,9 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     await firstPreviewPromise;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(previewOrder).toEqual(["Hello"]);
 
     releaseFirstPreview?.();
@@ -2338,7 +2340,9 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(onToolStart).toHaveBeenCalledTimes(1);
     const call = onToolStart.mock.calls[0]?.[0];
@@ -2398,7 +2402,9 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(onToolStart).not.toHaveBeenCalled();
   });
@@ -2456,7 +2462,9 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
@@ -2574,7 +2582,9 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
@@ -2626,7 +2636,9 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
@@ -2682,7 +2694,9 @@ describe("runAgentTurnWithFallback", () => {
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
@@ -3335,7 +3349,9 @@ describe("runAgentTurnWithFallback", () => {
     const deliveryOrder: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {
       const delay = payload.text === "first" ? 5 : 1;
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delay);
+      });
       deliveryOrder.push(payload.text ?? "");
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

@@ -90,7 +90,7 @@ export async function startGatewayMemoryBackend(params: {
       params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
       continue;
     } finally {
-      await manager.close?.().catch((err) => {
+      await manager.close?.().catch((err: unknown) => {
         params.log.warn(
           `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
         );

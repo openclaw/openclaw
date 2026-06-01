@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import {
   readPersistedInstalledPluginIndex,
+  resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
 } from "../../../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
@@ -11,6 +12,7 @@ import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
+import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import {
   DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
   FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
@@ -120,10 +122,31 @@ function requirePlugin(index: InstalledPluginIndex | null | undefined, pluginId:
   return plugin;
 }
 
+function insertStalePersistedIndexRow(stateDir: string) {
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.prepare(
+        `
+          INSERT OR REPLACE INTO installed_plugin_index (
+            index_key, version, host_contract_version, compat_registry_version,
+            migration_version, policy_hash, generated_at_ms, refresh_reason,
+            install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
+          ) VALUES (
+            'installed-plugin-index', 1, '2026.4.25', 'compat-v1',
+            0, 'stale-policy', 123, NULL,
+            '{}', '[]', '[]', NULL, 123
+          )
+        `,
+      ).run();
+    },
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+  );
+}
+
 describe("plugin registry install migration", () => {
   it("short-circuits when a current registry file already exists", async () => {
     const stateDir = makeTempDir();
-    const filePath = path.join(stateDir, "plugins", "installs.json");
+    const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
@@ -145,11 +168,9 @@ describe("plugin registry install migration", () => {
 
   it("migrates when an existing registry file is not current", async () => {
     const stateDir = makeTempDir();
-    const filePath = path.join(stateDir, "plugins", "installs.json");
     const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ version: 1, migrationVersion: 0 }), "utf8");
+    insertStalePersistedIndexRow(stateDir);
 
     const result = await migratePluginRegistryForInstall({
       stateDir,

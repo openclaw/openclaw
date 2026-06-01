@@ -120,7 +120,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   if (!readiness.ready) {
     rejectGatewayReady(new Error("gateway event loop readiness timeout"));
   }
-  await gatewayReady.catch((err) => {
+  await gatewayReady.catch((err: unknown) => {
     shutdown();
     throw err;
   });
@@ -271,7 +271,7 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
     );
   }
   const opts = parseArgs(argv);
-  serveAcpGateway(opts).catch((err) => {
+  serveAcpGateway(opts).catch((err: unknown) => {
     console.error(String(err));
     process.exit(1);
   });

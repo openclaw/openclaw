@@ -611,6 +611,10 @@ function scheduleDeferredTurnMaintenance(
     buildTurnMaintenanceTaskDescriptor({
       sessionKey,
     });
+  if (!task) {
+    log.warn("[context-engine] failed to create deferred turn maintenance task", { sessionKey });
+    return undefined;
+  }
   log.info(
     `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${resolveDeferredTurnMaintenanceLane(sessionKey)}`,
@@ -661,7 +665,7 @@ function scheduleDeferredTurnMaintenance(
     }
   };
   const trackedPromise = runPromise
-    .catch((err) => {
+    .catch((err: unknown) => {
       params.onScheduleFailure?.(err);
       markDeferredTurnMaintenanceTaskScheduleFailure({
         sessionKey,
@@ -669,7 +673,7 @@ function scheduleDeferredTurnMaintenance(
         error: err,
       });
     })
-    .then(cleanupDeferredTurnMaintenance, async (err) => {
+    .then(cleanupDeferredTurnMaintenance, async (err: unknown) => {
       await cleanupDeferredTurnMaintenance();
       throw err;
     });

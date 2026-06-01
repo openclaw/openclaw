@@ -465,7 +465,7 @@ describe("update-cli", () => {
       !repo.startsWith("@") &&
       repo.split("/").length === 2 &&
       repo.split("/").every((part) => /^[^\s/:@]+$/u.test(part));
-    let isHttpGitUrl = false;
+    let isHttpGitUrl;
     try {
       const url = new URL(target);
       const pathname = url.pathname.replace(/\/+$/u, "");
@@ -2763,7 +2763,7 @@ describe("update-cli", () => {
       };
     });
 
-    let writes = "";
+    let writes;
     try {
       await updateCommand({ yes: true, json: true });
       writes = stdoutWrite.mock.calls.map((call) => String(call[0])).join("\n");

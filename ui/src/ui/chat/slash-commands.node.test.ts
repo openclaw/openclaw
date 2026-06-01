@@ -130,10 +130,6 @@ describe("parseSlashCommand", () => {
     expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
-  it("keeps focus as a local slash command", () => {
-    expectParsedSlash("/focus", { key: "focus", executeLocal: true }, "");
-  });
-
   it("refreshes runtime commands from commands.list so docks, plugins, and direct skills appear", async () => {
     const request = async (method: string) => {
       expect(method).toBe("commands.list");

@@ -3187,7 +3187,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         const raw = await readBody(req);
-        let body: AnthropicMessagesRequest = {};
+        let body: AnthropicMessagesRequest;
         try {
           body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
         } catch {

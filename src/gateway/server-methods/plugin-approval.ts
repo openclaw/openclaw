@@ -125,10 +125,14 @@ export function createPluginApprovalHandlers(
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
             return false;
           }
-          return opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err) => {
-            context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
-            return false;
-          });
+          return opts.forwarder
+            .handlePluginApprovalRequested(requestEvent)
+            .catch((err: unknown) => {
+              context.logGateway?.error?.(
+                `plugin approvals: forward request failed: ${String(err)}`,
+              );
+              return false;
+            });
         },
       });
     },

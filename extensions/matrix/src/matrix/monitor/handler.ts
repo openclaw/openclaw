@@ -905,12 +905,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           if (!isPollEvent) {
             return null;
           }
-          pollSnapshotPromise ??= fetchMatrixPollSnapshot(client, roomId, event).catch((err) => {
-            logVerboseMessage(
-              `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
-            );
-            return null;
-          });
+          pollSnapshotPromise ??= fetchMatrixPollSnapshot(client, roomId, event).catch(
+            (err: unknown) => {
+              logVerboseMessage(
+                `matrix: failed resolving poll snapshot room=${roomId} id=${event.event_id ?? "unknown"}: ${String(err)}`,
+              );
+              return null;
+            },
+          );
           return await pollSnapshotPromise;
         };
 
@@ -1481,7 +1483,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           .then(({ reactMatrixMessage }) =>
             reactMatrixMessage(roomId, messageId, ackReaction, client),
           )
-          .catch((err) => {
+          .catch((err: unknown) => {
             logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
           });
       }
@@ -1489,7 +1491,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (messageId) {
         loadMatrixSendModule()
           .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, messageId, client))
-          .catch((err) => {
+          .catch((err: unknown) => {
             logVerboseMessage(
               `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
             );

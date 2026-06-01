@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
 import {
@@ -13,6 +15,7 @@ type InstalledPluginRecord = {
   pluginId: string;
   rootDir: string;
   enabled: boolean;
+  origin?: string;
   packageJson?: { path: string };
   manifestPath?: string;
   manifestHash?: string;
@@ -46,6 +49,33 @@ function isPackageJsonRef(value: unknown): value is InstalledPluginRecord["packa
   );
 }
 
+function isSourceCheckoutPluginRecord(record: InstalledPluginRecord): boolean {
+  if (record.origin === "workspace" || record.origin === "config") {
+    return true;
+  }
+  return record.origin === "bundled" && isBundledSourceCheckoutPluginRoot(record.rootDir);
+}
+
+function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
+  let current = path.resolve(pluginRootDir);
+  while (true) {
+    const extensionsDir = path.dirname(current);
+    if (path.basename(extensionsDir) === "extensions") {
+      const packageRoot = path.dirname(extensionsDir);
+      return (
+        fsSync.existsSync(path.join(packageRoot, ".git")) &&
+        fsSync.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+        fsSync.existsSync(path.join(packageRoot, "src"))
+      );
+    }
+    const next = path.dirname(current);
+    if (next === current) {
+      return false;
+    }
+    current = next;
+  }
+}
+
 function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -55,6 +85,7 @@ function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord
     typeof record.pluginId === "string" &&
     typeof record.rootDir === "string" &&
     typeof record.enabled === "boolean" &&
+    isOptionalString(record.origin) &&
     isPackageJsonRef(record.packageJson) &&
     isOptionalString(record.manifestPath) &&
     isOptionalString(record.manifestHash)
@@ -71,6 +102,19 @@ async function readInstallsJson(installsPath: string): Promise<InstallsJson | nu
   }
 }
 
+async function readInstalledPluginIndex(params: {
+  installsPath?: string;
+  stateDir?: string;
+}): Promise<InstallsJson | null> {
+  if (params.installsPath) {
+    return await readInstallsJson(params.installsPath);
+  }
+  const index = await readPersistedInstalledPluginIndex(
+    params.stateDir ? { stateDir: params.stateDir } : {},
+  );
+  return index && isInstallsJson(index) ? { plugins: [...index.plugins] } : null;
+}
+
 async function readInstalledPackageJson(
   rootDir: string,
   packageJsonRelPath: string,
@@ -78,6 +122,20 @@ async function readInstalledPackageJson(
   const absPath = path.join(rootDir, packageJsonRelPath);
   const raw = await fs.readFile(absPath, "utf-8");
   return JSON.parse(raw) as PackageManifest;
+}
+
+async function resolvePackageJsonRelPath(
+  record: InstalledPluginRecord,
+): Promise<string | undefined> {
+  if (record.packageJson) {
+    return record.packageJson.path;
+  }
+  try {
+    await fs.access(path.join(record.rootDir, "package.json"));
+    return "package.json";
+  } catch {
+    return undefined;
+  }
 }
 
 async function sha256OfFile(absPath: string): Promise<string | null> {
@@ -90,10 +148,11 @@ async function sha256OfFile(absPath: string): Promise<string | null> {
 }
 
 export async function runPostUpgradeProbes(params: {
-  installsPath: string;
+  installsPath?: string;
+  stateDir?: string;
 }): Promise<PostUpgradeReport> {
   const findings: PostUpgradeFinding[] = [];
-  const installs = await readInstallsJson(params.installsPath);
+  const installs = await readInstalledPluginIndex(params);
   if (!installs) {
     findings.push({
       level: "error",
@@ -108,35 +167,38 @@ export async function runPostUpgradeProbes(params: {
     if (!record.enabled) {
       continue;
     }
-    const pkgRelPath = record.packageJson?.path ?? "package.json";
-    let pkg: PackageManifest;
-    try {
-      pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
-    } catch (err) {
-      process.stderr.write(
-        `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      continue;
-    }
-    const entries = pkg.openclaw?.extensions ?? [];
-    if (entries.length > 0) {
-      // Delegate to the install-time resolver so the probe enforces the same
-      // contract as plugin install/discovery: runtimeExtensions shape, plugin-root
-      // boundary, and inferred-built-output / TypeScript-source-only handling.
-      const validation = await validatePackageExtensionEntriesForInstall({
-        packageDir: record.rootDir,
-        extensions: [...entries],
-        manifest: pkg,
-      });
-      if (!validation.ok) {
-        const offendingEntry = entries.find((entry) => validation.error.includes(entry));
-        findings.push({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          message: `Plugin ${record.pluginId}: ${validation.error}`,
-          plugin: record.pluginId,
-          ...(offendingEntry ? { entry: offendingEntry } : {}),
+    const pkgRelPath = await resolvePackageJsonRelPath(record);
+    if (pkgRelPath) {
+      let pkg: PackageManifest;
+      try {
+        pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
+      } catch (err) {
+        process.stderr.write(
+          `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        continue;
+      }
+      const entries = pkg.openclaw?.extensions ?? [];
+      if (entries.length > 0) {
+        // Delegate to the install-time resolver so the probe enforces the same
+        // contract as plugin install/discovery: runtimeExtensions shape, plugin-root
+        // boundary, and inferred-built-output / TypeScript-source-only handling.
+        const validation = await validatePackageExtensionEntriesForInstall({
+          packageDir: record.rootDir,
+          extensions: [...entries],
+          manifest: pkg,
+          allowSourceTypeScriptEntries: isSourceCheckoutPluginRecord(record),
         });
+        if (!validation.ok) {
+          const offendingEntry = entries.find((entry) => validation.error.includes(entry));
+          findings.push({
+            level: "error",
+            code: "plugin.entry_unresolved",
+            message: `Plugin ${record.pluginId}: ${validation.error}`,
+            plugin: record.pluginId,
+            ...(offendingEntry ? { entry: offendingEntry } : {}),
+          });
+        }
       }
     }
 

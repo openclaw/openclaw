@@ -178,7 +178,6 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
     }
     if (definition.captureRemaining) {
       values[definition.name] = tokens.slice(index).join(" ");
-      index = tokens.length;
       break;
     }
     values[definition.name] = tokens[index];

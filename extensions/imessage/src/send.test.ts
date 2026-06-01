@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearIMessageApprovalReactionTargetsForTest,
   resolveIMessageApprovalReactionTargetWithPersistence,
@@ -11,8 +11,12 @@ import {
   findLatestIMessageEntryForChat,
   resetIMessageShortIdState,
 } from "./monitor-reply-cache.js";
-import { hasPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
+import {
+  hasPersistedIMessageEcho,
+  resetPersistedIMessageEchoCacheForTest,
+} from "./monitor/persisted-echo-cache.js";
 import { sendMessageIMessage } from "./send.js";
+import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const IMESSAGE_TEST_CFG = {
   channels: {
@@ -61,9 +65,16 @@ function createApprovalText(id = "approval-123"): string {
 }
 
 describe("sendMessageIMessage receipts", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+    resetIMessageShortIdState();
+    resetPersistedIMessageEchoCacheForTest();
+  });
+
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
     resetIMessageShortIdState();
+    resetPersistedIMessageEchoCacheForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
@@ -291,19 +302,18 @@ describe("sendMessageIMessage receipts", () => {
     expect(attachmentArgs[1]).toBe("--chat");
     expect(attachmentArgs[2]).toBe("any;-;+15550004567");
     expect(attachmentArgs.slice(3)).toEqual(["--file", "/tmp/image.png", "--transport", "auto"]);
-    expect(
-      findLatestIMessageEntryForChat({
-        accountId: "default",
-        chatIdentifier: "any;-;+15550004567",
-      }),
-    ).toEqual(
+    const cachedEntry = findLatestIMessageEntryForChat({
+      accountId: "default",
+      chatIdentifier: "any;-;+15550004567",
+    });
+    expect(cachedEntry).toEqual(
       expect.objectContaining({
         messageId: "p:0/dm-media-guid",
-        chatGuid: undefined,
         chatIdentifier: "any;-;+15550004567",
         isFromMe: true,
       }),
     );
+    expect(cachedEntry).not.toHaveProperty("chatGuid");
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 

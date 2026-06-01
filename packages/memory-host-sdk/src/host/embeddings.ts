@@ -41,7 +41,7 @@ async function disposeResources(
     }
   }
   if (firstError) {
-    throw firstError;
+    throw toLintErrorObject(firstError, "Non-Error thrown");
   }
 }
 
@@ -180,4 +180,18 @@ export async function createLocalEmbeddingProviderInProcess(
       return closePromise;
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

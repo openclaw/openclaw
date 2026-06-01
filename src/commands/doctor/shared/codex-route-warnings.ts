@@ -2882,7 +2882,6 @@ function rewriteSessionModelPair(params: {
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
   if (provider === "openai-codex") {
     params.entry[params.providerKey] = "openai";
-    changed = true;
     if (model) {
       const modelId = toOpenAIModelId(model);
       if (modelId) {
@@ -2915,12 +2914,14 @@ function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
 }
 
 function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
+  const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
+  const overrideRuntime = normalizeRuntimeString(entry.agentRuntimeOverride);
   let changed = false;
-  if (entry.agentHarnessId !== undefined) {
+  if (entry.agentHarnessId !== undefined && harnessRuntime !== "openclaw") {
     delete entry.agentHarnessId;
     changed = true;
   }
-  if (entry.agentRuntimeOverride !== undefined) {
+  if (entry.agentRuntimeOverride !== undefined && overrideRuntime !== "openclaw") {
     delete entry.agentRuntimeOverride;
     changed = true;
   }

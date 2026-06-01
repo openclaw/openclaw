@@ -256,7 +256,7 @@ export function createDiscordDraftPreviewController(params: {
         );
       }
       const alreadyStarted = progressDraftGate.hasStarted;
-      let progressActive = false;
+      let progressActive;
       if (shouldStartDiscordProgressDraftNow(line)) {
         await progressDraftGate.startNow();
         progressActive = progressDraftGate.hasStarted;

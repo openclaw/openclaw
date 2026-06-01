@@ -1403,7 +1403,7 @@ describe("Code Mode", () => {
         pluginToolWithExecute(
           "fake_slow",
           "Slow helper",
-          async () => await new Promise<never>(() => undefined),
+          async () => await new Promise<never>(() => {}),
         ),
       ],
       config,
@@ -1458,7 +1458,7 @@ describe("Code Mode", () => {
         pluginToolWithExecute(
           "fake_slow",
           "Slow helper",
-          async () => await new Promise<never>(() => undefined),
+          async () => await new Promise<never>(() => {}),
         ),
       ],
       config,

@@ -159,7 +159,9 @@ async function waitForAgentCommandCall(expectedCalls = 1) {
     attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
     attempt += 1
   ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
   expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
 }
@@ -170,7 +172,9 @@ async function waitForGatewayCall(expectedCalls = 1) {
     attempt < 50 && callGateway.mock.calls.length < expectedCalls;
     attempt += 1
   ) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
   expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
 }

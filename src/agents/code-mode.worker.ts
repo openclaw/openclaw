@@ -392,7 +392,7 @@ function createHostRequestHandler(params: {
     ) {
       throw new Error("unsupported code mode bridge method");
     }
-    let args: unknown = [];
+    let args: unknown;
     try {
       args = JSON.parse(argsHandle.toString()) as unknown;
     } catch {

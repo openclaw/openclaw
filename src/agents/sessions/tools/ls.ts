@@ -223,7 +223,7 @@ export function createLsToolDefinition(
             });
           } catch (e: unknown) {
             signal?.removeEventListener("abort", onAbort);
-            reject(e);
+            reject(toLintErrorObject(e, "Non-Error rejection"));
           }
         })();
       });
@@ -243,4 +243,18 @@ export function createLsToolDefinition(
 
 export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<typeof lsSchema> {
   return wrapToolDefinition(createLsToolDefinition(cwd, options));
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

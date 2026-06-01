@@ -1450,7 +1450,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensFresh: false,
     };
 
-    let directTranscriptStats: unknown[] = [];
+    let directTranscriptStats: unknown[];
     try {
       await runMemoryFlushIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -1920,7 +1920,7 @@ describe("runMemoryFlushIfNeeded", () => {
       .mockImplementation(async (target, options) => originalStat(target, options));
 
     let entry: SessionEntry | undefined;
-    let directTranscriptStats: unknown[] = [];
+    let directTranscriptStats: unknown[];
     try {
       entry = await runPreflightCompactionIfNeeded({
         cfg: {

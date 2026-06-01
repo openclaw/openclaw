@@ -692,6 +692,21 @@ function shellJoin(commandArgs) {
   return commandArgs.map(shellQuote).join(" ");
 }
 
+function powershellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+function powershellJoin(commandArgs) {
+  return commandArgs.map(powershellQuote).join(" ");
+}
+
 function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
@@ -1524,12 +1539,69 @@ function isWindowsRemoteTarget(commandArgs) {
   );
 }
 
+function isNativeWindowsRemoteTarget(commandArgs) {
+  return (
+    isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2"
+  );
+}
+
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
   return (
     commandArgs[0] === "run" &&
     providerName === "aws" &&
     optionValue(commandArgs, "--target") === "macos"
   );
+}
+
+function remoteWindowsHydratedNodeModulesBootstrap() {
+  return [
+    "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
+    "if ($openclawModulesDir) {",
+    'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
+    '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
+    '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
+    'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
+    'if (-not (Test-Path $openclawWorkspaceModules)) { cmd /c mklink /J "$openclawWorkspaceModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link workspace node_modules" } }',
+    "}",
+  ].join("; ");
+}
+
+function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerName) {
+  const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
+  if (
+    commandArgs[0] !== "run" ||
+    providerName !== "aws" ||
+    !isNativeWindowsRemoteTarget(commandArgs) ||
+    !hasOption(commandArgs, "--id") ||
+    !runtimeEntrypoint
+  ) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : powershellJoin(remoteCommand);
+  const shellCommand = `${remoteWindowsHydratedNodeModulesBootstrap()}; ${originalShellCommand}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
 }
 
 function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
@@ -1810,15 +1882,18 @@ function isWorktreeClean() {
   return gitOutput(["status", "--porcelain=v1"]).stdout === "";
 }
 
-function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, _providerName) {
+function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
   if (commandArgs[0] !== "run") {
     return false;
   }
   if (hasOption(commandArgs, "--no-sync")) {
     return false;
   }
+  if (!isWorktreeClean()) {
+    return false;
+  }
 
-  return isSparseCheckout() && isWorktreeClean();
+  return isSparseCheckout() || isChangedGateCommand(runCommandArgs(commandArgs));
 }
 
 function prepareFullCheckoutForSync(options = {}) {
@@ -2025,12 +2100,11 @@ let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
-let scriptStdinPrepared = false;
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
 normalizedArgs = scriptBootstrap.args;
-scriptStdinPrepared = scriptBootstrap.prepared;
+const scriptStdinPrepared = scriptBootstrap.prepared;
 try {
-  if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
+  if (shouldUseFullCheckoutForCleanRemoteSync(normalizedArgs, provider)) {
     const runWords = runCommandArgs(normalizedArgs);
     const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
@@ -2108,9 +2182,15 @@ if (
 const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
 const childArgs =
   childCwd === repoRoot
-    ? injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider)
+    ? injectRemoteWindowsHydratedNodeModulesBootstrap(
+        injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+        provider,
+      )
     : injectRemoteChangedGateGitBootstrap(
-        injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+        injectRemoteWindowsHydratedNodeModulesBootstrap(
+          injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+          provider,
+        ),
         remoteChangedGateBase,
       );
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);

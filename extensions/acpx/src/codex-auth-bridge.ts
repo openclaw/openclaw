@@ -528,6 +528,35 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     installedBinPath,
     stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
+const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
+const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
+let shouldWriteCodexApiKeyAuth = false;
+if (codexApiKey) {
+  if (!existsSync(codexAuthPath)) {
+    shouldWriteCodexApiKeyAuth = true;
+  } else {
+    try {
+      const existingCodexAuth = JSON.parse(readFileSync(codexAuthPath, "utf8"));
+      shouldWriteCodexApiKeyAuth =
+        !existingCodexAuth ||
+        typeof existingCodexAuth !== "object" ||
+        typeof existingCodexAuth.OPENAI_API_KEY === "string";
+    } catch {
+      shouldWriteCodexApiKeyAuth = true;
+    }
+  }
+}
+if (shouldWriteCodexApiKeyAuth) {
+  writeFileSync(
+    codexAuthPath,
+    JSON.stringify({
+      OPENAI_API_KEY: codexApiKey,
+      tokens: null,
+      last_refresh: null,
+    }) + "\\n",
+    { mode: 0o600 },
+  );
+}
 const env = {
   ...process.env,
   CODEX_HOME: codexHome,

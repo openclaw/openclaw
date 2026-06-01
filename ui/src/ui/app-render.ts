@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -13,8 +14,6 @@ import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
-  renderChatMobileToggle,
-  renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
@@ -24,10 +23,11 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
+  renderChatSessionSelect,
   resolveChatAgentFilterId,
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
@@ -171,7 +171,7 @@ import {
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
-import type { GatewaySessionRow } from "./types.ts";
+import type { AgentsFilesGetResult, AgentsFilesListResult, GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -355,6 +355,13 @@ function renderSidebarSessions(state: AppViewState) {
               >${t("chat.runControls.newSession")}</span
             >`}
       </button>
+      <div class="sidebar-session-select ${collapsed ? "sidebar-session-select--collapsed" : ""}">
+        ${renderChatSessionSelect(state, switchChatSession, {
+          compact: collapsed,
+          sessionSwitcherOnly: true,
+          surface: "sidebar",
+        })}
+      </div>
       ${collapsed || recent.length === 0
         ? nothing
         : html`
@@ -398,6 +405,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
     <a
       href=${href}
       class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
+      data-session-key=${row.key}
       title=${`${label} · ${row.key}`}
       @click=${(event: MouseEvent) => {
         if (
@@ -445,6 +453,38 @@ const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyVie
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
+
+type ChatWorkspaceFilesState = {
+  activeName: string | null;
+  agentId: string;
+  error: string | null;
+  list: AgentsFilesListResult | null;
+  loading: boolean;
+  requestId: number;
+};
+
+const chatWorkspaceFilesStates = new WeakMap<AppViewState, ChatWorkspaceFilesState>();
+const chatWorkspaceFileOpenRequests = new WeakMap<
+  AppViewState,
+  { agentId: string; id: number; name: string; sessionKey: string }
+>();
+
+function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatWorkspaceFilesState {
+  const current = chatWorkspaceFilesStates.get(state);
+  if (current?.agentId === agentId) {
+    return current;
+  }
+  const next = {
+    activeName: null,
+    agentId,
+    error: null,
+    list: null,
+    loading: false,
+    requestId: 0,
+  };
+  chatWorkspaceFilesStates.set(state, next);
+  return next;
+}
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   return (
@@ -715,6 +755,46 @@ function renderMeasured<T>(
   return result;
 }
 
+function renderGuardedChatControls(state: AppViewState) {
+  return guard(
+    [
+      state.sessionKey,
+      state.connected,
+      state.client,
+      state.onboarding,
+      state.chatManualRefreshInFlight,
+      state.chatLoading,
+      state.chatSending,
+      state.chatStream,
+      state.chatRunId,
+      state.chatMobileControlsOpen,
+      state.sessionsHideCron ?? true,
+      state.sessionsResult,
+      state.sessionsShowArchived,
+      state.agentsList,
+      state.chatModelOverrides,
+      state.chatModelSwitchPromises,
+      state.chatModelsLoading,
+      state.chatModelCatalog,
+      state.settings.chatShowThinking,
+      state.settings.chatShowToolCalls,
+      state.settings.chatAutoScroll,
+      state.chatSessionPickerOpen,
+      state.chatSessionPickerSurface,
+      state.chatSessionPickerQuery,
+      state.chatSessionPickerAppliedQuery,
+      state.chatSessionPickerLoading,
+      state.chatSessionPickerError,
+      state.chatSessionPickerResult,
+      state.sessionSwitchNotice?.id ?? null,
+      state.sessionSwitchNotice?.text ?? null,
+      state.sessionSwitchFlashKey,
+      i18n.getLocale(),
+    ],
+    () => renderChatControls(state),
+  );
+}
+
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
   const parsed = parseAgentSessionKey(state.sessionKey);
@@ -974,6 +1054,14 @@ function renderCronQuickCreateForTab(
   });
 }
 
+function buildWorkspaceFileSidebarContent(name: string, content: string): string {
+  if (/\.(?:md|markdown|mdx)$/i.test(name)) {
+    return content;
+  }
+  const language = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
+  return `# ${name}\n\n\`\`\`${language}\n${content}\n\`\`\``;
+}
+
 export function renderApp(state: AppViewState) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
@@ -995,9 +1083,8 @@ export function renderApp(state: AppViewState) {
   const isChat = state.tab === "chat";
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
-  const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
-  const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
-  const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
+  const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
+  const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -1159,10 +1246,35 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.agents?.[0]?.id ??
     null;
   const resolvedAgentId = resolveSelectedAgentId();
-  const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
-  const toolsPanelUsesActiveSession = Boolean(
-    resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
+  const normalizedChatSessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+  const activeSessionAgentId =
+    normalizedChatSessionKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
+  const scopedChatAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
+  const chatFallbackAgentId = normalizeAgentId(
+    state.assistantAgentId ??
+      state.agentsList?.defaultId ??
+      state.agentsList?.agents?.[0]?.id ??
+      "main",
   );
+  const resolveChatWorkspaceAgentId = () => {
+    const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+    const activeAgentId =
+      normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
+    const scopedAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
+    return normalizedKey === "global"
+      ? (scopedAgentId ?? chatFallbackAgentId)
+      : (activeAgentId ?? scopedAgentId ?? chatFallbackAgentId);
+  };
+  const chatAgentId =
+    normalizedChatSessionKey === "global"
+      ? (scopedChatAgentId ?? chatFallbackAgentId)
+      : (activeSessionAgentId ?? scopedChatAgentId ?? chatFallbackAgentId);
+  const toolsPanelUsesActiveSession = Boolean(resolvedAgentId && resolvedAgentId === chatAgentId);
+  const chatWorkspaceFiles = getChatWorkspaceFilesState(state, chatAgentId);
+  const currentChatWorkspaceFilesState = () =>
+    resolveChatWorkspaceAgentId() === chatAgentId
+      ? getChatWorkspaceFilesState(state, chatAgentId)
+      : null;
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -1761,6 +1873,114 @@ export function renderApp(state: AppViewState) {
     state.toolsCatalogLoading = false;
     resetToolsEffectiveState(state);
   };
+  if (
+    isChat &&
+    state.connected &&
+    state.agentsList &&
+    !chatWorkspaceFiles.loading &&
+    !chatWorkspaceFiles.error &&
+    chatWorkspaceFiles.list?.agentId !== chatAgentId
+  ) {
+    loadChatWorkspaceFiles();
+  }
+  const refreshChatWorkspaceFiles = () => {
+    loadChatWorkspaceFiles({ force: true });
+  };
+  function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
+    if (!state.client || !state.connected || chatWorkspaceFiles.loading) {
+      return;
+    }
+    const requestId = chatWorkspaceFiles.requestId + 1;
+    chatWorkspaceFiles.requestId = requestId;
+    chatWorkspaceFiles.loading = true;
+    chatWorkspaceFiles.error = null;
+    if (opts?.force) {
+      chatWorkspaceFiles.list = null;
+    }
+    const requestState = chatWorkspaceFiles;
+    void (async () => {
+      try {
+        const res = await state.client?.request<AgentsFilesListResult | null>("agents.files.list", {
+          agentId: chatAgentId,
+        });
+        const current = currentChatWorkspaceFilesState();
+        if (current !== requestState || current.requestId !== requestId) {
+          return;
+        }
+        current.list = res ?? null;
+        if (current.activeName && !res?.files.some((file) => file.name === current.activeName)) {
+          current.activeName = null;
+        }
+      } catch (err) {
+        const current = currentChatWorkspaceFilesState();
+        if (current === requestState && current.requestId === requestId) {
+          current.error = String(err);
+        }
+      } finally {
+        const current = currentChatWorkspaceFilesState();
+        if (current === requestState && current.requestId === requestId) {
+          current.loading = false;
+        }
+        requestHostUpdate?.();
+      }
+    })();
+  }
+  const openChatWorkspaceFile = (name: string) => {
+    chatWorkspaceFiles.activeName = name;
+    const previousRequest = chatWorkspaceFileOpenRequests.get(state);
+    const openRequest = {
+      agentId: chatAgentId,
+      id: (previousRequest?.id ?? 0) + 1,
+      name,
+      sessionKey: state.sessionKey,
+    };
+    chatWorkspaceFileOpenRequests.set(state, openRequest);
+    const isCurrentOpenRequest = () => {
+      const currentRequest = chatWorkspaceFileOpenRequests.get(state);
+      const currentFiles = currentChatWorkspaceFilesState();
+      return (
+        currentRequest?.id === openRequest.id &&
+        currentRequest.agentId === resolveChatWorkspaceAgentId() &&
+        currentRequest.name === name &&
+        currentRequest.sessionKey === state.sessionKey &&
+        currentFiles?.activeName === name
+      );
+    };
+    void (async () => {
+      if (!state.client || !state.connected) {
+        return;
+      }
+      chatWorkspaceFiles.error = null;
+      try {
+        const res = await state.client.request<AgentsFilesGetResult | null>("agents.files.get", {
+          agentId: chatAgentId,
+          name,
+        });
+        const content = res?.file?.content;
+        if (typeof content !== "string") {
+          if (isCurrentOpenRequest()) {
+            chatWorkspaceFiles.error = `Failed to load ${name}`;
+            requestHostUpdate?.();
+          }
+          return;
+        }
+        if (!isCurrentOpenRequest()) {
+          return;
+        }
+        state.handleOpenSidebar({
+          kind: "markdown",
+          content: buildWorkspaceFileSidebarContent(name, content),
+          rawText: content,
+        });
+      } catch (err) {
+        if (isCurrentOpenRequest()) {
+          chatWorkspaceFiles.error = String(err);
+        }
+      } finally {
+        requestHostUpdate?.();
+      }
+    })();
+  };
 
   return html`
     ${renderCommandPalette({
@@ -1785,11 +2005,11 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus
-        ? "shell--chat-focus"
-        : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen
-        ? "shell--nav-drawer-open"
-        : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      class="shell ${isChat ? "shell--chat" : ""} ${navCollapsed
+        ? "shell--nav-collapsed"
+        : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${state.onboarding
+        ? "shell--onboarding"
+        : ""}"
       style=${styleMap(
         state.chatMessageMaxWidth ? { "--chat-message-max-width": state.chatMessageMaxWidth } : {},
       )}
@@ -1802,7 +2022,11 @@ export function renderApp(state: AppViewState) {
           state.navDrawerOpen = false;
         }}
       ></button>
-      <header class="topbar" ?inert=${chatFocus} aria-hidden=${chatFocus ? "true" : nothing}>
+      <header
+        class="topbar"
+        ?inert=${state.onboarding}
+        aria-hidden=${state.onboarding ? "true" : nothing}
+      >
         <div class="topnav-shell">
           <button
             type="button"
@@ -1838,10 +2062,7 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
-            <div class="topbar-status">
-              ${isChat ? renderChatMobileToggle(state) : nothing}
-              ${renderTopbarThemeModeToggle(state)}
-            </div>
+            <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
           </div>
         </div>
       </header>
@@ -1996,7 +2217,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.tab === "config"
+        ${state.tab === "config" || isChat
           ? nothing
           : html`<section
               class=${chatHeaderHidden
@@ -2006,10 +2227,8 @@ export function renderApp(state: AppViewState) {
               aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
-                ${isChat
-                  ? renderChatSessionSelect(state)
-                  : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
+                <div class="page-title">${titleForTab(state.tab)}</div>
+                <div class="page-sub">${subtitleForTab(state.tab)}</div>
               </div>
               <div class="page-meta">
                 ${state.tab === "dreams"
@@ -2040,7 +2259,6 @@ export function renderApp(state: AppViewState) {
                     `
                   : nothing}
                 ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
-                ${isChat ? renderChatControls(state) : nothing}
               </div>
             </section>`}
         ${state.tab === "overview"
@@ -2314,15 +2532,16 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${state.tab === "workboard"
-          ? renderLazyView(lazyWorkboard, (m) =>
-              m.renderWorkboard({
+          ? renderLazyView(lazyWorkboard, (m) => {
+              const auth =
+                (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                null;
+              return m.renderWorkboard({
                 host: state,
                 client: state.client,
                 connected: state.connected,
-                canWrite: hasOperatorWriteAccess(
-                  (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
-                    null,
-                ),
+                canWrite: hasOperatorWriteAccess(auth),
+                canModelOverride: hasOperatorAdminAccess(auth),
                 pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
                   enabledByDefault: false,
                 }),
@@ -2333,8 +2552,8 @@ export function renderApp(state: AppViewState) {
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onRequestUpdate: requestHostUpdate,
-              }),
-            )
+              });
+            })
           : nothing}
         ${renderUsageTab(state)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
@@ -2566,7 +2785,7 @@ export function renderApp(state: AppViewState) {
                     ) {
                       void loadToolsCatalog(state, resolvedAgentId);
                     }
-                    if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                    if (resolvedAgentId === chatAgentId) {
                       const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
                         agentId: resolvedAgentId,
                         sessionKey: state.sessionKey,
@@ -2971,21 +3190,24 @@ export function renderApp(state: AppViewState) {
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
-                  focusMode: chatFocus,
+                  composerControls: renderGuardedChatControls(state),
+                  workspaceFiles: {
+                    agentId: chatAgentId,
+                    list:
+                      chatWorkspaceFiles.list?.agentId === chatAgentId
+                        ? chatWorkspaceFiles.list
+                        : null,
+                    loading: chatWorkspaceFiles.loading,
+                    error: chatWorkspaceFiles.error,
+                    activeName: chatWorkspaceFiles.activeName,
+                    onRefresh: refreshChatWorkspaceFiles,
+                    onOpenFile: openChatWorkspaceFile,
+                  },
                   autoExpandToolCalls: false,
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
                     void refreshChat(state, { awaitHistory: true, scheduleScroll: false });
-                  },
-                  onToggleFocusMode: () => {
-                    if (state.onboarding) {
-                      return;
-                    }
-                    state.applySettings({
-                      ...state.settings,
-                      chatFocusMode: !state.settings.chatFocusMode,
-                    });
                   },
                   onChatScroll: (event) => state.handleChatScroll(event),
                   getDraft: () => state.chatMessage,
@@ -3051,7 +3273,7 @@ export function renderApp(state: AppViewState) {
                     }
                   }),
                   agentsList: state.agentsList,
-                  currentAgentId: resolvedAgentId ?? "main",
+                  currentAgentId: chatAgentId,
                   fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
                     switchChatSession(state, buildAgentMainSessionKey({ agentId }));

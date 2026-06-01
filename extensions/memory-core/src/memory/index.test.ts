@@ -504,7 +504,7 @@ describe("memory index", () => {
     managersForCleanup.add(first);
     await first.probeEmbeddingAvailability();
     const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
-    let second: MemoryIndexManager | null = null;
+    let second: MemoryIndexManager | null;
     try {
       await vi.waitFor(() => {
         expect(providerCloseCalls).toBe(1);

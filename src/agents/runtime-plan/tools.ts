@@ -9,6 +9,10 @@ import {
   normalizeProviderToolSchemas,
 } from "../embedded-agent-runner/tool-schema-runtime.js";
 import type { AgentTool } from "../runtime/index.js";
+import {
+  filterProviderNormalizableTools,
+  type RuntimeToolSchemaDiagnostic,
+} from "../tool-schema-projection.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -23,6 +27,10 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
+  onPreNormalizationSchemaDiagnostics?: (
+    diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+    tools: readonly AgentTool<TSchemaType, TResult>[],
+  ) => void;
 };
 
 function runtimePlanToolContext(params: {
@@ -78,10 +86,21 @@ export function normalizeAgentRuntimeTools<
   TResult = unknown,
 >(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
+  const normalizableToolProjection = filterProviderNormalizableTools(params.tools);
+  if (normalizableToolProjection.diagnostics.length > 0) {
+    params.onPreNormalizationSchemaDiagnostics?.(
+      normalizableToolProjection.diagnostics,
+      params.tools,
+    );
+  }
+  const normalizableTools = [...normalizableToolProjection.tools] as AgentTool<
+    TSchemaType,
+    TResult
+  >[];
   const normalized =
-    params.runtimePlan?.tools.normalize(params.tools, planContext) ??
+    params.runtimePlan?.tools.normalize(normalizableTools, planContext) ??
     normalizeProviderToolSchemas({
-      tools: params.tools,
+      tools: normalizableTools,
       provider: params.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -92,8 +111,8 @@ export function normalizeAgentRuntimeTools<
       runtimeHandle: params.runtimeHandle,
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
     });
-  const normalizedTools = Array.isArray(normalized) ? normalized : params.tools;
-  return preserveRuntimeToolMetadata(params.tools, normalizedTools);
+  const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
+  return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {

@@ -396,7 +396,9 @@ describe("exec notifyOnExit suppression", () => {
           startedAtMs: Date.now(),
           pid: 123,
           wait: async () => {
-            await new Promise((resolve) => setImmediate(resolve));
+            await new Promise((resolve) => {
+              setImmediate(resolve);
+            });
             return {
               reason: params.reason,
               exitCode: null,

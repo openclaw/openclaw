@@ -107,7 +107,7 @@ async function listLegacyLearningFiles(
 ): Promise<
   Array<{ storePath: string; sessionKey: string | null; filePath: string; learnings: string[] }>
 > {
-  let entries: Dirent[] = [];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(storePath, { withFileTypes: true });
   } catch {

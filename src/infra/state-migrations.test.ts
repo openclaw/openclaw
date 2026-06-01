@@ -35,7 +35,7 @@ vi.mock("../channels/plugins/bundled.js", () => {
     ]),
     listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
       ({ oauthDir }: { oauthDir: string }) => {
-        let entries: fsSync.Dirent[] = [];
+        let entries: fsSync.Dirent[];
         try {
           entries = fsSync.readdirSync(oauthDir, { withFileTypes: true });
         } catch {

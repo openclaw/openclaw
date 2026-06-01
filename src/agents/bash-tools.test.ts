@@ -103,7 +103,10 @@ vi.mock("../process/supervisor/index.js", () => {
     onStdout?: (chunk: string) => void;
   };
 
-  const immediate = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const immediate = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   const readPathKey = (env?: NodeJS.ProcessEnv) =>
     env && "Path" in env && !("PATH" in env) ? "Path" : "PATH";
   const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.[readPathKey(env)] ?? "";
@@ -330,7 +333,10 @@ const readNormalizedTextContent = (content: ToolTextContent) =>
   normalizeText(readTextContent(content));
 const readTrimmedLines = (content: ToolTextContent) =>
   (readTextContent(content) ?? "").split("\n").map((line) => line.trim());
-const waitOneTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+const waitOneTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
 const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
 const readProcessStatusOrRunning = (details: unknown) =>

@@ -900,7 +900,7 @@ export class RealtimeCallHandler {
       closeSession();
     };
 
-    session.connect().catch((error: Error) => {
+    session.connect().catch((error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       session.close();
       emitCallEnd("error");
@@ -999,9 +999,9 @@ export class RealtimeCallHandler {
       if (quietFor >= CONSULT_TRANSCRIPT_SETTLE_MS || now >= deadline) {
         return;
       }
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
+      });
     }
   }
 
