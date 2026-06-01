@@ -1044,7 +1044,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("flushes pending requests with structured connect errors on close", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
