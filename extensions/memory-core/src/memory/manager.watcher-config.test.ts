@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -660,6 +661,55 @@ describe("memory watcher config", () => {
         value: originalPlatformValue,
         configurable: true,
       });
+    }
+  });
+
+  it("falls back to chokidar when Linux subtree lstat races with deletion", async () => {
+    const originalPlatformValue = process.platform;
+    let lstatSpy: { mockRestore: () => void } | undefined;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const nestedDir = path.join(workspaceDir, "memory", "racy-topic");
+      await fs.mkdir(nestedDir);
+      const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+      const lstatMock = vi.spyOn(fsSync, "lstatSync");
+      lstatSpy = lstatMock;
+      lstatMock.mockImplementation(
+        (
+          target: Parameters<typeof fsSync.lstatSync>[0],
+          options?: Parameters<typeof fsSync.lstatSync>[1],
+        ): ReturnType<typeof fsSync.lstatSync> => {
+          if (path.resolve(String(target)) === nestedDir) {
+            throw Object.assign(new Error("ENOENT: no such file or directory, lstat"), {
+              code: "ENOENT",
+            });
+          }
+          return originalLstatSync(target, options);
+        },
+      );
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      const [fallbackPaths] = watchMock.mock.calls[0] as unknown as [
+        string[],
+        Record<string, unknown>,
+      ];
+      expect(fallbackPaths).toStrictEqual([path.join(workspaceDir, "memory")]);
+      expect(createdChokidarWatchers[0]?.add).toHaveBeenCalledWith([
+        path.join(workspaceDir, "MEMORY.md"),
+      ]);
+      expect(memoryLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("failed to attach Linux memory directory watcher subtree"),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+      lstatSpy?.mockRestore();
     }
   });
 

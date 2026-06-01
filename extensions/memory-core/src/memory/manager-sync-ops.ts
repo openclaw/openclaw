@@ -899,7 +899,12 @@ export abstract class MemoryManagerSyncOps {
     root: string,
     attachDirectory: (dir: string) => fsSync.FSWatcher | null,
   ): boolean {
-    const rootStats = fsSync.lstatSync(root, { throwIfNoEntry: false });
+    let rootStats: fsSync.Stats | undefined;
+    try {
+      rootStats = fsSync.lstatSync(root, { throwIfNoEntry: false }) ?? undefined;
+    } catch {
+      return false;
+    }
     if (
       !rootStats?.isDirectory() ||
       shouldIgnoreMemoryWatchPath(root, rootStats, this.settings.multimodal)
