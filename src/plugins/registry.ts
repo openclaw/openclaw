@@ -119,6 +119,7 @@ import {
   registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptSupplement,
   registerMemoryPromptSectionForPlugin,
+  registerMemoryRerankProvider,
   registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
@@ -3078,6 +3079,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryCorpusSupplement: (supplement) => {
                 registerMemoryCorpusSupplement(record.id, supplement);
+              },
+              registerMemoryRerankProvider: (provider) => {
+                // Vendor-neutral seam: the provider carries no id, so declaring the
+                // contract (non-empty list) is the gate, mirroring memoryEmbeddingProviders.
+                if ((record.contracts?.memoryRerankProviders ?? []).length === 0) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "plugin must declare contracts.memoryRerankProviders to register a memory rerank provider",
+                  });
+                  return;
+                }
+                const result = registerMemoryRerankProvider(record.id, provider);
+                if (!result.ok) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `memory rerank provider already registered (owner: ${result.existingOwner})`,
+                  });
+                }
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {

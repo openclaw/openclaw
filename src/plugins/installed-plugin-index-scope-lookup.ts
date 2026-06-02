@@ -8,6 +8,7 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "externalAuthProviders",
   "embeddingProviders",
   "memoryEmbeddingProviders",
+  "memoryRerankProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",
