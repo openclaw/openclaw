@@ -2885,11 +2885,16 @@ export async function dispatchReplyFromConfig(
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      throwIfDispatchOperationAborted();
+      // Clear pendingFinalDelivery before the abort check so that a
+      // concurrent stuck-session recovery abort between sendFinalPayload
+      // succeeding and this block does not leave the flag set permanently.
+      // The flag tracks whether a final payload was delivered to the user;
+      // if we delivered one successfully, clear it regardless of abort.
       await clearPendingFinalDeliveryAfterSuccess({
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
       });
+      throwIfDispatchOperationAborted();
     }
 
     if (!suppressDelivery) {
