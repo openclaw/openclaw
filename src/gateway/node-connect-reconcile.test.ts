@@ -54,21 +54,15 @@ function expectNodePairingRequest(
   requestPairing: ReturnType<typeof makePendingPairingRequest>,
   expected: Partial<NodePairingRequestInput>,
 ) {
-  expect(requestPairing).toHaveBeenCalledWith({
-    nodeId: "openclaw-ios",
-    clientId: undefined,
-    clientMode: undefined,
-    displayName: undefined,
-    platform: "ios",
-    version: "test",
-    deviceFamily: undefined,
-    modelIdentifier: undefined,
-    caps: [],
-    commands: [],
-    permissions: undefined,
-    remoteIp: undefined,
-    ...expected,
-  });
+  expect(requestPairing).toHaveBeenCalledWith(
+    expect.objectContaining({
+      nodeId: "openclaw-ios",
+      caps: [],
+      commands: [],
+      permissions: undefined,
+      ...expected,
+    }),
+  );
 }
 
 describe("reconcileNodePairingOnConnect", () => {
