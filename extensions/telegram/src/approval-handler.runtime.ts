@@ -9,7 +9,10 @@ import {
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalPendingReplyParams } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalReplyDecision,
+} from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -28,6 +31,10 @@ import {
 import { editMessageReplyMarkupTelegram, sendMessageTelegram, sendTypingTelegram } from "./send.js";
 
 const log = createSubsystemLogger("telegram/approvals");
+const TELEGRAM_REACTION_ALLOWED_DECISIONS = [
+  "allow-once",
+  "deny",
+] as const satisfies readonly ExecApprovalReplyDecision[];
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type PendingMessage = {
@@ -39,6 +46,15 @@ type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
+
+function filterTelegramReactionDecisions(
+  actions: PendingApprovalView["actions"],
+): ExecApprovalReplyDecision[] {
+  const allowed = new Set<ExecApprovalReplyDecision>(TELEGRAM_REACTION_ALLOWED_DECISIONS);
+  return actions
+    .map((action) => action.decision)
+    .filter((decision): decision is ExecApprovalReplyDecision => allowed.has(decision));
+}
 
 export type TelegramExecApprovalHandlerDeps = {
   nowMs?: () => number;
@@ -186,7 +202,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         chatId: entry.chatId,
         messageId: entry.messageId,
         approvalId: request.id,
-        allowedDecisions: view.actions.map((action) => action.decision),
+        allowedDecisions: filterTelegramReactionDecisions(view.actions),
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       })
         ? true

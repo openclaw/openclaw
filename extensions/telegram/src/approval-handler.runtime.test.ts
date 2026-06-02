@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import * as approvalReactions from "./approval-reactions.js";
 
 type TelegramPayload = {
   text: string;
@@ -118,5 +119,72 @@ describe("telegramApprovalNativeRuntime", () => {
       chatId: "-1003841603622",
       messageId: "m1",
     });
+  });
+
+  it("binds only Telegram-supported reaction decisions", async () => {
+    const registerSpy = vi
+      .spyOn(approvalReactions, "registerTelegramApprovalReactionTarget")
+      .mockReturnValue({
+        approvalId: "req-1",
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once", "deny"],
+      });
+
+    const result = await telegramApprovalNativeRuntime.interactions.bindPending({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-1",
+        commandText: "echo hi",
+        expiresAtMs: 60_000,
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve req-1 allow-once",
+            style: "success",
+          },
+          {
+            decision: "allow-always",
+            label: "Allow Always",
+            command: "/approve req-1 allow-always",
+            style: "primary",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve req-1 deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+      entry: {
+        accountId: "default",
+        chatId: "-1001",
+        messageId: "m1",
+      },
+    });
+
+    expect(result).toBe(true);
+    expect(registerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    registerSpy.mockRestore();
   });
 });
