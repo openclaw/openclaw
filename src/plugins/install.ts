@@ -410,6 +410,14 @@ function shouldResolveCompatiblePrereleaseNpmVersion(params: {
   );
 }
 
+function resolvePrereleaseChannel(version: string): string | null {
+  if (!isPrereleaseSemverVersion(version)) {
+    return null;
+  }
+  const match = /^\s*v?\d+\.\d+\.\d+-([0-9A-Za-z]+)(?:[.-]|$)/.exec(version);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
 function canResolveAroundCompatibilityError(error: PluginInstallFailureResult): boolean {
   return (
     error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION ||
@@ -446,6 +454,9 @@ async function resolveLatestCompatibleNpmResolution(params: {
     spec: params.parsedSpec,
     currentVersion,
   });
+  const prereleaseChannel = allowPrereleaseCandidates
+    ? resolvePrereleaseChannel(currentVersion)
+    : null;
   if (!shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) && !allowPrereleaseCandidates) {
     return null;
   }
@@ -461,7 +472,7 @@ async function resolveLatestCompatibleNpmResolution(params: {
   const candidates = versions
     .filter((version) =>
       allowPrereleaseCandidates
-        ? isPrereleaseSemverVersion(version)
+        ? resolvePrereleaseChannel(version) === prereleaseChannel
         : !isPrereleaseSemverVersion(version),
     )
     .filter((version) => compareNpmSemver(version, currentVersion) < 0)
