@@ -117,7 +117,9 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
       };
       const deadline = Date.now() + 5_000;
       while (!keyDrainedOnDisk() && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10);
+        });
       }
 
       // 6. Exactly-once: the restored message was redelivered a single time and
