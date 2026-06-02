@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 
@@ -25,6 +27,12 @@ function withEnv<T>(env: Record<string, string | undefined>, callback: () => T):
 }
 
 describe("bench-cli-startup", () => {
+  it("passes generated import hook paths as file URL specifiers", () => {
+    const hookPath = path.resolve("measure-rss.mjs");
+
+    expect(testing.nodeImportSpecifierForPath(hookPath)).toBe(pathToFileURL(hookPath).href);
+  });
+
   it("fails reports with no measured samples", () => {
     expect(
       testing.collectFailedSamples({
