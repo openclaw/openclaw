@@ -2887,6 +2887,10 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    // Strip reasoning_content when model does not support reasoning
+    if (model.reasoning != null && !model.reasoning) {
+      delete (choiceDelta as Record<string, unknown>).reasoning_content;
+    }
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choiceDelta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
