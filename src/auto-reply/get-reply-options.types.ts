@@ -1,4 +1,6 @@
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
+
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -68,6 +70,10 @@ export type GetReplyOptions = {
   onAgentRunStart?: (runId: string) => void;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Notifies callers when the runtime persisted an assistant error turn. */
+  onAssistantErrorMessagePersisted?: (
+    message: Extract<AgentMessage, { role: "assistant" }>,
+  ) => Promise<void> | void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
