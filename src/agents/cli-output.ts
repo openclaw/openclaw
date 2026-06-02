@@ -436,9 +436,12 @@ function parseClaudeCliPartialAssistantDelta(params: {
   }
   // Claude CLI --include-partial-messages emits assistant records with
   // stop_reason: null while streaming and a non-null stop_reason (e.g.
-  // "end_turn") for the final complete message.  Only relay true partials.
+  // "end_turn") for the final complete message.  Only relay true partials
+  // that have an explicit stop_reason: null (the documented partial signal).
+  // Records without stop_reason at all are not confirmed partials and could
+  // be complete messages from custom claude-stream-json backends.
   const message = params.parsed.message;
-  if (isRecord(message) && message.stop_reason != null) {
+  if (!isRecord(message) || !("stop_reason" in message) || message.stop_reason !== null) {
     return null;
   }
   const partialText = collectCliText(params.parsed.message);

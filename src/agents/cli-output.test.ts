@@ -1040,14 +1040,14 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(
       JSON.stringify({
         type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+        message: { role: "assistant", content: [{ type: "text", text: "Hello" }], stop_reason: null },
         session_id: "s1",
       }) + "\n",
     );
     parser.push(
       JSON.stringify({
         type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
+        message: { role: "assistant", content: [{ type: "text", text: "Hello world" }], stop_reason: null },
         session_id: "s1",
       }) + "\n",
     );
@@ -1262,6 +1262,7 @@ describe("createCliJsonlStreamingParser", () => {
         message: {
           role: "assistant",
           content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }],
+          stop_reason: null,
         },
       }) + "\n",
     );
@@ -1287,12 +1288,36 @@ describe("createCliJsonlStreamingParser", () => {
             { type: "text", text: "Let me read that file." },
             { type: "tool_use", id: "t1", name: "Read", input: { path: "README.md" } },
           ],
+          stop_reason: null,
         },
       }) + "\n",
     );
     parser.finish();
 
     expect(deltas).toEqual([{ text: "Let me read that file.", delta: "Let me read that file." }]);
+  });
+
+  it("skips assistant records without stop_reason field", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    // Assistant record without stop_reason -- not a confirmed partial
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([]);
   });
 
   it("skips complete assistant message with stop_reason set", () => {
@@ -1306,7 +1331,11 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(
       JSON.stringify({
         type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          stop_reason: null,
+        },
       }) + "\n",
     );
     parser.push(
