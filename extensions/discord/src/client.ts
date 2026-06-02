@@ -81,9 +81,14 @@ function resolveRest(
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
+  const apiTimeoutMs = account.config.apiTimeoutMs;
   return createDiscordRequestClient(
     token,
-    resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined,
+    resolvedProxyFetch
+      ? { fetch: resolvedProxyFetch, ...(apiTimeoutMs != null ? { timeout: apiTimeoutMs } : {}) }
+      : apiTimeoutMs != null
+        ? { timeout: apiTimeoutMs }
+        : undefined,
   );
 }
 
