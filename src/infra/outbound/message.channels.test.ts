@@ -271,7 +271,7 @@ const setThreadChatGatewayRegistry = () => {
         source: "test",
         plugin: {
           ...createThreadChatLikePlugin({ onSendText: () => {} }),
-          outbound: { deliveryMode: "gateway" },
+          outbound: { deliveryMode: "gateway", sendText: async () => ({ channel: "threadchat", messageId: "m1" }) },
         },
       },
     ]),

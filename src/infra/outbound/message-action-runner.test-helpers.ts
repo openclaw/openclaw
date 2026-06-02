@@ -32,7 +32,7 @@ export const directChatConfig = {
 
 export const directOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  sendText: async () => ({ channel: "test", messageId: "test" }),
+  sendText: async ({ to }) => ({ channel: "test", messageId: `test:${to}` }),
 };
 
 // Test plugins model token-gated workspace sends without booting real channel runtimes.
