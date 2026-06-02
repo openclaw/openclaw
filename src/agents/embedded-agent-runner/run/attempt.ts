@@ -1421,6 +1421,7 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
       runtimeHandle: getProviderRuntimeHandle(),
+      schemaHookFailureMode: "warn",
       onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
         logRuntimeToolSchemaQuarantine({
           diagnostics,
@@ -1517,6 +1518,7 @@ export async function runEmbeddedAttempt(
             modelApi: params.model.api,
             model: params.model,
             runtimeHandle: getProviderRuntimeHandle(),
+            schemaHookFailureMode: "warn",
             onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
               logRuntimeToolSchemaQuarantine({
                 diagnostics,
@@ -1674,6 +1676,7 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
       runtimeHandle: getProviderRuntimeHandle(),
+      schemaHookFailureMode: "warn",
     });
 
     const machineName = await getMachineDisplayName();

@@ -65,7 +65,15 @@ export function hasErrnoCode(err: unknown, code: string): boolean {
   return isErrno(err) && err.code === code;
 }
 
-export function formatErrorMessage(err: unknown): string {
+function safeObjectTag(value: unknown): string {
+  try {
+    return Object.prototype.toString.call(value);
+  } catch {
+    return typeof value === "function" ? "[object Function]" : "[object Unknown]";
+  }
+}
+
+function formatErrorMessageValue(err: unknown): string {
   let formatted: string;
   if (err instanceof Error) {
     formatted = err.message || err.name || "Error";
@@ -99,10 +107,20 @@ export function formatErrorMessage(err: unknown): string {
     formatted = String(err);
   } else {
     try {
-      formatted = JSON.stringify(err);
+      formatted = JSON.stringify(err) ?? safeObjectTag(err);
     } catch {
-      formatted = Object.prototype.toString.call(err);
+      formatted = safeObjectTag(err);
     }
+  }
+  return formatted;
+}
+
+export function formatErrorMessage(err: unknown): string {
+  let formatted: string;
+  try {
+    formatted = formatErrorMessageValue(err);
+  } catch {
+    formatted = safeObjectTag(err);
   }
   // Security: best-effort token redaction before returning/logging.
   return redactSensitiveText(formatted);
@@ -123,9 +141,9 @@ export function stringifyNonErrorCause(value: unknown): string {
     return String(value);
   }
   try {
-    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+    return JSON.stringify(value) ?? safeObjectTag(value);
   } catch {
-    return Object.prototype.toString.call(value);
+    return safeObjectTag(value);
   }
 }
 

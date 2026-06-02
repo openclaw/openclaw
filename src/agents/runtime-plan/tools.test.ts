@@ -330,6 +330,31 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     );
   });
 
+  it("passes assistant-runtime schema hook tolerance to RuntimePlan normalization", () => {
+    const tools = [createParameterFreeTool()] as AgentTool[];
+    const normalize = vi.fn(() => tools);
+    const runtimePlan = {
+      tools: {
+        normalize,
+        logDiagnostics: vi.fn(),
+      },
+    } as unknown as AgentRuntimePlan;
+
+    normalizeAgentRuntimeTools({
+      runtimePlan,
+      tools,
+      provider: "openai",
+      schemaHookFailureMode: "warn",
+    });
+
+    expect(normalize).toHaveBeenCalledWith(tools, {
+      workspaceDir: undefined,
+      modelApi: undefined,
+      model: undefined,
+      schemaHookFailureMode: "warn",
+    });
+  });
+
   it("routes diagnostics through RuntimePlan when a plan is available", () => {
     const tools = [createParameterFreeTool()] as AgentTool[];
     const model = createNativeOpenAIResponsesModel() as never;
@@ -355,6 +380,31 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       workspaceDir: "/tmp/openclaw-runtime-plan-tools",
       modelApi: "openai-responses",
       model,
+    });
+  });
+
+  it("passes assistant-runtime schema hook tolerance to RuntimePlan diagnostics", () => {
+    const tools = [createParameterFreeTool()] as AgentTool[];
+    const logDiagnostics = vi.fn();
+    const runtimePlan = {
+      tools: {
+        normalize: vi.fn(),
+        logDiagnostics,
+      },
+    } as unknown as AgentRuntimePlan;
+
+    logAgentRuntimeToolDiagnostics({
+      runtimePlan,
+      tools,
+      provider: "openai",
+      schemaHookFailureMode: "warn",
+    });
+
+    expect(logDiagnostics).toHaveBeenCalledWith(tools, {
+      workspaceDir: undefined,
+      modelApi: undefined,
+      model: undefined,
+      schemaHookFailureMode: "warn",
     });
   });
 });

@@ -174,6 +174,8 @@ export const rotateTranscriptAfterCompactionMock: Mock<
   rotated: false,
 }));
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
+export const runtimePlanNormalizeToolsMock = vi.fn((tools: unknown[]) => tools);
+export const runtimePlanLogDiagnosticsMock = vi.fn();
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -215,8 +217,8 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       preparedPlanning: {
         loadMetadataSnapshot: () => ({}),
       },
-      normalize: vi.fn((tools) => tools),
-      logDiagnostics: vi.fn(),
+      normalize: runtimePlanNormalizeToolsMock,
+      logDiagnostics: runtimePlanLogDiagnosticsMock,
     },
     transcript: {
       policy: transcriptPolicy,
@@ -336,6 +338,9 @@ export function resetCompactSessionStateMocks(): void {
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
+  runtimePlanNormalizeToolsMock.mockReset();
+  runtimePlanNormalizeToolsMock.mockImplementation((tools: unknown[]) => tools);
+  runtimePlanLogDiagnosticsMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
     params?.surface === "subagent"

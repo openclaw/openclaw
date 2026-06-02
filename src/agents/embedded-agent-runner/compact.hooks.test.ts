@@ -24,6 +24,8 @@ import {
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
+  runtimePlanLogDiagnosticsMock,
+  runtimePlanNormalizeToolsMock,
   resolveSandboxContextMock,
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
@@ -494,6 +496,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       (sessionOptions.customTools as Array<{ name: string }>).map((tool) => tool.name),
     ).toEqual(["healthy_lookup"]);
     expect(sessionOptions.tools).toEqual(["healthy_lookup"]);
+  });
+
+  it("uses assistant-tolerant provider schema hooks during compaction tool projection", async () => {
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    resolveModelMock.mockReturnValueOnce({
+      model: { provider: "openai", api: "openai-responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: "healthy_lookup",
+        label: "Healthy Lookup",
+        description: "Look up safe data.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "ok" }),
+      },
+    ] as never);
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      runId: "run-tool-schema-hook-tolerance",
+    });
+
+    expect(runtimePlanNormalizeToolsMock).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "healthy_lookup" })]),
+      expect.objectContaining({
+        schemaHookFailureMode: "warn",
+      }),
+    );
+    expect(runtimePlanLogDiagnosticsMock).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "healthy_lookup" })]),
+      expect.objectContaining({
+        schemaHookFailureMode: "warn",
+      }),
+    );
   });
 
   it("clamps the caller context token budget to the compaction model", async () => {

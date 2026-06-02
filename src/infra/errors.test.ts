@@ -16,6 +16,34 @@ function createCircularObject() {
   return circular;
 }
 
+function createHostileToStringTagFunction() {
+  return new Proxy(() => undefined, {
+    get(target, property, receiver) {
+      if (property === Symbol.toStringTag) {
+        throw new Error("tag exploded");
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+function createHostilePrototypeObject() {
+  return new Proxy(
+    {},
+    {
+      getPrototypeOf() {
+        throw new Error("prototype exploded");
+      },
+    },
+  );
+}
+
+function createRevokedProxy() {
+  const proxy = Proxy.revocable({}, {});
+  proxy.revoke();
+  return proxy.proxy;
+}
+
 describe("error helpers", () => {
   it.each([
     { value: { code: "EADDRINUSE" }, expected: "EADDRINUSE" },
@@ -65,6 +93,12 @@ describe("error helpers", () => {
     { value: 123n, expected: "123" },
     { value: false, expected: "false" },
     { value: createCircularObject(), expected: "[object Object]" },
+    { value: undefined, expected: "[object Undefined]" },
+    { value: Symbol("fuzz"), expected: "[object Symbol]" },
+    { value: () => undefined, expected: "[object Function]" },
+    { value: createHostileToStringTagFunction(), expected: "[object Function]" },
+    { value: createHostilePrototypeObject(), expected: "[object Object]" },
+    { value: createRevokedProxy(), expected: "[object Unknown]" },
   ])("formats error messages for case %#", ({ value, expected }) => {
     expect(formatErrorMessage(value)).toBe(expected);
   });

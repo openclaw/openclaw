@@ -301,6 +301,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelId: params.modelId,
     modelApi: params.model.api,
     model: params.model,
+    schemaHookFailureMode: "warn",
     onPreNormalizationSchemaDiagnostics: (diagnostics) =>
       preNormalizationDiagnostics.push(...diagnostics),
   });

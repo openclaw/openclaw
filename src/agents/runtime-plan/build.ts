@@ -291,11 +291,15 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
           workspaceDir?: string;
           modelApi?: string;
           model?: BuildAgentRuntimePlanParams["model"];
+          schemaHookFailureMode?: "throw" | "warn";
         },
       ): AgentTool<TSchemaType, TResult>[] {
         return normalizeProviderToolSchemas({
           ...resolveToolContext(overrides),
           tools,
+          ...(overrides?.schemaHookFailureMode
+            ? { hookFailureMode: overrides.schemaHookFailureMode }
+            : {}),
         });
       },
       logDiagnostics(
@@ -304,11 +308,15 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
           workspaceDir?: string;
           modelApi?: string;
           model?: BuildAgentRuntimePlanParams["model"];
+          schemaHookFailureMode?: "throw" | "warn";
         },
       ): void {
         logProviderToolSchemaDiagnostics({
           ...resolveToolContext(overrides),
           tools,
+          ...(overrides?.schemaHookFailureMode
+            ? { hookFailureMode: overrides.schemaHookFailureMode }
+            : {}),
         });
       },
     },

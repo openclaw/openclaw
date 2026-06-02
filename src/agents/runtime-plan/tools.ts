@@ -27,6 +27,7 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
+  schemaHookFailureMode?: "throw" | "warn";
   onPreNormalizationSchemaDiagnostics?: (
     diagnostics: readonly RuntimeToolSchemaDiagnostic[],
     tools: readonly AgentTool<TSchemaType, TResult>[],
@@ -37,11 +38,15 @@ function runtimePlanToolContext(params: {
   workspaceDir?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  schemaHookFailureMode?: "throw" | "warn";
 }) {
   return {
     workspaceDir: params.workspaceDir,
     modelApi: params.modelApi ?? undefined,
     model: params.model,
+    ...(params.schemaHookFailureMode
+      ? { schemaHookFailureMode: params.schemaHookFailureMode }
+      : {}),
   };
 }
 
@@ -110,6 +115,7 @@ export function normalizeAgentRuntimeTools<
       model: params.model,
       runtimeHandle: params.runtimeHandle,
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+      ...(params.schemaHookFailureMode ? { hookFailureMode: params.schemaHookFailureMode } : {}),
     });
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
@@ -131,5 +137,6 @@ export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyPar
     modelApi: params.modelApi,
     model: params.model,
     runtimeHandle: params.runtimeHandle,
+    ...(params.schemaHookFailureMode ? { hookFailureMode: params.schemaHookFailureMode } : {}),
   });
 }

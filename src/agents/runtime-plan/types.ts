@@ -356,6 +356,7 @@ export type AgentRuntimeToolPlan = {
       workspaceDir?: string;
       modelApi?: string;
       model?: AgentRuntimeModel;
+      schemaHookFailureMode?: "throw" | "warn";
     },
   ): AgentTool<TSchemaType, TResult>[];
   logDiagnostics(
@@ -364,6 +365,7 @@ export type AgentRuntimeToolPlan = {
       workspaceDir?: string;
       modelApi?: string;
       model?: AgentRuntimeModel;
+      schemaHookFailureMode?: "throw" | "warn";
     },
   ): void;
 };

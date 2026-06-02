@@ -1,5 +1,7 @@
 import type { TSchema } from "typebox";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -22,6 +24,7 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
+  hookFailureMode?: "throw" | "warn";
 };
 
 function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
@@ -40,6 +43,23 @@ function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, T
   };
 }
 
+function warnProviderToolSchemaHookFailure(params: {
+  provider: string;
+  hookName: "normalizeToolSchemas" | "inspectToolSchemas";
+  toolCount: number;
+  error: unknown;
+}): void {
+  const provider = sanitizeForLog(params.provider);
+  log.warn(
+    `provider tool schema ${params.hookName} hook failed for ${provider}; keeping current runtime tools: ${sanitizeForLog(formatErrorMessage(params.error))}`,
+    {
+      provider,
+      hookName: params.hookName,
+      toolCount: params.toolCount,
+    },
+  );
+}
+
 /**
  * Runs provider-owned tool-schema normalization without encoding provider
  * families in the embedded runner.
@@ -49,15 +69,29 @@ export function normalizeProviderToolSchemas<
   TResult = unknown,
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const provider = params.provider.trim();
-  const pluginNormalized = normalizeProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  let pluginNormalized: unknown;
+  try {
+    pluginNormalized = normalizeProviderToolSchemasWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+      context: buildProviderToolSchemaContext(params, provider),
+    });
+  } catch (error) {
+    if (params.hookFailureMode !== "warn") {
+      throw error;
+    }
+    warnProviderToolSchemaHookFailure({
+      provider,
+      hookName: "normalizeToolSchemas",
+      toolCount: params.tools.length,
+      error,
+    });
+    return params.tools;
+  }
   return Array.isArray(pluginNormalized)
     ? (pluginNormalized as AgentTool<TSchemaType, TResult>[])
     : params.tools;
@@ -68,15 +102,29 @@ export function normalizeProviderToolSchemas<
  */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const provider = params.provider.trim();
-  const diagnostics = inspectProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  let diagnostics: unknown;
+  try {
+    diagnostics = inspectProviderToolSchemasWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+      context: buildProviderToolSchemaContext(params, provider),
+    });
+  } catch (error) {
+    if (params.hookFailureMode !== "warn") {
+      throw error;
+    }
+    warnProviderToolSchemaHookFailure({
+      provider,
+      hookName: "inspectToolSchemas",
+      toolCount: params.tools.length,
+      error,
+    });
+    return;
+  }
   if (!Array.isArray(diagnostics)) {
     return;
   }

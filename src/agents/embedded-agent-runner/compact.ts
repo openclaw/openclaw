@@ -829,6 +829,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       workspaceDir: effectiveWorkspace,
       modelApi: model.api,
       model,
+      schemaHookFailureMode: "warn" as const,
     };
     const normalizableToolProjection = filterProviderNormalizableTools(
       toolsEnabled ? toolsRaw : [],

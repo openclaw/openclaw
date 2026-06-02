@@ -223,6 +223,32 @@ describe("Codex app-server dynamic tool build", () => {
     await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
   });
 
+  it("uses assistant-tolerant provider schema hooks for dynamic tool projection", async () => {
+    const messageTool = createRuntimeDynamicTool("message");
+    setOpenClawCodingToolsFactoryForTests(() => [messageTool]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const normalize = vi.fn((tools: unknown[]) => tools);
+    params.disableTools = false;
+    params.runtimePlan = {
+      ...createCodexRuntimePlanFixture(),
+      tools: {
+        normalize,
+        logDiagnostics: () => undefined,
+      },
+    } as never;
+
+    await expect(buildDynamicToolsForTest(params, workspaceDir)).resolves.toEqual([messageTool]);
+
+    expect(normalize).toHaveBeenCalledWith([messageTool], {
+      workspaceDir,
+      modelApi: params.model.api,
+      model: params.model,
+      schemaHookFailureMode: "warn",
+    });
+  });
+
   it("limits Codex memory flush runs to managed read and write tools", async () => {
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
