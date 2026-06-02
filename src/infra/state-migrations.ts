@@ -1438,11 +1438,6 @@ async function migrateLegacyPluginStateSidecar(params: {
         `Migrated ${imported} plugin-state sidecar ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
       );
     }
-    if (skippedExpired > 0) {
-      changes.push(
-        `Dropped ${skippedExpired} expired plugin-state sidecar ${skippedExpired === 1 ? "entry" : "entries"}`,
-      );
-    }
     if (conflictedKeys.length > 0) {
       return {
         changes,
@@ -1450,6 +1445,11 @@ async function migrateLegacyPluginStateSidecar(params: {
           `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${conflictedKeys[0]}`,
         ],
       };
+    }
+    if (skippedExpired > 0) {
+      changes.push(
+        `Dropped ${skippedExpired} expired plugin-state sidecar ${skippedExpired === 1 ? "entry" : "entries"}`,
+      );
     }
   } catch (err) {
     return {
