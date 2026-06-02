@@ -47,6 +47,7 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
+  type TelegramGroupHistoryContextMode,
   includesRecentTelegramGroupHistoryContext,
   resolveTelegramGroupHistoryContextModeForAccount,
 } from "./group-history-context.js";
@@ -215,6 +216,7 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
@@ -264,6 +266,7 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     groupHistories,
+    groupHistoryContextMode,
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
@@ -419,10 +422,11 @@ export async function buildTelegramInboundContextPayload(params: {
   const includeRecentGroupHistoryContext =
     isGroup &&
     includesRecentTelegramGroupHistoryContext(
-      resolveTelegramGroupHistoryContextModeForAccount({
-        cfg,
-        accountId: route.accountId,
-      }),
+      groupHistoryContextMode ??
+        resolveTelegramGroupHistoryContextModeForAccount({
+          cfg,
+          accountId: route.accountId,
+        }),
     );
   let combinedBody = body;
   if (includeRecentGroupHistoryContext && historyKey && historyLimit > 0) {
