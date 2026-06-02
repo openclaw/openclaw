@@ -6,6 +6,7 @@ import {
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  isPlatformMismatchOnly,
   resolveSkillStatusEntry,
   type SkillStatusEntry,
   type SkillStatusReport,
@@ -339,7 +340,20 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
   const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.blockedByAgentFilter,
+    (s) =>
+      !s.eligible &&
+      !s.disabled &&
+      !s.blockedByAllowlist &&
+      !s.blockedByAgentFilter &&
+      !isPlatformMismatchOnly(s),
+  );
+  const platformMismatch = report.skills.filter(
+    (s) =>
+      !s.eligible &&
+      !s.disabled &&
+      !s.blockedByAllowlist &&
+      !s.blockedByAgentFilter &&
+      isPlatformMismatchOnly(s),
   );
   const agentId = report.agentId ?? opts.agent;
 
@@ -360,6 +374,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           agentFiltered: agentFiltered.length,
           notInjected: promptHidden.length,
           missingRequirements: missingReqs.length,
+          platformIncompatible: platformMismatch.length,
         },
         eligible: eligible.map((s) => s.name),
         modelVisible: modelVisible.map((s) => s.name),
@@ -375,6 +390,10 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           name: s.name,
           missing: s.missing,
           install: s.install,
+        })),
+        platformIncompatible: platformMismatch.map((s) => ({
+          name: s.name,
+          required: s.requirements.os,
         })),
       }),
       null,
@@ -411,6 +430,11 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     );
   }
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
+  if (platformMismatch.length > 0) {
+    lines.push(
+      `${theme.warn("⟳")} ${theme.muted("Platform incompatible:")} ${platformMismatch.length}`,
+    );
+  }
 
   if (modelVisible.length > 0 || commandVisible.length > 0 || promptHidden.length > 0) {
     lines.push("");
@@ -477,6 +501,18 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       const missing = formatSkillMissingSummary(skill);
       lines.push(
         `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${missing})`)}`,
+      );
+    }
+  }
+
+  if (platformMismatch.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Platform incompatible (not designed for this OS):"));
+    for (const skill of platformMismatch) {
+      const emoji = normalizeSkillEmoji(skill.emoji);
+      const osList = skill.requirements.os.join(", ");
+      lines.push(
+        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(requires: ${osList})`)}`,
       );
     }
   }

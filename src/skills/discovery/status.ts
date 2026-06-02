@@ -78,6 +78,22 @@ export type SkillStatusReport = {
   skills: SkillStatusEntry[];
 };
 
+/**
+ * Skills whose ONLY missing requirement is an OS platform mismatch (e.g. a
+ * macOS-only skill running on Windows) are not broken installs — the skill
+ * was never designed for this platform.  Callers should surface these as
+ * "platform incompatible" rather than "missing requirements".
+ */
+export function isPlatformMismatchOnly(skill: SkillStatusEntry): boolean {
+  return (
+    skill.missing.os.length > 0 &&
+    skill.missing.bins.length === 0 &&
+    skill.missing.anyBins.length === 0 &&
+    skill.missing.env.length === 0 &&
+    skill.missing.config.length === 0
+  );
+}
+
 export function resolveSkillStatusEntry(
   skills: readonly SkillStatusEntry[],
   requestedName: string,

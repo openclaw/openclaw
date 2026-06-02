@@ -17,9 +17,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Module under test imports these at module scope.
-vi.mock("../skills/discovery/status.js", () => ({
-  buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
-}));
+vi.mock("../skills/discovery/status.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../skills/discovery/status.js")>();
+  return {
+    ...actual,
+    buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
+  };
+});
 vi.mock("../skills/lifecycle/install.js", () => ({
   installSkill: mocks.installSkill,
 }));

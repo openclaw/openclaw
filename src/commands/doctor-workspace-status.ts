@@ -6,7 +6,10 @@ import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
-import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import {
+  buildWorkspaceSkillStatus,
+  isPlatformMismatchOnly,
+} from "../skills/discovery/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
@@ -60,17 +63,18 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   }
 
   const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
-  note(
-    [
-      `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
-      `Missing requirements: ${
-        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
-          .length
-      }`,
-      `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
-    ].join("\n"),
-    "Skills status",
+  const ineligibleSkills = skillsReport.skills.filter(
+    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
+  const platformMismatchSkills = ineligibleSkills.filter(isPlatformMismatchOnly);
+  const genuinelyMissing = ineligibleSkills.filter((s) => !isPlatformMismatchOnly(s));
+  const lines = [
+    `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
+    `Missing requirements: ${genuinelyMissing.length}`,
+    `Platform incompatible: ${platformMismatchSkills.length}`,
+    `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
+  ];
+  note(lines.join("\n"), "Skills status");
 
   const pluginRegistry = buildPluginRegistrySnapshotReport({
     config: cfg,
