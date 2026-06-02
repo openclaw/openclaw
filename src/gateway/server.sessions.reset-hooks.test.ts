@@ -25,6 +25,23 @@ type HookEventRecord = Record<string, unknown> & {
   messages?: Array<{ role?: string; content?: unknown }>;
 };
 
+type CommandNewHookEvent = {
+  type: string;
+  action: string;
+  sessionKey?: string;
+  context?: {
+    commandSource?: string;
+    previousSessionEntry?: { sessionId?: string };
+  };
+};
+
+type SessionEntryWithCliBindings = {
+  sessionId?: string;
+  claudeCliSessionId?: string;
+  cliSessionBindings?: unknown;
+  cliSessionIds?: unknown;
+};
+
 function firstHookCall(mock: { mock: { calls: unknown[][] } }): [HookEventRecord, HookEventRecord] {
   const call = mock.mock.calls.at(0);
   if (!call) {
@@ -101,6 +118,27 @@ async function configureGlobalAgentSessionStore(dir: string) {
   };
 }
 
+async function withGlobalAgentSessionStore<T>(
+  dir: string,
+  run: (globalConfig: Awaited<ReturnType<typeof configureGlobalAgentSessionStore>>) => Promise<T>,
+) {
+  const globalConfig = await configureGlobalAgentSessionStore(dir);
+  try {
+    return await run(globalConfig);
+  } finally {
+    await globalConfig.cleanup();
+  }
+}
+
+async function writeGlobalSessionFile(storePath: string, sessionId: string) {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({ global: sessionStoreEntry(sessionId) }, null, 2),
+    "utf-8",
+  );
+}
+
 async function writeMessageTranscript(params: {
   dir: string;
   sessionId: string;
@@ -151,12 +189,25 @@ async function writeMainSessionEntry(
 }
 
 async function resetMainSession() {
+  return resetSession("main");
+}
+
+async function resetSession(key: string) {
   const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
-    key: "main",
+    key,
     reason: "new",
   });
   expect(reset.ok).toBe(true);
   return reset;
+}
+
+async function createFromMainSession(params: { emitCommandHooks?: boolean } = {}) {
+  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
+    parentSessionKey: "main",
+    ...params,
+  });
+  expect(result.ok).toBe(true);
+  return result;
 }
 
 async function performSessionReset(params: {
@@ -180,16 +231,31 @@ function expectResetErrorMessage(
   expect(reset.error.message).toBe(message);
 }
 
+function isCommandNewHookEvent(event: unknown): event is CommandNewHookEvent {
+  return (
+    Boolean(event) &&
+    typeof event === "object" &&
+    (event as { type?: unknown }).type === "command" &&
+    (event as { action?: unknown }).action === "new"
+  );
+}
+
 function commandNewHookEvents() {
   return (sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>)
     .map((call) => call[0])
-    .filter(
-      (event): event is { type: string; action: string; context?: { commandSource?: string } } =>
-        Boolean(event) &&
-        typeof event === "object" &&
-        (event as { type?: unknown }).type === "command" &&
-        (event as { action?: unknown }).action === "new",
-    );
+    .filter(isCommandNewHookEvent);
+}
+
+function expectSingleCommandNewHookEvent() {
+  const events = commandNewHookEvents();
+  expect(events).toHaveLength(1);
+  const event = events[0];
+  if (!event) {
+    throw new Error("expected session hook event");
+  }
+  expect(event.type).toBe("command");
+  expect(event.action).toBe("new");
+  return event;
 }
 
 function claudeCliBindings(sessionId: string) {
@@ -202,18 +268,69 @@ function claudeCliBindings(sessionId: string) {
   };
 }
 
-async function loadGatewaySessionStoreForKey(key: string) {
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { loadSessionStore }] =
-    await Promise.all([
-      import("../config/config.js"),
-      import("./session-utils.js"),
-      import("../config/sessions.js"),
-    ]);
-  const gatewayStorePath = resolveGatewaySessionStoreTarget({
+function cliBoundSessionEntry(
+  sessionId: string,
+  sessionFile: string,
+  cliSessionId: string,
+  overrides: Parameters<typeof sessionStoreEntry>[1] = {},
+) {
+  return sessionStoreEntry(sessionId, {
+    sessionFile,
+    ...overrides,
+    ...claudeCliBindings(cliSessionId),
+  });
+}
+
+async function resolveGatewaySessionStorePathForKey(key: string) {
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }] = await Promise.all([
+    import("../config/config.js"),
+    import("./session-utils.js"),
+  ]);
+  return resolveGatewaySessionStoreTarget({
     cfg: getRuntimeConfig(),
     key,
   }).storePath;
+}
+
+async function loadGatewaySessionStoreForKey(key: string) {
+  const [{ loadSessionStore }, gatewayStorePath] = await Promise.all([
+    import("../config/sessions.js"),
+    resolveGatewaySessionStorePathForKey(key),
+  ]);
   return loadSessionStore(gatewayStorePath, { skipCache: true });
+}
+
+async function updateGatewaySessionStoreForKey(
+  key: string,
+  update: Parameters<(typeof import("../config/sessions.js"))["updateSessionStore"]>[1],
+) {
+  const [{ updateSessionStore }, gatewayStorePath] = await Promise.all([
+    import("../config/sessions.js"),
+    resolveGatewaySessionStorePathForKey(key),
+  ]);
+  await updateSessionStore(gatewayStorePath, update);
+}
+
+function expectCliBindingsCleared(
+  nextEntry: SessionEntryWithCliBindings | undefined,
+  previousSessionId: string,
+) {
+  expect(nextEntry).toBeDefined();
+  expect(nextEntry?.sessionId).not.toBe(previousSessionId);
+  expect(nextEntry?.claudeCliSessionId).toBeUndefined();
+  expect(nextEntry?.cliSessionBindings).toBeUndefined();
+  expect(nextEntry?.cliSessionIds).toBeUndefined();
+}
+
+function expectClaudeCliBinding(
+  nextEntry: SessionEntryWithCliBindings | undefined,
+  cliSessionId: string,
+) {
+  expect(nextEntry?.claudeCliSessionId).toBe(cliSessionId);
+  expect(nextEntry?.cliSessionBindings).toEqual({
+    "claude-cli": { sessionId: cliSessionId },
+  });
+  expect(nextEntry?.cliSessionIds).toEqual({ "claude-cli": cliSessionId });
 }
 
 test("sessions.reset emits internal command hook with reason", async () => {
@@ -223,34 +340,7 @@ test("sessions.reset emits internal command hook with reason", async () => {
   await writeMainSessionEntry("sess-main");
 
   await resetMainSession();
-  const resetHookEvents = (
-    sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
-  )
-    .map((call) => call[0])
-    .filter(
-      (
-        event,
-      ): event is {
-        type: string;
-        action: string;
-        sessionKey?: string;
-        context?: {
-          commandSource?: string;
-          previousSessionEntry?: { sessionId?: string };
-        };
-      } =>
-        Boolean(event) &&
-        typeof event === "object" &&
-        (event as { type?: unknown }).type === "command" &&
-        (event as { action?: unknown }).action === "new",
-    );
-  expect(resetHookEvents).toHaveLength(1);
-  const event = resetHookEvents[0];
-  if (!event) {
-    throw new Error("expected session hook event");
-  }
-  expect(event.type).toBe("command");
-  expect(event.action).toBe("new");
+  const event = expectSingleCommandNewHookEvent();
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
@@ -266,11 +356,7 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
 
   beforeResetHookState.hasBeforeResetHook = true;
 
-  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
-    key: "main",
-    reason: "new",
-  });
-  expect(reset.ok).toBe(true);
+  await resetMainSession();
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
   expectTranscriptResetEvent({
@@ -283,27 +369,15 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
 
 test("sessions.reset infers selected global agent from agent-prefixed aliases", async () => {
   const { dir } = await createSessionStoreDir();
-  const globalConfig = await configureGlobalAgentSessionStore(dir);
-  await writeSessionStore({
-    entries: {},
-    storePath: path.join(dir, "prime-sessions.json"),
-  });
-  await fs.mkdir(path.dirname(globalConfig.mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(globalConfig.workStorePath), { recursive: true });
-  await fs.writeFile(
-    globalConfig.mainStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
-    "utf-8",
-  );
-  await fs.writeFile(
-    globalConfig.workStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
-    "utf-8",
-  );
-  const { getRuntimeConfig } = await import("../config/config.js");
-  const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
-
-  try {
+  await withGlobalAgentSessionStore(dir, async (globalConfig) => {
+    await writeSessionStore({
+      entries: {},
+      storePath: path.join(dir, "prime-sessions.json"),
+    });
+    await writeGlobalSessionFile(globalConfig.mainStorePath, "sess-main-global");
+    await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
+    const { getRuntimeConfig } = await import("../config/config.js");
+    const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
     const { performGatewaySessionReset } = await import("./session-reset-service.js");
     const reset = await performGatewaySessionReset({
       key: "agent:work:main",
@@ -331,16 +405,12 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     expect(mainStore.global?.sessionId).toBe("sess-main-global");
     expect(workStore.global?.sessionId).toBe(reset.entry.sessionId);
     expect(workStore.global?.sessionId).not.toBe("sess-work-global");
-  } finally {
-    await globalConfig.cleanup();
-  }
+  });
 });
 
 test("sessions.reset rejects selected global agentId conflicts", async () => {
   const { dir } = await createSessionStoreDir();
-  const globalConfig = await configureGlobalAgentSessionStore(dir);
-
-  try {
+  await withGlobalAgentSessionStore(dir, async () => {
     const reset = await performSessionReset({
       key: "agent:main:main",
       agentId: "work",
@@ -349,16 +419,12 @@ test("sessions.reset rejects selected global agentId conflicts", async () => {
     });
 
     expectResetErrorMessage(reset, "session key agent does not match agentId");
-  } finally {
-    await globalConfig.cleanup();
-  }
+  });
 });
 
 test("sessions.reset rejects unknown selected global agents", async () => {
   const { dir } = await createSessionStoreDir();
-  const globalConfig = await configureGlobalAgentSessionStore(dir);
-
-  try {
+  await withGlobalAgentSessionStore(dir, async () => {
     const reset = await performSessionReset({
       key: "agent:typo:main",
       reason: "reset",
@@ -366,22 +432,13 @@ test("sessions.reset rejects unknown selected global agents", async () => {
     });
 
     expectResetErrorMessage(reset, "Unknown agent id: typo");
-  } finally {
-    await globalConfig.cleanup();
-  }
+  });
 });
 
 test("sessions.reset emits inferred selected global agent scope", async () => {
   const { dir } = await createSessionStoreDir();
-  const globalConfig = await configureGlobalAgentSessionStore(dir);
-  await fs.mkdir(path.dirname(globalConfig.workStorePath), { recursive: true });
-  await fs.writeFile(
-    globalConfig.workStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
-    "utf-8",
-  );
-
-  try {
+  await withGlobalAgentSessionStore(dir, async (globalConfig) => {
+    await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
     const broadcast = vi.fn();
     const reset = await directSessionReq<{ ok: true; key: string }>(
       "sessions.reset",
@@ -404,9 +461,7 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
       }),
     );
     expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
-  } finally {
-    await globalConfig.cleanup();
-  }
+  });
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
@@ -417,11 +472,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     content: "hello from transcript",
   });
 
-  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
-    key: "main",
-    reason: "new",
-  });
-  expect(reset.ok).toBe(true);
+  await resetMainSession();
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
@@ -507,25 +558,13 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   });
 
   beforeResetHookState.hasBeforeResetHook = true;
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { updateSessionStore }] =
-    await Promise.all([
-      import("../config/config.js"),
-      import("./session-utils.js"),
-      import("../config/sessions.js"),
-    ]);
-  const gatewayStorePath = resolveGatewaySessionStoreTarget({
-    cfg: getRuntimeConfig(),
-    key: "main",
-  }).storePath;
-
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  await updateSessionStore(gatewayStorePath, (store) => {
+  await updateGatewaySessionStoreForKey("main", (store) => {
     store["agent:main:main"] = sessionStoreEntry("sess-new", {
       sessionFile: newTranscriptPath,
     });
   });
 
-  const reset = await performGatewaySessionReset({
+  const reset = await performSessionReset({
     key: "main",
     reason: "new",
     commandSource: "gateway:sessions.reset",
@@ -545,23 +584,11 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-parent", "hello from parent");
 
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-parent"),
-    },
-  });
+  await writeMainSessionEntry("sess-parent");
 
-  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-  });
-  expect(result.ok).toBe(true);
+  await createFromMainSession({ emitCommandHooks: true });
 
-  const commandNewEvents = commandNewHookEvents();
-  expect(commandNewEvents).toHaveLength(1);
-  expect(commandNewEvents[0]?.type).toBe("command");
-  expect(commandNewEvents[0]?.action).toBe("new");
-  expect(commandNewEvents[0]?.context?.commandSource).toBe("webchat");
+  expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
@@ -574,11 +601,7 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
 
   beforeResetHookState.hasBeforeResetHook = true;
 
-  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-  });
-  expect(result.ok).toBe(true);
+  await createFromMainSession({ emitCommandHooks: true });
 
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   const [beforeResetEvent, beforeResetContext] = firstHookCall(beforeResetHookMocks.runBeforeReset);
@@ -657,16 +680,9 @@ test("sessions.create without emitCommandHooks does not fire command:new hook (#
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");
 
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-parent2"),
-    },
-  });
+  await writeMainSessionEntry("sess-parent2");
 
-  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
-    parentSessionKey: "main",
-  });
-  expect(result.ok).toBe(true);
+  await createFromMainSession();
 
   expect(commandNewHookEvents()).toHaveLength(0);
   expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
@@ -683,12 +699,7 @@ test("sessions.reset drops cli session bindings so the next turn does not --resu
   await resetMainSession();
 
   const store = await loadGatewaySessionStoreForKey("main");
-  const nextEntry = store["agent:main:main"];
-  expect(nextEntry).toBeDefined();
-  expect(nextEntry?.sessionId).not.toBe("sess-with-binding");
-  expect(nextEntry?.claudeCliSessionId).toBeUndefined();
-  expect(nextEntry?.cliSessionBindings).toBeUndefined();
-  expect(nextEntry?.cliSessionIds).toBeUndefined();
+  expectCliBindingsCleared(store["agent:main:main"], "sess-with-binding");
 });
 
 test("sessions.reset clears cli session bindings for parent-linked non-subagent sessions (e.g. dashboard children)", async () => {
@@ -702,31 +713,25 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
 
   await writeSessionStore({
     entries: {
-      "dashboard:child:42": sessionStoreEntry("sess-dashboard-child", {
-        sessionFile: dashboardTranscript,
-        // parentSessionKey is set but the session key carries no `:subagent:`
-        // marker, so this is a user-facing parent-linked session, not a
-        // spawned subagent. The tighter predicate should still clear the
-        // CLI binding here so /reset matches user intuition.
-        parentSessionKey: "agent:main:main",
-        ...claudeCliBindings("claude-cli-dashboard-session"),
-      }),
+      "dashboard:child:42": cliBoundSessionEntry(
+        "sess-dashboard-child",
+        dashboardTranscript,
+        "claude-cli-dashboard-session",
+        {
+          // parentSessionKey is set but the session key carries no `:subagent:`
+          // marker, so this is a user-facing parent-linked session, not a
+          // spawned subagent. The tighter predicate should still clear the
+          // CLI binding here so /reset matches user intuition.
+          parentSessionKey: "agent:main:main",
+        },
+      ),
     },
   });
 
-  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
-    key: "dashboard:child:42",
-    reason: "new",
-  });
-  expect(reset.ok).toBe(true);
+  await resetSession("dashboard:child:42");
 
   const store = await loadGatewaySessionStoreForKey("dashboard:child:42");
-  const nextEntry = store["agent:main:dashboard:child:42"];
-  expect(nextEntry).toBeDefined();
-  expect(nextEntry?.sessionId).not.toBe("sess-dashboard-child");
-  expect(nextEntry?.claudeCliSessionId).toBeUndefined();
-  expect(nextEntry?.cliSessionBindings).toBeUndefined();
-  expect(nextEntry?.cliSessionIds).toBeUndefined();
+  expectCliBindingsCleared(store["agent:main:dashboard:child:42"], "sess-dashboard-child");
 });
 
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
@@ -740,29 +745,24 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
 
   await writeSessionStore({
     entries: {
-      "subagent:child": sessionStoreEntry("sess-spawned-child", {
-        sessionFile: childTranscript,
-        parentSessionKey: "agent:main:main",
-        spawnedBy: "agent:main:main",
-        subagentRole: "orchestrator",
-        ...claudeCliBindings("claude-cli-child-session"),
-      }),
+      "subagent:child": cliBoundSessionEntry(
+        "sess-spawned-child",
+        childTranscript,
+        "claude-cli-child-session",
+        {
+          parentSessionKey: "agent:main:main",
+          spawnedBy: "agent:main:main",
+          subagentRole: "orchestrator",
+        },
+      ),
     },
   });
 
-  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
-    key: "subagent:child",
-    reason: "new",
-  });
-  expect(reset.ok).toBe(true);
+  await resetSession("subagent:child");
 
   const store = await loadGatewaySessionStoreForKey("subagent:child");
   const nextEntry = store["agent:main:subagent:child"];
   expect(nextEntry).toBeDefined();
   expect(nextEntry?.sessionId).not.toBe("sess-spawned-child");
-  expect(nextEntry?.claudeCliSessionId).toBe("claude-cli-child-session");
-  expect(nextEntry?.cliSessionBindings).toEqual({
-    "claude-cli": { sessionId: "claude-cli-child-session" },
-  });
-  expect(nextEntry?.cliSessionIds).toEqual({ "claude-cli": "claude-cli-child-session" });
+  expectClaudeCliBinding(nextEntry, "claude-cli-child-session");
 });

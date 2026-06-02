@@ -76,6 +76,13 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).toContain('"--- local registry output ---"');
   });
 
+  it("waits for the local registry process during cleanup", () => {
+    const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
+
+    expect(script).toContain('openclaw_e2e_stop_process "${registry_pid:-}"');
+    expect(script).not.toContain('kill "$registry_pid"');
+  });
+
   it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 

@@ -17,6 +17,7 @@ import {
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
+import type { AuthCredentialReasonCode } from "../../agents/auth-profiles/credential-state.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
@@ -63,6 +64,7 @@ export type ModelAuthStatusProfile = {
   profileId: string;
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
+  reasonCode?: AuthCredentialReasonCode;
   expiry?: ModelAuthExpiry;
 };
 
@@ -220,8 +222,10 @@ export function aggregateOAuthStatus(
   // Priority: expired/missing > expiring > ok > static. Exhaustive — if a
   // new AuthProfileHealthStatus variant is added, the `never` check fires.
   let status: AuthProviderHealthStatus;
-  if (statuses.has("expired") || statuses.has("missing")) {
+  if (statuses.has("expired")) {
     status = "expired";
+  } else if (statuses.has("missing")) {
+    status = "missing";
   } else if (statuses.has("expiring")) {
     status = "expiring";
   } else if (statuses.has("ok")) {
@@ -266,6 +270,7 @@ function mapProvider(
       profileId: prof.profileId,
       type: prof.type,
       status: prof.status,
+      reasonCode: prof.reasonCode,
       expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
     })),
     usage: usage

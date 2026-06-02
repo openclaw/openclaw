@@ -188,6 +188,22 @@ function buildProfileHealth(params: {
     };
   }
 
+  const eligibility = evaluateStoredCredentialEligibility({
+    credential: healthCredential,
+    now,
+  });
+  if (!eligibility.eligible) {
+    return {
+      profileId,
+      provider,
+      type: "oauth",
+      status: eligibility.reasonCode === "expired" ? "expired" : "missing",
+      reasonCode: eligibility.reasonCode,
+      source,
+      label,
+    };
+  }
+
   const effectiveCredential = resolveEffectiveOAuthCredential({
     profileId,
     credential: healthCredential,

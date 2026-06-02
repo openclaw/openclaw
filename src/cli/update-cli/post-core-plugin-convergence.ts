@@ -5,12 +5,12 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
-import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/update.js";
+} from "../../plugins/official-external-install-records.js";
+import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
+import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import { VERSION } from "../../version.js";
 import {
   runPluginPayloadSmokeCheck,
@@ -45,6 +45,35 @@ export type PostCoreConvergenceResult = {
 const REPAIR_GUIDANCE = "Run `openclaw doctor --fix` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
+
+function isBlockingRepairFailure(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  records: Record<string, PluginInstallRecord>;
+  smokeRecords: Record<string, PluginInstallRecord>;
+}): boolean {
+  if (Object.hasOwn(params.smokeRecords, params.pluginId)) {
+    return true;
+  }
+  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
+  const enableState = resolveEffectiveEnableState({
+    id: params.pluginId,
+    origin: "global",
+    config: normalizedPluginConfig,
+    rootConfig: params.cfg,
+  });
+  if (enableState.enabled) {
+    return true;
+  }
+  const record = params.records[params.pluginId];
+  if (!record) {
+    return false;
+  }
+  return Boolean(
+    resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: params.pluginId, record }) ||
+    resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId: params.pluginId, record }),
+  );
+}
 
 async function repairManagedNpmOpenClawPeerLinks(params: {
   env: NodeJS.ProcessEnv;
@@ -136,6 +165,14 @@ export async function runPostCorePluginConvergence(params: {
   // configured plugin whose payload was deleted on disk would block the
   // entire update — even though the gateway will never load that plugin.
   const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
+  const blockingFailedPluginIds = (repair.failedPluginIds ?? []).filter((pluginId) =>
+    isBlockingRepairFailure({
+      cfg: params.cfg,
+      pluginId,
+      records,
+      smokeRecords,
+    }),
+  );
   const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
   for (const failure of smoke.failures) {
     warnings.push({
@@ -155,7 +192,7 @@ export async function runPostCorePluginConvergence(params: {
       ...peerLinkRepair.changes,
     ],
     warnings,
-    errored: warnings.length > 0,
+    errored: blockingFailedPluginIds.length > 0 || smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };
@@ -215,6 +252,8 @@ export function filterRecordsToActive(params: {
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
  *  - `errored` boolean that callers translate into `status: "error"`.
+ *    Repair warnings are nonblocking; smoke failures remain blocking
+ *    because they prove an active installed payload is unloadable.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];

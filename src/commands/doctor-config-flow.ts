@@ -3,6 +3,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
@@ -78,6 +79,28 @@ function emitDoctorChangesPanel(
   const message = options.sanitize ? sanitizeDoctorNote(body) : body;
   const title = shouldRepair ? "Doctor changes" : "Doctor changes preview";
   note(message, title);
+}
+
+async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
+  try {
+    await callGateway({
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running
+    // or the live gateway cannot reload unrelated secret-backed channels.
+  }
+  try {
+    await callGateway({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running.
+  }
 }
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
@@ -244,6 +267,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       env: process.env,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
+    if (repairSequence.authProfilesRepaired) {
+      await refreshGatewayAuthStateAfterAuthProfileRepair();
+    }
     emitDoctorNotes({
       note,
       changeNotes: repairSequence.changeNotes,

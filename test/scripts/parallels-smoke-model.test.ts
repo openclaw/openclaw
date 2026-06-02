@@ -1,13 +1,24 @@
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, join, win32 } from "node:path";
+import { basename, delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   modelProviderConfigBatchJson,
   readPositiveIntEnv,
+  resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
   resolveSnapshot,
@@ -82,6 +93,21 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   chmodSync(prlctlPath, 0o755);
   copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
+}
+
+class FakeHostServerChild extends EventEmitter {
+  exitCode: number | null = null;
+  readonly signals: string[] = [];
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.signals.push(String(signal));
+    return true;
+  }
+
+  exit(): void {
+    this.exitCode = 0;
+    this.emit("exit", 0, null);
+  }
 }
 
 function withEnv<T>(env: Record<string, string>, callback: () => T): T {
@@ -284,6 +310,58 @@ describe("Parallels smoke model selection", () => {
       12,
     );
     expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it("waits for host artifact server exit after SIGKILL before stop resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeHostServerChild();
+      const stop = hostServerTesting.stopHostServerChild(child as never, 100, 100);
+      expect(child.signals).toEqual(["SIGTERM"]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
+
+      let resolved = false;
+      void stop.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      child.exit();
+      await expect(stop).resolves.toBe(true);
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a temporary npmrc file and cleans it after resolving the latest package version", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-parallels-version-"));
+    let userConfigPath = "";
+    try {
+      const version = resolveLatestVersion("", {
+        createTempDir: (prefix) => {
+          expect(prefix).toBe(join(tmpdir(), "openclaw-npm-"));
+          return mkdtempSync(join(tempRoot, "npm-"));
+        },
+        runCommand: (command, args, options) => {
+          userConfigPath = args.at(-1) ?? "";
+          expect(command).toBe("npm");
+          expect(args).toEqual(["view", "openclaw", "version", "--userconfig", userConfigPath]);
+          expect(options).toEqual({ quiet: true });
+          expect(statSync(userConfigPath).isFile()).toBe(true);
+          return { status: 0, stderr: "", stdout: "2026.6.1\n" };
+        },
+      });
+
+      expect(version).toBe("2026.6.1");
+      expect(basename(userConfigPath)).toBe("npmrc");
+      expect(existsSync(userConfigPath)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it.runIf(process.platform !== "win32")(

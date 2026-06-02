@@ -826,11 +826,22 @@ export function resolveTestProjectsRunnerEnv(env) {
   return resolveVitestSpawnEnv(env);
 }
 
-function spawnTestProjectsRunner(argv, env) {
-  return spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+export function resolveTestProjectsRunnerSpawnParams(env, platform = process.platform) {
+  return {
     env: resolveTestProjectsRunnerEnv(env),
+    detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: "inherit",
+  };
+}
+
+function spawnTestProjectsRunner(argv, env) {
+  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+    ...resolveTestProjectsRunnerSpawnParams(env),
   });
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+  });
+  return { child, teardown };
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -852,8 +863,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const child = spawnTestProjectsRunner(delegatedArgs, env);
+    const { child, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
     child.on("exit", (code, signal) => {
+      teardown();
       if (signal) {
         process.kill(process.pid, signal);
         return;
@@ -861,6 +873,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       process.exit(code ?? 1);
     });
     child.on("error", (error) => {
+      teardown();
       console.error(error);
       process.exit(1);
     });

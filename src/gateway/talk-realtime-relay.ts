@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
@@ -45,6 +42,10 @@ import {
 } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import {
+  closeExpiredTalkRelaySessions,
+  requireActiveTalkRelaySession,
+} from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -220,6 +221,32 @@ function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   return session.activeAgentRuns.size;
 }
 
+function broadcastToolResultToOwner(
+  session: RelaySession,
+  params: {
+    callId: string;
+    turnId: string;
+    result: unknown;
+    final: boolean;
+    forced?: boolean;
+  },
+): void {
+  const payload =
+    params.forced === true ? { result: params.result, forced: true } : { result: params.result };
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "toolResult",
+    callId: params.callId,
+    talkEvent: session.talk.emit({
+      type: "tool.result",
+      callId: params.callId,
+      turnId: params.turnId,
+      payload,
+      final: params.final,
+    }),
+  });
+}
+
 function submitRelayAgentControlProviderResults(
   session: RelaySession,
   result: RealtimeVoiceAgentControlResult,
@@ -241,17 +268,11 @@ function submitRelayAgentControlProviderResults(
     } else {
       session.bridge.submitToolResult(callId, result.providerResult, { suppressResponse: true });
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolResult",
+    broadcastToolResultToOwner(session, {
       callId,
-      talkEvent: session.talk.emit({
-        type: "tool.result",
-        callId,
-        turnId,
-        payload: { result: result.providerResult },
-        final: true,
-      }),
+      turnId,
+      result: result.providerResult,
+      final: true,
     });
     session.activeAgentToolCalls.delete(callId);
     session.completedAgentToolCalls.add(callId);
@@ -279,16 +300,11 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
-  const validNowMs = asDateTimestampMs(nowMs);
-  if (validNowMs === undefined) {
-    return;
-  }
-  for (const session of relaySessions.values()) {
-    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
-    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
-      closeRelaySession(session, "completed");
-    }
-  }
+  closeExpiredTalkRelaySessions({
+    sessions: relaySessions.values(),
+    closeSession: (session) => closeRelaySession(session, "completed"),
+    nowMs,
+  });
 }
 
 function countRelaySessionsForConn(connId: string): number {
@@ -702,22 +718,13 @@ function ensureRelayTurn(session: RelaySession): string {
 }
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
-  const session = relaySessions.get(relaySessionId);
-  const nowMs = asDateTimestampMs(Date.now());
-  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
-  if (
-    !session ||
-    session.connId !== connId ||
-    nowMs === undefined ||
-    expiresAtMs === undefined ||
-    nowMs > expiresAtMs
-  ) {
-    if (session) {
-      closeRelaySession(session, "completed");
-    }
-    throw new Error("Unknown realtime relay session");
-  }
-  return session;
+  return requireActiveTalkRelaySession({
+    sessions: relaySessions,
+    sessionId: relaySessionId,
+    connId,
+    closeSession: (session) => closeRelaySession(session, "completed"),
+    unknownSessionMessage: "Unknown realtime relay session",
+  });
 }
 
 export function sendTalkRealtimeRelayAudio(params: {
@@ -787,17 +794,12 @@ export function submitTalkRealtimeRelayToolResult(params: {
     if (final && !cancelled && !isWorkingToolResult(params.result)) {
       session.forcedConsults.markDelivered(forcedConsult);
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolResult",
+    broadcastToolResultToOwner(session, {
       callId: params.callId,
-      talkEvent: session.talk.emit({
-        type: "tool.result",
-        callId: params.callId,
-        turnId,
-        payload: { result: params.result, forced: true },
-        final,
-      }),
+      turnId,
+      result: params.result,
+      forced: true,
+      final,
     });
     return;
   }
@@ -811,17 +813,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
       session.activeAgentToolCalls.delete(params.callId);
     }
   }
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "toolResult",
+  broadcastToolResultToOwner(session, {
     callId: params.callId,
-    talkEvent: session.talk.emit({
-      type: "tool.result",
-      callId: params.callId,
-      turnId,
-      payload: { result: params.result },
-      final,
-    }),
+    turnId,
+    result: params.result,
+    final,
   });
 }
 

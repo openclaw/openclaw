@@ -1294,6 +1294,141 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(true);
   });
 
+  it("resolves incompatible prerelease tags to a compatible prerelease version", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const warnings: string[] = [];
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/msteams@beta",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.4",
+        pluginId: "msteams",
+        npmRoot,
+        versions: ["2026.5.28-beta.3", "2026.5.28-beta.4"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.4" },
+        },
+      },
+      {
+        spec: "@openclaw/msteams@2026.5.28-beta.3",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.3",
+        pluginId: "msteams",
+        npmRoot,
+        expectedDependencySpec: "2026.5.28-beta.3",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.3" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/msteams@beta",
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/msteams@2026.5.28-beta.3");
+    expect(result.npmResolution?.version).toBe("2026.5.28-beta.3");
+    expect(warnings.join("\n")).toContain(
+      "using newest compatible @openclaw/msteams@2026.5.28-beta.3",
+    );
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@openclaw/msteams",
+    });
+    const managedManifest = JSON.parse(
+      fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(managedManifest.dependencies?.["@openclaw/msteams"]).toBe("2026.5.28-beta.3");
+  });
+
+  it("does not resolve explicit prerelease tags to stable compatible versions", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/msteams@beta",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.4",
+        pluginId: "msteams",
+        npmRoot,
+        versions: ["2026.5.27", "2026.5.28-beta.4"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.4" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/msteams@beta",
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    expect(result.error).toContain("requires plugin API >=2026.5.28-beta.4");
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+  });
+
+  it("does not resolve explicit prerelease tags to a different prerelease channel", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/msteams@beta",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.4",
+        pluginId: "msteams",
+        npmRoot,
+        versions: ["2026.5.28-alpha.10", "2026.5.28-beta.4"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.4" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/msteams@beta",
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    expect(result.error).toContain("requires plugin API >=2026.5.28-beta.4");
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "repairs root openclaw materialized by npm peer handling",
     async () => {
