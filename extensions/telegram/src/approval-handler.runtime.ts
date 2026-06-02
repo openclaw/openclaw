@@ -16,6 +16,10 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  registerTelegramApprovalReactionTarget,
+  unregisterTelegramApprovalReactionTarget,
+} from "./approval-reactions.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
@@ -27,6 +31,7 @@ const log = createSubsystemLogger("telegram/approvals");
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type PendingMessage = {
+  accountId: string;
   chatId: string;
   messageId: string;
 };
@@ -167,12 +172,38 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           : {}),
       });
       return {
+        accountId: resolved.accountId,
         chatId: result.chatId,
         messageId: result.messageId,
       };
     },
   },
   interactions: {
+    bindPending: ({ entry, request, view }) =>
+      registerTelegramApprovalReactionTarget({
+        accountId: entry.accountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+        approvalId: request.id,
+        allowedDecisions: view.actions.map((action) => action.decision),
+        ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
+      })
+        ? true
+        : null,
+    unbindPending: ({ entry }) => {
+      unregisterTelegramApprovalReactionTarget({
+        accountId: entry.accountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+      });
+    },
+    cancelDelivered: ({ entry }) => {
+      unregisterTelegramApprovalReactionTarget({
+        accountId: entry.accountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+      });
+    },
     clearPendingActions: async ({ cfg, accountId, context, entry }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {

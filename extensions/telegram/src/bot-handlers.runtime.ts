@@ -44,6 +44,10 @@ import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  resolveTelegramApprovalReactionTargetWithPersistence,
+  unregisterTelegramApprovalReactionTarget,
+} from "./approval-reactions.js";
+import {
   normalizeDmAllowFromWithStore,
   firstDefined,
   resolveTelegramEffectiveDmPolicy,
@@ -1616,10 +1620,73 @@ export const registerTelegramHandlers = ({
         parentPeer,
       });
       const sessionKey = route.sessionKey;
+      const runtimeCfg = telegramDeps.getRuntimeConfig();
 
-      // Enqueue system event for each added reaction.
+      // Enqueue system event for each added reaction unless the reaction resolves
+      // a bound approval prompt for this Telegram message.
       for (const r of addedReactions) {
         const emoji = r.emoji;
+        const approvalReaction = await resolveTelegramApprovalReactionTargetWithPersistence({
+          accountId,
+          chatId,
+          messageId,
+          reactionKey: emoji,
+        });
+        if (approvalReaction) {
+          const isPluginApproval = approvalReaction.approvalId.startsWith("plugin:");
+          const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+            cfg: runtimeCfg,
+            accountId,
+            senderId,
+          });
+          const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+            cfg: runtimeCfg,
+            accountId,
+            senderId,
+          });
+          const authorizedApprovalSender = isPluginApproval
+            ? pluginApprovalAuthorizedSender
+            : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+          if (!authorizedApprovalSender) {
+            logVerbose(
+              `telegram: approval reaction denied id=${approvalReaction.approvalId} sender=${senderId || "unknown"}`,
+            );
+            continue;
+          }
+          try {
+            await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
+              cfg: runtimeCfg,
+              approvalId: approvalReaction.approvalId,
+              decision: approvalReaction.decision,
+              senderId,
+              allowPluginFallback: pluginApprovalAuthorizedSender,
+            });
+            unregisterTelegramApprovalReactionTarget({
+              accountId,
+              chatId,
+              messageId,
+            });
+            logVerbose(
+              `telegram: approval reaction resolved id=${approvalReaction.approvalId} sender=${senderId || "unknown"} decision=${approvalReaction.decision}`,
+            );
+          } catch (resolveErr) {
+            if (isApprovalNotFoundError(resolveErr)) {
+              unregisterTelegramApprovalReactionTarget({
+                accountId,
+                chatId,
+                messageId,
+              });
+              logVerbose(
+                `telegram: approval reaction ignored for expired approval id=${approvalReaction.approvalId} sender=${senderId || "unknown"}`,
+              );
+              continue;
+            }
+            logVerbose(
+              `telegram: approval reaction failed id=${approvalReaction.approvalId} sender=${senderId || "unknown"}: ${String(resolveErr)}`,
+            );
+          }
+          continue;
+        }
         const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
         telegramDeps.enqueueSystemEvent(text, {
           sessionKey,

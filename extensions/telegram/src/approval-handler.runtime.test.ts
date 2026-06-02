@@ -114,6 +114,7 @@ describe("telegramApprovalNativeRuntime", () => {
       messageThreadId: 928,
     });
     expect(entry).toEqual({
+      accountId: "default",
       chatId: "-1003841603622",
       messageId: "m1",
     });
