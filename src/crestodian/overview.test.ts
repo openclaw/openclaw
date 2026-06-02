@@ -49,6 +49,7 @@ describe("loadCrestodianOverview", () => {
           version: command === "codex" ? "codex 1.0.0" : undefined,
         }),
         probeGatewayUrl: async (url) => ({ reachable: false, url, error: "offline" }),
+        delay: async () => undefined,
       },
     });
 
@@ -74,5 +75,69 @@ describe("loadCrestodianOverview", () => {
     expect(startup).not.toContain("Codex:");
     expect(startup).not.toContain("Claude Code:");
     expect(startup).not.toContain("API keys:");
+  });
+
+  it("retries the local startup gateway probe before reporting the gateway unreachable", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.2" } },
+        list: [{ id: "main", default: true }],
+      },
+      gateway: { port: 19001 },
+    };
+    const snapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: runtimeConfig,
+      sourceConfig: runtimeConfig,
+      resolved: runtimeConfig,
+      valid: true,
+      runtimeConfig,
+      config: runtimeConfig,
+      hash: "test-hash",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+    const probeCalls: string[] = [];
+    const retryDelays: number[] = [];
+
+    const overview = await loadCrestodianOverview({
+      env: { OPENCLAW_TEST_FAST: "1" },
+      deps: {
+        readConfigFileSnapshot: async () => snapshot,
+        resolveConfigPath: () => "/tmp/openclaw.json",
+        buildGatewayConnectionDetails: (input) => ({
+          url: `ws://127.0.0.1:${input.config.gateway?.port ?? 8765}`,
+          urlSource: "local loopback",
+        }),
+        probeLocalCommand: async (command) => ({
+          command,
+          found: false,
+        }),
+        probeGatewayUrl: async (url) => {
+          probeCalls.push(url);
+          if (probeCalls.length <= 2) {
+            return { reachable: false, url, error: "timed out after 900ms" };
+          }
+          return { reachable: true, url };
+        },
+        delay: async (ms) => {
+          retryDelays.push(ms);
+        },
+      },
+    });
+
+    expect(probeCalls).toEqual([
+      "ws://127.0.0.1:19001",
+      "ws://127.0.0.1:19001",
+      "ws://127.0.0.1:19001",
+    ]);
+    expect(retryDelays).toEqual([1_000, 2_000]);
+    expect(overview.gateway.reachable).toBe(true);
+    expect(formatCrestodianStartupMessage(overview)).toContain(
+      "Gateway: reachable at ws://127.0.0.1:19001.",
+    );
   });
 });

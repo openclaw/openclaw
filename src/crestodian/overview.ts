@@ -78,8 +78,13 @@ type CrestodianOverviewDependencies = {
   }) => GatewayConnectionDetails;
   probeLocalCommand?: typeof probeLocalCommand;
   probeGatewayUrl?: typeof probeGatewayUrl;
+  delay?: (ms: number) => Promise<void>;
   resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
 };
+
+type GatewayProbeResult = Awaited<ReturnType<typeof probeGatewayUrl>>;
+
+const CRESTODIAN_GATEWAY_STARTUP_RETRY_DELAYS_MS = [1_000, 2_000] as const;
 
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
   return snapshot.issues.map((issue) => {
@@ -138,6 +143,41 @@ function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePat
   };
 }
 
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isLocalLoopbackGatewayUrl(url: string): boolean {
+  try {
+    const httpUrl = url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
+    const hostname = new URL(httpUrl).hostname;
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+async function probeStartupGatewayUrl(
+  url: string,
+  deps: CrestodianOverviewDependencies,
+): Promise<GatewayProbeResult> {
+  const probe = deps.probeGatewayUrl ?? probeGatewayUrl;
+  let result = await probe(url);
+  if (result.reachable || !isLocalLoopbackGatewayUrl(url)) {
+    return result;
+  }
+  for (const retryDelayMs of CRESTODIAN_GATEWAY_STARTUP_RETRY_DELAYS_MS) {
+    await (deps.delay ?? delay)(retryDelayMs);
+    result = await probe(url);
+    if (result.reachable) {
+      return result;
+    }
+  }
+  return result;
+}
+
 export async function loadCrestodianOverview(
   opts: { env?: NodeJS.ProcessEnv; deps?: CrestodianOverviewDependencies } = {},
 ): Promise<CrestodianOverview> {
@@ -170,7 +210,7 @@ export async function loadCrestodianOverview(
   const [codex, claude, gateway, references] = await Promise.all([
     commandProbe("codex"),
     commandProbe("claude"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
+    probeStartupGatewayUrl(gatewayUrl, deps),
     resolveFastTestReferences(env) ??
       resolveReferences({
         argv1: process.argv[1],
