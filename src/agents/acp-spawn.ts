@@ -109,6 +109,8 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
+const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
+
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
 export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -999,6 +1001,13 @@ type AcpSpawnRuntimeOptions = {
   timeoutSeconds?: number;
 };
 
+function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
+  if (!runTimeoutSeconds) {
+    return undefined;
+  }
+  return Math.min(runTimeoutSeconds, ACP_RUNTIME_TIMEOUT_MAX_SECONDS);
+}
+
 function resolveAcpSpawnRuntimeOptions(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -1039,12 +1048,13 @@ function resolveAcpSpawnRuntimeOptions(params: {
     }
   }
 
+  const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =
-    model || thinking || params.runTimeoutSeconds
+    model || thinking || timeoutSeconds
       ? {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
-          ...(params.runTimeoutSeconds ? { timeoutSeconds: params.runTimeoutSeconds } : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
   return { ok: true, runtimeOptions };

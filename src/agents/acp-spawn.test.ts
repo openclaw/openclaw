@@ -1158,6 +1158,42 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.timeout).toBe(120);
   });
 
+  it("caps configured ACP runtime timeout without shortening spawn tracking", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 172_800,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 172_800);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 86_400,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(172_800);
+  });
+
   it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
