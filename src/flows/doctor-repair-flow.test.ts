@@ -422,4 +422,101 @@ describe("runDoctorHealthRepairs", () => {
     expect(repairContexts[1]).toMatchObject({ dryRun: true, diff: true });
     expect(withDiff.diffs).toMatchObject([{ kind: "config", path: "gateway.mode" }]);
   });
+
+  it("retries transient failures and succeeds on later attempt", async () => {
+    const attemptCount = { value: 0 };
+    const runnable: RunnableHealthCheck = {
+      id: "test/retry-eventually-succeeds",
+      kind: "core",
+      description: "retry eventually succeeds",
+      async run(ctx) {
+        attemptCount.value++;
+        if (attemptCount.value < 3) {
+          throw new Error(`transient failure attempt ${attemptCount.value}`);
+        }
+        return {
+          findings: [],
+          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+          changes: ["Set gateway.mode to local."],
+        };
+      },
+    };
+    const checks: HealthCheck[] = [normalizeHealthCheck(runnable)];
+
+    // Pass retries=2 via ctx — runDoctorHealthRepairs passes ctx directly to runRunnableHealthCheck
+    const ctxWithRetries: HealthRepairContext = {
+      mode: "fix",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      retries: 2,
+    };
+
+    const result = await runDoctorHealthRepairs(ctxWithRetries, { checks });
+
+    // Should have retried 2 times then succeeded on 3rd attempt.
+    // The 4th call is the post-repair validation check.
+    expect(attemptCount.value).toBe(4);
+    expect(result.config.gateway?.mode).toBe("local");
+    expect(result.changes).toEqual(["Set gateway.mode to local."]);
+    expect(result.checksRepaired).toBe(1);
+    expect(result.warnings).toEqual([]);
+    // Validation ran after successful repair
+    expect(result.checksValidated).toBe(1);
+  });
+
+  it("fails without retry when retries is 0", async () => {
+    const attemptCount = { value: 0 };
+    const runnable: RunnableHealthCheck = {
+      id: "test/no-retry",
+      kind: "core",
+      description: "no retry",
+      async run(ctx) {
+        attemptCount.value++;
+        throw new Error("always fails");
+      },
+    };
+    const checks: HealthCheck[] = [normalizeHealthCheck(runnable)];
+
+    const ctxNoRetries: HealthRepairContext = {
+      mode: "fix",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      retries: 0,
+    };
+
+    const result = await runDoctorHealthRepairs(ctxNoRetries, { checks });
+
+    expect(attemptCount.value).toBe(1);
+    expect(result.warnings).toContain("test/no-retry run failed after 1 attempts: always fails");
+    expect(result.checksRepaired).toBe(0);
+  });
+
+  it("exhausts retries and reports failure after all attempts fail", async () => {
+    const attemptCount = { value: 0 };
+    const runnable: RunnableHealthCheck = {
+      id: "test/exhausts-retries",
+      kind: "core",
+      description: "exhausts retries",
+      async run(ctx) {
+        attemptCount.value++;
+        throw new Error(`failure attempt ${attemptCount.value}`);
+      },
+    };
+    const checks: HealthCheck[] = [normalizeHealthCheck(runnable)];
+
+    const ctxWithRetries: HealthRepairContext = {
+      mode: "fix",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+      retries: 2, // 1 initial + 2 retries = 3 total attempts
+    };
+
+    const result = await runDoctorHealthRepairs(ctxWithRetries, { checks });
+
+    expect(attemptCount.value).toBe(3);
+    expect(result.warnings).toContain(
+      "test/exhausts-retries run failed after 3 attempts: failure attempt 3",
+    );
+    expect(result.checksRepaired).toBe(0);
+  });
 });
