@@ -507,13 +507,12 @@ describe("skill mutations", () => {
     },
     {
       name: "installs skills and uses server success messages",
-      run: (state: SkillsState) => installSkill(state, "github", "GitHub", "install-123", true),
+      run: (state: SkillsState) => installSkill(state, "github", "GitHub", "install-123"),
       expectedRequest: [
         "skills.install",
         {
           name: "GitHub",
           installId: "install-123",
-          dangerouslyForceUnsafeInstall: true,
           timeoutMs: 120000,
         },
       ],
