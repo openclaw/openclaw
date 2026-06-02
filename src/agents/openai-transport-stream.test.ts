@@ -383,6 +383,84 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("backfills Azure Responses completed message output when item events are absent", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-azure-completed-message",
+            status: "completed",
+            output: [
+              { type: "reasoning", id: "rs_123", summary: [] },
+              {
+                type: "message",
+                id: "msg_123",
+                role: "assistant",
+                content: [{ type: "text", text: "AZURE_RESPONSES_CANARY_OK" }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "AZURE_RESPONSES_CANARY_OK",
+        textSignature: '{"v":1,"id":"msg_123"}',
+      },
+    ]);
+  });
+
+  it("backfills Azure Responses completed function calls when item events are absent", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-azure-completed-tool",
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                id: "fc_123",
+                call_id: "call_123",
+                name: "session_status",
+                arguments: '{"sessionKey":"current"}',
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_123|fc_123",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialJson: '{"sessionKey":"current"}',
+      },
+    ]);
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";

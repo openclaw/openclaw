@@ -1443,6 +1443,66 @@ async function processResponsesStream(
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
+  const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
+    const text = readResponsesOutputMessageText(item);
+    if (!text) {
+      return;
+    }
+    const block: Record<string, unknown> = {
+      type: "text",
+      text,
+      textSignature: encodeTextSignatureV1(
+        stringifyUnknown(item.id),
+        (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
+      ),
+    };
+    output.content.push(block);
+    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "text_end",
+      contentIndex: blockIndex(),
+      content: text,
+      partial: output,
+    });
+  };
+  const appendCompletedResponseToolCallItem = (item: Record<string, unknown>) => {
+    const args = parseStreamingJson(stringifyJsonLike(item.arguments, "{}"));
+    const block = {
+      type: "toolCall",
+      id: `${stringifyUnknown(item.call_id)}|${stringifyUnknown(item.id)}`,
+      name: stringifyUnknown(item.name),
+      arguments: args,
+      partialJson: stringifyJsonLike(item.arguments, "{}"),
+    };
+    output.content.push(block);
+    stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "toolcall_end",
+      contentIndex: blockIndex(),
+      toolCall: {
+        type: "toolCall",
+        id: block.id,
+        name: block.name,
+        arguments: args,
+      },
+      partial: output,
+    });
+  };
+  const backfillCompletedResponseOutput = (response: Record<string, unknown> | undefined) => {
+    if (output.content.length > 0 || !Array.isArray(response?.output)) {
+      return;
+    }
+    for (const rawItem of response.output) {
+      if (!isRecord(rawItem)) {
+        continue;
+      }
+      if (rawItem.type === "message") {
+        appendCompletedResponseTextItem(rawItem);
+      } else if (rawItem.type === "function_call") {
+        appendCompletedResponseToolCallItem(rawItem);
+      }
+    }
+  };
   const guardedStream = withResponsesFirstEventTimeout(
     openaiStream,
     model,
@@ -1597,6 +1657,7 @@ async function processResponsesStream(
       if (typeof response?.id === "string") {
         output.responseId = response.id;
       }
+      backfillCompletedResponseOutput(response);
       const usage = response?.usage as
         | {
             input_tokens?: number;
@@ -1687,6 +1748,24 @@ function mapResponsesStopReason(status: string | undefined): string {
     default:
       throw new Error(`Unhandled stop reason: ${status}`);
   }
+}
+
+function readResponsesOutputMessageText(item: Record<string, unknown>): string {
+  const content = Array.isArray(item.content) ? item.content : [];
+  return content
+    .map((part) => {
+      if (!isRecord(part)) {
+        return "";
+      }
+      if (part.type === "output_text" || part.type === "text") {
+        return stringifyUnknown(part.text);
+      }
+      if (part.type === "refusal") {
+        return stringifyUnknown(part.refusal);
+      }
+      return "";
+    })
+    .join("");
 }
 
 function buildOpenAIClientHeaders(
