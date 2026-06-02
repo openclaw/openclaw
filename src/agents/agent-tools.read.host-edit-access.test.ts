@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHostWorkspaceEditTool } from "./agent-tools.read.js";
+import { createHostWorkspaceEditTool, createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 
 type CapturedEditOperations = {
   access: (absolutePath: string) => Promise<void>;
@@ -31,6 +31,17 @@ vi.mock("./sessions/index.js", async () => {
 });
 
 describe("createHostWorkspaceEditTool host access mapping", () => {
+  it("does not resolve the workspace root eagerly during tool construction", () => {
+    const missingWorkspaceDir = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}`);
+
+    expect(() =>
+      createHostWorkspaceEditTool(missingWorkspaceDir, { workspaceOnly: true }),
+    ).not.toThrow();
+    expect(() =>
+      createHostWorkspaceWriteTool(missingWorkspaceDir, { workspaceOnly: true }),
+    ).not.toThrow();
+  });
+
   let tmpDir = "";
 
   afterEach(async () => {
