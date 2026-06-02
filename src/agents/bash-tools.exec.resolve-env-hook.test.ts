@@ -389,4 +389,50 @@ describe("exec resolve_exec_env hook wiring", () => {
       REQUEST_SAFE: "request",
     });
   });
+
+  it("resolves plugin env after before_tool_call adds a command", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
+      ),
+      runResolveExecEnv: vi.fn(async () => ({ PLUGIN_SAFE: "yes" })),
+      runBeforeToolCall: vi.fn(async (event: { params: Record<string, unknown> }) => {
+        mocks.beforeToolCallParams.push({ ...event.params });
+        return {
+          params: { ...event.params, command: "echo ok" },
+        };
+      }),
+    };
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:chat-1",
+    });
+    const [definition] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:telegram:chat-1",
+    });
+
+    await definition.execute(
+      "call-command-rewrite",
+      {
+        env: { REQUEST_SAFE: "request" },
+        yieldMs: 120_000,
+      },
+      undefined,
+      undefined,
+      testExtensionContext,
+    );
+
+    expect(mocks.beforeToolCallParams[0]?.env).toEqual({
+      REQUEST_SAFE: "request",
+    });
+    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      PLUGIN_SAFE: "yes",
+      REQUEST_SAFE: "request",
+    });
+  });
 });

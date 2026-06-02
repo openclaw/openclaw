@@ -1411,7 +1411,10 @@ export function createExecTool(
       rawArgs as ExecToolArgs,
       XML_ARG_VALUE_EXEC_PARAM_KEYS,
     );
-    if (!params.command || isResolveExecEnvPrepared(params)) {
+    if (!params.command) {
+      return params;
+    }
+    if (isResolveExecEnvPrepared(params)) {
       return markResolveExecEnvPrepared(params);
     }
     const hookRunner = getGlobalHookRunner();
