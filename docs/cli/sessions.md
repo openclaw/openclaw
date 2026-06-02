@@ -20,8 +20,10 @@ channel connectivity.
 default so large long-lived stores cannot monopolize the CLI process or Gateway
 event loop. The CLI returns the newest 100 sessions by default; pass
 `--limit <n>` for a smaller/larger window or `--limit all` when you intentionally
-need the full store. JSON responses include `totalCount`, `limitApplied`, and
-`hasMore` when callers need to show that more rows exist.
+need the full store. JSON responses include `totalCount`, `limitApplied`,
+`hasMore`, and `nextOffset` when callers need to show that more rows exist.
+`nextOffset` is a numeric cursor when another page is available and `null` on
+the final page.
 
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.
@@ -94,6 +96,7 @@ JSON examples:
   "totalCount": 2,
   "limitApplied": 100,
   "hasMore": false,
+  "nextOffset": null,
   "activeMinutes": null,
   "sessions": [
     { "agentId": "main", "key": "agent:main:main", "model": "gpt-5" },
