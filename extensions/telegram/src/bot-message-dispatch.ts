@@ -114,6 +114,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
+import { includesRecentTelegramGroupHistoryContext } from "./group-history-context.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -509,6 +510,14 @@ function extractCurrentTelegramBody(body: string | undefined): string {
   return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
 }
 
+function includesRecoveredTelegramGroupHistoryContext(context: TelegramMessageContext): boolean {
+  return Boolean(
+    context.isGroup &&
+    context.groupHistoryContextMode &&
+    includesRecentTelegramGroupHistoryContext(context.groupHistoryContextMode),
+  );
+}
+
 function buildRecoveredTelegramBody(params: {
   cfg: OpenClawConfig;
   context: TelegramMessageContext;
@@ -516,7 +525,11 @@ function buildRecoveredTelegramBody(params: {
   historyKey?: string;
   threadSpec: TelegramThreadSpec;
 }): string {
-  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
+  if (
+    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
+    !params.historyKey ||
+    params.context.historyLimit <= 0
+  ) {
     return params.currentMessage;
   }
   const groupLabel = buildGroupLabel(
@@ -578,7 +591,7 @@ function migrateRecoveredTelegramRoomEventHistory(params: {
   const originalHistoryKey = params.context.historyKey;
   const recoveredHistoryKey = params.recoveredHistoryKey;
   if (
-    !params.context.isGroup ||
+    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
     params.context.ctxPayload.InboundEventKind !== "room_event" ||
     !originalHistoryKey ||
     !recoveredHistoryKey ||
@@ -645,12 +658,13 @@ function resolveDispatchTelegramContext(params: {
   const recoveredHistoryKey = params.context.isGroup
     ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
     : params.context.historyKey;
+  const includeRecoveredGroupHistory = includesRecoveredTelegramGroupHistoryContext(params.context);
   migrateRecoveredTelegramRoomEventHistory({
     context: params.context,
     recoveredHistoryKey,
   });
   const recoveredInboundHistory =
-    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+    includeRecoveredGroupHistory && recoveredHistoryKey && params.context.historyLimit > 0
       ? createChannelHistoryWindow({
           historyMap: params.context.groupHistories,
         }).buildInboundHistory({
