@@ -37,7 +37,6 @@ async function mergeVectorResultsWithTemporalDecay(
     vectorWeight: 1,
     textWeight: 0,
     temporalDecay: { enabled: true, halfLifeDays: 30 },
-    mmr: { enabled: false },
     nowMs: NOW_MS,
     vector,
     keyword: [],

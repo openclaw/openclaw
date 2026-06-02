@@ -430,6 +430,7 @@ export function createMemorySearchTool(options: {
                   configuredMode?: string;
                   effectiveMode?: string;
                   fallback?: string;
+                  rerank?: "active" | "degraded" | "disabled";
                   searchMs: number;
                   hits: number;
                 }

@@ -39,6 +39,8 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  /** Cross-encoder relevance in [0,1]; kept separate from fusion `score` so minScore/telemetry stay on the fusion scale. */
+  rerankScore?: number;
 };
 
 export type MemoryEmbeddingProbeResult = {
