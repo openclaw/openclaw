@@ -24,6 +24,8 @@ async function waitForEmbeddedAbortSettle(params: {
   }
 
   let timeout: NodeJS.Timeout | undefined;
+  // Abort settlement is advisory cleanup; timeout or errors are logged but do
+  // not block releasing the session write-lock.
   const outcome = await Promise.race([
     params.promise
       .then(() => "settled" as const)
@@ -112,6 +114,8 @@ export async function cleanupEmbeddedAttemptResources(params: {
     }
   } finally {
     try {
+      // Release the write-lock before disposing runtimes so another attempt can
+      // recover even if runtime disposal stalls or throws.
       await params.sessionLock.release();
     } catch (err) {
       sessionLockReleaseError = err;
