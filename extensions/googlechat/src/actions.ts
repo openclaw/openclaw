@@ -162,7 +162,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
               ]
             : undefined,
         });
-        return jsonResult({ ok: true, to: space, ...(sent ?? {}) });
+        return jsonResult({ ok: true, to: space, ...sent });
       }
 
       if (action === "upload-file") {
@@ -175,7 +175,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         text: content,
         thread: threadId ?? undefined,
       });
-      return jsonResult({ ok: true, to: space, ...(sent ?? {}) });
+      return jsonResult({ ok: true, to: space, ...sent });
     }
 
     if (action === "react") {
