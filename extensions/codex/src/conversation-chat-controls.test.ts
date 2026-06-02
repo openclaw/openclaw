@@ -50,7 +50,7 @@ describe("codex conversation chat controls", () => {
       scope,
     });
     const buttons = readButtons(reply);
-    expect(reply.text).toBe("<proposed_plan>do this</proposed_plan>");
+    expect(reply.text).toBe("do this");
     expect(buttons.map((button) => button.label)).toEqual([
       "Approve and execute",
       "Approve and execute with clean context",

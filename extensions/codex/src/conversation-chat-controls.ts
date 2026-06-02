@@ -68,12 +68,13 @@ export function buildCodexPlanDecisionReply(params: {
   text: string;
   scope: ControlScope;
 }): ReplyPayload {
+  const planText = extractCodexProposedPlan(params.text) ?? params.text;
   const token = createPendingPlanDecision({
     scope: params.scope,
-    planText: extractCodexProposedPlan(params.text) ?? params.text,
+    planText,
   });
   return {
-    text: params.text,
+    text: planText,
     presentation: {
       blocks: [
         {
@@ -307,10 +308,11 @@ function extractCodexProposedPlan(text: string): string | undefined {
   if (!raw) {
     return undefined;
   }
-  return raw
+  const planText = raw
     .replace(/^<proposed_plan>/i, "")
     .replace(/<\/proposed_plan>$/i, "")
     .trim();
+  return planText || undefined;
 }
 
 function createPendingPlanDecision(params: { scope: ControlScope; planText: string }): string {

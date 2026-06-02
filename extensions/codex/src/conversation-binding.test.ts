@@ -1276,7 +1276,7 @@ describe("codex conversation binding", () => {
       { timeoutMs: 50 },
     );
 
-    expect(result?.reply?.text).toBe("<proposed_plan>Run the tests.</proposed_plan>");
+    expect(result?.reply?.text).toBe("Run the tests.");
     expect(readReplyButtons(result?.reply ?? {}).map((button) => button.label)).toEqual([
       "Approve and execute",
       "Approve and execute with clean context",
@@ -1370,7 +1370,7 @@ describe("codex conversation binding", () => {
       { timeoutMs: 50 },
     );
 
-    expect(result?.reply?.text).toBe("<proposed_plan>Run the focused tests.</proposed_plan>");
+    expect(result?.reply?.text).toBe("Run the focused tests.");
     expect(result?.reply?.text).not.toContain("block above");
     expect(readReplyButtons(result?.reply ?? {}).map((button) => button.label)).toEqual([
       "Approve and execute",
@@ -1471,7 +1471,7 @@ describe("codex conversation binding", () => {
       { timeoutMs: 50 },
     );
 
-    expect(result?.reply?.text).toBe("<proposed_plan>Run the focused tests.</proposed_plan>");
+    expect(result?.reply?.text).toBe("Run the focused tests.");
     expect(request).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(request.mock.calls[1]?.[1])).toContain(
       "No proposed_plan block was delivered",
