@@ -290,18 +290,6 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function appendDisplayMessageIfMissing(messages: unknown[], message: unknown): unknown[] {
-  const signature = messageDisplaySignature(message);
-  if (!signature) {
-    return [...messages, message];
-  }
-  return messages
-    .slice(lastUserMessageIndex(messages) + 1)
-    .some((existing) => messageDisplaySignature(existing) === signature)
-    ? messages
-    : [...messages, message];
-}
-
 function visibleAssistantStreamText(stream: string | null): string | null {
   if (!stream?.trim() || isSilentReplyStream(stream) || isHeartbeatAckStream(stream)) {
     return null;
@@ -363,6 +351,7 @@ function trimAccumulatedVisibleStreamText(text: string, previousText: string | n
 type VisibleAssistantStreamPart = {
   text: string;
   replacementText: string;
+  source: "segment" | "current";
 };
 
 function visibleAssistantStreamParts(
@@ -384,7 +373,7 @@ function visibleAssistantStreamParts(
       trimAccumulatedVisibleStreamText(segment.text, previousText),
     );
     if (visible) {
-      parts.push({ text: visible, replacementText: segment.text });
+      parts.push({ text: visible, replacementText: segment.text, source: "segment" });
     }
     if (segment.text.trim()) {
       previousText = segment.text;
@@ -395,7 +384,7 @@ function visibleAssistantStreamParts(
       trimAccumulatedVisibleStreamText(state.chatStream, previousText),
     );
     if (visible) {
-      parts.push({ text: visible, replacementText: state.chatStream });
+      parts.push({ text: visible, replacementText: state.chatStream, source: "current" });
     }
   }
   return parts;
@@ -411,6 +400,28 @@ function hasAssistantStreamPartReplacement(
   );
 }
 
+function firstCurrentToolStreamMessageIndex(messages: unknown[], state: ChatState): number {
+  const liveToolIds = new Set(currentLiveToolCallIds(state));
+  if (liveToolIds.size === 0) {
+    return -1;
+  }
+  const startIndex = lastUserMessageIndex(messages) + 1;
+  for (let index = startIndex; index < messages.length; index++) {
+    const message = messages[index];
+    if (!isPersistedToolHistoryMessage(message)) {
+      continue;
+    }
+    if (collectToolCallIds(message).some((id) => liveToolIds.has(id))) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function insertMessageAtIndex(messages: unknown[], message: unknown, index: number): unknown[] {
+  return [...messages.slice(0, index), message, ...messages.slice(index)];
+}
+
 function appendVisibleStreamStateMessages(
   messages: unknown[],
   state: ChatState,
@@ -422,10 +433,13 @@ function appendVisibleStreamStateMessages(
     if (hasAssistantStreamPartReplacement([...nextMessages, ...replacementMessages], part)) {
       continue;
     }
-    nextMessages = appendDisplayMessageIfMissing(
-      nextMessages,
-      buildAssistantStreamMessage(part.text),
-    );
+    const streamMessage = buildAssistantStreamMessage(part.text);
+    const toolIndex =
+      part.source === "segment" ? firstCurrentToolStreamMessageIndex(nextMessages, state) : -1;
+    nextMessages =
+      toolIndex >= 0
+        ? insertMessageAtIndex(nextMessages, streamMessage, toolIndex)
+        : [...nextMessages, streamMessage];
   }
   return nextMessages;
 }
@@ -1397,7 +1411,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, finalMessage);
+      state.chatMessages = [...state.chatMessages, finalMessage];
     } else {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
     }
@@ -1411,7 +1425,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         [normalizedMessage],
         { includeCurrent: false },
       );
-      state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, normalizedMessage);
+      state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
     }
@@ -1426,14 +1440,14 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state, [
         visiblePayloadMessage,
       ]);
-      state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, visiblePayloadMessage);
+      state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
     } else {
       const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
       if (hadActiveRunBeforeEvent) {
         state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
       }
       if (errorMessage) {
-        state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, errorMessage);
+        state.chatMessages = [...state.chatMessages, errorMessage];
       }
     }
     reconcileTerminalRun("interrupted", "failed");

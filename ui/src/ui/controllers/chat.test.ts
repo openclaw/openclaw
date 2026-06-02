@@ -884,6 +884,41 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([firstUser, firstAssistant, secondUser, secondAssistant]);
   });
 
+  it("keeps repeated assistant final text within the same turn", () => {
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "repeat" }],
+      timestamp: 1,
+    };
+    const firstAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "OK" }],
+      timestamp: 2,
+    };
+    const secondAssistant = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "OK" },
+        { type: "canvas", url: "/__openclaw__/canvas/documents/repeat/index.html" },
+      ],
+      timestamp: 3,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user, firstAssistant],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: secondAssistant,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([user, firstAssistant, secondAssistant]);
+  });
+
   it("appends final payload message from own run before clearing stream state", () => {
     const state = createState({
       sessionKey: "main",
@@ -2555,8 +2590,8 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toHaveLength(3);
     expect(state.chatMessages[0]).toEqual(persistedUser);
-    expect(state.chatMessages[1]).toEqual(persistedToolResult);
-    expectTextChatMessage(state.chatMessages[2], "assistant", "before tool");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expect(state.chatMessages[2]).toEqual(persistedToolResult);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([]);
