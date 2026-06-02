@@ -278,6 +278,8 @@ export function buildEmbeddedRunPayloads(params: {
     ) {
       return;
     }
+    // Message-tool-only replies were already sent by the tool. Mirror them into
+    // the transcript while marking payloads so channel delivery suppresses a duplicate send.
     replyItems.push({
       text,
       ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
@@ -452,6 +454,8 @@ export function buildEmbeddedRunPayloads(params: {
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  // When streamed text lost media directives but the canonical assistant answer
+  // still contains them, keep the raw answer so attachments are not dropped.
   const fallbackAnswerSourceText =
     shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
   const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
@@ -596,6 +600,7 @@ export function buildEmbeddedRunPayloads(params: {
         payload.channelData = item.channelData;
       }
       if (item.sourceReplyMirror) {
+        // Source-reply mirrors are transcript artifacts, not channel sends.
         markReplyPayloadForSourceSuppressionDelivery(payload);
         if (params.sessionKey) {
           const sourceReplyTranscriptMirror: NonNullable<
