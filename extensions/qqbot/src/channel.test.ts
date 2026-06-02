@@ -138,6 +138,18 @@ function expectReconnectDrainSelection(selectEntry: (entry: PendingDeliveryEntry
     match: true,
     bypassBackoff: true,
   });
+  // The reported regression leaves this exact lastError on pending entries;
+  // the bypass predicate must drain them immediately on reconnect.
+  expect(
+    selectEntry({
+      channel: "qqbot",
+      accountId: "default",
+      lastError: "Outbound not configured for channel: qqbot",
+    } as PendingDeliveryEntry),
+  ).toEqual({
+    match: true,
+    bypassBackoff: true,
+  });
 }
 
 describe("qqbot gateway reconnect delivery drain", () => {
