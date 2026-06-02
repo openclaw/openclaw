@@ -154,8 +154,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     );
   }
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, snapshot.path);
-  if (hookTransformsDirWarnings.length > 0) {
-    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
+  const unknownHookEntryKeyWarnings = (
+    await import("./doctor/shared/hook-entry-keys-warnings.js")
+  ).collectUnknownHookEntryKeysWarnings(cfg);
+  const allHookWarnings = [...hookTransformsDirWarnings, ...unknownHookEntryKeyWarnings];
+  if (allHookWarnings.length > 0) {
+    note(sanitizeDoctorNote(allHookWarnings.join("\n")), "Doctor warnings");
   }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
