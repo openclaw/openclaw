@@ -223,6 +223,7 @@ describe("tsdown config", () => {
       expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
+      expect(neverBundle("protobufjs/ext/descriptor.js")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -236,6 +237,7 @@ describe("tsdown config", () => {
         "@slack/web-api",
         "@vitest/expect",
         "matrix-js-sdk",
+        "protobufjs",
         "qrcode-terminal",
         "vitest",
       ]) {
@@ -246,6 +248,7 @@ describe("tsdown config", () => {
       throw new Error("expected unified graph external predicate");
     }
     const externalize = external;
+    expect(externalize("protobufjs/ext/descriptor.js", undefined, false)).toBe(true);
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 
