@@ -793,6 +793,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
+  <Accordion title="Approval reactions (👍 / 👎)">
+    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes through Telegram, OpenClaw binds the approval prompt message to Telegram reaction updates and accepts reaction decisions directly:
+
+    - `👍` -> `allow-once`
+    - `👎` -> `deny`
+    - `allow-always` remains a manual fallback via `/approve <id> allow-always`
+
+    Approval reactions are authorized with explicit approval approvers (exec approvers or plugin approvers), not with generic reaction notification settings. This shortcut is checked before generic `reactionNotifications` gates so approval reactions can still resolve when notification mode is `off`.
+
+    Persistence behavior:
+
+    - Approval reaction targets are stored in plugin keyed state and mirrored in a bounded in-memory cache.
+    - The in-memory cache TTL is clamped to the approval expiry, and stale targets are removed when the approval resolves or expires.
+    - This keeps reaction resolution working across normal restart windows while preventing old message reactions from resolving expired approvals.
+
+  </Accordion>
+
   <Accordion title="Ack reactions">
     `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides *when* that emoji is actually sent.
 
