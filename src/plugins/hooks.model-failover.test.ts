@@ -16,6 +16,7 @@ const BASE_AGENT_CTX = {
   sessionId: "session-1",
   sessionKey: "agent:test:direct:123",
 };
+const DEFAULT_FAILURE_HOOK_TIMEOUT_MS = 30_000;
 
 describe("model_failover hook", () => {
   it("invokes registered model_failover handlers with the full event payload", async () => {
@@ -122,6 +123,41 @@ describe("model_failover hook", () => {
     expect(goodHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds a never-settling handler with the default timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise<void>(() => {}));
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+      const { runner } = createHookRunnerWithRegistry(
+        [{ hookName: "model_failover", handler, pluginId: "plugin-a" }],
+        { logger },
+      );
+
+      const run = runner.runModelFailover(
+        {
+          provider: "openai",
+          model: "gpt-4",
+          stage: "prompt",
+          decision: "fallback_model",
+          fallbackConfigured: true,
+        },
+        BASE_AGENT_CTX,
+      );
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_FAILURE_HOOK_TIMEOUT_MS);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        `[hooks] model_failover handler from plugin-a failed: timed out after ${DEFAULT_FAILURE_HOOK_TIMEOUT_MS}ms`,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("includes hasHooks('model_failover') = true when a handler is registered", () => {
     const { runner } = createHookRunnerWithRegistry([
       { hookName: "model_failover", handler: vi.fn() },
@@ -208,6 +244,38 @@ describe("model_failure_terminal hook", () => {
     };
 
     await expect(runner.runModelFailureTerminal(event, BASE_AGENT_CTX)).resolves.toBeUndefined();
+  });
+
+  it("bounds a never-settling handler with the default timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise<void>(() => {}));
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+      const { runner } = createHookRunnerWithRegistry(
+        [{ hookName: "model_failure_terminal", handler, pluginId: "plugin-a" }],
+        { logger },
+      );
+
+      const run = runner.runModelFailureTerminal(
+        {
+          finalMessage: "all models failed",
+          kind: "run_failed_before_reply",
+        },
+        BASE_AGENT_CTX,
+      );
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_FAILURE_HOOK_TIMEOUT_MS);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        `[hooks] model_failure_terminal handler from plugin-a failed: timed out after ${DEFAULT_FAILURE_HOOK_TIMEOUT_MS}ms`,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("includes hasHooks('model_failure_terminal') = true when a handler is registered", () => {
