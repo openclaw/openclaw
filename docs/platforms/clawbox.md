@@ -16,7 +16,7 @@ provisioning a VPS or keeping a laptop running.
 
 ## What it is
 
-- NVIDIA Jetson hardware with the Gateway installed and enabled on boot
+- NVIDIA Jetson hardware with the OpenClaw Gateway preinstalled
 - First-run setup wizard and a local dashboard
 - QR-code device pairing for phones and laptops
 
