@@ -159,7 +159,7 @@ type BeforeToolCallPreparingTool = AnyAgentTool & {
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
-  ) => Promise<unknown> | unknown;
+  ) => unknown;
   finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 

@@ -25,7 +25,7 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
-  ) => Promise<unknown> | unknown;
+  ) => unknown;
   finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 
