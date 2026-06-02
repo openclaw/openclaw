@@ -196,7 +196,7 @@ fi
 
 echo "→ Running opengrep ($BUCKET) against $(IFS=' '; echo "${SCAN_PATHS[*]:-overridden}")" >&2
 echo "  Using exclusions from .semgrepignore" >&2
-OPENGREP_ARGS=( scan --no-strict --config "$CONFIG" --no-git-ignore )
+OPENGREP_ARGS=( scan --no-strict --config "$CONFIG" --no-git-ignore --force-exclude )
 if (( ${#EXTRA_ARGS[@]} > 0 )); then
   OPENGREP_ARGS+=( "${EXTRA_ARGS[@]}" )
 fi
