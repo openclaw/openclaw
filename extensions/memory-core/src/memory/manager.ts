@@ -717,7 +717,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return merged;
     }
     if (merged.length === 0) {
-      this.rerankState = "active";
+      // Empty candidate pool: nothing to rerank — do not assert "active" since
+      // no scores could be applied. Leave the existing state untouched.
       onDebug?.({ backend: "builtin", rerank: this.rerankState });
       return merged;
     }
@@ -747,8 +748,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (!this.isValidRerankScores(scores, merged.length)) {
         throw new Error("reranker returned invalid or duplicate refs");
       }
+      // An empty scores array means the provider chose not to rank (e.g.
+      // kill-switch on, endpoint down). Treat this as degraded so a
+      // registered-but-not-reranking plugin is visible in observability.
+      // This is intentional: kill-switched = "registered but not reranking" = degraded.
+      if (scores.length === 0) {
+        throw new Error("reranker returned no scores");
+      }
       const reranked = this.reorderByRerankScores(merged, scores);
-      // Re-arm the latch: a recovered provider returns to "active".
+      // Re-arm the latch: a recovered provider returns to "active" only when
+      // scores were actually applied.
       this.rerankState = "active";
       onDebug?.({ backend: "builtin", rerank: this.rerankState });
       return reranked;

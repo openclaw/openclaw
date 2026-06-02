@@ -235,4 +235,30 @@ describe("memory rerank stage", () => {
     const custom = baseline.status().custom as ManagerStatusCustom;
     expect(custom.rerank?.state).toBe("degraded");
   });
+
+  it("(f) reranker returns [] with non-empty candidates: pre-rerank order, degraded state, failureCount 1", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+    expect(preOrder.length).toBeGreaterThan(0);
+
+    // Kill-switched or fail-open plugin returns [] without throwing.
+    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+      rerank: async (): Promise<MemoryRerankScore[]> => [],
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    // Pre-rerank order preserved (fail-open).
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    // No rerankScore applied since the provider returned no scores.
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    // A registered-but-not-reranking provider must report "degraded", not "active".
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+    expect(custom.rerank?.lastError).toBeTruthy();
+  });
 });
