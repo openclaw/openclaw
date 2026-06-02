@@ -134,7 +134,7 @@
         "channel": {
           "id": "openclaw-zaloclawbot",
           "label": "Zalo ClawBot",
-          "selectionLabel": "Zalo ClawBot (personal assistant)",
+          "selectionLabel": "Zalo ClawBot (QR)",
           "detailLabel": "Zalo ClawBot",
           "docsPath": "/channels/zaloclawbot",
           "docsLabel": "zaloclawbot",
@@ -153,9 +153,9 @@
           }
         },
         "install": {
-          "npmSpec": "@zalo-platforms/openclaw-zaloclawbot@0.1.0",
+          "npmSpec": "@zalo-platforms/openclaw-zaloclawbot@0.1.1",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-nXXGdFWUKtyvV8nhKLW6h008sbjBvhViSUJmKcLLlB/+N1VeaWFwHZmVTkTRbYYpjPWPDHjl289+pUncwsYxcQ==",
+          "expectedIntegrity": "sha512-IIus3wUc8e7790qjCqOykq2kVh6JuecjHoJe+rMAH7leSHuLel0eAoLkZZCjHcrTvcpEe14fkxWf1c8OH57gyw==",
           "minHostVersion": ">=2026.4.10"
         }
       }

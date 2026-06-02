@@ -35,8 +35,10 @@ If the quick installer script does not fit your environment, follow these steps 
 ### 1. Install the plugin
 
 ```bash
-openclaw plugins install "@zalo-platforms/openclaw-zaloclawbot"
+openclaw plugins install "@zalo-platforms/openclaw-zaloclawbot@0.1.1"
 ```
+
+Use the exact pinned version shown above (it matches the official catalog entry), so OpenClaw verifies the package against the catalog integrity hash during install.
 
 ### 2. Enable the plugin in config
 
