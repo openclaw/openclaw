@@ -65,6 +65,7 @@ describe("run-opengrep.sh", () => {
     });
 
     const args = fs.readFileSync(path.join(repo, "opengrep-args.txt"), "utf8");
+    expect(args).toContain("--force-exclude");
     expect(args).toContain("security/opengrep/precise.yml");
   });
 
