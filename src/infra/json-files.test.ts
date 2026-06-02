@@ -9,6 +9,7 @@ import {
   readJson,
   readJsonFile,
   tryReadJson,
+  writeJson,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./json-files.js";
@@ -209,6 +210,58 @@ describe("json file helpers", () => {
     await expect(first).rejects.toThrow(expectedFirstError);
     await expect(second).resolves.toBe("ok");
     expect(events).toEqual(expectedEvents);
+  });
+
+  describe("dirMode defaults (#89589)", () => {
+    const skipOnWindows = process.platform === "win32";
+
+    it("writeTextAtomic defaults dirMode to 0o700", async () => {
+      if (skipOnWindows) {
+        return;
+      }
+      await withTempDir({ prefix: "openclaw-json-files-dirmode-" }, async (base) => {
+        const filePath = path.join(base, "nested", "note.txt");
+        await writeTextAtomic(filePath, "content");
+        const dirStat = await fsPromises.stat(path.join(base, "nested"));
+        expect(dirStat.mode & 0o777).toBe(0o700);
+      });
+    });
+
+    it("writeTextAtomic respects explicit dirMode override", async () => {
+      if (skipOnWindows) {
+        return;
+      }
+      await withTempDir({ prefix: "openclaw-json-files-dirmode-" }, async (base) => {
+        const filePath = path.join(base, "nested2", "note.txt");
+        await writeTextAtomic(filePath, "content", { dirMode: 0o755 });
+        const dirStat = await fsPromises.stat(path.join(base, "nested2"));
+        expect(dirStat.mode & 0o777).toBe(0o755);
+      });
+    });
+
+    it("writeJson defaults dirMode to 0o700", async () => {
+      if (skipOnWindows) {
+        return;
+      }
+      await withTempDir({ prefix: "openclaw-json-files-dirmode-" }, async (base) => {
+        const filePath = path.join(base, "nested3", "data.json");
+        await writeJson(filePath, { ok: true });
+        const dirStat = await fsPromises.stat(path.join(base, "nested3"));
+        expect(dirStat.mode & 0o777).toBe(0o700);
+      });
+    });
+
+    it("writeJson respects explicit dirMode override", async () => {
+      if (skipOnWindows) {
+        return;
+      }
+      await withTempDir({ prefix: "openclaw-json-files-dirmode-" }, async (base) => {
+        const filePath = path.join(base, "nested4", "data.json");
+        await writeJson(filePath, { ok: true }, { dirMode: 0o755 });
+        const dirStat = await fsPromises.stat(path.join(base, "nested4"));
+        expect(dirStat.mode & 0o777).toBe(0o755);
+      });
+    });
   });
 
   describe("retry behaviors on 'File changed during read'", () => {

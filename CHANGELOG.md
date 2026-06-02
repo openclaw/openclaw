@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Security: state directory writes no longer relax permissions back to 0775. Thanks @SebTardif.
+
 ## 2026.6.2
 
 ### Highlights
