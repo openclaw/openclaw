@@ -468,6 +468,11 @@ export async function waitForAgentJob(params: {
     removeWaiter = addAgentRunWaiter(runId);
 
     const timer = setSafeTimeout(() => {
+      const pendingTimeout = getPendingAgentRunTimeout(runId);
+      if (pendingTimeout) {
+        finish(pendingTimeout.snapshot);
+        return;
+      }
       const pendingError = getPendingAgentRunError(runId);
       finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
     }, timeoutMs);
