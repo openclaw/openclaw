@@ -25,6 +25,7 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     disabled: false,
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
+    blockedByPlatform: false,
     eligible: true,
     modelVisible: true,
     userInvocable: true,

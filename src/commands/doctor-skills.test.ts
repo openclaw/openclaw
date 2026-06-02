@@ -24,6 +24,7 @@ function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {
     disabled: false,
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
+    blockedByPlatform: false,
     eligible: true,
     modelVisible: true,
     userInvocable: true,
@@ -88,6 +89,30 @@ describe("doctor skills", () => {
     expect(lines.join("\n")).toContain("places: bins: goplaces; env: GOOGLE_MAPS_API_KEY");
     expect(lines.join("\n")).toContain("install option: Install goplaces (brew)");
     expect(lines.join("\n")).toContain("openclaw doctor --fix");
+  });
+
+  it("excludes platform-incompatible skills from unavailable list (regression for #89232)", () => {
+    // macOS-only skills on non-macOS platforms should not show as "missing requirements".
+    const platformBlocked = createSkill({
+      name: "apple-notes",
+      eligible: false,
+      blockedByPlatform: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: ["darwin"] },
+    });
+    const genuinelyMissing = createSkill({
+      name: "missing-bin",
+      eligible: false,
+      missing: { bins: ["tool"], anyBins: [], env: [], config: [], os: [] },
+    });
+    const report = createReport([
+      createSkill({ name: "ready" }),
+      platformBlocked,
+      genuinelyMissing,
+    ]);
+
+    const collected = collectUnavailableAgentSkills(report);
+    expect(collected).toHaveLength(1);
+    expect(collected[0]?.name).toBe("missing-bin");
   });
 
   it("surfaces a GH_CONFIG_DIR hint when the github skill is eligible but auth lives at a different HOME", () => {
