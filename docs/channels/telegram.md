@@ -794,13 +794,15 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Approval reactions (👍 / 👎)">
-    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes through Telegram, OpenClaw binds the approval prompt message to Telegram reaction updates and accepts reaction decisions directly:
+    When exec approvals are enabled for Telegram (`channels.telegram.execApprovals.enabled`, or account override `channels.telegram.accounts.<id>.execApprovals.enabled`) and the request routes through Telegram, OpenClaw binds the approval prompt message to Telegram reaction updates and accepts reaction decisions directly:
 
     - `👍` -> `allow-once`
     - `👎` -> `deny`
     - `allow-always` remains a manual fallback via `/approve <id> allow-always`
 
-    Approval reactions are authorized with explicit approval approvers (exec approvers or plugin approvers), not with generic reaction notification settings. This shortcut is checked before generic `reactionNotifications` gates so approval reactions can still resolve when notification mode is `off`.
+    Approval reactions are authorized with explicit approval approvers, not with generic reaction notification settings. For exec approvals, approvers come from `channels.telegram.execApprovals.approvers` (or `channels.telegram.accounts.<id>.execApprovals.approvers`) and fall back to numeric owner IDs from `commands.ownerAllowFrom`. Telegram approver IDs must be numeric Telegram user IDs.
+
+    This shortcut is checked before generic `reactionNotifications` gates so approval reactions can still resolve when notification mode is `off`.
 
     Persistence behavior:
 
