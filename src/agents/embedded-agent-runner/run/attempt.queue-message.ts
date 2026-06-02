@@ -81,6 +81,11 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
   return Array.isArray(messages) ? messages : undefined;
 }
 
+/**
+ * Removes one pending steered user message from both the runtime queue and UI
+ * steering list. This targets the exact text so unrelated queued messages keep
+ * their payloads and ordering.
+ */
 export async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -140,6 +145,8 @@ export async function steerAndWaitForTranscriptCommit(
       resolve();
     };
     const rejectAfterCancellation = (message: string) => {
+      // Cancellation is best-effort but must finish before rejecting so callers
+      // do not return while a stale queued message can leak into the next turn.
       void cancelQueuedSteeringMessage(activeSession, text)
         .then((removed) => {
           if (!removed) {
@@ -176,6 +183,8 @@ export async function steerAndWaitForTranscriptCommit(
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
+        // Continuation events prove the run is still alive under a new attempt,
+        // so keep waiting for the queued user message to drain.
         if (terminalTimer) {
           clearTimeout(terminalTimer);
           terminalTimer = undefined;
