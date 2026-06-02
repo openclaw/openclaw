@@ -55,6 +55,10 @@ export type RunCliAgentParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  /** When true, an empty assistant reply is treated as a valid silent no-reply
+   *  rather than triggering model fallback. Passed through from the caller's
+   *  group silent-reply policy. */
+  allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;

@@ -536,10 +536,11 @@ export async function runPreparedCliAgent(
     const assistantText = output.text.trim();
     if (!assistantText) {
       // A completed CLI turn with a result event and no text (e.g.
-      // thinking-only end_turn) is a valid "nothing to say" when silent
-      // replies are enabled. In silent-disallowed contexts, keep the
-      // failover path so a different model can produce a visible reply.
-      if (!output.completedTurn || params.silentReplyPromptMode === "none") {
+      // thinking-only end_turn) is a valid "nothing to say" when the
+      // caller's group policy allows empty assistant replies as silent.
+      // Otherwise keep the failover path so a different model can
+      // produce a visible reply.
+      if (!output.completedTurn || !params.allowEmptyAssistantReplyAsSilent) {
         throw new FailoverError("CLI backend returned an empty response.", {
           reason: "empty_response",
           provider: params.provider,
