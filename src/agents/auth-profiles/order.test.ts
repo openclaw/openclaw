@@ -544,6 +544,101 @@ describe("resolveAuthProfileOrder", () => {
     }
   });
 
+  it("clamps a stale persisted billing disable so the profile is reachable again (#70903)", () => {
+    // Simulates a user upgrading from an older OpenClaw default that wrote
+    // `disabledUntil` ~5 hours into the future for a billing failure. Without
+    // the clamp the profile would be filtered from the resolved order for the
+    // full window and the user would stay locked out even after topping up.
+    const fiveHours = 5 * 60 * 60 * 1000;
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:default": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-test",
+        },
+      },
+      usageStats: {
+        "fixture-provider:default": {
+          disabledUntil: Date.now() + fiveHours,
+          disabledReason: "billing",
+          errorCount: 2,
+          failureCounts: { billing: 2 },
+          lastFailureAt: Date.now() - 1_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "fixture-provider",
+    });
+
+    // Profile is still in the order (last, behind any available ones — here
+    // it's alone, so it shows up): the clamp pulls disabledUntil down to the
+    // ~15-minute default ceiling, so the existing cooldown sort still keeps
+    // it considered.
+    expect(order).toEqual(["fixture-provider:default"]);
+    const clamped = store.usageStats?.["fixture-provider:default"]?.disabledUntil;
+    expect(typeof clamped).toBe("number");
+    expect((clamped as number) - Date.now()).toBeLessThanOrEqual(16 * 60 * 1000);
+  });
+
+  it("recovers a stale on-disk billing disable across repeated reloads without sliding the window (#70903)", () => {
+    // Reproduce the restart/reload path: the same stale auth-state.json bytes
+    // are reconstructed into a fresh store on each call, and `Date.now()`
+    // advances between calls (as it would across gateway restarts).
+    const failureAt = 1_700_000_000_000;
+    const fiveHours = 5 * 60 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const profileId = "fixture-provider:default";
+
+    // Fresh store from the persisted bytes — stale 5h disable + the original
+    // failure timestamp the disable was written against.
+    const reloadStore = (): AuthProfileStore => ({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: "fixture-provider", key: "sk-test" },
+      },
+      usageStats: {
+        [profileId]: {
+          disabledUntil: failureAt + fiveHours,
+          disabledReason: "billing",
+          errorCount: 2,
+          failureCounts: { billing: 2 },
+          lastFailureAt: failureAt,
+        },
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      // Reload BEFORE the cap elapses: the clamp pins disabledUntil to the
+      // failure-anchored ceiling and the profile is still cooling down.
+      vi.setSystemTime(failureAt + 10 * 60 * 1000);
+      const earlyStore = reloadStore();
+      resolveAuthProfileOrder({ store: earlyStore, provider: "fixture-provider" });
+      expect(earlyStore.usageStats?.[profileId]?.disabledUntil).toBe(failureAt + fifteenMinutes);
+
+      // Reload repeatedly AFTER the cap elapses: each fresh load pins to the
+      // same past ceiling (no sliding) and the expiry sweep clears it, so the
+      // profile becomes usable again instead of staying disabled forever.
+      for (const offset of [16 * 60 * 1000, 2 * 60 * 60 * 1000, fiveHours]) {
+        vi.setSystemTime(failureAt + offset);
+        const store = reloadStore();
+        const order = resolveAuthProfileOrder({ store, provider: "fixture-provider" });
+        expect(order).toEqual([profileId]);
+        // Cleared by clearExpiredCooldowns after the anchored clamp — NOT
+        // reclamped to now + 15m.
+        expect(store.usageStats?.[profileId]?.disabledUntil).toBeUndefined();
+        expect(store.usageStats?.[profileId]?.disabledReason).toBeUndefined();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses caller-provided auth alias metadata for stored credential compatibility", () => {
     expect(
       isStoredCredentialCompatibleWithAuthProvider({

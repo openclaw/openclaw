@@ -16,11 +16,11 @@ export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   order?: Record<string, string[]>;
   cooldowns?: {
-    /** Default billing backoff (hours). Default: 5. */
+    /** Default billing backoff (hours). Default: ~5 minutes (0.083 hours). */
     billingBackoffHours?: number;
     /** Optional per-provider billing backoff (hours). */
     billingBackoffHoursByProvider?: Record<string, number>;
-    /** Billing backoff cap (hours). Default: 24. */
+    /** Billing backoff cap (hours). Default: 15 minutes (0.25 hours). */
     billingMaxHours?: number;
     /**
      * Base backoff for high-confidence permanent-auth failures (minutes).

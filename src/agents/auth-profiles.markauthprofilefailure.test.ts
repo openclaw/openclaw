@@ -143,7 +143,10 @@ describe("markAuthProfileFailure", () => {
     expect(typeof reloaded.usageStats?.["openai:default"]?.cooldownUntil).toBe("number");
   });
 
-  it("disables billing failures for ~5 hours by default", async () => {
+  it("disables billing failures for ~5 minutes by default (#70903)", async () => {
+    // Persisted disabledUntil locks users out for the full window even after
+    // billing recovers, because the call layer skips disabled profiles before
+    // any probe runs. Keep the default tight; operators raise via config.
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();
       await markAuthProfileFailure({
@@ -156,8 +159,54 @@ describe("markAuthProfileFailure", () => {
       const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
+      expectCooldownInRange(remainingMs, 4.5 * 60 * 1000, 5.5 * 60 * 1000);
     });
+  });
+
+  it("caps repeated billing failures at the default ~15-minute ceiling (#70903)", async () => {
+    const agentDir = makeAgentDir("billing-cap");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    const now = Date.now();
+    // Seed the on-disk state with a high accumulated billing failure count
+    // inside the active failure window but with no active disable window. The
+    // next failure should escalate via the disable-lane exponential backoff,
+    // which the new 15-minute default cap clamps tightly.
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-default",
+          },
+        },
+        usageStats: {
+          "anthropic:default": {
+            errorCount: 5,
+            failureCounts: { billing: 5 },
+            lastFailureAt: now - 60_000,
+          },
+        },
+      }),
+    );
+
+    const store = ensureAuthProfileStore(agentDir);
+    const startedAt = Date.now();
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "billing",
+      agentDir,
+    });
+
+    const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+    expect(typeof disabledUntil).toBe("number");
+    const remainingMs = (disabledUntil as number) - startedAt;
+    // failureCounts.billing now 6 → exponent 5 → 5min*32 = 160min raw → capped
+    // to ~15 minutes by the new default.
+    expectCooldownInRange(remainingMs, 14 * 60 * 1000, 16 * 60 * 1000);
   });
   it("honors per-provider billing backoff overrides", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
