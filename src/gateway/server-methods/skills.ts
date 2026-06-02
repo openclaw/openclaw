@@ -495,11 +495,22 @@ export const skillsHandlers: GatewayRequestHandlers = {
       dangerouslyForceUnsafeInstall?: boolean;
       timeoutMs?: number;
     };
+    if (p.dangerouslyForceUnsafeInstall === true) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid skills.install params: dangerouslyForceUnsafeInstall=true is not supported on the gateway; omit the field or send false",
+        ),
+      );
+      return;
+    }
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
       installId: p.installId,
-      dangerouslyForceUnsafeInstall: p.dangerouslyForceUnsafeInstall,
+      dangerouslyForceUnsafeInstall: false,
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
