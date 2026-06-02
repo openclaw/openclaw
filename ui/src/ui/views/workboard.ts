@@ -200,10 +200,11 @@ function focusWorkboardDialog(root: HTMLElement, initialFocusSelector?: string) 
 
 function syncWorkboardDialog(element: Element | undefined, initialFocusSelector?: string) {
   if (!(element instanceof HTMLElement)) {
-    if (activeWorkboardDialog) {
+    if (activeWorkboardDialog && !activeWorkboardDialog.isConnected) {
       restoreWorkboardFocus();
     }
     return;
+  }
   }
   if (activeWorkboardDialog !== element) {
     rememberWorkboardReturnFocus(null);
