@@ -50,6 +50,20 @@ type SessionsYieldVisibleReply = {
   anchor: Record<string, unknown>;
 };
 
+const SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX = ":sessions_yield_mirror";
+
+export function resolveSessionsYieldMirrorMessageId(sourceMessageId: string): string {
+  return sourceMessageId.endsWith(SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX)
+    ? sourceMessageId
+    : `${sourceMessageId}${SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX}`;
+}
+
+export function resolveSessionsYieldMirrorSourceMessageId(messageId: string): string | undefined {
+  return messageId.endsWith(SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX)
+    ? messageId.slice(0, -SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX.length)
+    : undefined;
+}
+
 type PendingSessionsYieldCall = {
   assistantIndex?: number;
   text?: string;
@@ -1238,7 +1252,16 @@ function buildSessionsYieldVisibleReplyMirror(
   }
   const transcriptMeta = readRecord(reply.anchor["__openclaw"]);
   if (transcriptMeta) {
-    mirror["__openclaw"] = { ...transcriptMeta };
+    const sourceMessageId = normalizeOptionalString(transcriptMeta.id);
+    mirror["__openclaw"] = {
+      ...transcriptMeta,
+      ...(sourceMessageId
+        ? {
+            id: resolveSessionsYieldMirrorMessageId(sourceMessageId),
+            sourceId: sourceMessageId,
+          }
+        : {}),
+    };
   }
   return mirror;
 }
@@ -1357,6 +1380,7 @@ function mirrorSessionsYieldToolResults(messages: unknown[]): unknown[] {
       const duplicatesPreviousAssistantText =
         previousAssistantMatchesYieldText || pendingYieldCall?.text === normalizedYieldText;
       if (!duplicatesPreviousAssistantText) {
+        next.push(message);
         next.push(
           buildSessionsYieldVisibleReplyMirror({
             text: normalizedYieldText,
@@ -1378,6 +1402,7 @@ function mirrorSessionsYieldToolResults(messages: unknown[]): unknown[] {
             },
           );
         }
+        next.push(message);
       }
       changed = true;
       if (pendingYieldCallId) {

@@ -2774,12 +2774,14 @@ describe("gateway server chat", () => {
           typeof message === "object" &&
           Boolean((message as { openclawSessionsYieldMirror?: unknown }).openclawSessionsYieldMirror),
       ) as { __openclaw?: { id?: string }; content?: Array<{ text?: string }> } | undefined;
-      expect(yieldMirror?.["__openclaw"]?.id).toBe("msg-yield-result");
+      expect(yieldMirror?.["__openclaw"]?.id).toBe(
+        "msg-yield-result:sessions_yield_mirror",
+      );
       expect(yieldMirror?.content?.[0]?.text).toContain("...(truncated)...");
 
       const full = await fetchChatMessage(ws, {
         sessionKey: "main",
-        messageId: "msg-yield-result",
+        messageId: "msg-yield-result:sessions_yield_mirror",
       });
 
       expect(full.ok).toBe(true);
@@ -2794,10 +2796,20 @@ describe("gateway server chat", () => {
       });
       expect(JSON.stringify(full.message)).toContain(yieldMessage);
       expect(JSON.stringify(full.message)).not.toContain("toolResult");
+
+      const raw = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-yield-result",
+      });
+
+      expect(raw.ok).toBe(true);
+      expect(raw.unavailableReason).toBeUndefined();
+      expect((raw.message as { role?: unknown } | undefined)?.role).toBe("toolResult");
+      expect(JSON.stringify(raw.message)).toContain(yieldMessage);
     });
   });
 
-  test("chat.message.get does not expose hidden duplicate sessions_yield results", async () => {
+  test("chat.message.get keeps duplicate sessions_yield raw results addressable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
       const yieldMessage = "Waiting for child completion.";
@@ -2843,16 +2855,17 @@ describe("gateway server chat", () => {
             (message as { ["__openclaw"]?: { id?: string } } | undefined)?.["__openclaw"]?.id ===
             "msg-yield-result",
         ),
-      ).toBe(false);
+      ).toBe(true);
 
-      const hidden = await fetchChatMessage(ws, {
+      const raw = await fetchChatMessage(ws, {
         sessionKey: "main",
         messageId: "msg-yield-result",
       });
 
-      expect(hidden.ok).toBe(false);
-      expect(hidden.unavailableReason).toBe("not_visible");
-      expect(hidden.message).toBeUndefined();
+      expect(raw.ok).toBe(true);
+      expect(raw.unavailableReason).toBeUndefined();
+      expect((raw.message as { role?: unknown } | undefined)?.role).toBe("toolResult");
+      expect(JSON.stringify(raw.message)).toContain(yieldMessage);
     });
   });
 

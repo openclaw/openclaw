@@ -104,6 +104,24 @@ describe("SessionHistorySseState", () => {
         })
       );
     });
+  const collectVisibleTextValues = (messages: unknown[]): string[] =>
+    messages.flatMap((message) => {
+      if (!message || typeof message !== "object") {
+        return [];
+      }
+      const role = (message as { role?: unknown }).role;
+      if (role === "toolResult" || role === "tool") {
+        return [];
+      }
+      return (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [];
+    });
+  const hasToolResult = (messages: unknown[]): boolean =>
+    messages.some((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+      return (message as { role?: unknown }).role === "toolResult";
+    });
 
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
     const readSpy = vi
@@ -338,12 +356,11 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expect(
-      snapshot.history.messages.flatMap(
-        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-      ),
-    ).toEqual(["spawn a child", yieldMessage]);
-    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(collectVisibleTextValues(snapshot.history.messages)).toEqual([
+      "spawn a child",
+      yieldMessage,
+    ]);
+    expect(hasToolResult(snapshot.history.messages)).toBe(true);
     expect(
       Boolean(
         snapshot.history.messages.find(
@@ -396,12 +413,12 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expect(
-      snapshot.history.messages.flatMap(
-        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-      ),
-    ).toEqual(["spawn a child", "I started the child session.", yieldMessage]);
-    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(collectVisibleTextValues(snapshot.history.messages)).toEqual([
+      "spawn a child",
+      "I started the child session.",
+      yieldMessage,
+    ]);
+    expect(hasToolResult(snapshot.history.messages)).toBe(true);
     expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
       toolName: "sessions_yield",
       toolCallId: "call-yield",
@@ -446,12 +463,11 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expect(
-      snapshot.history.messages.flatMap(
-        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-      ),
-    ).toEqual(["I started the child session.", yieldMessage]);
-    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(collectVisibleTextValues(snapshot.history.messages)).toEqual([
+      "I started the child session.",
+      yieldMessage,
+    ]);
+    expect(hasToolResult(snapshot.history.messages)).toBe(true);
     expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
       toolName: "sessions_yield",
       toolCallId: "call-yield",
@@ -490,12 +506,8 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expect(
-      snapshot.history.messages.flatMap(
-        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-      ),
-    ).toEqual([yieldMessage]);
-    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(collectVisibleTextValues(snapshot.history.messages)).toEqual([yieldMessage]);
+    expect(hasToolResult(snapshot.history.messages)).toBe(true);
     expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
       toolName: "sessions_yield",
       toolCallId: "call-yield",
@@ -532,12 +544,8 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expect(
-      snapshot.history.messages.flatMap(
-        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-      ),
-    ).toEqual([yieldMessage]);
-    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(collectVisibleTextValues(snapshot.history.messages)).toEqual([yieldMessage]);
+    expect(hasToolResult(snapshot.history.messages)).toBe(true);
     expect(snapshot.history.messages.at(-1)?.openclawSessionsYieldMirror).toEqual({
       toolName: "sessions_yield",
       toolCallId: "call-yield",
@@ -677,27 +685,21 @@ describe("SessionHistorySseState", () => {
         messageSeq: 2,
       });
 
-      expect(appended?.shouldRefresh).toBe(true);
-      expect(
-        state
-          .snapshot()
-          .messages.flatMap(
-            (message) =>
-              (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-          ),
-      ).toEqual([yieldMessage]);
+      expect(appended?.messageSeq).toBe(2);
+      expect((appended?.message as { role?: unknown } | undefined)?.role).toBe("toolResult");
+      expect(collectVisibleTextValues(state.snapshot().messages)).toEqual([yieldMessage]);
       expect(
         hasHistoryContentBlockType(state.snapshot().messages, "function_call"),
       ).toBe(false);
       expect(
         state
           .snapshot()
-          .messages.at(-1)?.openclawSessionsYieldMirror,
-      ).toEqual({
+          .messages[0]?.openclawSessionsYieldMirror,
+      ).toMatchObject({
         toolName: "sessions_yield",
         toolCallId: "call-yield",
-        duplicateAssistantText: true,
       });
+      expect(hasToolResult(state.snapshot().messages)).toBe(true);
     }
   });
 
@@ -772,7 +774,7 @@ describe("SessionHistorySseState", () => {
       projected.some(
         (message) => message.role === "toolResult" && message.toolName === "sessions_yield",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("uses hidden sessions_yield calls as inline context for following tool results", () => {
@@ -836,25 +838,21 @@ describe("SessionHistorySseState", () => {
         messageSeq: 3,
       });
 
-      expect(yieldedResultAppend?.messageSeq).toBe(3);
+      expect(yieldedResultAppend?.shouldRefresh).toBe(true);
+      expect(collectVisibleTextValues(state.snapshot().messages)).toEqual([
+        "spawn a child",
+        yieldMessage,
+      ]);
+      expect(hasToolResult(state.snapshot().messages)).toBe(true);
       expect(
-        (yieldedResultAppend?.message as { openclawSessionsYieldMirror?: unknown } | undefined)
-          ?.openclawSessionsYieldMirror,
-      ).toEqual({
-        toolName: "sessions_yield",
-        toolCallId: "call-yield",
-      });
-      expect(
-        state
-          .snapshot()
-          .messages.flatMap(
-            (message) =>
-              (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
-          ),
-      ).toEqual(["spawn a child", yieldMessage]);
-      expect(state.snapshot().messages.some((message) => message.role === "toolResult")).toBe(
-        false,
-      );
+        Boolean(
+          state
+            .snapshot()
+            .messages.find(
+              (message) => message.openclawSessionsYieldMirror !== undefined,
+            ),
+        ),
+      ).toBe(true);
     }
   });
 
