@@ -10,6 +10,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
@@ -110,6 +111,21 @@ export function invalidateModelAuthStatusCache(): void {
   // rotation, etc.). Without this, `/models` and pickers keep advertising
   // providers the running gateway can no longer authenticate.
   clearCurrentProviderAuthState();
+}
+
+async function refreshModelAuthStatusRuntimeState(): Promise<void> {
+  invalidateModelAuthStatusCache();
+  try {
+    if (await refreshActiveSecretsRuntimeSnapshot()) {
+      return;
+    }
+  } catch (err) {
+    log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
+    return;
+  }
+  // Explicit status refresh follows CLI/doctor repairs. If no secrets runtime is
+  // active, drop runtime auth snapshots so the next status read observes disk.
+  clearRuntimeAuthProfileStoreSnapshots();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -444,6 +460,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (bypassCache) {
+        await refreshModelAuthStatusRuntimeState();
+      }
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveDefaultAgentDir(cfg);
       // Use the external-profile-aware store for status reads so the dashboard
@@ -456,6 +475,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         store,
         cfg,
         providers: configured.providers.length > 0 ? configured.providers : undefined,
+        allowKeychainPrompt: false,
       });
 
       // Usage queries usually need refreshable credentials. Keep API-key status

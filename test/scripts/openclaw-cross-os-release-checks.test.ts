@@ -83,6 +83,7 @@ import {
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
+  verifyWindowsPackagedUpgradeFallbackInstall,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
@@ -1354,6 +1355,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         usedWindowsPackagedUpgradeFallback: true,
       }),
     ).toBe(true);
+  });
+
+  it("verifies the Windows packaged-upgrade fallback installed the candidate", () => {
+    expect(() =>
+      verifyWindowsPackagedUpgradeFallbackInstall({
+        installedVersion: "2026.5.4-beta.1",
+        candidateVersion: "2026.5.4-beta.1",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      verifyWindowsPackagedUpgradeFallbackInstall({
+        installedVersion: "2026.5.3",
+        candidateVersion: "2026.5.4-beta.1",
+      }),
+    ).toThrow(/expected 2026\.5\.4-beta\.1/u);
+    expect(() =>
+      verifyWindowsPackagedUpgradeFallbackInstall({
+        installedVersion: "",
+        candidateVersion: "2026.5.4-beta.1",
+      }),
+    ).toThrow(/installed unknown/u);
   });
 
   it("does not recover unrelated packaged update failures", () => {

@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 
 const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
-  readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
+  readCodexCliCredentialsCachedMock: vi.fn<
+    (options?: { allowKeychainPrompt?: boolean }) => OAuthCredential | null
+  >(() => null),
 }));
 
 vi.mock("./cli-credentials.js", () => ({
@@ -122,6 +124,7 @@ describe("buildAuthHealthSummary", () => {
 
   it("reports unresolved legacy Codex OAuth sidecars as missing auth", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
+    mockFreshCodexCliCredentials();
     const store = {
       version: 1,
       profiles: {
@@ -147,6 +150,59 @@ describe("buildAuthHealthSummary", () => {
     expect(profileReasonCodes(summary)["openai-codex:default"]).toBe("unresolved_ref");
     expect(summary.providers.find((entry) => entry.provider === "openai-codex")?.status).toBe(
       "missing",
+    );
+  });
+
+  it("uses external CLI bootstrap before marking empty OAuth profiles missing", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mockFreshCodexCliCredentials();
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth" as const,
+          provider: "openai",
+        } as unknown as OAuthCredential,
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    expect(profileStatuses(summary)["openai:default"]).toBe("ok");
+    expect(profileReasonCodes(summary)["openai:default"]).toBeUndefined();
+    const provider = summary.providers.find((entry) => entry.provider === "openai");
+    expect(provider?.status).toBe("ok");
+    expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+  });
+
+  it("passes no-prompt policy to external CLI bootstrap during health checks", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mockFreshCodexCliCredentials();
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth" as const,
+          provider: "openai",
+        } as unknown as OAuthCredential,
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      allowKeychainPrompt: false,
+    });
+
+    expect(profileStatuses(summary)["openai:default"]).toBe("ok");
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
     );
   });
 

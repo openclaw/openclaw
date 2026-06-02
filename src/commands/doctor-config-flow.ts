@@ -131,7 +131,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     shouldRepair,
     doctorFixCommand,
   });
-  ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  cfg = legacyStep.state.cfg;
+  candidate = legacyStep.state.candidate;
+  pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
+  fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
@@ -160,7 +163,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     !shouldRepair &&
     !fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
   ) {
-    fixHints = [...fixHints, `Run "${doctorFixCommand}" to migrate legacy config keys.`];
+    fixHints.push(`Run "${doctorFixCommand}" to migrate legacy config keys.`);
   }
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
@@ -258,6 +261,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (missingExplicitDefaultWarnings.length > 0) {
     note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
   }
+
+  const { repairHooksTokenReuseGatewayAuth } =
+    await import("./doctor/shared/hooks-token-reuse-repair.js");
+  const hooksTokenReuseRepair = await repairHooksTokenReuseGatewayAuth(candidate, process.env);
+  emitDoctorChangesPanel(hooksTokenReuseRepair.changes, shouldRepair);
+  ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    mutation: hooksTokenReuseRepair,
+    shouldRepair,
+    fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
+  }));
 
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");

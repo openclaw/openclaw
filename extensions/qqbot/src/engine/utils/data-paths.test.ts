@@ -12,7 +12,7 @@ function createTempDir(prefix: string): string {
   return dir;
 }
 
-describe("qqbot credential backup paths", () => {
+describe("qqbot legacy credential backup paths", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     for (const stateDir of createdStateDirs.splice(0)) {
@@ -20,7 +20,7 @@ describe("qqbot credential backup paths", () => {
     }
   });
 
-  it("scopes credential backups to the active OPENCLAW_STATE_DIR", () => {
+  it("scopes legacy credential backup imports to the active OPENCLAW_STATE_DIR", () => {
     const stateDir = createTempDir("qqbot-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
@@ -32,7 +32,7 @@ describe("qqbot credential backup paths", () => {
     );
   });
 
-  it("keeps same account IDs isolated across different state directories", () => {
+  it("keeps legacy account import paths isolated across different state directories", () => {
     const stateDirA = createTempDir("qqbot-state-a-");
     const stateDirB = createTempDir("qqbot-state-b-");
 
@@ -51,7 +51,7 @@ describe("qqbot credential backup paths", () => {
     expect(gatewayBPath).not.toBe(gatewayAPath);
   });
 
-  it("uses OPENCLAW_HOME for default credential backup state", () => {
+  it("uses OPENCLAW_HOME for default legacy credential backup imports", () => {
     const homeDir = createTempDir("qqbot-openclaw-home-");
     vi.stubEnv("OPENCLAW_STATE_DIR", "");
     vi.stubEnv("OPENCLAW_HOME", homeDir);
