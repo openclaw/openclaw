@@ -2064,8 +2064,8 @@ describe("update-cli", () => {
     expect(jsonOutput?.targetVersion).toBe("2026.5.26");
   });
 
-  it.each(["2026q2", "01", "2026.05", "1.02.x"])(
-    "checks digit-starting npm dist-tags before reporting dry-run success (%s)",
+  it.each(["2026q2", "V1", "V1.x", "1.x-beta"])(
+    "checks npm dist-tags before reporting dry-run success (%s)",
     async (tag) => {
       mockPackageInstallStatus(createCaseDir("openclaw-update"));
       readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
@@ -2684,6 +2684,110 @@ describe("update-cli", () => {
     expect(jsonOutput?.targetVersion).toBe("2026.5.26");
   });
 
+  it("honors caller-local .npmrc registry for Bun-managed package updates", async () => {
+    const root = createCaseDir("openclaw-update-bun-npmrc");
+    const invocationCwd = await createTrackedTempDir("openclaw-update-bun-npmrc-");
+    await fs.writeFile(
+      path.join(invocationCwd, ".npmrc"),
+      "registry=https://bun.internal.example/\n",
+    );
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("bun");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "bun",
+      deps: {
+        manager: "bun",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(invocationCwd);
+    try {
+      await withEnvAsync(
+        {
+          BUN_CONFIG_REGISTRY: undefined,
+          NPM_CONFIG_REGISTRY: undefined,
+          npm_config_registry: undefined,
+        },
+        async () => {
+          await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+        },
+      );
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it("honors caller-local bunfig registry for Bun-managed package updates", async () => {
+    const root = createCaseDir("openclaw-update-bun-bunfig");
+    const invocationCwd = await createTrackedTempDir("openclaw-update-bun-bunfig-");
+    await fs.writeFile(
+      path.join(invocationCwd, "bunfig.toml"),
+      '[install]\nregistry = "https://bun.internal.example/"\n',
+    );
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("bun");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "bun",
+      deps: {
+        manager: "bun",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(invocationCwd);
+    try {
+      await withEnvAsync(
+        {
+          BUN_CONFIG_REGISTRY: undefined,
+          NPM_CONFIG_REGISTRY: undefined,
+          npm_config_registry: undefined,
+        },
+        async () => {
+          await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+        },
+      );
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
   it("checks npm availability preflight for Bun-managed updates when no registry env is set", async () => {
     const root = createCaseDir("openclaw-update-bun-default");
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
@@ -2888,7 +2992,20 @@ describe("update-cli", () => {
     );
   });
 
-  it.each(["^2026.5.0", "2026.5.x", "1.2.x-beta", "v1.x.x-beta", "1"])(
+  it.each([
+    "^2026.5.0",
+    "2026.5.x",
+    "01",
+    "2026.05",
+    "1.02.x",
+    "vv1",
+    "vv1.2.3",
+    "1.02.3",
+    "1.2.x-beta",
+    "v1.x.x-beta",
+    "x.x.x-beta",
+    "1",
+  ])(
     "skips npm availability preflight for semver range package specs (%s)",
     async (tag) => {
       mockPackageInstallStatus(createCaseDir("openclaw-update"));

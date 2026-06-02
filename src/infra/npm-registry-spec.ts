@@ -11,15 +11,14 @@ const OPENCLAW_ALPHA_VERSION_RE =
 const OPENCLAW_BETA_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const SEMVER_NUMERIC_IDENTIFIER_RE = "(?:0|[1-9]\\d*)";
-const SEMVER_PARTIAL_IDENTIFIER_RE = `(?:${SEMVER_NUMERIC_IDENTIFIER_RE}|x|\\*)`;
+const SEMVER_PARTIAL_IDENTIFIER_RE = "(?:\\d+|x|\\*)";
 const SIMPLE_SEMVER_RANGE_SELECTOR_RE = new RegExp(
-  `^v?${SEMVER_PARTIAL_IDENTIFIER_RE}(?:\\.${SEMVER_PARTIAL_IDENTIFIER_RE}){0,2}$`,
+  `^v*${SEMVER_PARTIAL_IDENTIFIER_RE}(?:\\.${SEMVER_PARTIAL_IDENTIFIER_RE}){0,2}$`,
   "u",
 );
 const WILDCARD_PRERELEASE_SEMVER_RANGE_SELECTOR_RE =
   new RegExp(
-    `^v?${SEMVER_PARTIAL_IDENTIFIER_RE}(?:\\.${SEMVER_PARTIAL_IDENTIFIER_RE}){0,2}-[0-9a-z][0-9a-z.-]*(?:\\+[0-9a-z.-]+)?$`,
+    `^v*${SEMVER_PARTIAL_IDENTIFIER_RE}(?:\\.${SEMVER_PARTIAL_IDENTIFIER_RE}){0,2}-[0-9a-z][0-9a-z.-]*(?:\\+[0-9a-z.-]+)?$`,
     "u",
   );
 
@@ -50,7 +49,7 @@ function isSemverRangeSelector(value: string): boolean {
   if (!trimmed || isExactSemverVersion(trimmed)) {
     return false;
   }
-  if (/^V(?=\d)/u.test(trimmed)) {
+  if (trimmed.startsWith("V")) {
     return false;
   }
   const lowered = trimmed.toLowerCase();

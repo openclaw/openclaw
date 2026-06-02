@@ -1083,6 +1083,87 @@ function readBunRegistryEnv(env: NodeJS.ProcessEnv): string | null {
   );
 }
 
+function parseNpmrcDefaultRegistry(contents: string): string | null {
+  for (const rawLine of contents.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) {
+      continue;
+    }
+    const match = /^registry\s*=\s*(?<value>.+)$/iu.exec(line);
+    const value = normalizeOptionalString(match?.groups?.value);
+    if (value) {
+      return stripConfigStringQuotes(value);
+    }
+  }
+  return null;
+}
+
+function stripConfigStringQuotes(value: string): string {
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  if (
+    (quote === `"` || quote === "'") &&
+    trimmed.endsWith(quote) &&
+    trimmed.length >= 2
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function parseBunfigInstallRegistry(contents: string): string | null {
+  let inInstallSection = false;
+  for (const rawLine of contents.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const section = /^\[(?<name>[^\]]+)\]$/u.exec(line);
+    if (section?.groups?.name) {
+      inInstallSection = section.groups.name.trim() === "install";
+      continue;
+    }
+    if (!inInstallSection) {
+      continue;
+    }
+    const registry = /^registry\s*=\s*(?<value>.+)$/u.exec(line)?.groups?.value;
+    const normalized = normalizeOptionalString(registry);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized.startsWith("{")) {
+      const url = /\burl\s*=\s*(?<value>"[^"]*"|'[^']*'|[^,}#\s]+)/u.exec(normalized)?.groups
+        ?.value;
+      const parsedUrl = normalizeOptionalString(url);
+      return parsedUrl ? stripConfigStringQuotes(parsedUrl) : null;
+    }
+    const bareValue = normalized.split(/\s+#/u)[0]?.trim() ?? "";
+    return stripConfigStringQuotes(bareValue);
+  }
+  return null;
+}
+
+async function readRegistryConfigFile(
+  filePath: string,
+  parse: (contents: string) => string | null,
+): Promise<string | null> {
+  try {
+    return parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function readBunRegistryConfig(cwd: string | undefined): Promise<string | null> {
+  if (!cwd) {
+    return null;
+  }
+  return (
+    (await readRegistryConfigFile(path.join(cwd, "bunfig.toml"), parseBunfigInstallRegistry)) ??
+    (await readRegistryConfigFile(path.join(cwd, ".npmrc"), parseNpmrcDefaultRegistry))
+  );
+}
+
 function resolvePackageManagerRegistryConfigArgs(params: {
   manager?: GlobalInstallManager | null;
   command?: string | null;
@@ -1107,7 +1188,10 @@ async function resolveEffectiveNpmRegistry(params: {
   manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
   if (params.manager === "bun") {
-    return readBunRegistryEnv(params.env);
+    return (
+      readBunRegistryEnv(params.env) ??
+      (await readBunRegistryConfig(params.registryConfigCwd ?? params.invocationCwd))
+    );
   }
   if (params.manager === "pnpm") {
     const registryEnv = readPnpmRegistryEnv(params.env);
