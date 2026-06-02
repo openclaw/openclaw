@@ -2337,12 +2337,15 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual([persistedUser, persistedToolResult]);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expect(state.chatMessages[2]).toEqual(persistedToolResult);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBe("Still answering.");
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
@@ -2458,12 +2461,15 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual([persistedUser, persistedToolCall]);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expect(state.chatMessages[2]).toEqual(persistedToolCall);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBe("Still answering.");
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });
@@ -2507,12 +2513,15 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual([persistedUser, persistedToolResult]);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expect(state.chatMessages[2]).toEqual(persistedToolResult);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBe(100);
     expect(state.chatToolMessages).toEqual([]);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);
     expect(state.toolStreamOrder).toEqual([]);
   });

@@ -297,12 +297,54 @@ function visibleAssistantStreamText(stream: string | null): string | null {
   return stream;
 }
 
-function buildAssistantStreamMessage(stream: string): Record<string, unknown> {
+function buildAssistantStreamMessage(
+  stream: string,
+  replacementText = stream,
+): Record<string, unknown> {
   return {
     role: "assistant",
     content: [{ type: "text", text: stream }],
     timestamp: Date.now(),
+    openclawStreamFallback: {
+      replacementText,
+    },
   };
+}
+
+function streamFallbackReplacementText(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const fallback = (message as { openclawStreamFallback?: unknown }).openclawStreamFallback;
+  if (!fallback || typeof fallback !== "object") {
+    return null;
+  }
+  const replacementText = (fallback as { replacementText?: unknown }).replacementText;
+  if (typeof replacementText === "string" && replacementText.trim()) {
+    return replacementText.trim();
+  }
+  return extractText(message)?.trim() ?? null;
+}
+
+function terminalMessageReplacesStreamFallback(message: unknown, fallback: unknown): boolean {
+  const fallbackText = streamFallbackReplacementText(fallback);
+  if (!fallbackText) {
+    return false;
+  }
+  const terminalText = extractText(message)?.trim();
+  return Boolean(
+    terminalText && (terminalText === fallbackText || terminalText.startsWith(fallbackText)),
+  );
+}
+
+function appendTerminalAssistantMessage(messages: unknown[], message: unknown): unknown[] {
+  const retainedMessages = messages.filter((existing, index) => {
+    if (index <= lastUserMessageIndex(messages)) {
+      return true;
+    }
+    return !terminalMessageReplacesStreamFallback(message, existing);
+  });
+  return [...retainedMessages, message];
 }
 
 function lastUserMessageIndex(messages: unknown[]): number {
@@ -433,7 +475,7 @@ function appendVisibleStreamStateMessages(
     if (hasAssistantStreamPartReplacement([...nextMessages, ...replacementMessages], part)) {
       continue;
     }
-    const streamMessage = buildAssistantStreamMessage(part.text);
+    const streamMessage = buildAssistantStreamMessage(part.text, part.replacementText);
     const toolIndex =
       part.source === "segment" ? firstCurrentToolStreamMessageIndex(nextMessages, state) : -1;
     nextMessages =
@@ -991,7 +1033,10 @@ async function loadChatHistoryUncached(
         state.chatStream = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedToolStream) {
-        maybeResetToolStream(state, { preserveStreamSegments: true });
+        state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state, [], {
+          includeCurrent: false,
+        });
+        maybeResetToolStream(state);
       }
     }
     recordChatHistoryTiming(state, "applied", startedAtMs, {
@@ -1411,7 +1456,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
     }
@@ -1425,7 +1470,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         [normalizedMessage],
         { includeCurrent: false },
       );
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
     }
@@ -1440,14 +1485,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state, [
         visiblePayloadMessage,
       ]);
-      state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
+      state.chatMessages = appendTerminalAssistantMessage(
+        state.chatMessages,
+        visiblePayloadMessage,
+      );
     } else {
       const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
       if (hadActiveRunBeforeEvent) {
         state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
       }
       if (errorMessage) {
-        state.chatMessages = [...state.chatMessages, errorMessage];
+        state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, errorMessage);
       }
     }
     reconcileTerminalRun("interrupted", "failed");
