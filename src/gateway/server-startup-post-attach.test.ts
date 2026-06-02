@@ -227,6 +227,16 @@ function firstStartupLog(): { loadedPluginIds?: string[] } {
   return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
 }
 
+function findStartupOutcomeSummary(log: { info: { mock: { calls: unknown[][] } } }): string {
+  const summary = log.info.mock.calls
+    .map(([message]) => String(message))
+    .find((message) => message.startsWith("gateway startup summary: "));
+  if (!summary) {
+    throw new Error("expected gateway startup outcome summary log");
+  }
+  return summary;
+}
+
 function createStartupTraceRecorder() {
   const details: Array<{
     name: string;
@@ -339,6 +349,74 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+  });
+
+  it("logs a redacted startup summary when Gmail watcher is skipped without an account", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams({
+        gatewayPluginConfigAtStart: {
+          hooks: { enabled: true, internal: { enabled: false }, gmail: {} },
+        } as never,
+        log,
+      }),
+    });
+
+    const summary = findStartupOutcomeSummary(log);
+    expect(summary).toContain("gmail-watcher=skipped (no gmail account configured)");
+    expect(summary).toContain("channels=started");
+    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("gateway ready");
+  });
+
+  it("does not expose the Gmail account in the startup summary", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams({
+        gatewayPluginConfigAtStart: {
+          hooks: {
+            enabled: true,
+            internal: { enabled: false },
+            gmail: { account: "private-user@example.com" },
+          },
+        } as never,
+        log,
+      }),
+    });
+
+    const summary = findStartupOutcomeSummary(log);
+    expect(summary).toContain("gmail-watcher=scheduled");
+    expect(summary).not.toContain("private-user@example.com");
+  });
+
+  it("keeps raw startup failure details out of the startup summary", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    hoisted.startPluginServices.mockRejectedValueOnce(new Error("raw provider diagnostic"));
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams({
+        log,
+        logChannels,
+        startChannels: vi.fn(async () => {
+          throw new Error("account private-user@example.com failed");
+        }),
+      }),
+    });
+
+    const summary = findStartupOutcomeSummary(log);
+    expect(summary).toContain("channels=failed (see earlier warning)");
+    expect(summary).toContain("plugin-services=failed (see earlier warning)");
+    expect(summary).not.toContain("private-user@example.com");
+    expect(summary).not.toContain("raw provider diagnostic");
+    expect(logChannels.error).toHaveBeenCalledWith(
+      "channel startup failed: Error: account private-user@example.com failed",
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      "plugin services failed to start: Error: raw provider diagnostic",
+    );
   });
 
   it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
