@@ -83,6 +83,15 @@ export async function captureScreenshot(opts: {
     async (send) => {
       await send("Page.enable");
 
+      // Bring the target tab to the foreground before capturing. Under headless
+      // Chrome (--headless=new) a backgrounded tab never commits a new compositor
+      // frame, so Page.captureScreenshot (fromSurface:true) blocks until the
+      // socket times out. Activating the tab forces a frame to commit and the
+      // capture returns in ~100ms. This is a no-op for a single-tab session and
+      // for an already-foregrounded tab; tolerate failure so capture paths that
+      // currently work are never regressed by the activation attempt.
+      await send("Page.bringToFront").catch(() => {});
+
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the
       // current viewport state and restore it after capture so pre-existing
