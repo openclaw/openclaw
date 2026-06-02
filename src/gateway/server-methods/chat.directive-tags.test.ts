@@ -252,13 +252,11 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         for (const reply of mockState.dispatchedReplies) {
           if (reply.kind === "tool") {
             params.dispatcher.sendToolResult(reply.payload);
-            continue;
-          }
-          if (reply.kind === "block") {
+          } else if (reply.kind === "block") {
             params.dispatcher.sendBlockReply(reply.payload);
-            continue;
+          } else {
+            params.dispatcher.sendFinalReply(reply.payload);
           }
-          params.dispatcher.sendFinalReply(reply.payload);
         }
       } else {
         params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
@@ -1340,6 +1338,72 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     });
     expect(JSON.stringify(persistedAssistant)).not.toContain(fs.realpathSync(blockAudioPath));
+  });
+
+  it("routes final agent media broadcasts to selected global agents", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-global-agent-tts-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const spokenText = "This text is already in the model transcript.";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-work-global-media";
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: spokenText,
+          spokenText,
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-work-global-tts",
+    });
+
+    expect(payload).toMatchObject({
+      runId: "idem-work-global-tts",
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(broadcastContent[1]).toMatchObject({
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        isVoiceNote: true,
+      },
+    });
+    const nodeSend = lastNodeSendCall(context);
+    expect(nodeSend?.[0]).toBe("agent:work:global");
+    expect(nodeSend?.[2]).toMatchObject({
+      runId: "idem-work-global-tts",
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    expect(context.nodeSendToSession).toHaveBeenCalledTimes(1);
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {

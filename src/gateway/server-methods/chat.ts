@@ -3612,18 +3612,22 @@ export const chatHandlers: GatewayRequestHandlers = {
               context.logGateway.warn(
                 `webchat transcript rewrite skipped for final media reply: ${rewriteResult.reason ?? "unknown reason"}`,
               );
-              appendedMessage = existingEntry.message;
+              appendedMessage = replacementMessage;
             }
           }
         }
         if (shouldBroadcastAsFinal) {
-          const broadcastContent =
+          const appendedContent =
             Array.isArray(appendedMessage?.content) &&
             appendedMessage.content.some((block) => {
               return block && typeof block === "object" && "type" in block;
             })
               ? (appendedMessage.content as typeof persistedContentForAppend)
-              : persistedContentForAppend;
+              : undefined;
+          const broadcastContent =
+            persistedContentForAppend.length > 0
+              ? persistedContentForAppend
+              : (appendedContent ?? persistedContentForAppend);
           const finalBroadcastText =
             extractAssistantDisplayTextFromContent(broadcastContent) ?? broadcastText;
           webchatAgentMediaFinalMessage = {
@@ -4292,6 +4296,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     context,
                     runId: clientRunId,
                     sessionKey,
+                    agentId,
                     message: webchatAgentMediaFinalMessage,
                   });
                   broadcastedAgentRunFinal = true;
