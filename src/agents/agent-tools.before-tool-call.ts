@@ -94,6 +94,11 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Originating user-turn route for approval delivery. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   skillsSnapshot?: SkillSnapshot;
@@ -443,6 +448,10 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
         timeoutMs,
         twoPhase: true,
       },
@@ -464,6 +473,15 @@ async function requestPluginToolApproval(params: {
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       if (decision === null) {
+        if (approval.unavailableBehavior === "allow") {
+          const resolution = PluginApprovalResolutions.ALLOW_ONCE;
+          notifyPluginApprovalResolution(approval, resolution);
+          return {
+            blocked: false,
+            params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+            approvalResolution: resolution,
+          };
+        }
         notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
         return {
           blocked: true,
