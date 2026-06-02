@@ -345,6 +345,7 @@ describe("memory_search unavailable payloads", () => {
         configuredMode?: unknown;
         effectiveMode?: unknown;
         fallback?: unknown;
+        rerank?: unknown;
         hits?: unknown;
         searchMs?: number;
       };
@@ -354,8 +355,35 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.configuredMode).toBe("search");
     expect(details.debug?.effectiveMode).toBe("query");
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect(details.debug?.rerank).toBeUndefined();
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("surfaces rerank state in search debug when emitted by the backend", async () => {
+    setMemoryBackend("builtin");
+    setMemorySearchImpl(async (opts) => {
+      opts?.onDebug?.({ backend: "builtin", rerank: "active" });
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "reranked result",
+          source: "memory",
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: { memory: { backend: "builtin" } },
+    });
+    const result = await tool.execute("debug", { query: "rerank test" });
+    const details = result.details as {
+      debug?: { rerank?: unknown };
+    };
+    expect(details.debug?.rerank).toBe("active");
   });
 });
 

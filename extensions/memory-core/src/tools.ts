@@ -532,6 +532,7 @@ export function createMemorySearchTool(options: {
                       ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
                       : "n/a",
                   fallback: latestDebug?.fallback,
+                  rerank: latestDebug?.rerank,
                   searchMs: Math.max(0, Date.now() - searchStartedAt),
                   hits: rawResults.length,
                 };
