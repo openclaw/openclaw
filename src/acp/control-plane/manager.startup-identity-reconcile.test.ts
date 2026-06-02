@@ -168,4 +168,44 @@ describe("AcpSessionManager startup identity reconcile", () => {
     expect(runtimeState.getStatus).not.toHaveBeenCalled();
     expect(runtimeState.ensureSession).not.toHaveBeenCalled();
   });
+
+  it("skips startup identity reconciliation for oneshot sessions", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:session-1";
+    const oneshotMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      mode: "oneshot",
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          acp: oneshotMeta,
+        },
+        acp: oneshotMeta,
+      },
+    ]);
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    expect(result).toEqual({ checked: 0, resolved: 0, failed: 0 });
+    expect(runtimeState.ensureSession).not.toHaveBeenCalled();
+    expect(runtimeState.getStatus).not.toHaveBeenCalled();
+  });
 });
