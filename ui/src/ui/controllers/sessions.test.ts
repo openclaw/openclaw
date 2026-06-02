@@ -431,6 +431,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -551,6 +552,7 @@ describe("patchSession", () => {
       fastMode: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1217,6 +1219,7 @@ describe("loadSessions", () => {
       checkpointId: "checkpoint-1",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1228,6 +1231,7 @@ describe("loadSessions", () => {
       checkpointId: "checkpoint-1",
     });
     expect(request).toHaveBeenNthCalledWith(4, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,

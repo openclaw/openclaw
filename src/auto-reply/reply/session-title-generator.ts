@@ -71,8 +71,9 @@ export function maybeGenerateSessionTitle(params: {
     sessionModelId,
     authProfileId,
     authProfileIdSource,
-  }).catch((err) => {
-    logVerbose(`session-title-generator: failed to generate title for ${sessionKey}: ${err}`);
+  }).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    logVerbose(`session-title-generator: failed to generate title for ${sessionKey}: ${message}`);
   });
 }
 
