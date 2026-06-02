@@ -493,8 +493,16 @@ describe("gateway/node-registry", () => {
     const frames: string[] = [];
     registry.register(makeClient("conn-1", "node-1", frames), {});
     const payload = serializeEventPayload({ foo: "bar" });
+    const nullPayload = serializeEventPayload(null);
+    const falsePayload = serializeEventPayload(false);
+    const zeroPayload = serializeEventPayload(0);
+    const emptyStringPayload = serializeEventPayload("");
 
     expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(true);
+    expect(registry.sendEventRaw("node-1", "nullish", nullPayload)).toBe(true);
+    expect(registry.sendEventRaw("node-1", "flag", falsePayload)).toBe(true);
+    expect(registry.sendEventRaw("node-1", "count", zeroPayload)).toBe(true);
+    expect(registry.sendEventRaw("node-1", "empty", emptyStringPayload)).toBe(true);
     expect(registry.sendEventRaw("missing-node", "chat", payload)).toBe(false);
     expect(registry.sendEventRaw("node-1", "heartbeat", null)).toBe(true);
     expect(
@@ -514,6 +522,10 @@ describe("gateway/node-registry", () => {
 
     expect(frames).toEqual([
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
+      '{"type":"event","event":"nullish","payload":null}',
+      '{"type":"event","event":"flag","payload":false}',
+      '{"type":"event","event":"count","payload":0}',
+      '{"type":"event","event":"empty","payload":""}',
       '{"type":"event","event":"heartbeat"}',
     ]);
   });

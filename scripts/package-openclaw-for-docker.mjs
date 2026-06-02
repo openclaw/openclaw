@@ -142,12 +142,26 @@ function run(command, args, cwd, options = {}) {
       }
       child.kill(signal);
     };
+    const processGroupAlive = () => {
+      if (!useProcessGroup || !child.pid) {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    };
     const terminateChild = () => {
       killChild("SIGTERM");
-      forceKillTimeout = setTimeout(
-        () => killChild("SIGKILL"),
-        options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
-      );
+      forceKillTimeout = setTimeout(() => {
+        forceKillTimeout = undefined;
+        if (settled && !processGroupAlive()) {
+          return;
+        }
+        killChild("SIGKILL");
+      }, options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
       forceKillTimeout.unref?.();
     };
     ACTIVE_CHILD_KILLERS.add(killChild);

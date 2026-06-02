@@ -201,6 +201,15 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(sweep).not.toContain("readarray ");
   });
 
+  it("bounds bundled plugin package lifecycle commands", () => {
+    const sweep = fs.readFileSync(sweepPath, "utf8");
+
+    expect(sweep).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT:-300s");
+    expect(sweep.match(/openclaw_e2e_maybe_timeout/g)).toHaveLength(1);
+    expect(sweep).toContain('run_logged_sweep_command "install $plugin_id"');
+    expect(sweep).toContain('run_logged_sweep_command "uninstall $plugin_id"');
+  });
+
   it("keeps runtime command output capture bounded", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
 
@@ -209,6 +218,14 @@ describe("bundled plugin install/uninstall probe", () => {
 
     const second = runtimeSmoke.appendBoundedOutput(first, "ghij", 5);
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("preserves explicit nullish runtime RPC result fields", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+
+    expect(runtimeSmoke.unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
+    expect(runtimeSmoke.unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
+    expect(runtimeSmoke.unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
   });
 
   it("caps noisy runtime gateway logs", async () => {
@@ -548,6 +565,159 @@ describe("bundled plugin install/uninstall probe", () => {
       ),
     ).not.toContainEqual({ args: "yarn install", pid: 104, ppid: 1 });
   });
+
+  it.runIf(process.platform !== "win32")("kills timed-out runtime command groups", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const commandPath = path.join(root, "timeout-command.mjs");
+    const descendantPidPath = path.join(root, "timed-out-descendant.pid");
+    const descendantScript = [
+      "import fs from 'node:fs';",
+      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    fs.writeFileSync(
+      commandPath,
+      [
+        "import childProcess from 'node:child_process';",
+        `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+          descendantScript,
+        )}], { stdio: "ignore" });`,
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    let descendantPid: number | undefined;
+    try {
+      const commandResult = runtimeSmoke
+        .runCommand(process.execPath, [commandPath], { detached: undefined, timeoutMs: 1000 })
+        .catch((error: unknown) => error);
+      await waitForFile(descendantPidPath, 1000);
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      const error = await commandResult;
+      if (!(error instanceof Error)) {
+        throw new Error("expected runtime command to time out");
+      }
+      expect(error.message).toMatch(/timed out after 1000ms/u);
+
+      await waitForDead(descendantPid, 2000);
+    } finally {
+      if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to direct kills for non-detached command timeouts",
+    async () => {
+      const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+      const root = makePackageRoot();
+      const commandPath = path.join(root, "non-detached-timeout-command.mjs");
+      const commandPidPath = path.join(root, "non-detached-command.pid");
+      fs.writeFileSync(
+        commandPath,
+        [
+          "import fs from 'node:fs';",
+          `fs.writeFileSync(${JSON.stringify(commandPidPath)}, String(process.pid));`,
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      let commandPid: number | undefined;
+      try {
+        const commandResult = runtimeSmoke
+          .runCommand(process.execPath, [commandPath], { detached: false, timeoutMs: 100 })
+          .catch((error: unknown) => error);
+        await waitForFile(commandPidPath, 1000);
+        commandPid = Number(fs.readFileSync(commandPidPath, "utf8"));
+        const error = await Promise.race([
+          commandResult,
+          new Promise<Error>((resolve) => {
+            setTimeout(() => {
+              resolve(new Error("runCommand did not settle after timeout"));
+            }, 2000);
+          }),
+        ]);
+        if (!(error instanceof Error)) {
+          throw new Error("expected non-detached runtime command to time out");
+        }
+        expect(error.message).toMatch(/timed out after 100ms/u);
+
+        await waitForDead(commandPid, 1000);
+      } finally {
+        if (commandPid !== undefined && pidIsAlive(commandPid)) {
+          process.kill(commandPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans detached runtime command groups when the parent is signaled",
+    async () => {
+      const root = makePackageRoot();
+      const commandPath = path.join(root, "signaled-command.mjs");
+      const runnerPath = path.join(root, "run-runtime-command.mjs");
+      const descendantPidPath = path.join(root, "command-descendant.pid");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      fs.writeFileSync(
+        commandPath,
+        [
+          "import childProcess from 'node:child_process';",
+          `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      fs.writeFileSync(
+        runnerPath,
+        [
+          `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
+          `void runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
+          "  timeoutMs: 60_000,",
+          "}).catch(() => undefined);",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const runner = spawn(process.execPath, [runnerPath], {
+        stdio: "ignore",
+      });
+      let descendantPid: number | undefined;
+      try {
+        await waitForFile(descendantPidPath, 1000);
+        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        expect(pidIsAlive(descendantPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await waitForDead(descendantPid, 2000);
+      } finally {
+        if (runner.pid && pidIsAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "cleans detached runtime gateway groups when the parent is signaled",
