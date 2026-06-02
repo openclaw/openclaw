@@ -1722,6 +1722,19 @@ export const dispatchTelegramMessage = async ({
                       buttons?: TelegramInlineButtons,
                     ) => {
                       const finalText = await resolveTranscriptBackedFinalText(text);
+                      const deliverPostFinalFollowUpText = async () => {
+                        await prepareAnswerLaneForText();
+                        return deliverLaneText({
+                          laneName: "answer",
+                          text: finalText,
+                          payload: answerPayload,
+                          infoKind: "final",
+                          buttons,
+                        });
+                      };
+                      if (finalAnswerDelivered) {
+                        return deliverPostFinalFollowUpText();
+                      }
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
@@ -1962,6 +1975,7 @@ export const dispatchTelegramMessage = async ({
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
                           reasoningStepState.resetForNextStep();
+                          finalAnswerDelivered = false;
                           streamToolProgressSuppressed = false;
                           streamToolProgressLines = [];
                           if (answerLane.finalized) {
