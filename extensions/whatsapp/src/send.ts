@@ -250,21 +250,29 @@ export async function sendMessageWhatsApp(
         await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
       }
     }
-    const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const messageId = result.messageId;
+    const dropReason = result.dropReason;
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
-    if (messageId && messageId !== "unknown" && text) {
-      registerWhatsAppApprovalReactionTargetForOutboundMessage({
-        accountId: resolvedAccountId,
-        remoteJid: sentRemoteJid,
-        messageId,
-        text,
-      });
-    }
     const durationMs = Date.now() - startedAt;
-    outboundLog.info(
-      `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,
-    );
-    logger.info({ jid: redactedJid, messageId }, "sent message");
+    if (dropReason) {
+      outboundLog.info(
+        `Dropped message (${dropReason}) -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,
+      );
+      logger.info({ jid: redactedJid, messageId, dropReason }, "dropped message");
+    } else {
+      if (messageId && messageId !== "unknown" && text) {
+        registerWhatsAppApprovalReactionTargetForOutboundMessage({
+          accountId: resolvedAccountId,
+          remoteJid: sentRemoteJid,
+          messageId,
+          text,
+        });
+      }
+      outboundLog.info(
+        `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,
+      );
+      logger.info({ jid: redactedJid, messageId }, "sent message");
+    }
     return { messageId, toJid: sentRemoteJid };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo, hasMedia }, "failed to send via web session");
@@ -319,15 +327,25 @@ export async function sendReactionWhatsApp(
     const redactedJid = redactIdentifier(jid);
     outboundLog.info(`Sending reaction "${emoji}" -> message ${messageId}`);
     logger.info({ chatJid: redactedJid, messageId, emoji }, "sending reaction");
-    await active.sendReaction(
+    const result = await active.sendReaction(
       chatJid,
       messageId,
       emoji,
       options.fromMe ?? false,
       options.participant,
     );
-    outboundLog.info(`Sent reaction "${emoji}" -> message ${messageId}`);
-    logger.info({ chatJid: redactedJid, messageId, emoji }, "sent reaction");
+    if (result.dropReason) {
+      outboundLog.info(
+        `Dropped reaction (${result.dropReason}) "${emoji}" -> message ${messageId}`,
+      );
+      logger.info(
+        { chatJid: redactedJid, messageId, emoji, dropReason: result.dropReason },
+        "dropped reaction",
+      );
+    } else {
+      outboundLog.info(`Sent reaction "${emoji}" -> message ${messageId}`);
+      logger.info({ chatJid: redactedJid, messageId, emoji }, "sent reaction");
+    }
   } catch (err) {
     logger.error(
       { err: String(err), chatJid: redactedChatJid, messageId, emoji },
@@ -369,8 +387,13 @@ export async function sendPollWhatsApp(
       "sending poll",
     );
     const result = await active.sendPoll(to, normalized);
-    const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
+    if (result.dropReason) {
+      outboundLog.info(`Dropped poll (${result.dropReason}) -> ${redactedJid} (${durationMs}ms)`);
+      logger.info({ jid: redactedJid, dropReason: result.dropReason }, "dropped poll");
+      return { messageId: result.messageId, toJid: jid };
+    }
+    const { messageId } = result;
     outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
     logger.info({ jid: redactedJid, messageId }, "sent poll");
     return { messageId, toJid: jid };

@@ -121,6 +121,8 @@ type WhatsAppConfigCore = {
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** When true, all outbound socket writes (messages and presence) are suppressed. */
+  readOnly?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /** Inbound message prefix override (WhatsApp only). */

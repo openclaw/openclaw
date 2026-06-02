@@ -11,7 +11,7 @@ import {
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import type { WhatsAppSendDropReason, WhatsAppSendResult } from "../inbound/send-result.js";
 import { listWhatsAppSendResultMessageIds } from "../inbound/send-result.js";
 import { loadWebMedia } from "../media.js";
 import {
@@ -33,7 +33,13 @@ import { elide } from "./util.js";
 export type WhatsAppReplyDeliveryResult = {
   results: WhatsAppSendResult[];
   receipt: MessageReceipt;
+  /** True when at least one chunk was accepted by the provider. False for both
+   * transport failures and intentional policy drops — use dropReason to distinguish. */
   providerAccepted: boolean;
+  /** Set when providerAccepted is false and every result was a policy drop
+   * rather than a transport failure. Absence with providerAccepted false means
+   * an actual transport failure. */
+  dropReason?: WhatsAppSendDropReason;
 };
 
 function resolveWhatsAppReceiptKind(
@@ -106,6 +112,7 @@ export async function deliverWebReply(params: {
   textLimit: number;
   chunkMode?: ChunkMode;
   replyLogger: {
+    debug: (obj: unknown, msg: string) => void;
     info: (obj: unknown, msg: string) => void;
     warn: (obj: unknown, msg: string) => void;
   };
@@ -123,10 +130,23 @@ export async function deliverWebReply(params: {
   };
   const finishDelivery = (): WhatsAppReplyDeliveryResult => {
     const receipt = createWhatsAppReplyDeliveryReceipt(sendResults);
+    const anyAccepted = sendResults.some((result) => result.providerAccepted);
+    // Propagate dropReason only when nothing was accepted and all results share
+    // the same drop reason — that means the whole delivery was a policy drop,
+    // not a partial or genuine transport failure.
+    const dropReason =
+      !anyAccepted &&
+      sendResults.length > 0 &&
+      sendResults.every(
+        (r) => r.dropReason !== undefined && r.dropReason === sendResults[0]?.dropReason,
+      )
+        ? sendResults[0]?.dropReason
+        : undefined;
     return {
       results: sendResults,
       receipt,
-      providerAccepted: sendResults.some((result) => result.providerAccepted),
+      providerAccepted: anyAccepted,
+      ...(dropReason !== undefined ? { dropReason } : {}),
     };
   };
   if (isReasoningReplyPayload(replyResult)) {
@@ -210,6 +230,8 @@ export async function deliverWebReply(params: {
     };
     if (delivery.providerAccepted) {
       replyLogger.info(logPayload, "auto-reply sent (text)");
+    } else if (delivery.dropReason) {
+      replyLogger.info(logPayload, `auto-reply text suppressed (${delivery.dropReason})`);
     } else {
       replyLogger.warn(logPayload, "auto-reply text was not accepted by WhatsApp provider");
     }
@@ -237,38 +259,37 @@ export async function deliverWebReply(params: {
         );
         logVerbose(`Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`);
       }
+      let primarySendResult: WhatsAppSendResult | undefined;
       if (media.kind === "image") {
         const quote = getQuote();
-        rememberSendResult(
-          await sendWithRetry(
-            () =>
-              msg.sendMedia(
-                {
-                  image: media.buffer,
-                  caption,
-                  mimetype: media.mimetype,
-                },
-                quote,
-              ),
-            "media:image",
-          ),
+        primarySendResult = await sendWithRetry(
+          () =>
+            msg.sendMedia(
+              {
+                image: media.buffer,
+                caption,
+                mimetype: media.mimetype,
+              },
+              quote,
+            ),
+          "media:image",
         );
+        rememberSendResult(primarySendResult);
       } else if (media.kind === "audio") {
         const quote = getQuote();
-        rememberSendResult(
-          await sendWithRetry(
-            () =>
-              msg.sendMedia(
-                {
-                  audio: media.buffer,
-                  ptt: true,
-                  mimetype: media.mimetype,
-                },
-                quote,
-              ),
-            "media:audio",
-          ),
+        primarySendResult = await sendWithRetry(
+          () =>
+            msg.sendMedia(
+              {
+                audio: media.buffer,
+                ptt: true,
+                mimetype: media.mimetype,
+              },
+              quote,
+            ),
+          "media:audio",
         );
+        rememberSendResult(primarySendResult);
         if (caption) {
           rememberSendResult(
             await sendWithRetry(() => msg.reply(caption, quote), "media:audio-text"),
@@ -276,55 +297,58 @@ export async function deliverWebReply(params: {
         }
       } else if (media.kind === "video") {
         const quote = getQuote();
-        rememberSendResult(
-          await sendWithRetry(
-            () =>
-              msg.sendMedia(
-                {
-                  video: media.buffer,
-                  caption,
-                  mimetype: media.mimetype,
-                },
-                quote,
-              ),
-            "media:video",
-          ),
+        primarySendResult = await sendWithRetry(
+          () =>
+            msg.sendMedia(
+              {
+                video: media.buffer,
+                caption,
+                mimetype: media.mimetype,
+              },
+              quote,
+            ),
+          "media:video",
         );
+        rememberSendResult(primarySendResult);
       } else {
         const quote = getQuote();
-        rememberSendResult(
-          await sendWithRetry(
-            () =>
-              msg.sendMedia(
-                {
-                  document: media.buffer,
-                  fileName: media.fileName,
-                  caption,
-                  mimetype: media.mimetype,
-                },
-                quote,
-              ),
-            "media:document",
-          ),
+        primarySendResult = await sendWithRetry(
+          () =>
+            msg.sendMedia(
+              {
+                document: media.buffer,
+                fileName: media.fileName,
+                caption,
+                mimetype: media.mimetype,
+              },
+              quote,
+            ),
+          "media:document",
+        );
+        rememberSendResult(primarySendResult);
+      }
+      const mediaLogPayload = {
+        correlationId: msg.id ?? newConnectionId(),
+        connectionId: connectionId ?? null,
+        to: msg.from,
+        from: msg.to,
+        text: caption ?? null,
+        mediaUrl,
+        mediaSizeBytes: media.buffer.length,
+        mediaKind: media.kind,
+        durationMs: Date.now() - replyStarted,
+      };
+      if (primarySendResult?.providerAccepted) {
+        whatsappOutboundLog.info(
+          `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
+        );
+        replyLogger.info(mediaLogPayload, "auto-reply sent (media)");
+      } else if (primarySendResult?.dropReason) {
+        replyLogger.info(
+          { ...mediaLogPayload, dropReason: primarySendResult.dropReason },
+          `auto-reply media suppressed (${primarySendResult.dropReason})`,
         );
       }
-      whatsappOutboundLog.info(
-        `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
-      );
-      replyLogger.info(
-        {
-          correlationId: msg.id ?? newConnectionId(),
-          connectionId: connectionId ?? null,
-          to: msg.from,
-          from: msg.to,
-          text: caption ?? null,
-          mediaUrl,
-          mediaSizeBytes: media.buffer.length,
-          mediaKind: media.kind,
-          durationMs: Date.now() - replyStarted,
-        },
-        "auto-reply sent (media)",
-      );
     },
     onError: async ({ error, mediaUrl, caption, isFirst }) => {
       whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
