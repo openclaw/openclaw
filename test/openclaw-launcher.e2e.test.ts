@@ -480,6 +480,59 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe(`PRECOMPUTED ${params.command} help\n`);
   });
 
+  it.each(["doctor", "gateway", "models", "plugins"])(
+    "uses precomputed %s help before loading the runtime entry",
+    async (command) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+        JSON.stringify({ subcommandHelpText: { [command]: `PRECOMPUTED ${command} help\n` } }),
+        "utf8",
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), command, "--help"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(`PRECOMPUTED ${command} help\n`);
+    },
+  );
+
+  it("defers precomputed subcommand help to the runtime entry when container env is set", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ subcommandHelpText: { models: "PRECOMPUTED models help\n" } }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "models", "--help"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv({ OPENCLAW_CONTAINER: "demo" }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
   it("defers root help to the runtime entry when plugin config can change help", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     const configPath = path.join(fixtureRoot, "openclaw.json");

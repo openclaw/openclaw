@@ -155,6 +155,65 @@ describe("entry precomputed command help fast path", () => {
     expect(outputPrecomputedNodesHelpTextCalls).toBe(1);
   });
 
+  it("renders precomputed subcommand help from startup metadata without importing the full program", async () => {
+    const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
+
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "doctor", "--help"],
+      {
+        env: {},
+        outputPrecomputedSubcommandHelpText: (commandName) => {
+          outputPrecomputedSubcommandHelpTextCalls.push(commandName);
+          return true;
+        },
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(outputPrecomputedSubcommandHelpTextCalls).toEqual(["doctor"]);
+  });
+
+  it("renders precomputed subcommand help with leading root options", async () => {
+    const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
+
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "--profile", "work", "--no-color", "models", "-h"],
+      {
+        env: {},
+        outputPrecomputedSubcommandHelpText: (commandName) => {
+          outputPrecomputedSubcommandHelpTextCalls.push(commandName);
+          return true;
+        },
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(outputPrecomputedSubcommandHelpTextCalls).toEqual(["models"]);
+  });
+
+  it("keeps subcommand help fast path strict for extra or mixed flags", async () => {
+    const invocations = [
+      ["node", "openclaw", "doctor", "--help", "--bogus"],
+      ["node", "openclaw", "doctor", "--help", "extra"],
+      ["node", "openclaw", "doctor", "--version", "-h"],
+      ["node", "openclaw", "--bogus", "doctor", "--help"],
+    ];
+    let outputPrecomputedSubcommandHelpTextCalls = 0;
+
+    for (const argv of invocations) {
+      const handled = await tryHandlePrecomputedCommandHelpFastPath(argv, {
+        env: {},
+        outputPrecomputedSubcommandHelpText: () => {
+          outputPrecomputedSubcommandHelpTextCalls += 1;
+          return true;
+        },
+      });
+
+      expect(handled).toBe(false);
+    }
+    expect(outputPrecomputedSubcommandHelpTextCalls).toBe(0);
+  });
+
   it("defers nodes help when plugin config can change command metadata", async () => {
     let outputPrecomputedNodesHelpTextCalls = 0;
     let liveConfigChecks = 0;

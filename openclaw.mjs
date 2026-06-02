@@ -384,6 +384,18 @@ const resolvePrecomputedCommandHelp = (argv) => {
   if (argv[2] === "nodes") {
     return { command: "nodes", metadataKey: "nodesHelpText" };
   }
+  if (
+    argv[2] === "doctor" ||
+    argv[2] === "gateway" ||
+    argv[2] === "models" ||
+    argv[2] === "plugins"
+  ) {
+    return {
+      command: argv[2],
+      metadataKey: "subcommandHelpText",
+      subcommandKey: argv[2],
+    };
+  }
   return null;
 };
 
@@ -456,11 +468,11 @@ const shouldDeferRootHelpToRuntimeEntry = () => {
   return false;
 };
 
-const loadPrecomputedHelpText = (key) => {
+const loadPrecomputedHelpText = (key, subkey) => {
   try {
     const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
     const parsed = JSON.parse(raw);
-    const value = parsed?.[key];
+    const value = subkey ? parsed?.[key]?.[subkey] : parsed?.[key];
     return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
@@ -650,10 +662,13 @@ const tryOutputPrecomputedCommandHelp = () => {
   if (!commandHelp) {
     return false;
   }
+  if (commandHelp.subcommandKey && normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+    return false;
+  }
   if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
-  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey);
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey, commandHelp.subcommandKey);
   if (!precomputed) {
     return false;
   }
