@@ -1149,6 +1149,16 @@ export function createOpenClawCodingTools(options?: {
         sessionId: options?.sessionId,
         runId: options?.runId,
         channelId: options?.hookChannelId ?? options?.currentChannelId,
+        // Carry turn-source so plugin before_tool_call requireApproval can be
+        // delivered back to the originating chat (parity with bash exec
+        // approval). Without these, embedded-runner plugin approvals reach
+        // requestPluginToolApproval without a delivery route and resolve as
+        // `decision: null` (no-approval-route), blocking the tool. Mirrors
+        // openclaw/openclaw#84205.
+        turnSourceChannel: options?.messageProvider,
+        turnSourceTo: options?.currentChannelId,
+        turnSourceAccountId: options?.agentAccountId,
+        turnSourceThreadId: options?.currentThreadTs,
         ...(options?.trace ? { trace: options.trace } : {}),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
         onToolOutcome: options?.onToolOutcome,
