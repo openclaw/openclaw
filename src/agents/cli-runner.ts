@@ -266,6 +266,7 @@ async function finalizeCliContextEngineTurn(params: {
     sessionFile: runParams.sessionFile,
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
+    isHeartbeat: runParams.bootstrapContextRunKind === "heartbeat" || undefined,
     config: context.contextEngineConfig,
     runMaintenance: async (maintenanceParams) =>
       await runHarnessContextEngineMaintenance({
