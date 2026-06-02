@@ -116,8 +116,6 @@ function startStuckDiscovery(timeoutMs: string) {
 }
 
 describe("startGatewayDiscovery", () => {
-
-describe("startGatewayDiscovery", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
