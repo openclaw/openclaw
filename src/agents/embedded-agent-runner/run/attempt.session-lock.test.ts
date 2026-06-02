@@ -767,8 +767,13 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
+    // Post-reacquire owned write: an owned append landing after the prompt
+    // stream's lock reacquisition still publishes through the trust gate (the
+    // fence stays active), so cleanup must not flag it as a takeover. Distinct
+    // from the in-prompt publish path the trust-gate suite below covers.
+    const beforeWrite = readSessionFileFingerprintSync(sessionFile);
     await fs.appendFile(sessionFile, '{"type":"message","id":"provider-error"}\n', "utf8");
-    controller.refreshAfterOwnedSessionWrite();
+    controller.publishOwnedPostMessageWrite(beforeWrite);
 
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
@@ -852,23 +857,6 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
     expect(acquireSessionWriteLockLocal4).toHaveBeenCalledTimes(3);
     expect(release).toHaveBeenCalledTimes(3);
-  });
-
-  it("refreshes the prompt fence after an owned session manager append", async () => {
-    const sessionFile = await createTempSessionFile();
-    const release = vi.fn(async () => {});
-    const acquireSessionWriteLockLocal3 = vi.fn(async () => ({ release }));
-    const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock: acquireSessionWriteLockLocal3,
-      lockOptions: { ...lockOptions, sessionFile },
-    });
-
-    await controller.releaseForPrompt();
-    await fs.appendFile(sessionFile, '{"type":"message","id":"owned-session-manager"}\n', "utf8");
-    controller.refreshAfterOwnedSessionWrite();
-
-    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
-    expect(controller.hasSessionTakeover()).toBe(false);
   });
 
   it("allows post-prompt writes after the prompt context publishes an owned transcript write", async () => {

@@ -624,7 +624,6 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
-  refreshAfterOwnedSessionWrite(): void;
   publishOwnedPostMessageWrite(beforeWrite: SessionFileFingerprint | undefined): void;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
@@ -951,12 +950,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     async releaseHeldLockForAbort(): Promise<void> {
       await releaseHeldLockWithFence();
-    },
-    refreshAfterOwnedSessionWrite(): void {
-      if (fenceActive && !takeoverDetected) {
-        fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
-        fenceSnapshot = { fingerprint: fenceFingerprint };
-      }
     },
     publishOwnedPostMessageWrite(beforeWrite: SessionFileFingerprint | undefined): void {
       // Called synchronously after pi's `sessionManager.appendMessage` →
