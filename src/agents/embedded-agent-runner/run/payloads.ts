@@ -145,6 +145,11 @@ function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary):
   return lastToolError.middlewareError === true;
 }
 
+/**
+ * Chooses whether a tool failure needs a separate user-visible warning and
+ * whether to include raw details. Mutating failures are stricter because a
+ * silent failed write/send/delete can make the assistant look successful.
+ */
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
@@ -199,6 +204,12 @@ function resolveToolErrorWarningPolicy(params: {
   };
 }
 
+/**
+ * Converts a completed embedded attempt into reply payloads for channels. This
+ * is the boundary that suppresses duplicate source replies, filters raw API
+ * errors, preserves directive metadata, and decides when tool failures must be
+ * surfaced to the user.
+ */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
