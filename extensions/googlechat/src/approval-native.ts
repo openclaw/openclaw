@@ -7,7 +7,7 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/ap
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
-  doesApprovalRequestMatchChannelAccount,
+  createNativeApprovalChannelRouteGates,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
@@ -18,7 +18,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listGoogleChatAccountIds, resolveGoogleChatAccount } from "./accounts.js";
+import {
+  listGoogleChatAccountIds,
+  resolveDefaultGoogleChatAccountId,
+  resolveGoogleChatAccount,
+} from "./accounts.js";
 import {
   getGoogleChatApprovalApprovers,
   googleChatApprovalAuth,
@@ -27,7 +31,18 @@ import {
 import { isGoogleChatSpaceTarget, normalizeGoogleChatTarget } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type GoogleChatOriginTarget = { to: string; threadId?: string | number | null };
+type GoogleChatApprovalTarget = {
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+};
+type ChannelApprovalForwardTarget = Parameters<
+  NonNullable<
+    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
+  >
+>[0]["target"];
+
+const DEFAULT_APPROVAL_FORWARDING_MODE = "session";
 
 function isGoogleChatAccountConfigured(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
@@ -52,20 +67,32 @@ function hasGoogleChatWebhookApprovalAuthConfig(params: {
   return account.audienceType === "app-url";
 }
 
-export function isGoogleChatNativeApprovalClientEnabled(params: {
+function isGoogleChatApprovalTransportEnabled(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
   accountId?: string | null;
 }): boolean {
-  return (
-    isGoogleChatAccountConfigured(params) &&
-    hasGoogleChatWebhookApprovalAuthConfig(params) &&
-    getGoogleChatApprovalApprovers(params).length > 0
-  );
+  return isGoogleChatAccountConfigured(params) && hasGoogleChatWebhookApprovalAuthConfig(params);
+}
+
+function normalizeGoogleChatForwardTarget(
+  target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
+): GoogleChatApprovalTarget | null {
+  if (normalizeLowercaseStringOrEmpty(target.channel) !== "googlechat") {
+    return null;
+  }
+  const to = normalizeGoogleChatTarget(target.to);
+  return to
+    ? {
+        to,
+        accountId: normalizeOptionalString(target.accountId),
+        threadId: target.threadId ?? null,
+      }
+    : null;
 }
 
 function resolveTurnSourceGoogleChatOriginTarget(
   request: ApprovalRequest,
-): GoogleChatOriginTarget | null {
+): GoogleChatApprovalTarget | null {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   if (turnSourceChannel !== "googlechat") {
     return null;
@@ -76,14 +103,37 @@ function resolveTurnSourceGoogleChatOriginTarget(
   }
   return {
     to: target,
+    accountId: normalizeOptionalString(request.request.turnSourceAccountId),
     threadId: request.request.turnSourceThreadId ?? null,
   };
+}
+
+const googleChatApprovalRouteGates = createNativeApprovalChannelRouteGates({
+  channel: "googlechat",
+  defaultForwardingMode: DEFAULT_APPROVAL_FORWARDING_MODE,
+  isTransportEnabled: isGoogleChatApprovalTransportEnabled,
+  listAccountIds: listGoogleChatAccountIds,
+  resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
+  normalizeForwardTarget: normalizeGoogleChatForwardTarget,
+  resolveTurnSourceTarget: resolveTurnSourceGoogleChatOriginTarget,
+});
+
+export function isGoogleChatNativeApprovalClientEnabled(params: {
+  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
+  accountId?: string | null;
+}): boolean {
+  return (
+    googleChatApprovalRouteGates.canAnyApprovalPotentiallyRouteToChannel({
+      ...params,
+      nativeSessionOnly: true,
+    }) && getGoogleChatApprovalApprovers(params).length > 0
+  );
 }
 
 function resolveSessionGoogleChatOriginTarget(sessionTarget: {
   to: string;
   threadId?: string | number | null;
-}): GoogleChatOriginTarget | null {
+}): GoogleChatApprovalTarget | null {
   const target = normalizeGoogleChatTarget(sessionTarget.to);
   return target && isGoogleChatSpaceTarget(target)
     ? { to: target, threadId: sessionTarget.threadId ?? null }
@@ -95,18 +145,9 @@ export function shouldHandleGoogleChatNativeApprovalRequest(params: {
   accountId?: string | null;
   request: ApprovalRequest;
 }): boolean {
-  if (
-    !doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: "googlechat",
-      accountId: params.accountId,
-    })
-  ) {
-    return false;
-  }
   return (
-    isGoogleChatNativeApprovalClientEnabled(params) &&
+    googleChatApprovalRouteGates.shouldHandleApprovalRequest(params) &&
+    getGoogleChatApprovalApprovers(params).length > 0 &&
     Boolean(resolveTurnSourceGoogleChatOriginTarget(params.request))
   );
 }

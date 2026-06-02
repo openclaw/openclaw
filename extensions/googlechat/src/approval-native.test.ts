@@ -12,6 +12,7 @@ describe("googleChatApprovalCapability", () => {
     expect(
       runtime?.availability.isConfigured({
         cfg: {
+          approvals: { exec: { enabled: true } },
           channels: {
             googlechat: {
               serviceAccount: {
@@ -36,6 +37,7 @@ describe("googleChatApprovalCapability", () => {
     expect(
       runtime?.availability.isConfigured({
         cfg: {
+          approvals: { exec: { enabled: true } },
           channels: {
             googlechat: {
               serviceAccount: {
@@ -53,6 +55,7 @@ describe("googleChatApprovalCapability", () => {
     expect(
       runtime?.availability.isConfigured({
         cfg: {
+          approvals: { exec: { enabled: true } },
           channels: {
             googlechat: {
               serviceAccount: {
@@ -70,11 +73,57 @@ describe("googleChatApprovalCapability", () => {
     ).toBe(false);
   });
 
+  it("requires a top-level approval forwarding route before enabling native cards", async () => {
+    const runtime = googleChatApprovalCapability.nativeRuntime;
+    const googlechat = {
+      serviceAccount: {
+        type: "service_account" as const,
+        client_email: "bot@example.com",
+        private_key: "test-key",
+        token_uri: "https://oauth2.googleapis.com/token",
+      },
+      audienceType: "app-url" as const,
+      audience: "https://chat-app.example.test/googlechat",
+      dm: { allowFrom: ["users/123"] },
+    };
+
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: { channels: { googlechat } },
+      }),
+    ).toBe(false);
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          approvals: { exec: { enabled: false } },
+          channels: { googlechat },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          approvals: { exec: { enabled: true, mode: "targets" } },
+          channels: { googlechat },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          approvals: { plugin: { enabled: true } },
+          channels: { googlechat },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("enables native cards for supported webhook audience modes", async () => {
     const runtime = googleChatApprovalCapability.nativeRuntime;
     expect(
       runtime?.availability.isConfigured({
         cfg: {
+          approvals: { exec: { enabled: true } },
           channels: {
             googlechat: {
               serviceAccount: {
@@ -94,6 +143,7 @@ describe("googleChatApprovalCapability", () => {
     expect(
       runtime?.availability.isConfigured({
         cfg: {
+          approvals: { exec: { enabled: true } },
           channels: {
             googlechat: {
               serviceAccount: {
@@ -137,6 +187,7 @@ describe("googleChatApprovalCapability", () => {
 
   it("only handles approvals for the originating Google Chat account", () => {
     const cfg: OpenClawConfig = {
+      approvals: { exec: { enabled: true } },
       channels: {
         googlechat: {
           accounts: {
@@ -173,6 +224,7 @@ describe("googleChatApprovalCapability", () => {
     const request = {
       id: "approval-1",
       request: {
+        command: "echo hi",
         turnSourceChannel: "googlechat",
         turnSourceAccountId: "alpha",
         turnSourceTo: "spaces/AAA",
@@ -190,6 +242,41 @@ describe("googleChatApprovalCapability", () => {
       shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
         accountId: "beta",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not handle exec approvals when only plugin approval forwarding is enabled", () => {
+    const cfg: OpenClawConfig = {
+      approvals: { plugin: { enabled: true } },
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            type: "service_account",
+            client_email: "bot@example.com",
+            private_key: "test-key",
+            token_uri: "https://oauth2.googleapis.com/token",
+          },
+          audienceType: "app-url",
+          audience: "https://chat-app.example.test/googlechat",
+          appPrincipal: "123456789012345678901",
+          dm: { allowFrom: ["users/123"] },
+        },
+      },
+    };
+    const request = {
+      id: "approval-1",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "googlechat",
+        turnSourceTo: "spaces/AAA",
+      },
+    } as never;
+
+    expect(
+      shouldHandleGoogleChatNativeApprovalRequest({
+        cfg,
         request,
       }),
     ).toBe(false);
