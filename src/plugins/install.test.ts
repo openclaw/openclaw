@@ -504,10 +504,6 @@ function expectWarningExcludes(warnings: readonly string[], fragment: string) {
   expect(warnings.join("\n")).not.toContain(fragment);
 }
 
-function expectMessageIncludesPath(message: string, fragment: string) {
-  expect(message.replaceAll("\\", "/")).toContain(fragment);
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
