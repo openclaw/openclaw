@@ -90,6 +90,12 @@ async function buildModelsJsonFingerprint(params: {
   const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
+  const targetDir = path.resolve(params.agentDir);
+  const mainAgentDir = path.resolve(resolveDefaultAgentDir(params.config));
+  const mainModelsFileMtimeMs =
+    targetDir === mainAgentDir
+      ? modelsFileMtimeMs
+      : await readFileMtimeMs(path.join(mainAgentDir, "models.json"));
   const pluginCatalogMtimes = await readPluginCatalogMtimes(params.agentDir);
   const envShape = createConfigRuntimeEnv(params.config, params.env ?? {});
   const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
@@ -102,6 +108,7 @@ async function buildModelsJsonFingerprint(params: {
     authProfilesMtimeMs,
     authProfilesWalMtimeMs,
     modelsFileMtimeMs,
+    mainModelsFileMtimeMs,
     pluginCatalogMtimes,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
@@ -268,6 +275,160 @@ async function writePluginCatalogsForModelsJson(params: {
   return wrote || removedStale;
 }
 
+function hasErrorCode(error: unknown, expectedCode: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    String(error.code) === expectedCode
+  );
+}
+
+function isLinkUnavailableError(error: unknown): boolean {
+  return (
+    hasErrorCode(error, "EPERM") ||
+    hasErrorCode(error, "ENOTSUP") ||
+    hasErrorCode(error, "EOPNOTSUPP") ||
+    hasErrorCode(error, "EXDEV")
+  );
+}
+
+async function writeModelsFileAtomicIfMissing(
+  targetPath: string,
+  contents: string,
+): Promise<boolean> {
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, contents, { mode: 0o600 });
+  try {
+    try {
+      // link() creates targetPath atomically and never overwrites an existing file.
+      await fs.link(tempPath, targetPath);
+      return true;
+    } catch (error) {
+      if (hasErrorCode(error, "EEXIST")) {
+        return false;
+      }
+      if (!isLinkUnavailableError(error)) {
+        throw error;
+      }
+      try {
+        await fs.writeFile(targetPath, contents, { mode: 0o600, flag: "wx" });
+        return true;
+      } catch (writeError) {
+        if (hasErrorCode(writeError, "EEXIST")) {
+          return false;
+        }
+        throw writeError;
+      }
+    }
+  } finally {
+    await fs.unlink(tempPath).catch(() => {
+      // best-effort cleanup
+    });
+  }
+}
+
+const INHERITED_MODELS_JSON_PROVIDER_CREDENTIAL_FIELDS = new Set([
+  "apiKey",
+  "auth",
+  "authHeader",
+  "headers",
+  "keyRef",
+  "proxy",
+  "request",
+  "tls",
+  "tlsOptions",
+  "tokenRef",
+]);
+
+const INHERITED_MODELS_JSON_MODEL_CREDENTIAL_FIELDS = new Set(["headers", "request"]);
+
+function sanitizeInheritedModelDefinition(model: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(model)) {
+    if (INHERITED_MODELS_JSON_MODEL_CREDENTIAL_FIELDS.has(key)) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
+function sanitizeInheritedProviderConfig(
+  provider: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(provider)) {
+    if (INHERITED_MODELS_JSON_PROVIDER_CREDENTIAL_FIELDS.has(key)) {
+      continue;
+    }
+    sanitized[key] =
+      key === "models" && Array.isArray(value)
+        ? value.map((model) =>
+            isRecordLike(model) ? sanitizeInheritedModelDefinition(model) : model,
+          )
+        : value;
+  }
+  return sanitized;
+}
+
+function serializeSanitizedInheritedModelsJson(sourceRaw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(sourceRaw) as unknown;
+  } catch {
+    return null;
+  }
+  if (!isRecordLike(parsed) || !isRecordLike(parsed.providers)) {
+    return null;
+  }
+  const providers: Record<string, unknown> = {};
+  for (const [providerId, provider] of Object.entries(parsed.providers)) {
+    providers[providerId] = isRecordLike(provider)
+      ? sanitizeInheritedProviderConfig(provider)
+      : provider;
+  }
+  return `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`;
+}
+
+async function inheritModelsJsonFromMainAgent(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+  targetPath: string;
+}): Promise<boolean> {
+  const targetDir = path.resolve(params.agentDir);
+  const mainAgentDir = path.resolve(resolveDefaultAgentDir(params.config));
+  if (targetDir === mainAgentDir) {
+    return false;
+  }
+
+  const targetStore = privateFileStore(path.dirname(params.targetPath));
+  const existingRaw = await targetStore.readTextIfExists(path.basename(params.targetPath));
+  if (existingRaw !== null) {
+    return false;
+  }
+
+  const sourcePath = path.join(mainAgentDir, "models.json");
+  const sourceRaw = await privateFileStore(path.dirname(sourcePath)).readTextIfExists(
+    path.basename(sourcePath),
+  );
+  if (!sourceRaw?.trim()) {
+    return false;
+  }
+  const sanitizedSource = serializeSanitizedInheritedModelsJson(sourceRaw);
+  if (!sanitizedSource) {
+    return false;
+  }
+
+  await fs.mkdir(params.agentDir, { recursive: true, mode: 0o700 });
+  const wrote = await writeModelsFileAtomicIfMissing(params.targetPath, sanitizedSource);
+  if (!wrote) {
+    return false;
+  }
+  await ensureModelsFileModeForModelsJson(params.targetPath);
+  return true;
+}
+
 function resolveModelsConfigInput(config?: OpenClawConfig): {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
@@ -425,7 +586,12 @@ async function prepareOpenClawModelsJsonSource(
         agentDir,
         pluginCatalogWrites: plan.pluginCatalogWrites,
       });
-      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog } };
+      const inherited = await inheritModelsJsonFromMainAgent({
+        config: cfg,
+        agentDir,
+        targetPath,
+      });
+      return { fingerprint, result: { agentDir, wrote: wrotePluginCatalog || inherited } };
     }
 
     if (plan.action === "noop") {
