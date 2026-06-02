@@ -4,10 +4,7 @@ import { resolveBrewExecutable } from "../infra/brew.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { patchSkillConfigEntry } from "../skills/config/mutations.js";
-import {
-  buildWorkspaceSkillStatus,
-  isPlatformMismatchOnly,
-} from "../skills/discovery/status.js";
+import { buildWorkspaceSkillStatus, isPlatformMismatchOnly } from "../skills/discovery/status.js";
 import { installSkill } from "../skills/lifecycle/install.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
