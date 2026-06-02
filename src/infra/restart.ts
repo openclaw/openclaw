@@ -778,7 +778,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
       pendingRestartEmitHooks = opts?.emitHooks;
-      void emitPreparedGatewayRestart(undefined, reason);
+      void emitPreparedGatewayRestart(undefined, reason, {
+        skipDeferral: true,
+        ...(reason ? { reason } : {}),
+      });
       return {
         ok: true,
         pid: process.pid,

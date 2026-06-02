@@ -5,6 +5,7 @@ import {
   consumeGatewaySigusr1RestartIntent,
   deferGatewayRestartUntilIdle,
   scheduleGatewaySigusr1Restart,
+  setPreRestartDeferralCheck,
   type RestartDeferralHooks,
 } from "./restart.js";
 
@@ -204,5 +205,37 @@ describe("scheduleGatewaySigusr1Restart skipDeferral intent", () => {
 
     const intent = consumeGatewaySigusr1RestartIntent();
     expect(intent?.skipDeferral).toBeFalsy();
+  });
+
+  it("carries skipDeferral through the active-deferral bypass path", () => {
+    // Register a pre-restart check that always reports pending work,
+    // so the first restart enters deferGatewayRestartUntilIdle.
+    setPreRestartDeferralCheck(() => 5);
+
+    // Schedule a normal (non-skipDeferral) restart.
+    scheduleGatewaySigusr1Restart({
+      delayMs: 0,
+      reason: "gateway.restart.config-change",
+      skipDeferral: false,
+      skipCooldown: true,
+    });
+
+    // Fire the timer so the restart enters the preparing+deferral state.
+    vi.advanceTimersByTime(0);
+
+    // At this point pendingRestartPreparing is true and
+    // activeDeferralPolls is non-empty (deferral is polling).
+    // A second request with skipDeferral should bypass the active
+    // deferral and thread the intent through.
+    scheduleGatewaySigusr1Restart({
+      delayMs: 0,
+      reason: "gateway.restart.safe",
+      skipDeferral: true,
+      skipCooldown: true,
+    });
+
+    const intent = consumeGatewaySigusr1RestartIntent();
+    expect(intent).toMatchObject({ skipDeferral: true });
+    expect(intent?.reason).toBe("gateway.restart.safe");
   });
 });
