@@ -1139,8 +1139,9 @@ export function createFollowupRunner(params: {
                 suppressTranscriptOnlyAssistantPersistence:
                   run.suppressTranscriptOnlyAssistantPersistence,
                 suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
-                onAssistantErrorMessagePersisted: () => {
+                onAssistantErrorMessagePersisted: (message) => {
                   assistantErrorPersistedAcrossFallback = true;
+                  void opts?.onAssistantErrorMessagePersisted?.(message);
                 },
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
