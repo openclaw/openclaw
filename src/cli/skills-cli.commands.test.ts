@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
         always: false,
         disabled: false,
         blockedByAllowlist: false,
+        blockedByPlatform: false,
         eligible: true,
         primaryEnv: "CALENDAR_API_KEY",
         requirements: {
