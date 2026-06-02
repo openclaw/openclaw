@@ -2064,32 +2064,35 @@ describe("update-cli", () => {
     expect(jsonOutput?.targetVersion).toBe("2026.5.26");
   });
 
-  it("checks digit-starting npm dist-tags before reporting dry-run success", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-update"));
-    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValueOnce({
-      target: "2026q2",
-      version: null,
-      nodeEngine: null,
-      error: "HTTP 404",
-    });
-    vi.mocked(defaultRuntime.writeJson).mockClear();
+  it.each(["2026q2", "01", "2026.05", "1.02.x"])(
+    "checks digit-starting npm dist-tags before reporting dry-run success (%s)",
+    async (tag) => {
+      mockPackageInstallStatus(createCaseDir("openclaw-update"));
+      readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValueOnce({
+        target: tag,
+        version: null,
+        nodeEngine: null,
+        error: "HTTP 404",
+      });
+      vi.mocked(defaultRuntime.writeJson).mockClear();
 
-    await updateCommand({ dryRun: true, tag: "2026q2", json: true });
+      await updateCommand({ dryRun: true, tag, json: true });
 
-    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
-      target: "2026q2",
-      timeoutMs: undefined,
-    });
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeUndefined();
-    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
-    expect(errors.join("\n")).toContain(
-      "openclaw@2026q2 is not available on the npm registry yet.",
-    );
-  });
+      expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+        target: tag,
+        timeoutMs: undefined,
+      });
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()).toBeUndefined();
+      const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+      expect(errors.join("\n")).toContain(
+        `openclaw@${tag} is not available on the npm registry yet.`,
+      );
+    },
+  );
 
   it("skips only the npm availability preflight when npm registry env points at a custom registry", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
@@ -2625,8 +2628,8 @@ describe("update-cli", () => {
     expect(jsonOutput?.targetVersion).toBe("2026.5.26");
   });
 
-  it("skips npm availability preflight for Bun-managed updates when the registry is not proven public", async () => {
-    const root = createCaseDir("openclaw-update-bun-custom");
+  it("checks npm availability preflight for Bun-managed updates when no registry env is set", async () => {
+    const root = createCaseDir("openclaw-update-bun-default");
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     resolveGlobalManager.mockResolvedValue("bun");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
@@ -2660,11 +2663,12 @@ describe("update-cli", () => {
       },
     );
 
-    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
-    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
-    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("uses npm registry config output instead of guessing registry env casing", async () => {
@@ -2828,7 +2832,7 @@ describe("update-cli", () => {
     );
   });
 
-  it.each(["^2026.5.0", "2026.5.x", "2026.05", "01", "1.02.x"])(
+  it.each(["^2026.5.0", "2026.5.x", "1.2.x-beta", "v1.x.x-beta", "1"])(
     "skips npm availability preflight for semver range package specs (%s)",
     async (tag) => {
       mockPackageInstallStatus(createCaseDir("openclaw-update"));
