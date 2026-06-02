@@ -53,6 +53,7 @@ export async function prepareSessionManagerForRun(params: {
     byId?: Map<string, unknown>;
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
+    wasRecoveredFromCorruptHeader?: () => boolean;
   };
 
   const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
@@ -69,6 +70,18 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
+    if (sm.wasRecoveredFromCorruptHeader?.()) {
+      header.id = params.sessionId;
+      header.cwd = params.cwd;
+      sm.sessionId = params.sessionId;
+      sm.cwd = params.cwd;
+      await writeJsonlLines(params.sessionFile, sm.fileEntries.map(serializeJsonlLine), {
+        mode: 0o600,
+      });
+      sm.flushed = true;
+      return;
+    }
+
     // Reset file so the first assistant flush includes header+user+assistant in order.
     await assertExistingHeaderIsReadable(params.sessionFile);
     await fs.writeFile(params.sessionFile, "", "utf-8");

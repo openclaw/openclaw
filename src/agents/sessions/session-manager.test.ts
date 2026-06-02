@@ -78,8 +78,24 @@ describe("SessionManager.open", () => {
     await fs.writeFile(sessionFile, '{"type":"session","version":3,"id":"sess', "utf8");
 
     const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
-    sessionManager.appendMessage({ role: "user", content: "hello" });
-    sessionManager.appendMessage({ role: "assistant", content: "hi" });
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
 
     const entries = (await fs.readFile(sessionFile, "utf8"))
       .trim()

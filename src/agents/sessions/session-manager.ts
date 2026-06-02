@@ -14,7 +14,6 @@ import {
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
-  appendJsonlEntriesSync,
   appendJsonlEntrySync,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
@@ -742,6 +741,7 @@ export class SessionManager {
   private labelsById: Map<string, string> = new Map();
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
+  private recoveredCorruptHeader = false;
 
   private constructor(
     cwd: string,
@@ -766,6 +766,7 @@ export class SessionManager {
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
     this.sessionFile = resolve(sessionFile);
+    this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
       this.fileEntries = loadEntriesFromFile(this.sessionFile);
 
@@ -778,15 +779,9 @@ export class SessionManager {
           const header = this.fileEntries.find((e) => e.type === "session");
           this.sessionId = header?.id ?? createSessionId();
           this.buildIndex();
-          const hasAssistant = this.fileEntries.some(
-            (e) => e.type === "message" && e.message.role === "assistant",
-          );
-          if (hasAssistant) {
-            this.rewriteFile();
-            this.flushed = true;
-          } else {
-            this.flushed = false;
-          }
+          this.rewriteFile();
+          this.recoveredCorruptHeader = true;
+          this.flushed = true;
           return;
         }
 
@@ -815,6 +810,7 @@ export class SessionManager {
   }
 
   newSession(options?: NewSessionOptions): string | undefined {
+    this.recoveredCorruptHeader = false;
     this.sessionId = options?.id ?? createSessionId();
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -882,6 +878,10 @@ export class SessionManager {
 
   getSessionId(): string {
     return this.sessionId;
+  }
+
+  wasRecoveredFromCorruptHeader(): boolean {
+    return this.recoveredCorruptHeader;
   }
 
   getSessionFile(): string | undefined {
