@@ -457,6 +457,31 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts route bindings to the implicit default agent "main" when agents.list is populated', () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          { id: "codex", model: "anthropic/claude-3-5-sonnet" },
+          { id: "claude", model: "anthropic/claude-3-5-sonnet" },
+        ],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", accountId: "default" },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts bindings that match normalized agents.list ids", () => {
     const res = validateConfigObject({
       agents: {

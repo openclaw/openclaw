@@ -44,6 +44,33 @@ describe("compatibility binding repair migrate", () => {
     expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
+  it('preserves bindings for the implicit default agent "main" when agents.list is valid', () => {
+    const bindings = [
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "discord", accountId: "default" },
+      },
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "telegram", accountId: "default" },
+      },
+    ];
+
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "codex" }, { id: "claude" }],
+      },
+      bindings,
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual(bindings);
+    expect(res.changes).not.toContain(
+      "Removed 2 bindings that referenced missing agents.list ids.",
+    );
+  });
+
   it("leaves bindings untouched when agents.list has malformed entries", () => {
     const cfg = {
       agents: {

@@ -5,7 +5,7 @@ import {
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
@@ -1283,7 +1283,10 @@ export const OpenClawSchema = z
       return;
     }
     const agentIds = new Set(agents.map((agent) => agent.id));
-    const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+    const effectiveAgentIds = new Set([
+      normalizeAgentId(DEFAULT_AGENT_ID),
+      ...agents.map((agent) => normalizeAgentId(agent.id)),
+    ]);
 
     // Bindings referencing a missing agent id silently misroute at gateway
     // load time. Match routing's normalized id semantics; otherwise valid
