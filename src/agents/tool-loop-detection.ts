@@ -48,6 +48,27 @@ const DEFAULT_LOOP_DETECTION_CONFIG = {
     pingPong: true,
   },
 };
+const MESSAGE_SEND_VOLATILE_RESULT_KEYS = new Set([
+  "messageId",
+  "message_id",
+  "primaryPlatformMessageId",
+  "primary_platform_message_id",
+  "platformMessageId",
+  "platform_message_id",
+  "platformMessageIds",
+  "platform_message_ids",
+  "sentAt",
+  "sent_at",
+  "timestamp",
+]);
+const MESSAGE_SEND_TEXT_VOLATILE_PATTERNS: Array<[RegExp, string]> = [
+  [/("messageId"\s*:\s*)"[^"]*"/g, '$1"<message-id>"'],
+  [/("message_id"\s*:\s*)"[^"]*"/g, '$1"<message-id>"'],
+  [/("primaryPlatformMessageId"\s*:\s*)"[^"]*"/g, '$1"<message-id>"'],
+  [/("platformMessageId"\s*:\s*)"[^"]*"/g, '$1"<message-id>"'],
+  [/("platformMessageIds"\s*:\s*)\[[^\]]*\]/g, '$1["<message-id>"]'],
+  [/(Message ID:\s*)[^\s,.)\]}]+/gi, "$1<message-id>"],
+];
 
 type ResolvedLoopDetectionConfig = {
   enabled: boolean;
@@ -191,6 +212,45 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function isMessageSendToolCall(toolName: string, params: unknown): boolean {
+  return toolName === "message" && isPlainObject(params) && stringField(params.action) === "send";
+}
+
+function normalizeMessageSendOutcomeForHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeMessageSendOutcomeForHash(entry));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (MESSAGE_SEND_VOLATILE_RESULT_KEYS.has(key)) {
+      continue;
+    }
+    normalized[key] = normalizeMessageSendOutcomeForHash(entry);
+  }
+  return normalized;
+}
+
+function normalizeMessageSendTextForHash(text: string): string {
+  let normalized = text;
+  for (const [pattern, replacement] of MESSAGE_SEND_TEXT_VOLATILE_PATTERNS) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized;
+}
+
+function hashMessageSendToolOutcome(details: Record<string, unknown>, text: string): string {
+  // 发送结果会携带每次不同的投递 ID；循环检测只保留语义结果，避免重复发送绕过 critical 阻断。
+  const normalizedDetails = normalizeMessageSendOutcomeForHash(details);
+  if (Object.keys(details).length > 0) {
+    return digestStable({ details: normalizedDetails });
+  }
+  return digestStable({ text: normalizeMessageSendTextForHash(text) });
+}
+
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
   const status = stringField(details.status);
   if (!status) {
@@ -245,6 +305,9 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
+  if (isMessageSendToolCall(toolName, params)) {
+    return { resultHash: hashMessageSendToolOutcome(details, text) };
+  }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
     if (execHash) {

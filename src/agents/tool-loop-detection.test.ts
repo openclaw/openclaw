@@ -586,6 +586,62 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks repeated message sends despite volatile delivery receipts", () => {
+      const state = createState();
+      const params = {
+        action: "send",
+        channel: "feishu",
+        target: "chat:oc_123",
+        message: "hello",
+      };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const messageId = `om_${index}`;
+        recordSuccessfulCall(
+          state,
+          "message",
+          params,
+          {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  channel: "feishu",
+                  to: "chat:oc_123",
+                  via: "gateway",
+                  result: { messageId, chatId: "oc_123" },
+                }),
+              },
+            ],
+            details: {
+              channel: "feishu",
+              to: "chat:oc_123",
+              via: "gateway",
+              result: {
+                messageId,
+                chatId: "oc_123",
+                receipt: {
+                  primaryPlatformMessageId: messageId,
+                  platformMessageIds: [messageId],
+                  parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+                  sentAt: 1_000 + index,
+                  raw: [{ channel: "feishu", messageId, chatId: "oc_123" }],
+                },
+              },
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
     it("blocks repeated running exec calls despite volatile session details and text", () => {
       const state = createState();
       const params = { command: "tail -f /var/log/app.log", yieldMs: 1000 };

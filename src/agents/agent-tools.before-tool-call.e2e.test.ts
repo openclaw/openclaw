@@ -197,7 +197,7 @@ describe("before_tool_call loop detection behavior", () => {
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
-      detector: "ping_pong" | "known_poll_no_progress";
+      detector: "generic_repeat" | "ping_pong" | "known_poll_no_progress";
       toolName: string;
       count?: number;
     },
@@ -318,6 +318,75 @@ describe("before_tool_call loop detection behavior", () => {
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+  });
+
+  it("blocks repeated message sends when delivery ids are the only changing result field", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const execute = vi.fn().mockImplementation(async (toolCallId: string) => {
+        const messageId = `om_${toolCallId}`;
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                channel: "feishu",
+                to: "chat:oc_123",
+                via: "gateway",
+                result: { messageId, chatId: "oc_123" },
+              }),
+            },
+          ],
+          details: {
+            channel: "feishu",
+            to: "chat:oc_123",
+            via: "gateway",
+            result: {
+              messageId,
+              chatId: "oc_123",
+              receipt: {
+                primaryPlatformMessageId: messageId,
+                platformMessageIds: [messageId],
+                parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+                sentAt: Date.now(),
+                raw: [{ channel: "feishu", messageId, chatId: "oc_123" }],
+              },
+            },
+          },
+        };
+      });
+      const tool = createWrappedTool("message", execute);
+      const params = {
+        action: "send",
+        channel: "feishu",
+        target: "chat:oc_123",
+        message: "hello",
+      };
+
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        await expectUnblockedToolExecution(tool, `message-${i}`, params);
+      }
+
+      const result = await tool.execute(
+        `message-${CRITICAL_THRESHOLD}`,
+        params,
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(result, "identical outcomes");
+      expectCriticalLoopEvent(emitted.at(-1), {
+        detector: "generic_repeat",
+        toolName: "message",
+      });
+
+      const retryResult = await tool.execute(
+        `message-${CRITICAL_THRESHOLD + 1}`,
+        params,
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(retryResult, "identical outcomes");
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+    });
   });
 
   it("does not carry loop history across run ids", async () => {

@@ -1140,13 +1140,16 @@ export function wrapToolWithBeforeToolCallHook(
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
         });
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: outcome.params ?? hookParams,
-          toolCallId,
-          result: blockedResult,
-        });
+        if (outcome.deniedReason !== "tool-loop") {
+          // 循环阻断本身不是工具进展；记录它会覆盖上一条成功结果，让下一次同参调用重新放行。
+          await recordLoopOutcome({
+            ctx,
+            toolName: normalizedToolName,
+            toolParams: outcome.params ?? hookParams,
+            toolCallId,
+            result: blockedResult,
+          });
+        }
         return blockedResult;
       }
       const executeParams = reconcileCodeModeExecBeforeHookParams({
