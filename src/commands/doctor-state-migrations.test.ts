@@ -1438,6 +1438,22 @@ describe("doctor legacy state migrations", () => {
         version: "1.0.0",
       },
     },
+    {
+      label: "use different floating selectors",
+      current: {
+        source: "npm",
+        spec: "demo@latest",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+      },
+      legacy: {
+        source: "npm",
+        spec: "demo@beta",
+        version: "1.0.0",
+      },
+    },
   ] satisfies Array<{
     label: string;
     current: InstalledPluginInstallRecordInfo;

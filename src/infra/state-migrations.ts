@@ -391,6 +391,16 @@ function readInstallRecordField(
   return (record as Partial<Record<string, unknown>>)[key];
 }
 
+function installRecordSpecPinsCurrentVersion(
+  record: InstalledPluginIndex["installRecords"][string],
+): boolean {
+  const parsed = record.spec ? parseRegistryNpmSpec(record.spec) : null;
+  const version = record.resolvedVersion ?? record.version;
+  return Boolean(
+    parsed?.selectorKind === "exact-version" && version && parsed.selector === version,
+  );
+}
+
 function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
@@ -412,7 +422,12 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   }
   const currentVersion = currentRecord.resolvedVersion ?? currentRecord.version;
   const legacyVersion = legacyRecord.resolvedVersion ?? legacyRecord.version;
-  return Boolean(currentVersion && legacyVersion && currentVersion === legacyVersion);
+  return Boolean(
+    currentVersion &&
+    legacyVersion &&
+    currentVersion === legacyVersion &&
+    installRecordSpecPinsCurrentVersion(currentRecord),
+  );
 }
 
 function legacyInstallRecordCoveredByCurrent(
