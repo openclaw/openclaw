@@ -1379,6 +1379,110 @@ describe("codex conversation binding", () => {
     ]);
   });
 
+  it("retries when a plan-mode reply references a missing proposed plan block", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "gpt-5.4-mini",
+        collaborationMode: "plan",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    let turnIndex = 0;
+    const request = vi.fn(async (method: string, params?: { input?: unknown }) => {
+      if (method !== "turn/start") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      turnIndex += 1;
+      const turnId = `turn-${turnIndex}`;
+      const items =
+        turnIndex === 1
+          ? [
+              {
+                id: "assistant-1",
+                type: "agentMessage",
+                text: "Yes. I made a complete implement-ready plan in the previous message inside the <proposed_plan> block.",
+              },
+            ]
+          : [
+              {
+                id: "plan-1",
+                type: "plan",
+                text: "<proposed_plan>Run the focused tests.</proposed_plan>",
+              },
+            ];
+      setImmediate(() =>
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: { id: turnId, status: "completed", items },
+          },
+        }),
+      );
+      return { turn: { id: turnId } };
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request,
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "did u make a plan",
+        bodyForAgent: "did u make a plan",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        threadId: "chat-1",
+        sessionKey: "session-key",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result?.reply?.text).toBe("<proposed_plan>Run the focused tests.</proposed_plan>");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(request.mock.calls[1]?.[1])).toContain(
+      "No proposed_plan block was delivered",
+    );
+    expect(readReplyButtons(result?.reply ?? {}).map((button) => button.label)).toEqual([
+      "Approve and execute",
+      "Approve and execute with clean context",
+      "Stay in plan mode",
+    ]);
+  });
+
   it("returns approve and stay buttons for plain Markdown plan text in plan mode", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

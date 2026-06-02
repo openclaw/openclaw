@@ -81,6 +81,8 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
+const MISSING_PROPOSED_PLAN_REFERENCE_RE =
+  /\b(?:previous|above|earlier)\b[\s\S]{0,120}<proposed_plan>|<proposed_plan>[\s\S]{0,120}\b(?:previous|above|earlier)\b/iu;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
@@ -578,14 +580,16 @@ async function runBoundTurn(params: {
       payload,
     });
   };
-  const collector = createCodexConversationTurnCollector(threadId, {
-    onProgress: binding.liveProgress
-      ? (text) =>
-          sendProgressReply({
-            text,
-          }).catch(() => undefined)
-      : undefined,
-  });
+  const createCollector = () =>
+    createCodexConversationTurnCollector(threadId, {
+      onProgress: binding.liveProgress
+        ? (text) =>
+            sendProgressReply({
+              text,
+            }).catch(() => undefined)
+        : undefined,
+    });
+  let collector = createCollector();
   const notificationCleanup = client.addNotificationHandler((notification) =>
     collector.handleNotification(notification),
   );
@@ -697,12 +701,57 @@ async function runBoundTurn(params: {
     },
   );
   try {
+    const completion = await runConversationTurn(params.prompt);
+    let replyText = completion.replyText.trim();
+    let planText = completion.planText.trim();
+    let planReplyText = resolvePlanReplyText({ binding, replyText, planText });
+    if (
+      !planReplyText &&
+      binding.collaborationMode === "plan" &&
+      referencesMissingProposedPlan(replyText)
+    ) {
+      const retryCompletion = await runConversationTurn(buildMissingProposedPlanRetryPrompt());
+      replyText = retryCompletion.replyText.trim();
+      planText = retryCompletion.planText.trim();
+      planReplyText = resolvePlanReplyText({ binding, replyText, planText });
+    }
+    if (planReplyText) {
+      return {
+        reply: buildCodexPlanDecisionReply({
+          text: planReplyText,
+          scope: {
+            sessionFile: params.data.sessionFile,
+            threadId,
+            channel: params.event.channel,
+            senderId: params.event.senderId ?? params.ctx.senderId,
+            accountId: params.event.accountId ?? params.ctx.accountId,
+            sessionKey: params.event.sessionKey ?? params.ctx.sessionKey,
+            messageThreadId: params.event.threadId,
+          },
+        }),
+      };
+    }
+    return {
+      reply: {
+        text: replyText || "Codex completed without a text reply.",
+      },
+    };
+  } finally {
+    notificationCleanup();
+    requestCleanup();
+    releaseLeasedSharedCodexAppServerClient(client);
+  }
+
+  async function runConversationTurn(
+    prompt: string,
+  ): Promise<{ replyText: string; planText: string }> {
+    collector = createCollector();
     const response: CodexTurnStartResponse = await client.request(
       "turn/start",
       {
         threadId,
         input: buildCodexConversationTurnInput({
-          prompt: params.prompt,
+          prompt,
           event: params.event,
         }),
         cwd: workspaceDir,
@@ -732,46 +781,41 @@ async function runBoundTurn(params: {
       turnId,
     });
     collector.setTurnId(turnId);
-    const completion = await collector
+    return await collector
       .wait({
         timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
       })
       .finally(activeCleanup);
-    const replyText = completion.replyText.trim();
-    const planText = completion.planText.trim();
-    const planReplyText = hasCodexProposedPlan(replyText)
-      ? replyText
-      : hasCodexProposedPlan(planText)
-        ? planText
-        : binding.collaborationMode === "plan"
-          ? planText
-          : "";
-    if (planReplyText) {
-      return {
-        reply: buildCodexPlanDecisionReply({
-          text: planReplyText,
-          scope: {
-            sessionFile: params.data.sessionFile,
-            threadId,
-            channel: params.event.channel,
-            senderId: params.event.senderId ?? params.ctx.senderId,
-            accountId: params.event.accountId ?? params.ctx.accountId,
-            sessionKey: params.event.sessionKey ?? params.ctx.sessionKey,
-            messageThreadId: params.event.threadId,
-          },
-        }),
-      };
-    }
-    return {
-      reply: {
-        text: replyText || "Codex completed without a text reply.",
-      },
-    };
-  } finally {
-    notificationCleanup();
-    requestCleanup();
-    releaseLeasedSharedCodexAppServerClient(client);
   }
+}
+
+function resolvePlanReplyText(params: {
+  binding: CodexAppServerThreadBinding;
+  replyText: string;
+  planText: string;
+}): string {
+  if (hasCodexProposedPlan(params.replyText)) {
+    return params.replyText;
+  }
+  if (hasCodexProposedPlan(params.planText)) {
+    return params.planText;
+  }
+  return params.binding.collaborationMode === "plan" ? params.planText : "";
+}
+
+function referencesMissingProposedPlan(replyText: string): boolean {
+  return MISSING_PROPOSED_PLAN_REFERENCE_RE.test(replyText);
+}
+
+function buildMissingProposedPlanRetryPrompt(): string {
+  return [
+    "Your previous reply said a plan was already provided inside a <proposed_plan> block.",
+    "No proposed_plan block was delivered to OpenClaw.",
+    "OpenClaw also did not receive a native plan payload.",
+    "Send the complete implement-ready plan now.",
+    "Wrap the entire plan exactly in <proposed_plan> and </proposed_plan>.",
+    "Do not refer to earlier or previous messages.",
+  ].join(" ");
 }
 
 function assertNativeConversationApprovalPolicySupported(params: {
