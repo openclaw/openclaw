@@ -10,6 +10,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
@@ -374,13 +375,39 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         `[qqbot:${account.accountId}] Starting gateway — appId=${account.appId}, enabled=${account.enabled}, name=${account.name ?? "unnamed"}`,
       );
 
+      const drainReconnectPendingDeliveries = async () => {
+        try {
+          await drainPendingDeliveries({
+            drainKey: `qqbot:${account.accountId}`,
+            logLabel: "QQBot reconnect drain",
+            cfg,
+            log: {
+              info: (message) => log?.info(message),
+              warn: (message) => log?.warn(message),
+              error: (message) => log?.error(message),
+            },
+            selectEntry: (entry) => ({
+              match:
+                entry.channel === "qqbot" &&
+                (entry.accountId === account.accountId ||
+                  (!entry.accountId && account.accountId === DEFAULT_ACCOUNT_ID)),
+              bypassBackoff: /not connected|disconnected|gateway/i.test(entry.lastError ?? ""),
+            }),
+          });
+        } catch (err) {
+          log?.error(
+            `[qqbot:${account.accountId}] Reconnect delivery drain failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      };
+
       await startGateway({
         account,
         abortSignal,
         cfg,
         log,
         channelRuntime: ctx.channelRuntime as GatewayContext["channelRuntime"],
-        onReady: () => {
+        onReady: async () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
           ctx.setStatus({
             ...ctx.getStatus(),
@@ -392,8 +419,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
           persistAccountCredentialSnapshot(account);
+          await drainReconnectPendingDeliveries();
         },
-        onResumed: () => {
+        onResumed: async () => {
           log?.info(`[qqbot:${account.accountId}] Gateway resumed`);
           ctx.setStatus({
             ...ctx.getStatus(),
@@ -403,6 +431,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             lastError: null,
           });
           persistAccountCredentialSnapshot(account);
+          await drainReconnectPendingDeliveries();
         },
         onError: (error) => {
           log?.error(`[qqbot:${account.accountId}] Gateway error: ${error.message}`);

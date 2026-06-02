@@ -14,7 +14,7 @@ import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { resolveOutboundChannelPluginForDelivery } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
@@ -205,7 +205,7 @@ async function resolveRequiredChannel(params: {
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
-  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const plugin = resolveOutboundChannelPluginForDelivery({ channel, cfg });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
