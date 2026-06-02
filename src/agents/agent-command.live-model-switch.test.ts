@@ -32,6 +32,9 @@ const state = vi.hoisted(() => ({
     (_cfg?: unknown, _agentId?: string): string[] | undefined => undefined,
   ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
+  hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
+  resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
+  resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
@@ -103,15 +106,38 @@ vi.mock("./command/cli-compaction.js", () => ({
 }));
 
 vi.mock("./command/run-context.js", () => ({
-  resolveAgentRunContext: () => ({
-    messageChannel: "test",
-    accountId: "acct",
-    groupId: undefined,
-    groupChannel: undefined,
-    groupSpace: undefined,
+  resolveAgentRunContext: (opts: {
+    accountId?: string;
+    channel?: string;
+    groupChannel?: string | null;
+    groupId?: string | null;
+    groupSpace?: string | null;
+    messageChannel?: string;
+    replyChannel?: string;
+    runContext?: {
+      accountId?: string;
+      currentChannelId?: string;
+      currentThreadTs?: string;
+      groupChannel?: string | null;
+      groupId?: string | null;
+      groupSpace?: string | null;
+      messageChannel?: string;
+      replyToMode?: "off" | "first" | "all" | "batched";
+    };
+    threadId?: string | number;
+    to?: string;
+  }) => ({
+    messageChannel:
+      opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.replyChannel ?? opts.channel,
+    accountId: opts.runContext?.accountId ?? opts.accountId ?? "acct",
+    groupId: opts.runContext?.groupId ?? opts.groupId,
+    groupChannel: opts.runContext?.groupChannel ?? opts.groupChannel,
+    groupSpace: opts.runContext?.groupSpace ?? opts.groupSpace,
     currentChannelId: undefined,
-    currentThreadTs: undefined,
-    replyToMode: undefined,
+    currentThreadTs:
+      opts.runContext?.currentThreadTs ??
+      (opts.threadId == null ? undefined : String(opts.threadId)),
+    replyToMode: opts.runContext?.replyToMode,
     hasRepliedRef: { current: false },
   }),
 }));
@@ -282,6 +308,10 @@ vi.mock("../logging/subsystem.js", () => ({
   },
 }));
 
+vi.mock("../channels/model-overrides.js", () => ({
+  resolveChannelModelOverride: (params: unknown) => state.resolveChannelModelOverrideMock(params),
+}));
+
 vi.mock("../routing/session-key.js", async () => {
   const actual = await vi.importActual<typeof import("../routing/session-key.js")>(
     "../routing/session-key.js",
@@ -330,18 +360,25 @@ vi.mock("../trajectory/runtime.js", () => ({
 vi.mock("../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "internal",
   isDeliverableMessageChannel: (value: string) => value !== "internal",
-  resolveMessageChannel: () => "test",
+  normalizeMessageChannel: (value?: string | null) => value?.trim().toLowerCase() || undefined,
+  resolveMessageChannel: (...values: Array<string | null | undefined>) =>
+    values
+      .find((value) => value?.trim())
+      ?.trim()
+      .toLowerCase(),
 }));
 
 vi.mock("./agent-scope.js", () => ({
   clearAutoFallbackPrimaryProbeSelection: vi.fn(),
   entryMatchesAutoFallbackPrimaryProbe: () => true,
-  hasLegacyAutoFallbackWithoutOrigin: () => false,
+  hasLegacyAutoFallbackWithoutOrigin: (entry: unknown) =>
+    state.hasLegacyAutoFallbackWithoutOriginMock(entry),
   hasSessionAutoModelFallbackProvenance: () => false,
   listAgentEntries: () => [],
   listAgentIds: () => ["default"],
   markAutoFallbackPrimaryProbe: vi.fn(),
-  resolveAutoFallbackPrimaryProbe: () => undefined,
+  resolveAutoFallbackPrimaryProbe: (params: unknown) =>
+    state.resolveAutoFallbackPrimaryProbeMock(params),
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
   resolveDefaultAgentId: () => "default",
@@ -904,6 +941,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
+    state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
+    state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
+      const input = params as {
+        cfg?: { channels?: { modelByChannel?: Record<string, Record<string, string>> } };
+        channel?: string;
+        groupId?: string;
+        parentSessionKey?: string;
+      };
+      const channel = input.channel?.trim().toLowerCase();
+      const entries = channel ? input.cfg?.channels?.modelByChannel?.[channel] : undefined;
+      if (!entries) {
+        return null;
+      }
+      const direct = input.groupId ? entries[input.groupId] : undefined;
+      if (direct) {
+        return { channel, model: direct, matchKey: input.groupId };
+      }
+      const parentChannel = input.parentSessionKey?.match(/:channel:([^:]+)/u)?.[1];
+      const parent = parentChannel ? entries[parentChannel] : undefined;
+      return parent ? { channel, model: parent, matchKey: parentChannel } : null;
+    });
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
@@ -1099,6 +1158,341 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(touchWrites).toHaveLength(0);
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses channel model override as the initial run model for channel-backed sessions", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+
+    await runBasicAgentCommand();
+
+    expect(mockCallArg(state.resolveChannelModelOverrideMock)).toMatchObject({
+      channel: "discord",
+      groupId: "channel-123",
+    });
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("channel-model");
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "openai",
+      modelOverride: "channel-model",
+    });
+  });
+
+  it("uses current run channel context when persisted session metadata is absent", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+
+    await agentCommand({
+      message: "hello",
+      channel: "discord",
+      groupId: "channel-123",
+      to: "discord:channel:channel-123",
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("keeps persisted channel model override when current run context is internal", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+
+    await agentCommand({
+      message: "hello",
+      channel: "internal",
+      messageChannel: "internal",
+      to: "internal",
+    });
+
+    expect(mockCallArg(state.resolveChannelModelOverrideMock)).toMatchObject({
+      channel: "discord",
+      groupId: "channel-123",
+    });
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("uses channel model override after ignoring stale legacy fallback overrides", async () => {
+    setupSingleAttemptFallback();
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      providerOverride: "anthropic",
+      modelOverride: "stale-fallback-model",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("probes the channel primary when a session is pinned to an auto fallback", async () => {
+    setupSingleAttemptFallback();
+    state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue({
+      provider: "openai",
+      model: "channel-model",
+      fallbackProvider: "anthropic",
+      fallbackModel: "fallback-model",
+    });
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "anthropic/fallback-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "channel-model",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.resolveAutoFallbackPrimaryProbeMock), {
+      primaryProvider: "openai",
+      primaryModel: "channel-model",
+    });
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("uses current threaded session key for parent channel model overrides", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/parent-channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          slack: {
+            general: "openai/parent-channel-model",
+          },
+        },
+      },
+    };
+    state.resolvedSessionKeyMock = "agent:main:slack:channel:general:thread:thread-1";
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "slack",
+      groupId: "thread-1",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(
+      makeSuccessResult("openai", "parent-channel-model"),
+    );
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("parent-channel-model");
+  });
+
+  it("keeps stored session model overrides ahead of channel model overrides", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/channel-model": {},
+            "anthropic/stored-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      providerOverride: "anthropic",
+      modelOverride: "stored-model",
+      modelOverrideSource: "user",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "stored-model"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("anthropic");
+    expect(fallbackParams.model).toBe("stored-model");
+  });
+
+  it("keeps explicit run model overrides ahead of channel model overrides", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "openai/channel-model": {},
+            "openai/explicit-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "explicit-model"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "openai/explicit-model",
+      allowModelOverride: true,
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("explicit-model");
   });
 
   it("uses rotated session identity for all post-run session persistence", async () => {
