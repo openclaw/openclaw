@@ -1118,6 +1118,60 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([message]);
   });
 
+  it("keeps stream segments visible when an error ends after a tool event", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Ping" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [existingMessage],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & { chatStreamSegments: Array<{ text: string; ts: number }> };
+    state.chatStreamSegments = [{ text: "Visible text before tool.", ts: 100 }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "gateway disconnected",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(existingMessage);
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Visible text before tool.");
+    expectTextChatMessage(state.chatMessages[2], "assistant", "Error: gateway disconnected");
+  });
+
+  it("does not treat substring matches as stream replacement", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Error: provider said NOT OK yet." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "OK",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "provider said NOT OK yet",
+      message,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "OK");
+    expect(state.chatMessages[1]).toEqual(message);
+  });
+
   it("prefers server-provided assistant error messages", () => {
     const state = createState({
       sessionKey: "main",
