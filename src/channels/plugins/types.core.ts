@@ -248,6 +248,15 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
   /**
+   * Channel can carry deferred final TTS text as a voice-note caption.
+   * When set, core suppresses live ACP block delivery and attaches the
+   * accumulated visible text to the final voice-note payload instead.
+   * Use only for channels whose voice-note send path supports captions.
+   * Core owns text-only fallback delivery when suppressed blocks abort or
+   * error before final TTS; incorrect opt-in suppresses live block messages.
+   */
+  captionedFinalText?: boolean;
+  /**
    * Optional preferred audio container the channel wants for voice-memo
    * delivery. When set and the host can transcode (e.g. `afconvert` on
    * macOS), the TTS pipeline pre-encodes synthesized audio to this format

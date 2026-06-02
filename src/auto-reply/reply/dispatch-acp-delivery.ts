@@ -3,7 +3,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -164,8 +167,10 @@ type AcpDispatchDeliveryState = {
   cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   blockCount: number;
   deliveredFinalReply: boolean;
+  deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
+  failedFinalDelivery: boolean;
   queuedDirectVisibleTextDeliveries: number;
   settledDirectVisibleText: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
@@ -188,8 +193,10 @@ export type AcpDispatchDeliveryCoordinator = {
   resolveAccumulatedDeliveredTranscriptText: () => Promise<string>;
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
+  hasDeliveredFinalTtsMedia: () => boolean;
   hasDeliveredVisibleText: () => boolean;
   hasFailedVisibleTextDelivery: () => boolean;
+  hasFailedFinalDelivery: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -204,6 +211,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressBlockUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -257,8 +265,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       : undefined,
     blockCount: 0,
     deliveredFinalReply: false,
+    deliveredFinalTtsMedia: false,
     deliveredVisibleText: false,
     failedVisibleTextDelivery: false,
+    failedFinalDelivery: false,
     queuedDirectVisibleTextDeliveries: 0,
     settledDirectVisibleText: false,
     routedCounts: {
@@ -309,6 +319,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const failedVisibleCount = failedCounts.block + failedCounts.final;
     if (failedVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;
+    }
+    if (failedCounts.final > 0) {
+      state.failedFinalDelivery = true;
     }
     if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
       state.deliveredVisibleText = true;
@@ -428,6 +441,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (params.suppressUserDelivery) {
       return false;
     }
+    if (kind === "block" && params.suppressBlockUserDelivery) {
+      // Captioned final TTS still needs block text accumulation, but live
+      // block delivery would duplicate the final voice-note caption.
+      return false;
+    }
 
     const ttsPayload = await maybeApplyAcpTts({
       payload: visiblePayload,
@@ -440,6 +458,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
       skipTts: meta?.skipTts,
     });
+    const hasFinalMedia =
+      kind === "final" && resolveSendableOutboundReplyParts(ttsPayload).hasMedia;
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = normalizeOptionalString(meta?.toolCallId);
@@ -496,6 +516,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (result.suppressed) {
         if (kind === "final") {
           state.deliveredFinalReply = true;
+          if (hasFinalMedia) {
+            state.deliveredFinalTtsMedia = true;
+          }
         }
         if (tracksVisibleText) {
           state.deliveredVisibleText = true;
@@ -514,6 +537,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       appendDeliveredTranscriptText(kind, rawBlockText, rawFinalText);
       if (kind === "final") {
         state.deliveredFinalReply = true;
+        if (hasFinalMedia) {
+          state.deliveredFinalTtsMedia = true;
+        }
       }
       if (tracksVisibleText) {
         state.deliveredVisibleText = true;
@@ -553,6 +579,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
+      if (hasFinalMedia) {
+        state.deliveredFinalTtsMedia = true;
+      }
     }
     if (delivered && tracksVisibleText) {
       state.queuedDirectVisibleTextDeliveries += 1;
@@ -581,8 +610,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
+    hasDeliveredFinalTtsMedia: () => state.deliveredFinalTtsMedia,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
+    hasFailedFinalDelivery: () => state.failedFinalDelivery,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

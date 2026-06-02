@@ -191,10 +191,21 @@ const agentEventMocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
   onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
 }));
+const channelTtsMocks = vi.hoisted(() => ({
+  resolveChannelTtsVoiceDelivery: vi.fn<
+    (channel?: string) => { captionedFinalText?: boolean } | undefined
+  >(() => undefined),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
     synthesizeToolAudio: false,
+    statusSnapshot: {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    },
   };
   return {
     state,
@@ -393,6 +404,7 @@ export {
   threadInfoMocks,
   transcriptMocks,
   ttsMocks,
+  channelTtsMocks,
 };
 
 export function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
@@ -624,13 +636,16 @@ vi.mock("./conversation-binding-input.js", () => ({
     conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
 }));
 vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  }),
+  resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
 }));
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
+  return {
+    ...actual,
+    resolveChannelTtsVoiceDelivery: (channel?: string) =>
+      channelTtsMocks.resolveChannelTtsVoiceDelivery(channel),
+  };
+});
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
@@ -703,6 +718,14 @@ export function resetPluginTtsAndThreadMocks() {
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;
+  ttsMocks.state.statusSnapshot = {
+    autoMode: "always",
+    provider: "auto",
+    maxLength: 1500,
+    summarize: true,
+  };
+  channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReset();
+  channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue(undefined);
   ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
       payload: ReplyPayload;

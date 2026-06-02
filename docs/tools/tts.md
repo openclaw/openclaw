@@ -708,6 +708,65 @@ Reply -> TTS enabled?
                             yes -> summarize -> TTS -> attach audio
 ```
 
+## Captioned final text (`captionedFinalText`)
+
+Channel plugins can opt in to **captioned final text** delivery by returning
+`{ captionedFinalText: true }` from `resolveChannelTtsVoiceDelivery`. When
+enabled, core changes how text and audio are delivered during an auto-TTS reply:
+
+1. **Live text suppression.** Instead of streaming block text to the channel
+   while TTS synthesis runs, core accumulates the text internally.
+2. **Bundled caption.** When synthesis completes, the accumulated text is
+   attached as a caption on the final voice-note message, so the user sees
+   text and audio together.
+3. **Text-only fallback.** If TTS synthesis fails, core delivers the
+   accumulated text as a plain text reply so the user still sees the content.
+
+### When to opt in
+
+Only channels whose voice-note send path supports captions should opt in.
+Telegram is the primary example — its `sendVoice` API accepts a `caption`
+parameter. Channels that cannot attach text to voice messages (or where
+clients do not render voice-note captions) should not enable this.
+
+### Tagged mode behavior
+
+In `auto: "tagged"` mode on caption-capable channels, partial reply previews
+are suppressed to prevent raw `[[tts:text]]...[[/tts:text]]` directives from
+leaking through the channel's draft preview lane before the final
+voice-plus-caption delivery.
+
+### How to opt in (channel plugin)
+
+Return `captionedFinalText: true` from your channel's
+`resolveChannelTtsVoiceDelivery` implementation:
+
+```ts
+resolveChannelTtsVoiceDelivery() {
+  return { captionedFinalText: true };
+}
+```
+
+## Output formats by channel
+
+| Target                                | Format                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
+| Other channels                        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps default for speech.                                 |
+| Talk / telephony                      | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                 |
+
+Per-provider notes:
+
+- **Feishu / WhatsApp transcoding:** When a voice-note reply lands as MP3/WebM/WAV/M4A, the channel plugin transcodes to 48 kHz Ogg/Opus with `ffmpeg`. WhatsApp sends through Baileys with `ptt: true` and `audio/ogg; codecs=opus`. If conversion fails: Feishu falls back to attaching the original file; WhatsApp send fails rather than posting an incompatible PTT payload.
+- **MiniMax / Xiaomi MiMo:** Default MP3 (32 kHz for MiniMax `speech-2.8-hd`); transcoded to 48 kHz Opus for voice-note targets via `ffmpeg`.
+- **Local CLI:** Uses configured `outputFormat`. Voice-note targets are converted to Ogg/Opus and telephony output to raw 16 kHz mono PCM.
+- **Google Gemini:** Returns raw 24 kHz PCM. OpenClaw wraps as WAV for attachments, transcodes to 48 kHz Opus for voice-note targets, returns PCM directly for Talk/telephony.
+- **Inworld:** MP3 attachments, native `OGG_OPUS` voice-note, raw `PCM` 22050 Hz for Talk/telephony.
+- **xAI:** MP3 by default; `responseFormat` may be `mp3|wav|pcm|mulaw|alaw`. Uses xAI's batch REST endpoint — streaming WebSocket TTS is **not** used. Native Opus voice-note format is **not** supported.
+- **Microsoft:** Uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`). Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need guaranteed Opus voice messages. If the configured Microsoft format fails, OpenClaw retries with MP3.
+
+OpenAI and ElevenLabs output formats are fixed per channel as listed above.
+
 ## Field reference
 
 <AccordionGroup>

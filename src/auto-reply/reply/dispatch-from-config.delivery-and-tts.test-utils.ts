@@ -24,12 +24,14 @@ import {
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
+  channelTtsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticGroupReplyConfig,
   dispatchReplyFromConfig,
   setNoAbort,
   firstMockArg,
+  firstFinalReplyPayload,
   dispatchTwiceWithFreshDispatchers,
   messageAuditEvents,
   globalBeforeAll0,
@@ -1708,5 +1710,353 @@ describe("dispatchReplyFromConfig", () => {
       assistantMessageIndex: 7,
     });
   });
+
+  it("suppresses block delivery and includes caption text with TTS voice on captioned channels", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:user123",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Hello from block streaming." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(blockCalls).toHaveLength(0);
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.audioAsVoice).toBe(true);
+    expect(finalPayload?.text).toBe("Hello from block streaming.");
+    expect(finalPayload?.spokenText).toBe("Hello from block streaming.");
+  });
+
+  it("falls back to text-only delivery when TTS fails on captioned channel", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:user456",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Fallback text content." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(blockCalls).toHaveLength(0);
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.text).toBe("Fallback text content.");
+    expect(finalPayload?.mediaUrl).toBeUndefined();
+  });
+
+  it("does not suppress blocks when channel lacks captionedFinalText", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue(undefined);
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:main:discord:user789",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Discord block text." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const blockCalls = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(blockCalls).toHaveLength(1);
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.text).toBeUndefined();
+  });
+
+  it("adds caption text to Telegram tagged final TTS when reply is directive-only", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (): Promise<ReplyPayload> => ({
+      text: "[[tts:text]]Hello[[/tts:text]]",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.audioAsVoice).toBe(true);
+    expect(finalPayload?.text).toBe("Hello");
+  });
+
+  it("includes directive content as visible text when tagged TTS directive is the entire response", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({
+        text: "[[tts:text]]Hello boss, TTS is back![[/tts:text]]",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(0);
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.text).toBe("Hello boss, TTS is back!");
+    expect(finalPayload?.audioAsVoice).toBe(true);
+  });
+
+  it("tagged directive-only reply with both block and final delivery synthesizes voice from accumulated block TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({}).mockResolvedValueOnce({
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    const dispatcher = createDispatcher();
+    (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => Boolean(payload.mediaUrl || payload.text),
+    );
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({
+        text: "[[tts:text]]Hello boss, TTS is back![[/tts:text]]",
+      });
+      return { text: "[[tts:text]]Hello boss, TTS is back![[/tts:text]]" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    const finalPayloads = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([payload]) => payload as ReplyPayload,
+    );
+    const voicePayload = finalPayloads.find((payload) => payload.mediaUrl);
+    expect(voicePayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(voicePayload?.text).toBe("Hello boss, TTS is back!");
+    expect(voicePayload?.audioAsVoice).toBe(true);
+    expect(finalPayloads.some((payload) => payload.text === "No response generated.")).toBe(false);
+  });
+
+  it("always mode reply with both block and final delivery uses final reply TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text: "Hello boss, TTS is back!",
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Hello boss, TTS is back!" });
+      return { text: "Hello boss, TTS is back!" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.text).toBe("Hello boss, TTS is back!");
+    expect(finalPayload?.audioAsVoice).toBe(true);
+  });
+
+  it("streams plain Telegram tagged block replies without final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Plain tagged mode text." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Plain tagged mode text." });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers text fallback when TTS fails and tagged directive consumed all visible text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({
+        text: "[[tts:text]]Fallback content here[[/tts:text]]",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.text).toBe("Fallback content here");
+    expect(finalPayload?.mediaUrl).toBeUndefined();
+  });
+
+  it("preserves normal visibleTextAlreadyDelivered when directives do not consume all text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({
+        text: "Visible intro [[tts:text]]hidden speech[[/tts:text]] visible outro",
+      });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(blockReplySentTexts.join("")).toContain("Visible intro");
+    expect(blockReplySentTexts.join("")).toContain("visible outro");
+    expect(blockReplySentTexts.join("")).not.toContain("hidden speech");
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.text).toBeUndefined();
+    expect(
+      (finalPayload?.ttsSupplement as Record<string, unknown> | undefined)
+        ?.visibleTextAlreadyDelivered,
+    ).toBe(true);
+  });
+
+  it("suppresses onPartialReply for tagged TTS on caption-capable channels", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const partialCallback = vi.fn();
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onPartialReply?.({ text: "[[tts:text]]hidden speech[[/tts:text]]" });
+      return { text: "done" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onPartialReply: partialCallback },
+    });
+
+    expect(partialCallback).not.toHaveBeenCalled();
+  });
+
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
