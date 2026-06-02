@@ -12,12 +12,48 @@ import {
   resolveAgentDir,
 } from "../agents/agent-scope.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
+import type { ModelRef } from "../agents/model-selection-normalize.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
+
+/**
+ * Resolve which model to use for slug generation.
+ *
+ * When the hook config (e.g. `hooks.internal.entries["session-memory"].model`)
+ * provides a `provider/model` (or bare `model`) string, prefer it so the
+ * caller can route slug generation to a cheaper / faster model than the
+ * agent's primary model. Falls back to the agent's default model when the
+ * override is missing, empty, or unparseable.
+ */
+export function resolveSlugGeneratorModelRef(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  hookModelOverride?: unknown;
+}): ModelRef {
+  const fallback = () => resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const raw = params.hookModelOverride;
+  if (typeof raw !== "string") {
+    return fallback();
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return fallback();
+  }
+  const fallbackRef = fallback();
+  const parsed = parseModelRef(trimmed, fallbackRef.provider);
+  if (!parsed) {
+    log.warn(
+      `Ignoring unparseable session-memory hook model override; falling back to agent default`,
+    );
+    return fallbackRef;
+  }
+  return parsed;
+}
 const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
 
 function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
@@ -34,6 +70,12 @@ function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  /**
+   * Optional `provider/model` (or bare `model`) override from the hook's
+   * config entry. When present and parseable it takes precedence over the
+   * agent's default model for this slug-generation run.
+   */
+  modelOverride?: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
@@ -53,9 +95,10 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    const { provider, model } = resolveDefaultModelForAgent({
+    const { provider, model } = resolveSlugGeneratorModelRef({
       cfg: params.cfg,
       agentId,
+      hookModelOverride: params.modelOverride,
     });
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
