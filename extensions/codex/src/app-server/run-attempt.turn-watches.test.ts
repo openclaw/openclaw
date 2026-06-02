@@ -2519,6 +2519,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 5,
       turnAssistantCompletionIdleTimeoutMs: 500,
+      postToolRawAssistantCompletionIdleTimeoutMs: 100,
       turnTerminalIdleTimeoutMs: 500,
     }).finally(() => {
       settled = true;
@@ -2562,17 +2563,21 @@ describe("runCodexAppServerAttempt turn watches", () => {
       ),
     ).toBe(false);
 
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-      },
-    });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
-    expect(result.promptError).toBeNull();
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const completionWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+    );
+    expect(completionWarnCall).toBeDefined();
+    const completionWarnData = completionWarnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(completionWarnData?.timeoutMs).toBe(100);
+    expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
     expect(
       warn.mock.calls.some(
         ([message]) =>

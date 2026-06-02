@@ -227,7 +227,7 @@ export function applyCodexTurnNotificationState(params: {
     }
   } else if (rawResponseItemCompletedWithNoActiveItems) {
     if (isRawReasoningCompletionNotification(notification)) {
-      armPostProgressReplyWatch();
+      armPostToolContinuationWatch();
     } else {
       turnWatches.armCompletionIdleWatch();
     }
