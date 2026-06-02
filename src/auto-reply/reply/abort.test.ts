@@ -282,11 +282,11 @@ describe("abort detection", () => {
 
   it("isAbortRequestText aligns abort command semantics", () => {
     expect(isAbortRequestText("/stop")).toBe(true);
-    expect(isAbortRequestText("/cancel")).toBe(true);
+    expect(isAbortRequestText("/cancel")).toBe(false);
     expect(isAbortRequestText("/STOP")).toBe(true);
-    expect(isAbortRequestText("/CANCEL")).toBe(true);
+    expect(isAbortRequestText("/CANCEL")).toBe(false);
     expect(isAbortRequestText("/stop!!!")).toBe(true);
-    expect(isAbortRequestText("/cancel!!!")).toBe(true);
+    expect(isAbortRequestText("/cancel!!!")).toBe(false);
     expect(isAbortRequestText("/Stop!!!")).toBe(true);
     expect(isAbortRequestText("stop")).toBe(true);
     expect(isAbortRequestText("Stop")).toBe(true);

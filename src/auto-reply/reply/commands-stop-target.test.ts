@@ -11,6 +11,7 @@ import type { MsgContext } from "../templating.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { clearSessionQueues } from "./queue.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
@@ -18,6 +19,7 @@ const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
 const abortSessionRunTargetMock = vi.hoisted(() => vi.fn());
+const clearSessionQueuesMock = vi.mocked(clearSessionQueues);
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
@@ -146,6 +148,7 @@ describe("handleStopCommand target fallback", () => {
   beforeEach(() => {
     previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
+    clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
     persistAbortTargetEntryMock.mockResolvedValue(true);
     abortSessionRunTargetMock.mockReturnValue(true);
   });
@@ -234,6 +237,7 @@ describe("handleStopCommand target fallback", () => {
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
     expect(createInternalHookEventMock).not.toHaveBeenCalled();
     expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
+    expect(clearSessionQueuesMock).not.toHaveBeenCalled();
   });
 
   it("treats reply-scoped Telegram /cancel as a stop alias", async () => {
@@ -251,6 +255,26 @@ describe("handleStopCommand target fallback", () => {
       key: "agent:target:telegram:direct:123",
       sessionId: undefined,
     });
+  });
+
+  it("does not clear queues when the replied-to target has already finished", async () => {
+    const params = buildStopParams();
+    abortSessionRunTargetMock.mockReturnValue(false);
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "No active work is still running for the replied-to message." },
+    });
+    expect(abortSessionRunTargetMock).toHaveBeenCalledWith({
+      key: "agent:target:telegram:direct:123",
+      sessionId: undefined,
+    });
+    expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+    expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+    expect(createInternalHookEventMock).not.toHaveBeenCalled();
+    expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
   });
 
   it("rejects native stop commands from non-owner senders when the plugin enforces owner-only commands", async () => {
