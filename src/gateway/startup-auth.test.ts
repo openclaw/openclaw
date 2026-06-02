@@ -24,6 +24,9 @@ vi.mock("../config/mutate.js", async () => {
   };
 });
 
+type StartupAuthInput = Parameters<typeof ensureGatewayStartupAuth>[0];
+type StartupAuthResult = Awaited<ReturnType<typeof ensureGatewayStartupAuth>>;
+
 describe("mergeGatewayTailscaleConfig", () => {
   it("preserves explicit preserveFunnel overrides", () => {
     expect(
@@ -45,6 +48,19 @@ describe("mergeGatewayTailscaleConfig", () => {
 });
 
 describe("ensureGatewayStartupAuth", () => {
+  function expectEphemeralGeneratedToken(result: StartupAuthResult) {
+    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe(result.generatedToken);
+  }
+
+  function expectResolvedPassword(result: StartupAuthResult, password: string) {
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.auth.mode).toBe("password");
+    expect(result.auth.password).toBe(password);
+  }
+
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
     const result = await ensureGatewayStartupAuth({
       cfg,
@@ -53,10 +69,7 @@ describe("ensureGatewayStartupAuth", () => {
       persist: true,
     });
 
-    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(result.generatedToken);
+    expectEphemeralGeneratedToken(result);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   }
 
@@ -81,12 +94,14 @@ describe("ensureGatewayStartupAuth", () => {
   async function expectResolvedToken(params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
+    authOverride?: StartupAuthInput["authOverride"];
     expectedToken: string;
     expectedConfiguredToken?: unknown;
   }) {
     const result = await ensureGatewayStartupAuth({
       cfg: params.cfg,
       env: params.env,
+      authOverride: params.authOverride,
       persist: true,
     });
 
@@ -123,10 +138,7 @@ describe("ensureGatewayStartupAuth", () => {
       persist: true,
     });
 
-    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(result.generatedToken);
+    expectEphemeralGeneratedToken(result);
     expect(result.cfg.gateway?.auth?.token).toBe(result.generatedToken);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
@@ -180,9 +192,7 @@ describe("ensureGatewayStartupAuth", () => {
       persist: true,
     });
 
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.auth.mode).toBe("password");
-    expect(result.auth.password).toBe("resolved-password");
+    expectResolvedPassword(result, "resolved-password");
     expect(result.cfg.gateway?.auth?.password).toEqual({
       source: "env",
       provider: "default",
@@ -295,9 +305,7 @@ describe("ensureGatewayStartupAuth", () => {
       persist: true,
     });
 
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.auth.mode).toBe("password");
-    expect(result.auth.password).toBe("password-from-env");
+    expectResolvedPassword(result, "password-from-env");
   });
 
   it("does not resolve gateway.auth.password SecretRef when token mode is explicit", async () => {
@@ -355,26 +363,19 @@ describe("ensureGatewayStartupAuth", () => {
   });
 
   it("treats undefined token override as no override", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "from-config",
+    await expectResolvedToken({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "from-config",
+          },
         },
       },
-    };
-    const result = await ensureGatewayStartupAuth({
-      cfg,
       env: {} as NodeJS.ProcessEnv,
       authOverride: { mode: "token", token: undefined },
-      persist: true,
+      expectedToken: "from-config",
     });
-
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe("from-config");
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("keeps generated token ephemeral when runtime override flips explicit non-token mode", async () => {

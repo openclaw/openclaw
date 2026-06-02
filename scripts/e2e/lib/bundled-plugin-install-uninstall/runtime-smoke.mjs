@@ -56,9 +56,10 @@ const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/
 const PACKAGE_MANAGER_PROCESS_BASENAME = /^(?:npm|pnpm|yarn|corepack)(?:$|[.-])/u;
 const PROCESS_SNAPSHOT_ARGS = ["-ww", "-eo", "pid=,ppid=,args="];
 const isolatedStateRoots = new WeakMap();
+const activeCommandChildren = new Set();
 const activeGatewayChildren = new Set();
 const parentSignalHandlers = new Map();
-let gatewayExitCleanupInstalled = false;
+let parentCleanupInstalled = false;
 
 function readPositiveInt(raw, fallback) {
   const text = String(raw ?? "").trim();
@@ -400,10 +401,15 @@ function createBoundedGatewayLog(logPath) {
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const { timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
+    const detached = spawnOptions.detached ?? process.platform !== "win32";
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
+      detached,
     });
+    if (detached) {
+      trackCommandChild(child);
+    }
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
@@ -417,7 +423,7 @@ export function runCommand(command, args, options = {}) {
     const clearCommandTimer = timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          child.kill("SIGKILL");
+          signalChildProcessTree(child, "SIGKILL");
         }, timeoutMs)
       : undefined;
     child.on("error", (error) => {
@@ -508,14 +514,24 @@ function trackGatewayChild(child) {
   };
   child.once("error", untrack);
   child.once("close", untrack);
-  installGatewayParentCleanup();
+  installParentCleanup();
 }
 
-function installGatewayParentCleanup() {
-  if (!gatewayExitCleanupInstalled) {
-    gatewayExitCleanupInstalled = true;
+function trackCommandChild(child) {
+  activeCommandChildren.add(child);
+  const untrack = () => {
+    activeCommandChildren.delete(child);
+  };
+  child.once("error", untrack);
+  child.once("close", untrack);
+  installParentCleanup();
+}
+
+function installParentCleanup() {
+  if (!parentCleanupInstalled) {
+    parentCleanupInstalled = true;
     process.once("exit", () => {
-      cleanupActiveGatewayChildren("SIGTERM");
+      cleanupActiveChildren("SIGTERM");
     });
   }
   for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
@@ -523,7 +539,7 @@ function installGatewayParentCleanup() {
       continue;
     }
     const handler = () => {
-      cleanupActiveGatewayChildren(signal);
+      cleanupActiveChildren(signal);
       for (const [registeredSignal, registeredHandler] of parentSignalHandlers) {
         process.off(registeredSignal, registeredHandler);
       }
@@ -535,11 +551,17 @@ function installGatewayParentCleanup() {
   }
 }
 
-function cleanupActiveGatewayChildren(signal) {
-  for (const child of activeGatewayChildren) {
-    signalGateway(child, signal);
+function cleanupActiveChildren(signal) {
+  for (const child of activeCommandChildren) {
+    signalChildProcessTree(child, signal);
     if (process.platform !== "win32") {
-      signalGateway(child, "SIGKILL");
+      signalChildProcessTree(child, "SIGKILL");
+    }
+  }
+  for (const child of activeGatewayChildren) {
+    signalChildProcessTree(child, signal);
+    if (process.platform !== "win32") {
+      signalChildProcessTree(child, "SIGKILL");
     }
   }
 }
@@ -559,11 +581,11 @@ export async function stopGateway(child) {
     return !processTreeIsAlive(child);
   };
 
-  signalGateway(child, "SIGTERM");
+  signalChildProcessTree(child, "SIGTERM");
   if (await waitForExit(GATEWAY_TEARDOWN_GRACE_MS)) {
     return;
   }
-  signalGateway(child, "SIGKILL");
+  signalChildProcessTree(child, "SIGKILL");
   await waitForExit(GATEWAY_TEARDOWN_KILL_GRACE_MS);
 }
 
@@ -585,15 +607,14 @@ function processTreeIsAlive(child) {
   }
 }
 
-function signalGateway(child, signal) {
+function signalChildProcessTree(child, signal) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
-    } catch (error) {
-      if (error?.code === "ESRCH") {
-        return;
-      }
+    } catch {
+      // Non-detached callers may not own a process group keyed by child.pid; keep
+      // the legacy direct-child kill path as the fallback.
     }
   }
   try {

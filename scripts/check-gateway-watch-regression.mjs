@@ -541,25 +541,59 @@ export async function runTimedWatch(options, outputDir, deps = {}) {
         resolve({ code: null, signal: null, error: error.message });
       });
     });
+    const raceSpawnError = async (operation) =>
+      await Promise.race([
+        Promise.resolve(operation).then((value) => ({ type: "value", value })),
+        spawnErrorExit.then((value) => ({ type: "spawn-error", value })),
+      ]);
 
     let watchPid = null;
+    let exit = null;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       if (fs.existsSync(pidFilePath)) {
         watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
         break;
       }
-      await sleepMs(100);
+      const waitResult = await raceSpawnError(sleepMs(100));
+      if (waitResult.type === "spawn-error") {
+        exit = waitResult.value;
+        break;
+      }
     }
 
-    const readyBeforeWindow = await waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs);
-    if (readyBeforeWindow && options.readySettleMs > 0) {
-      await sleepMs(options.readySettleMs);
+    let readyBeforeWindow = false;
+    let idleCpuStartMs = null;
+    let idleCpuEndMs = null;
+    if (!exit) {
+      const readyResult = await raceSpawnError(
+        waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs),
+      );
+      if (readyResult.type === "spawn-error") {
+        exit = readyResult.value;
+      } else {
+        readyBeforeWindow = readyResult.value;
+      }
     }
-    const idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
-    await sleepMs(options.windowMs);
-    const idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
+    if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
+      const settleResult = await raceSpawnError(sleepMs(options.readySettleMs));
+      if (settleResult.type === "spawn-error") {
+        exit = settleResult.value;
+      }
+    }
+    if (!exit) {
+      idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
+      const windowResult = await raceSpawnError(sleepMs(options.windowMs));
+      if (windowResult.type === "spawn-error") {
+        exit = windowResult.value;
+      } else {
+        idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
+      }
+    }
+    if (!exit) {
+      const stopResult = await raceSpawnError(stopChild(child, watchPid, options));
+      exit = stopResult.value;
+    }
 
-    const exit = await Promise.race([stopChild(child, watchPid, options), spawnErrorExit]);
     fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
     fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
     const timingFileMissing = !fs.existsSync(timeFilePath);

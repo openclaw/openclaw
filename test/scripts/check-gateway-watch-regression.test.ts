@@ -142,6 +142,14 @@ describe("check-gateway-watch-regression", () => {
     };
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
+    const sleep = vi.fn(() => new Promise<never>(() => {}));
+    const stopChild = vi.fn(
+      () =>
+        new Promise<never>(() => {
+          // Spawn failures must win before cleanup waits for a child that never started.
+        }),
+    );
+    const waitForGatewayReady = vi.fn(async () => false);
 
     try {
       const result = await runTimedWatch(
@@ -154,18 +162,15 @@ describe("check-gateway-watch-regression", () => {
         outputDir,
         {
           allocateLoopbackPort: async () => 19042,
-          sleep: async () => undefined,
           spawn: () => {
             process.nextTick(() => {
               child.emit("error", new Error("spawn failed"));
             });
             return child;
           },
-          stopTimedWatchChild: () =>
-            new Promise<never>(() => {
-              // Intentionally never resolves; the injected spawn error wins the race.
-            }),
-          waitForGatewayReady: async () => false,
+          sleep,
+          stopTimedWatchChild: stopChild,
+          waitForGatewayReady,
         },
       );
 
@@ -175,6 +180,8 @@ describe("check-gateway-watch-regression", () => {
       expect(result.spawnError).toBe("spawn failed");
       expect(fs.existsSync(isolatedHomeDir)).toBe(false);
       expect(fs.existsSync(path.join(outputDir, "watch.home.txt"))).toBe(true);
+      expect(waitForGatewayReady).not.toHaveBeenCalled();
+      expect(stopChild).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }

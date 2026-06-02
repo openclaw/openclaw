@@ -13,7 +13,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
@@ -1540,7 +1540,9 @@ function isWindowsRemoteTarget(commandArgs) {
 }
 
 function isNativeWindowsRemoteTarget(commandArgs) {
-  return isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2";
+  return (
+    isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2"
+  );
 }
 
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
@@ -1553,14 +1555,14 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
 
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
-    '$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR',
-    'if ($openclawModulesDir) {',
+    "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
+    "if ($openclawModulesDir) {",
     'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
     '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
     '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
     'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
     'if (-not (Test-Path $openclawWorkspaceModules)) { cmd /c mklink /J "$openclawWorkspaceModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link workspace node_modules" } }',
-    '}',
+    "}",
   ].join("; ");
 }
 
@@ -1894,8 +1896,23 @@ function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
   return isSparseCheckout() || isChangedGateCommand(runCommandArgs(commandArgs));
 }
 
+function defaultFullCheckoutSyncRoot() {
+  const home = homedir();
+  if (home) {
+    return resolve(home, ".cache", "openclaw", "crabbox-sync");
+  }
+  return resolve(tmpdir(), "openclaw-crabbox-sync");
+}
+
+function fullCheckoutSyncRoot() {
+  const configured = process.env.OPENCLAW_CRABBOX_SYNC_TMPDIR?.trim();
+  const root = configured ? resolve(configured) : defaultFullCheckoutSyncRoot();
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
 function prepareFullCheckoutForSync(options = {}) {
-  const dir = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-sync-"));
+  const dir = mkdtempSync(resolve(fullCheckoutSyncRoot(), "openclaw-crabbox-sync-"));
   let active = false;
   const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
   if (add.status !== 0) {

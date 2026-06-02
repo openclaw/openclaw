@@ -43,6 +43,14 @@ type BeforeToolCallHookInput = {
   signal?: unknown;
 };
 
+type McpToolResultPayload = {
+  result?: {
+    tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
+    content?: Array<{ text?: string }>;
+    isError?: boolean;
+  };
+};
+
 const runBeforeToolCallHookMock = vi.hoisted(() =>
   vi.fn(
     async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
@@ -96,6 +104,9 @@ import {
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
+const MAIN_SESSION_HEADER = { "x-session-key": "agent:main:main" };
+const ANGLE_NUMBER_PROPERTY = { type: "number" };
+
 async function sendRaw(params: {
   port: number;
   token?: string;
@@ -110,6 +121,137 @@ async function sendRaw(params: {
     },
     body: params.body,
   });
+}
+
+async function startLoopbackServerForTest(port = 0) {
+  server = await startMcpLoopbackServer(port);
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error("expected active MCP loopback runtime");
+  }
+  return { port: server.port, runtime };
+}
+
+async function readMcpPayload(response: Response): Promise<McpToolResultPayload> {
+  return (await response.json()) as McpToolResultPayload;
+}
+
+async function sendLoopbackToolsList(params: {
+  token?: string;
+  headers?: Record<string, string>;
+  id?: number;
+}) {
+  return sendRaw({
+    port: server?.port ?? 0,
+    token: params.token,
+    headers: jsonHeaders(params.headers),
+    body: mcpToolsListBody(params.id),
+  });
+}
+
+async function sendLoopbackToolCall(params: {
+  token?: string;
+  name: string;
+  args?: Record<string, unknown>;
+  headers?: Record<string, string>;
+}) {
+  return sendRaw({
+    port: server?.port ?? 0,
+    token: params.token,
+    headers: jsonHeaders(params.headers),
+    body: mcpToolCallBody(params.name, params.args),
+  });
+}
+
+async function sendMainSessionToolCall(params: {
+  token?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+}) {
+  return sendLoopbackToolCall({
+    token: params.token,
+    name: params.name ?? "message",
+    args: params.args,
+    headers: MAIN_SESSION_HEADER,
+  });
+}
+
+async function readOkMcpPayload(response: Response) {
+  const payload = await readMcpPayload(response);
+  expect(response.status).toBe(200);
+  return payload;
+}
+
+async function listMainSessionTools(token?: string) {
+  return readOkMcpPayload(
+    await sendLoopbackToolsList({
+      token,
+      headers: MAIN_SESSION_HEADER,
+    }),
+  );
+}
+
+async function callMainSessionTool(params: {
+  token?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+}) {
+  return readOkMcpPayload(await sendMainSessionToolCall(params));
+}
+
+async function callMessageToolWithExecute(execute: MockGatewayTool["execute"]) {
+  mockScopedTools([makeMessageTool({ execute })]);
+  const { runtime } = await startLoopbackServerForTest();
+  return callMainSessionTool({
+    token: runtime?.ownerToken,
+    name: "message",
+    args: { body: "hello" },
+  });
+}
+
+async function expectBrowserToolsListStatus(params: {
+  origin: string | ((port: number) => string);
+  fetchSite?: string;
+  token?: "owner" | "none";
+  status: number;
+}) {
+  const { runtime, port } = await startLoopbackServerForTest();
+  const origin = typeof params.origin === "function" ? params.origin(port) : params.origin;
+  const response = await sendRaw({
+    port,
+    token: params.token === "none" ? undefined : runtime?.ownerToken,
+    headers: jsonHeaders({
+      origin,
+      ...(params.fetchSite ? { "sec-fetch-site": params.fetchSite } : {}),
+    }),
+    body: mcpToolsListBody(),
+  });
+
+  expect(response.status).toBe(params.status);
+}
+
+function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
+  const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+  for (const name of expected) {
+    expect(names).toContain(name);
+  }
+}
+
+function expectMcpResultText(payload: McpToolResultPayload, text: string, isError?: boolean) {
+  if (isError === undefined) {
+    expect(payload.result?.isError).not.toBe(true);
+  } else {
+    expect(payload.result?.isError).toBe(isError);
+  }
+  expect(payload.result?.content?.[0]?.text).toBe(text);
+}
+
+function angleSchema(property: unknown, required: string[] = []) {
+  return {
+    type: "object",
+    properties: { angle: property },
+    required,
+  };
 }
 
 function getScopedToolsCall(index: number): ScopedToolsCall {
@@ -261,56 +403,23 @@ describe("buildMcpToolSchema", () => {
       {
         name: "fuzzplugin_move_delta",
         parameters: {
-          anyOf: [
-            { type: "object", properties: { angle: null }, required: ["angle"] },
-            {
-              type: "object",
-              properties: { angle: { type: "number" } },
-              required: ["angle"],
-            },
-          ],
+          anyOf: [angleSchema(null, ["angle"]), angleSchema(ANGLE_NUMBER_PROPERTY, ["angle"])],
         },
-        expected: {
-          type: "object",
-          properties: { angle: { type: "number" } },
-          required: ["angle"],
-        },
+        expected: angleSchema(ANGLE_NUMBER_PROPERTY, ["angle"]),
       },
       {
         name: "fuzzplugin_optional_delta",
         parameters: {
-          anyOf: [
-            {
-              type: "object",
-              properties: { angle: { type: "number" } },
-              required: ["angle"],
-            },
-            true,
-          ],
+          anyOf: [angleSchema(ANGLE_NUMBER_PROPERTY, ["angle"]), true],
         },
-        expected: {
-          type: "object",
-          properties: { angle: { type: "number" } },
-          required: [],
-        },
+        expected: angleSchema(ANGLE_NUMBER_PROPERTY),
       },
       {
         name: "fuzzplugin_boolean_delta",
         parameters: {
-          anyOf: [
-            { type: "object", properties: { angle: false } },
-            {
-              type: "object",
-              properties: { angle: { type: "number" } },
-              required: ["angle"],
-            },
-          ],
+          anyOf: [angleSchema(false), angleSchema(ANGLE_NUMBER_PROPERTY, ["angle"])],
         },
-        expected: {
-          type: "object",
-          properties: { angle: { type: "number" } },
-          required: [],
-        },
+        expected: angleSchema(ANGLE_NUMBER_PROPERTY),
       },
     ];
 
@@ -333,11 +442,10 @@ describe("mcp loopback server", () => {
       offsets: [0],
       fallbackBase: 53_000,
     });
-    server = await startMcpLoopbackServer(port);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime, port: serverPort } = await startLoopbackServerForTest(port);
 
     const response = await sendRaw({
-      port: server.port,
+      port: serverPort,
       token: runtime?.nonOwnerToken,
       headers: jsonHeaders({
         "x-session-key": "agent:main:telegram:group:chat123",
@@ -374,14 +482,11 @@ describe("mcp loopback server", () => {
   });
 
   it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
     const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
-      await sendRaw({
-        port: server?.port ?? 0,
+      await sendLoopbackToolsList({
         token: runtime?.ownerToken,
         headers: {
-          "content-type": "application/json",
           "x-session-key": "agent:main:telegram:group:chat123",
           "x-openclaw-message-channel": "telegram",
           "x-openclaw-inbound-event-kind": inboundEventKind,
@@ -389,7 +494,6 @@ describe("mcp loopback server", () => {
             ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
             : {}),
         },
-        body: mcpToolsListBody(),
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
@@ -416,21 +520,15 @@ describe("mcp loopback server", () => {
         },
       ],
     });
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
+    const response = await sendLoopbackToolsList({
       token: runtime?.nonOwnerToken,
       headers: {
-        "content-type": "application/json",
         "x-session-key": "agent:main:main",
       },
-      body: mcpToolsListBody(),
     });
-    const payload = (await response.json()) as {
-      result?: { tools?: Array<{ inputSchema?: Record<string, unknown> }> };
-    };
+    const payload = await readMcpPayload(response);
 
     expect(response.status).toBe(200);
     expect(payload.result?.tools?.[0]?.inputSchema).toEqual({
@@ -440,19 +538,15 @@ describe("mcp loopback server", () => {
   });
 
   it("derives sender owner identity from the loopback bearer token", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
     const sendToolsList = async (token?: string) =>
-      await sendRaw({
-        port: server?.port ?? 0,
+      await sendLoopbackToolsList({
         token,
         headers: {
-          "content-type": "application/json",
           "x-session-key": "agent:main:matrix:dm:test",
           "x-openclaw-message-channel": "matrix",
         },
-        body: mcpToolsListBody(),
       });
 
     expect((await sendToolsList(runtime?.ownerToken)).status).toBe(200);
@@ -464,19 +558,15 @@ describe("mcp loopback server", () => {
   });
 
   it("ignores spoofed owner headers on loopback requests", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
+    const response = await sendLoopbackToolsList({
       token: runtime?.nonOwnerToken,
       headers: {
-        "content-type": "application/json",
         "x-session-key": "agent:main:matrix:dm:test",
         "x-openclaw-message-channel": "matrix",
         "x-openclaw-sender-is-owner": "true",
       },
-      body: mcpToolsListBody(),
     });
 
     expect(response.status).toBe(200);
@@ -499,51 +589,20 @@ describe("mcp loopback server", () => {
         }),
       }),
     ]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolsListBody(),
-    });
-    const payload = (await response.json()) as {
-      result?: { tools?: Array<{ name: string }> };
-    };
-    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+    const payload = await listMainSessionTools(runtime?.ownerToken);
 
-    expect(response.status).toBe(200);
-    expect(names).toContain("message");
-    expect(names).toContain("cron");
-    expect(names).toContain("owner_probe");
+    expectMcpToolNames(payload, ["message", "cron", "owner_probe"]);
   });
 
   it("keeps tools available to loopback callers", async () => {
     mockScopedTools([makeMessageTool(), makeCronTool()]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolsListBody(),
-    });
-    const payload = (await response.json()) as {
-      result?: { tools?: Array<{ name: string }> };
-    };
-    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+    const payload = await listMainSessionTools(runtime?.ownerToken);
 
-    expect(response.status).toBe(200);
-    expect(names).toContain("message");
-    expect(names).toContain("cron");
+    expectMcpToolNames(payload, ["message", "cron"]);
   });
 
   it("executes tools for loopback callers", async () => {
@@ -551,26 +610,15 @@ describe("mcp loopback server", () => {
       content: [{ type: "text", text: "CRON_EXECUTED" }],
     }));
     mockScopedTools([makeMessageTool(), makeCronTool({ execute: cronExecute })]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
+    const payload = await callMainSessionTool({
       token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolCallBody("cron"),
+      name: "cron",
     });
-    const payload = (await response.json()) as {
-      result?: { content?: Array<{ text?: string }>; isError?: boolean };
-    };
 
-    expect(response.status).toBe(200);
     expect(cronExecute).toHaveBeenCalledTimes(1);
-    expect(payload.result?.isError).not.toBe(true);
-    expect(payload.result?.content?.[0]?.text).toBe("CRON_EXECUTED");
+    expectMcpResultText(payload, "CRON_EXECUTED");
   });
 
   it("calls healthy tools when an earlier loopback tool name is unreadable", async () => {
@@ -588,26 +636,16 @@ describe("mcp loopback server", () => {
       },
     });
     mockScopedTools([unreadableName, makeMessageTool({ execute: messageExecute })]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
+    const payload = await callMainSessionTool({
       token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolCallBody("message", { body: "hello" }),
+      name: "message",
+      args: { body: "hello" },
     });
-    const payload = (await response.json()) as {
-      result?: { content?: Array<{ text?: string }>; isError?: boolean };
-    };
 
-    expect(response.status).toBe(200);
     expect(messageExecute).toHaveBeenCalledTimes(1);
-    expect(payload.result?.isError).not.toBe(true);
-    expect(payload.result?.content?.[0]?.text).toBe("MESSAGE_EXECUTED");
+    expectMcpResultText(payload, "MESSAGE_EXECUTED");
   });
 
   it("does not execute loopback tools omitted from the advertised schema", async () => {
@@ -626,28 +664,15 @@ describe("mcp loopback server", () => {
       },
     });
     mockScopedTools([unreadableParameters]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendRaw({
-      port: server.port,
+    const payload = await callMainSessionTool({
       token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolCallBody("mockplugin_unreadable_parameters"),
+      name: "mockplugin_unreadable_parameters",
     });
-    const payload = (await response.json()) as {
-      result?: { content?: Array<{ text?: string }>; isError?: boolean };
-    };
 
-    expect(response.status).toBe(200);
     expect(unreadableExecute).not.toHaveBeenCalled();
-    expect(payload.result?.isError).toBe(true);
-    expect(payload.result?.content?.[0]?.text).toBe(
-      "Tool not available: mockplugin_unreadable_parameters",
-    );
+    expectMcpResultText(payload, "Tool not available: mockplugin_unreadable_parameters", true);
   });
 
   it("honors before-tool-call hook blocks before loopback tool execution", async () => {
@@ -658,24 +683,8 @@ describe("mcp loopback server", () => {
       blocked: true,
       reason: "blocked by hook",
     });
-    mockScopedTools([makeMessageTool({ execute })]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const payload = await callMessageToolWithExecute(execute);
 
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolCallBody("message", { body: "hello" }),
-    });
-    const payload = (await response.json()) as {
-      result?: { content?: Array<{ text?: string }>; isError?: boolean };
-    };
-
-    expect(response.status).toBe(200);
     const hookInput = getBeforeToolCallHookInput(0);
     expect(hookInput.toolName).toBe("message");
     expect(hookInput.params).toEqual({ body: "hello" });
@@ -684,33 +693,16 @@ describe("mcp loopback server", () => {
     expect(hookInput.ctx?.sessionKey).toBe("agent:main:main");
     expect(hookInput.signal).toBeInstanceOf(AbortSignal);
     expect(execute).not.toHaveBeenCalled();
-    expect(payload.result?.isError).toBe(true);
-    expect(payload.result?.content?.[0]?.text).toBe("blocked by hook");
+    expectMcpResultText(payload, "blocked by hook", true);
   });
 
   it("forwards the request abort signal to loopback tool execution", async () => {
     const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
       content: [{ type: "text", text: "EXECUTED" }],
     }));
-    mockScopedTools([makeMessageTool({ execute })]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const payload = await callMessageToolWithExecute(execute);
 
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        "x-session-key": "agent:main:main",
-      },
-      body: mcpToolCallBody("message", { body: "hello" }),
-    });
-    const payload = (await response.json()) as {
-      result?: { isError?: boolean };
-    };
-
-    expect(response.status).toBe(200);
-    expect(payload.result?.isError).toBe(false);
+    expectMcpResultText(payload, "EXECUTED", false);
     expect(execute).toHaveBeenCalledTimes(1);
     const [callId, params, signal] = execute.mock.calls.at(0) ?? [];
     expect(callId).toMatch(/^mcp-/);
@@ -767,65 +759,35 @@ describe("mcp loopback server", () => {
   });
 
   it("rejects cross-origin browser requests before auth", async () => {
-    server = await startMcpLoopbackServer(0);
-    const response = await sendRaw({
-      port: server.port,
-      headers: {
-        "content-type": "application/json",
-        origin: "https://evil.example",
-        "sec-fetch-site": "cross-site",
-      },
-      body: mcpToolsListBody(),
+    await expectBrowserToolsListStatus({
+      origin: "https://evil.example",
+      fetchSite: "cross-site",
+      token: "none",
+      status: 403,
     });
-
-    expect(response.status).toBe(403);
   });
 
   it("rejects non-loopback origins even without fetch metadata", async () => {
-    server = await startMcpLoopbackServer(0);
-    const response = await sendRaw({
-      port: server.port,
-      headers: {
-        "content-type": "application/json",
-        origin: "https://evil.example",
-      },
-      body: mcpToolsListBody(),
+    await expectBrowserToolsListStatus({
+      origin: "https://evil.example",
+      token: "none",
+      status: 403,
     });
-
-    expect(response.status).toBe(403);
   });
 
   it("allows loopback browser origins for local clients", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        origin: "http://127.0.0.1:43123",
-      },
-      body: mcpToolsListBody(),
+    await expectBrowserToolsListStatus({
+      origin: "http://127.0.0.1:43123",
+      status: 200,
     });
-
-    expect(response.status).toBe(200);
   });
 
   it("allows same-origin browser requests from loopback clients", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        origin: `http://127.0.0.1:${server.port}`,
-        "sec-fetch-site": "same-origin",
-      },
-      body: mcpToolsListBody(),
+    await expectBrowserToolsListStatus({
+      origin: (port) => `http://127.0.0.1:${port}`,
+      fetchSite: "same-origin",
+      status: 200,
     });
-
-    expect(response.status).toBe(200);
   });
 
   it("allows cross-site fetch metadata when both ends are loopback (localhost ↔ 127.0.0.1)", async () => {
@@ -835,20 +797,11 @@ describe("mcp loopback server", () => {
     // not blanket-reject on the cross-site signal — checkBrowserOrigin
     // already authorizes loopback origins from loopback peers via
     // its `local-loopback` matcher.
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
-    const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
-      headers: {
-        "content-type": "application/json",
-        origin: "http://localhost:43123",
-        "sec-fetch-site": "cross-site",
-      },
-      body: mcpToolsListBody(),
+    await expectBrowserToolsListStatus({
+      origin: "http://localhost:43123",
+      fetchSite: "cross-site",
+      status: 200,
     });
-
-    expect(response.status).toBe(200);
   });
 });
 
