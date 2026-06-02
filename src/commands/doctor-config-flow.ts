@@ -131,7 +131,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     shouldRepair,
     doctorFixCommand,
   });
-  ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  cfg = legacyStep.state.cfg;
+  candidate = legacyStep.state.candidate;
+  pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
+  fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
@@ -160,7 +163,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     !shouldRepair &&
     !fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
   ) {
-    fixHints = [...fixHints, `Run "${doctorFixCommand}" to migrate legacy config keys.`];
+    fixHints.push(`Run "${doctorFixCommand}" to migrate legacy config keys.`);
   }
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
