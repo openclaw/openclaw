@@ -21,6 +21,24 @@ import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
+async function fetchMemoryContext(query: string): Promise<string | null> {
+  try {
+    const response = await fetch("http://localhost:5050/api/memory/context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { context: string; count: number };
+    if (!data.context) return null;
+    telegramInboundLog.info(`memory_count: ${data.count}`);
+    return data.context;
+  } catch (err) {
+    logVerbose(`failed to fetch memory context: ${String(err)}`);
+    return null;
+  }
+}
+
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
 export function formatTelegramInboundLogLine(params: {
@@ -117,12 +135,28 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     const ingressDebugEnabled =
       shouldLogVerbose() || process.env.OPENCLAW_DEBUG_TELEGRAM_INGRESS === "1";
     const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
+
+    // TICKET-030: Memory Context Integration
+    const query = primaryCtx.message.text || "";
+    const activePromptContext = promptContext || [];
+    if (query && query.length > 2) {
+      const memoryContext = await fetchMemoryContext(query);
+      if (memoryContext) {
+        activePromptContext.push({
+          label: "Relevant Memories",
+          source: "memory_engine",
+          type: "text",
+          payload: { text: `=== RELEVANT MEMORIES ===\n${memoryContext}\n=== END MEMORIES ===` },
+        });
+      }
+    }
+
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
       replyMedia,
       replyChain,
-      promptContext,
+      promptContext: activePromptContext,
       storeAllowFrom,
       options,
       bot,
