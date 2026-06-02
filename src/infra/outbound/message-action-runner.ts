@@ -129,6 +129,7 @@ export type RunMessageActionParams = {
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  inboundAudio?: boolean;
   abortSignal?: AbortSignal;
 };
 
@@ -440,6 +441,7 @@ type ResolvedActionContext = {
   params: Record<string, unknown>;
   channel: ChannelId;
   mediaAccess: OutboundMediaAccess;
+  extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
@@ -990,6 +992,7 @@ async function buildSendPayloadParts(params: {
   if (!actionParams.media) {
     actionParams.media = mergedMediaUrls[0] || undefined;
   }
+  actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
@@ -1120,6 +1123,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
     sessionKey: input.sessionKey,
+    inboundAudio: input.inboundAudio,
     dryRun,
   });
   if (ttsPayload !== sendPayload.payload) {
@@ -1127,6 +1131,20 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
   throwIfAborted(abortSignal);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId,
+    mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
+      structuredAttachments: "all",
+    }),
+    sessionKey: input.sessionKey,
+    messageProvider: input.sessionKey ? undefined : channel,
+    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    requesterSenderId: input.requesterSenderId,
+    requesterSenderName: input.requesterSenderName,
+    requesterSenderUsername: input.requesterSenderUsername,
+    requesterSenderE164: input.requesterSenderE164,
+  });
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
@@ -1165,7 +1183,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       senderIsOwner: input.senderIsOwner,
-      mediaAccess: ctx.mediaAccess,
+      mediaAccess,
       accountId: accountId ?? undefined,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
@@ -1535,6 +1553,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaAccess,
+      extraActionMediaSourceParamKeys,
       accountId,
       dryRun,
       gateway,
@@ -1551,6 +1570,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaAccess,
+      extraActionMediaSourceParamKeys,
       accountId,
       dryRun,
       gateway,
@@ -1564,6 +1584,7 @@ export async function runMessageAction(
     params,
     channel,
     mediaAccess,
+    extraActionMediaSourceParamKeys,
     accountId,
     dryRun,
     gateway,

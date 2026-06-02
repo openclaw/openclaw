@@ -251,6 +251,17 @@ async function linkOpenClawPeerDependency(params: {
     });
     if (existing) {
       if (!existing.isSymbolicLink()) {
+        if (params.peerName === "openclaw" && existing.isDirectory()) {
+          const existingPackageName = await readPackageName(linkPath);
+          if (existingPackageName === "openclaw") {
+            await fs.rm(linkPath, { recursive: true, force: true });
+            await fs.symlink(params.hostRoot, linkPath, "junction");
+            params.logger.info?.(
+              `Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`,
+            );
+            return "linked";
+          }
+        }
         params.logger.warn?.(
           `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
         );
@@ -264,6 +275,19 @@ async function linkOpenClawPeerDependency(params: {
   } catch (err) {
     params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(err)}`);
     return "skipped";
+  }
+}
+
+async function readPackageName(packageDir: string): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(packageDir, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
   }
 }
 

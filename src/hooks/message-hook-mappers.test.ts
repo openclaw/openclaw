@@ -127,6 +127,57 @@ describe("message hook mappers", () => {
     expect(canonical.guildId).toBe("guild-1");
   });
 
+  it("maps inbound reply metadata into canonical and plugin payloads", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        ReplyToId: "discord-message-42",
+        ReplyToBody: "quoted Discord reply body",
+        ReplyToSender: "Ada",
+      }),
+    );
+
+    expect(canonical.replyToId).toBe("discord-message-42");
+    expect(canonical.replyToBody).toBe("quoted Discord reply body");
+    expect(canonical.replyToSender).toBe("Ada");
+
+    expect(toPluginMessageContext(canonical)).toMatchObject({
+      replyToId: "discord-message-42",
+      replyToBody: "quoted Discord reply body",
+      replyToSender: "Ada",
+    });
+
+    const claimContext = toPluginInboundClaimContext(canonical);
+    expect(claimContext).toMatchObject({
+      replyToId: "discord-message-42",
+      replyToBody: "quoted Discord reply body",
+      replyToSender: "Ada",
+    });
+
+    const claimEvent = toPluginInboundClaimEvent(canonical);
+    expect(claimEvent).toMatchObject({
+      replyToId: "discord-message-42",
+      replyToBody: "quoted Discord reply body",
+      replyToSender: "Ada",
+    });
+    expect(claimEvent.metadata).toMatchObject({
+      replyToId: "discord-message-42",
+      replyToBody: "quoted Discord reply body",
+      replyToSender: "Ada",
+    });
+
+    const receivedEvent = toPluginMessageReceivedEvent(canonical);
+    expect(receivedEvent).toMatchObject({
+      replyToId: "discord-message-42",
+      replyToBody: "quoted Discord reply body",
+      replyToSender: "Ada",
+    });
+    expect(receivedEvent.metadata).toMatchObject({
+      replyToId: "discord-message-42",
+      replyToBody: "quoted Discord reply body",
+      replyToSender: "Ada",
+    });
+  });
+
   it("falls back to raw body when command body is blank", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({

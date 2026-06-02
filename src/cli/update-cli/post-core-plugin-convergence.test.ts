@@ -275,12 +275,39 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
-  it("flags errored=true and surfaces actionable guidance when repair warns", async () => {
+  it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [
         'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
       ],
+      records: {},
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { discord: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(result.warnings).toStrictEqual([
+      {
+        reason:
+          'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+        message:
+          'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+        guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+      },
+    ]);
+  });
+
+  it("marks convergence errored when repair reports failed plugin ids", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+      ],
+      failedPluginIds: ["discord"],
       records: {},
     });
     const result = await runPostCorePluginConvergence({
@@ -299,6 +326,37 @@ describe("runPostCorePluginConvergence", () => {
         guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
       },
     ]);
+  });
+
+  it("keeps inactive repair failures nonblocking", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+      ],
+      failedPluginIds: ["discord"],
+      records: {
+        discord: {
+          source: "npm",
+          spec: "@acme/discord",
+          installPath: "/p/discord",
+        },
+      },
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: {
+          deny: ["discord"],
+          entries: { discord: { enabled: true } },
+        },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
   });
 
   it("flags errored=true when smoke check finds a missing main entry", async () => {

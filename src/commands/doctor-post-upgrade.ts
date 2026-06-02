@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
@@ -14,6 +15,7 @@ type InstalledPluginRecord = {
   pluginId: string;
   rootDir: string;
   enabled: boolean;
+  origin?: string;
   packageJson?: { path: string };
   manifestPath?: string;
   manifestHash?: string;
@@ -47,6 +49,33 @@ function isPackageJsonRef(value: unknown): value is InstalledPluginRecord["packa
   );
 }
 
+function isSourceCheckoutPluginRecord(record: InstalledPluginRecord): boolean {
+  if (record.origin === "workspace" || record.origin === "config") {
+    return true;
+  }
+  return record.origin === "bundled" && isBundledSourceCheckoutPluginRoot(record.rootDir);
+}
+
+function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
+  let current = path.resolve(pluginRootDir);
+  while (true) {
+    const extensionsDir = path.dirname(current);
+    if (path.basename(extensionsDir) === "extensions") {
+      const packageRoot = path.dirname(extensionsDir);
+      return (
+        fsSync.existsSync(path.join(packageRoot, ".git")) &&
+        fsSync.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+        fsSync.existsSync(path.join(packageRoot, "src"))
+      );
+    }
+    const next = path.dirname(current);
+    if (next === current) {
+      return false;
+    }
+    current = next;
+  }
+}
+
 function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -56,6 +85,7 @@ function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord
     typeof record.pluginId === "string" &&
     typeof record.rootDir === "string" &&
     typeof record.enabled === "boolean" &&
+    isOptionalString(record.origin) &&
     isPackageJsonRef(record.packageJson) &&
     isOptionalString(record.manifestPath) &&
     isOptionalString(record.manifestHash)
@@ -94,6 +124,20 @@ async function readInstalledPackageJson(
   return JSON.parse(raw) as PackageManifest;
 }
 
+async function resolvePackageJsonRelPath(
+  record: InstalledPluginRecord,
+): Promise<string | undefined> {
+  if (record.packageJson) {
+    return record.packageJson.path;
+  }
+  try {
+    await fs.access(path.join(record.rootDir, "package.json"));
+    return "package.json";
+  } catch {
+    return undefined;
+  }
+}
+
 async function sha256OfFile(absPath: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(absPath);
@@ -123,35 +167,38 @@ export async function runPostUpgradeProbes(params: {
     if (!record.enabled) {
       continue;
     }
-    const pkgRelPath = record.packageJson?.path ?? "package.json";
-    let pkg: PackageManifest;
-    try {
-      pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
-    } catch (err) {
-      process.stderr.write(
-        `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
-      continue;
-    }
-    const entries = pkg.openclaw?.extensions ?? [];
-    if (entries.length > 0) {
-      // Delegate to the install-time resolver so the probe enforces the same
-      // contract as plugin install/discovery: runtimeExtensions shape, plugin-root
-      // boundary, and inferred-built-output / TypeScript-source-only handling.
-      const validation = await validatePackageExtensionEntriesForInstall({
-        packageDir: record.rootDir,
-        extensions: [...entries],
-        manifest: pkg,
-      });
-      if (!validation.ok) {
-        const offendingEntry = entries.find((entry) => validation.error.includes(entry));
-        findings.push({
-          level: "error",
-          code: "plugin.entry_unresolved",
-          message: `Plugin ${record.pluginId}: ${validation.error}`,
-          plugin: record.pluginId,
-          ...(offendingEntry ? { entry: offendingEntry } : {}),
+    const pkgRelPath = await resolvePackageJsonRelPath(record);
+    if (pkgRelPath) {
+      let pkg: PackageManifest;
+      try {
+        pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
+      } catch (err) {
+        process.stderr.write(
+          `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        continue;
+      }
+      const entries = pkg.openclaw?.extensions ?? [];
+      if (entries.length > 0) {
+        // Delegate to the install-time resolver so the probe enforces the same
+        // contract as plugin install/discovery: runtimeExtensions shape, plugin-root
+        // boundary, and inferred-built-output / TypeScript-source-only handling.
+        const validation = await validatePackageExtensionEntriesForInstall({
+          packageDir: record.rootDir,
+          extensions: [...entries],
+          manifest: pkg,
+          allowSourceTypeScriptEntries: isSourceCheckoutPluginRecord(record),
         });
+        if (!validation.ok) {
+          const offendingEntry = entries.find((entry) => validation.error.includes(entry));
+          findings.push({
+            level: "error",
+            code: "plugin.entry_unresolved",
+            message: `Plugin ${record.pluginId}: ${validation.error}`,
+            plugin: record.pluginId,
+            ...(offendingEntry ? { entry: offendingEntry } : {}),
+          });
+        }
       }
     }
 

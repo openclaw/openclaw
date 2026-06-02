@@ -19,7 +19,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
-  "minimax/minimax-m2.7",
+  "minimax/minimax-m3",
   "openai/gpt-5.5",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
@@ -28,7 +28,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "xai/grok-4.3",
   "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/glm-5p1",
-  "minimax-portal/minimax-m2.7",
+  "minimax-portal/minimax-m3",
 ] as const;
 
 const SMALL_LIVE_MODEL_PRIORITY = [

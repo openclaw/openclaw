@@ -680,10 +680,10 @@ describe("registerCoreHealthChecks", () => {
                 checkId: "core/doctor/runtime-tool-schemas",
                 severity: "error",
                 message:
-                  "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
-                path: "plugins.entries.dofbot",
-                target: "dofbot_move_angles",
-                requirement: 'dofbot_move_angles.parameters.type must be "object"',
+                  "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
+                path: "plugins.entries.fuzzplugin",
+                target: "fuzzplugin_move_angles",
+                requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
               },
             ];
           },
@@ -702,7 +702,7 @@ describe("registerCoreHealthChecks", () => {
       expect.objectContaining({
         checkId: "core/doctor/runtime-tool-schemas",
         severity: "error",
-        target: "dofbot_move_angles",
+        target: "fuzzplugin_move_angles",
       }),
     );
   });

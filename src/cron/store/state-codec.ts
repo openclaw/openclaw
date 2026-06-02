@@ -7,6 +7,7 @@ import {
 } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
+/** Maps mutable cron runtime state into normalized SQLite columns. */
 export function bindStateColumns(
   state: CronJobState,
 ): Pick<
@@ -42,8 +43,11 @@ export function bindStateColumns(
   };
 }
 
+/** Reconstructs cron runtime state from JSON plus split indexed columns. */
 export function stateFromRow(row: CronJobRow): CronJobState {
   return {
+    // Keep unknown runtime fields from state_json while letting indexed columns
+    // win for fields that SQLite updates independently during hot-path writes.
     ...parseJsonObject<CronJobState>(row.state_json, {}),
     ...(row.next_run_at_ms != null ? { nextRunAtMs: normalizeNumber(row.next_run_at_ms) } : {}),
     ...(row.running_at_ms != null ? { runningAtMs: normalizeNumber(row.running_at_ms) } : {}),

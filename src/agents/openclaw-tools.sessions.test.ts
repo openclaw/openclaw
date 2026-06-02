@@ -1481,6 +1481,7 @@ describe("sessions tools", () => {
         isStreaming: () => true,
         isCompacting: () => false,
         supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "message_tool_only",
         abort: () => {},
       },
       runScopedCallerKey,
@@ -1533,6 +1534,7 @@ describe("sessions tools", () => {
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
       waitForTranscriptCommit: true,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
 
     await vi.waitFor(() => {
@@ -1587,6 +1589,7 @@ describe("sessions tools", () => {
         queueMessage,
         isStreaming: () => true,
         isCompacting: () => false,
+        sourceReplyDeliveryMode: "message_tool_only",
         abort: () => {},
       },
       runScopedCallerKey,
@@ -1622,6 +1625,7 @@ describe("sessions tools", () => {
       steeringMode: "all",
       debounceMs: 0,
       deliveryTimeoutMs: 30_000,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
@@ -1638,6 +1642,7 @@ describe("sessions tools", () => {
         isStreaming: () => true,
         isCompacting: () => false,
         supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "message_tool_only",
         abort: () => {},
       },
       runScopedCallerKey,

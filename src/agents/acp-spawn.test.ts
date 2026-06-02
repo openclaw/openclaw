@@ -1033,7 +1033,7 @@ describe("spawnAcpDirect", () => {
     });
   });
 
-  it("does not treat a configured runtime=acp agent primary model as an ACP startup model", async () => {
+  it("uses configured runtime=acp agent primary model as an ACP startup model", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -1067,8 +1067,13 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
-    const initInput = expectInitializeSessionFields({ agent: "codex" });
-    expect(initInput.runtimeOptions).toBeUndefined();
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "anthropic/claude-sonnet-4-6",
+        thinking: "adaptive",
+      },
+    });
   });
 
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
@@ -1084,6 +1089,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 45);
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
@@ -1094,6 +1100,98 @@ describe("spawnAcpDirect", () => {
     const agentCall = findAgentGatewayCall();
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.timeout).toBe(45);
+  });
+
+  it("passes zero timeout through to the gateway no-timeout path", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 0,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 0);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(0);
+  });
+
+  it("uses configured subagent timeout for ACP spawns", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 120);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 120,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(120);
+  });
+
+  it("caps configured ACP runtime timeout without shortening spawn tracking", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            runTimeoutSeconds: 172_800,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 172_800);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        timeoutSeconds: 86_400,
+      },
+    });
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.timeout).toBe(172_800);
   });
 
   it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {

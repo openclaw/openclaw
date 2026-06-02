@@ -1,7 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { md, toSanitizedMarkdownHtml, toStreamingPlainTextHtml } from "./markdown.ts";
+import {
+  md,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  toStreamingPlainTextHtml,
+} from "./markdown.ts";
 import { renderMarkdownSidebar } from "./views/markdown-sidebar.ts";
 
 function htmlFragment(html: string): HTMLElement {
@@ -696,6 +701,82 @@ describe("toStreamingPlainTextHtml", () => {
     );
     expect(html).not.toContain("cite");
     expect(html).not.toContain("turn2view0");
+  });
+});
+
+describe("toStreamingMarkdownHtml", () => {
+  it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
+    const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
+
+    expect(html).toBe(
+      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
+    );
+  });
+
+  it("keeps a single open paragraph as escaped text", () => {
+    const html = toStreamingMarkdownHtml("**still streaming");
+
+    expect(html).toBe('<div class="markdown-plain-text-fallback">**still streaming</div>');
+  });
+
+  it("does not invoke the markdown parser before a stable block boundary exists", () => {
+    const renderSpy = vi.spyOn(md, "render");
+    try {
+      const html = toStreamingMarkdownHtml("**still streaming parser sentinel");
+
+      expect(html).toBe(
+        '<div class="markdown-plain-text-fallback">**still streaming parser sentinel</div>',
+      );
+      expect(renderSpy).not.toHaveBeenCalled();
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  it("reuses the rendered stable prefix while only the streaming tail changes", () => {
+    const renderSpy = vi.spyOn(md, "render");
+    try {
+      const first = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nfirst **tail");
+      const second = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nsecond **tail");
+
+      expect(first).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(second).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(renderSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  it("does not parse an open code fence while streaming", () => {
+    const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
+
+    expect(html).toBe(
+      '<p>Intro</p>\n<div class="markdown-plain-text-fallback">```ts\nconst x = 1 &lt; 2</div>',
+    );
+  });
+
+  it("keeps an open list code fence streaming through blank lines", () => {
+    const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">- ```ts\n  const x = 1;\n\n  const y = 2;</div>',
+    );
+  });
+
+  it("keeps an open blockquote code fence streaming through blank lines", () => {
+    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">&gt; ```ts\n&gt; const x = 1;\n&gt;\n&gt; const y = 2;</div>',
+    );
+  });
+
+  it("renders a completed code fence once the closing fence arrives", () => {
+    const html = toStreamingMarkdownHtml("```ts\nconst x = 1;\n```");
+
+    expect(html).toContain('<code class="hljs language-ts"');
+    expect(html).toContain("const x = 1;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 });
 

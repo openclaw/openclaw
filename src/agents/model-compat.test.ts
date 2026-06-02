@@ -524,6 +524,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(
       isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.1:free" }),
     ).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M3" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M2.7" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.7" })).toBe(
       true,
@@ -656,7 +657,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
-      { provider: "minimax", id: "minimax-m2.7" },
+      { provider: "minimax", id: "minimax-m3" },
       { provider: "openai", id: "gpt-5.5" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
@@ -665,7 +666,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "xai", id: "grok-4.3" },
       { provider: "zai", id: "glm-5.1" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
-      { provider: "minimax-portal", id: "minimax-m2.7" },
+      { provider: "minimax-portal", id: "minimax-m3" },
     ]);
   });
 });
@@ -733,7 +734,7 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "openai", id: "gpt-5.5" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
-      { provider: "minimax", id: "minimax-m2.7" },
+      { provider: "minimax", id: "minimax-m3" },
     ];
 
     expect(
@@ -746,7 +747,7 @@ describe("selectHighSignalLiveItems", () => {
     ).toEqual([
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
-      { provider: "minimax", id: "minimax-m2.7" },
+      { provider: "minimax", id: "minimax-m3" },
     ]);
   });
 

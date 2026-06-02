@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,6 +16,7 @@ import {
   resolveReportRunSpecs,
   resolveRunPlanConcurrency,
   resolveRunPlans,
+  spawnText,
 } from "../../scripts/test-group-report.mjs";
 
 describe("scripts/test-group-report grouping", () => {
@@ -254,11 +257,13 @@ describe("scripts/test-group-report arg parsing", () => {
       configs: ["a.ts", "b.ts"],
       fullSuite: false,
       groupBy: "folder",
+      killGraceMs: 10000,
       limit: 25,
       maxTestMs: null,
       output: null,
       reports: [],
       rss: process.platform !== "win32",
+      timeoutMs: 1800000,
       topFiles: 25,
       vitestArgs: ["--maxWorkers=1"],
     });
@@ -282,11 +287,13 @@ describe("scripts/test-group-report arg parsing", () => {
       configs: [],
       fullSuite: false,
       groupBy: "area",
+      killGraceMs: 10000,
       limit: 5,
       maxTestMs: null,
       output: null,
       reports: [],
       rss: process.platform !== "win32",
+      timeoutMs: 1800000,
       topFiles: 3,
       vitestArgs: [],
     });
@@ -302,6 +309,94 @@ describe("scripts/test-group-report arg parsing", () => {
     expect(parseTestGroupReportArgs(["--concurrency", "4"])).toMatchObject({
       concurrency: 4,
     });
+  });
+
+  it("parses per-config timeout controls", () => {
+    expect(
+      parseTestGroupReportArgs(["--timeout-ms", "5000", "--kill-grace-ms", "250"]),
+    ).toMatchObject({
+      killGraceMs: 250,
+      timeoutMs: 5000,
+    });
+  });
+});
+
+describe("scripts/test-group-report child process guard", () => {
+  it("times out a child that ignores SIGTERM", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const started = Date.now();
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 50,
+        timeoutMs: 250,
+      },
+    );
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result).toMatchObject({
+      status: 1,
+      signal: "SIGKILL",
+      timedOut: true,
+    });
+    expect(result.output).toContain("command timed out after 250ms");
+    expect(result.output).toContain("sending SIGKILL");
+  });
+
+  it("kills timed wrapper process groups without orphaning the measured process", async () => {
+    if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+    const markerPath = path.join(tempDir, "marker.txt");
+    try {
+      const result = await spawnText(
+        "/usr/bin/time",
+        [
+          process.execPath,
+          "--input-type=module",
+          "--eval",
+          [
+            "import fs from 'node:fs';",
+            "process.on('SIGTERM', () => {});",
+            `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          timeoutMs: 250,
+        },
+      );
+
+      expect(result).toMatchObject({
+        status: 1,
+        timedOut: true,
+      });
+      expect(result.output).toContain("command timed out after 250ms");
+      expect(result.output).toContain("sending SIGKILL");
+
+      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      expect(sizeAfterWait).toBe(sizeAfterReturn);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

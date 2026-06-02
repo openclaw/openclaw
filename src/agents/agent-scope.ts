@@ -97,6 +97,24 @@ export type AutoFallbackPrimaryProbe = {
   fallbackAuthProfileIdSource?: "auto" | "user";
 };
 
+export function hasLegacyAutoFallbackWithoutOrigin(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | null
+    | undefined,
+): boolean {
+  return (
+    entry?.modelOverrideSource === "auto" &&
+    (!normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ||
+      !normalizeOptionalString(entry.modelOverrideFallbackOriginModel))
+  );
+}
+
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:
     | Pick<

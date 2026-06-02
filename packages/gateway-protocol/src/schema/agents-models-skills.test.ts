@@ -60,10 +60,10 @@ describe("ToolsEffectiveResultSchema", () => {
       ...toolsEffectiveResult(),
       notices: [
         {
-          id: "unsupported-tool-schema:dofbot_move_angles",
+          id: "unsupported-tool-schema:fuzzplugin_move_angles",
           severity: "warning",
           message:
-            'Tool "dofbot_move_angles" from plugin "dofbot" has an unsupported runtime input schema and was quarantined before model projection.',
+            'Tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema and was quarantined before model projection.',
         },
       ],
     };
@@ -76,7 +76,7 @@ describe("ToolsEffectiveResultSchema", () => {
       ...toolsEffectiveResult(),
       notices: [
         {
-          id: "unsupported-tool-schema:dofbot_move_angles",
+          id: "unsupported-tool-schema:fuzzplugin_move_angles",
           severity: "warning",
           message: "Unsupported schema.",
           extra: true,

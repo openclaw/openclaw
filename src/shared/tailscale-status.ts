@@ -44,6 +44,7 @@ function extractTailnetHostFromStatusJson(raw: string): string | null {
   return ips.length > 0 ? (ips[0] ?? null) : null;
 }
 
+/** Resolves the host published to clients for tailnet or Tailscale Serve gateway modes. */
 export function resolveTailscalePublishedHost(params: {
   tailscaleMode: string;
   tailnetHost: string | null;
@@ -58,6 +59,7 @@ export function resolveTailscalePublishedHost(params: {
   if (!serviceName) {
     return tailnetHost;
   }
+  // Tailscale Serve service names compose with DNS hosts, not raw tailnet IP addresses.
   if (/^[\d.:]+$/.test(tailnetHost)) {
     return null;
   }
@@ -66,6 +68,7 @@ export function resolveTailscalePublishedHost(params: {
   return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : null;
 }
 
+/** Runs known Tailscale status commands and returns the first DNS name or tailnet IP found. */
 export async function resolveTailnetHostWithRunner(
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
 ): Promise<string | null> {

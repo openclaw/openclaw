@@ -86,10 +86,12 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
   return { text: next, strippedTrailingSilentToken };
 }
 
+/** Returns whether cron delivery should tolerate per-payload send failures. */
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return job.delivery?.bestEffort === true;
 }
 
+/** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
@@ -124,6 +126,7 @@ type DispatchCronDeliveryParams = {
   ) => RunCronAgentTurnResult;
 };
 
+/** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
 export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
@@ -241,6 +244,7 @@ async function logCronDeliveryError(message: string): Promise<void> {
   logError(message);
 }
 
+/** Deletes or retires ephemeral direct-delivery cron sessions for delete-after-run jobs. */
 export async function cleanupDirectCronSession(params: {
   job: CronJob;
   agentSessionKey: string;
@@ -680,10 +684,12 @@ async function appendDirectCronDeliveryTranscriptMirror(params: {
   }
 }
 
+/** Clears the direct-delivery idempotency cache for deterministic tests. */
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
 
+/** Returns the direct-delivery idempotency cache size for tests. */
 export function getCompletedDirectCronDeliveriesCountForTests(): number {
   return COMPLETED_DIRECT_CRON_DELIVERIES.size;
 }
@@ -749,6 +755,7 @@ async function retryTransientDirectCronDelivery<T>(params: {
   return await params.run();
 }
 
+/** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {

@@ -488,9 +488,12 @@ function rememberSingleRowChildSessionCandidateCacheEntry(
 }
 
 function buildStoreChildSessionCandidateIndex(
-  store: Record<string, SessionEntry>,
+  store: Record<string, SessionEntry> | null | undefined,
 ): Map<string, string[]> {
   const childSessionsByKey = new Map<string, string[]>();
+  if (!store) {
+    return childSessionsByKey;
+  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
@@ -508,8 +511,11 @@ function buildStoreChildSessionCandidateIndex(
 
 function getSingleRowChildSessionCandidates(params: {
   storePath: string;
-  store: Record<string, SessionEntry>;
+  store: Record<string, SessionEntry> | null | undefined;
 }): Map<string, string[]> {
+  if (!params.store) {
+    return new Map();
+  }
   const storeVersion = getSessionStoreCacheVersion(params.storePath);
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
   if (cached && cached.store === params.store && cached.storeVersion === storeVersion) {
