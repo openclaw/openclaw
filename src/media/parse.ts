@@ -11,7 +11,7 @@ import {
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
-// Allow optional wrapping backticks and punctuation after the token; capture the core token.
+/** Captures legacy MEDIA: attachment directives from model/tool output. */
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 /** Ordered output segment emitted after visible text and extracted media are separated. */
@@ -32,7 +32,7 @@ export type SplitMediaFromOutputOptions = {
 };
 
 /** Converts file URLs into plain local paths before downstream media validation. */
-export function normalizeMediaSource(src: string) {
+export function normalizeMediaSource(src: string): string {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
 
