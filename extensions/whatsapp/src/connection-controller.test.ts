@@ -40,6 +40,7 @@ const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision)
 function createListenerStub(messageId = "ok") {
   return {
     sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", messageId)),
+    sendListReply: vi.fn(async () => createAcceptedWhatsAppSendResult("text", messageId)),
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", messageId)),
     sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", messageId)),
     sendComposingTo: vi.fn(async () => {}),

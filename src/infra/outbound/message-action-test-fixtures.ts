@@ -44,6 +44,15 @@ export function createPinboardMessageActionBootstrapRegistryMock() {
         },
       };
     }
+    if (channel === "whatsapp") {
+      return {
+        actions: {
+          messageActionTargetAliases: {
+            "list-reply": { aliases: ["chatJid", "chatId"] },
+          },
+        },
+      };
+    }
     return undefined;
   };
 }

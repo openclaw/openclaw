@@ -246,6 +246,7 @@ describe("startWhatsAppQaDriverSession", () => {
       sendPoll: mocks.sendPoll,
       sendReaction: mocks.sendReaction,
       sendSticker: mocks.sendSticker,
+      sendListReply: vi.fn(),
     }));
   });
 

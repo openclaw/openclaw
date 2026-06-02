@@ -171,6 +171,50 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("redacts WhatsApp list option details from inbound logs", async () => {
+    const { onMessage, listener } = await runSingleUpsertAndCapture({
+      type: "notify",
+      messages: [
+        {
+          key: { id: "list1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: {
+            listMessage: {
+              title: "Choose a delivery window",
+              description: "I found 2 available delivery windows.",
+              buttonText: "View windows",
+              sections: [
+                {
+                  title: "Available windows",
+                  rows: [
+                    {
+                      rowId: "delivery-morning",
+                      title: "Morning delivery",
+                      description: "9:00 AM to 12:00 PM",
+                    },
+                    {
+                      rowId: "delivery-evening",
+                      title: "Evening delivery",
+                      description: "6:00 PM to 8:00 PM",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    });
+
+    expect(onMessage.mock.calls[0]?.[0]?.body).toContain("rowId: delivery-morning");
+    expect(inboundLoggerInfoMock).toHaveBeenCalledTimes(1);
+    const logged = inboundLoggerInfoMock.mock.calls[0]?.[0] as { body?: string } | undefined;
+    expect(logged?.body).toBe("WhatsApp list (2 options)");
+    expect(logged?.body).not.toContain("delivery-morning");
+    expect(logged?.body).not.toContain("Morning delivery");
+    await listener.close();
+  });
+
   it("includes participant when marking group messages read", async () => {
     const { listener, sock } = await runSingleUpsertAndCapture({
       type: "notify",
