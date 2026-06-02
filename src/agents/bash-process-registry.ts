@@ -71,6 +71,7 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  noOutputTimedOut?: boolean;
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
@@ -89,6 +90,7 @@ export interface FinishedSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  noOutputTimedOut?: boolean;
   aggregated: string;
   tail: string;
   truncated: boolean;
@@ -172,11 +174,13 @@ export function markExited(
   exitSignal: NodeJS.Signals | number | null,
   status: ProcessStatus,
   exitReason?: TerminationReason,
+  noOutputTimedOut?: boolean,
 ) {
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
+  session.noOutputTimedOut = noOutputTimedOut;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
 }
@@ -233,6 +237,9 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     exitReason: session.exitReason,
+    ...(session.noOutputTimedOut !== undefined
+      ? { noOutputTimedOut: session.noOutputTimedOut }
+      : {}),
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,
