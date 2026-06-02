@@ -117,6 +117,115 @@ describe("createAgentSession tool defaults", () => {
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
   });
 
+  it("drops unreadable SDK custom tool descriptors before session setup", async () => {
+    const healthyTool: ToolDefinition = {
+      name: "healthy_lookup",
+      label: "Healthy Lookup",
+      description: "Looks up a test value.",
+      promptSnippet: "Lookup test values",
+      promptGuidelines: ["Use healthy_lookup for test values."],
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+    const unreadableNameTool = {
+      get name(): string {
+        throw new Error("boom");
+      },
+      label: "Broken",
+      description: "Breaks when read.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "bad" }],
+        details: {},
+      }),
+    } as unknown as ToolDefinition;
+    const unreadableGuidelinesTool = {
+      name: "bad_guidelines",
+      label: "Broken Guidelines",
+      description: "Breaks when prompt metadata is read.",
+      get promptGuidelines(): string[] {
+        throw new Error("boom");
+      },
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "bad" }],
+        details: {},
+      }),
+    } as unknown as ToolDefinition;
+    const unreadableParametersTool = {
+      name: "bad_parameters",
+      label: "Broken Parameters",
+      description: "Breaks when schema is read.",
+      get parameters(): ToolDefinition["parameters"] {
+        throw new Error("boom");
+      },
+      execute: async () => ({
+        content: [{ type: "text", text: "bad" }],
+        details: {},
+      }),
+    } as unknown as ToolDefinition;
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [
+        unreadableNameTool,
+        unreadableGuidelinesTool,
+        healthyTool,
+        unreadableParametersTool,
+      ],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.getActiveToolNames()).toEqual(["healthy_lookup"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["healthy_lookup"]);
+  });
+
+  it("preserves the original custom tool receiver after snapshotting", async () => {
+    const statefulTool = {
+      name: "stateful_lookup",
+      label: "Stateful Lookup",
+      description: "Uses state from the tool object.",
+      parameters: Type.Object({}),
+      calls: 0,
+      async execute() {
+        this.calls += 1;
+        return {
+          content: [{ type: "text" as const, text: String(this.calls) }],
+          details: {},
+        };
+      },
+    } as ToolDefinition & { calls: number };
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [statefulTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    const definition = session.getToolDefinition("stateful_lookup");
+    const result = await definition?.execute(
+      "call-1",
+      {},
+      undefined,
+      undefined,
+      undefined as unknown as Parameters<ToolDefinition["execute"]>[4],
+    );
+
+    expect(result?.content).toEqual([{ type: "text", text: "1" }]);
+    expect(statefulTool.calls).toBe(1);
+  });
+
   it("preserves an exact base system prompt when active tools change", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",
