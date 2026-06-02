@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Google Chat: fall back to sending the media URL as a text link when app-auth attachment upload returns 403. Thanks @SebTardif.
+
 ## 2026.6.2
 
 ### Highlights

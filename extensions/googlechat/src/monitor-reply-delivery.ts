@@ -111,13 +111,30 @@ export async function deliverGoogleChatReply(params: {
           url: mediaUrl,
           maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
         });
-        const upload = await uploadAttachmentForReply({
-          account,
-          spaceId,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-          filename: loaded.fileName ?? "attachment",
-        });
+        let upload: { attachmentUploadToken?: string } | undefined;
+        try {
+          upload = await uploadAttachmentForReply({
+            account,
+            spaceId,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+            filename: loaded.fileName ?? "attachment",
+          });
+        } catch (uploadErr) {
+          if (/\b403\b/.test(String(uploadErr))) {
+            // App-auth scope insufficient for media upload; fall back to URL as text.
+            const fallbackText = caption ? `${caption}\n${mediaUrl}` : mediaUrl;
+            await sendGoogleChatMessage({
+              account,
+              space: spaceId,
+              text: fallbackText,
+              thread: payload.replyToId,
+            });
+            statusSink?.({ lastOutboundAt: Date.now() });
+            return;
+          }
+          throw uploadErr;
+        }
         if (!upload.attachmentUploadToken) {
           throw new Error("missing attachment upload token");
         }

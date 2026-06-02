@@ -141,4 +141,70 @@ describe("Google Chat reply delivery", () => {
       attachments: [{ attachmentUploadToken: "upload-token", contentName: "reply.png" }],
     });
   });
+
+  it("falls back to sending the media URL as text when upload returns 403", async () => {
+    const core = createCore({
+      media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
+    });
+    const runtime = createRuntime();
+    const statusSink = vi.fn();
+    mocks.deleteGoogleChatMessage.mockResolvedValue(undefined);
+    mocks.uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/fallback" });
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "caption",
+        mediaUrl: "https://example.invalid/reply.png",
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      statusSink,
+      typingMessageName: "spaces/AAA/messages/typing",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "caption\nhttps://example.invalid/reply.png",
+      thread: "spaces/AAA/threads/root",
+    });
+    expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("propagates non-403 upload errors to the error handler", async () => {
+    const core = createCore({
+      media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
+    });
+    const runtime = createRuntime();
+    mocks.deleteGoogleChatMessage.mockResolvedValue(undefined);
+    mocks.uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 500: Internal Server Error"),
+    );
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "caption",
+        mediaUrl: "https://example.invalid/reply.png",
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      typingMessageName: "spaces/AAA/messages/typing",
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Google Chat attachment send failed"),
+    );
+  });
 });
