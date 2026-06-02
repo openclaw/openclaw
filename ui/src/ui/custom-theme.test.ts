@@ -82,6 +82,16 @@ describe("custom theme import helpers", () => {
       fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
       themeId: "cmlhfpjhw000004l4f4ax3m7z",
     });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
   });
 
   it("extracts theme ids from copied tweakcn editor URLs and pasted text", () => {
@@ -110,6 +120,11 @@ describe("custom theme import helpers", () => {
       sourceUrl: "https://tweakcn.com/themes/amethyst-haze",
       fetchUrl: "https://tweakcn.com/r/themes/amethyst-haze",
       themeId: "amethyst-haze",
+    });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/editor/theme?theme=claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
     });
   });
 
