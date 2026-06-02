@@ -9,6 +9,7 @@ import { deriveSessionChatType } from "./session-chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
+/** Normalizes stored/configured send-policy strings; invalid values inherit caller fallback. */
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
   const value = normalizeOptionalLowercaseString(raw);
   if (value === "allow") {
@@ -71,6 +72,10 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   return undefined;
 }
 
+/**
+ * Resolves whether a session may send replies.
+ * Per-session overrides win, then ordered config rules, then config default, then allow.
+ */
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
@@ -88,12 +93,14 @@ export function resolveSendPolicy(params: {
     return "allow";
   }
 
+  // Rules may intentionally target either stored agent-scoped keys or their session-key tail.
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
   const rawSessionKeyNorm = normalizeLowercaseStringOrEmpty(rawSessionKey);
   const strippedSessionKeyNorm = normalizeLowercaseStringOrEmpty(strippedSessionKey);
   let channel: string | undefined;
   let chatType: SessionChatType | undefined;
+  // Derive channel/chat type lazily so simple key-only rules do not infer extra metadata.
   const getChannel = () => {
     channel ??=
       normalizeMatchValue(params.channel) ??
@@ -138,6 +145,7 @@ export function resolveSendPolicy(params: {
       continue;
     }
     if (action === "deny") {
+      // Deny is fail-closed across matching rules; later allow rules cannot reopen it.
       return "deny";
     }
     allowedMatch = true;
