@@ -21,7 +21,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveFeishuAccount } from "./accounts.js";
+import { isFeishuSecretRefUnavailableError, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -593,6 +593,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots,
           });
         } catch (err) {
+          // Configuration errors (unresolved SecretRef) must propagate — re-throw
+          // instead of silently degrading to plain text, which would mask the
+          // root cause. See: https://github.com/OpenClaw/openclaw/issues/89338
+          if (isFeishuSecretRefUnavailableError(err)) {
+            throw err;
+          }
           console.error(`[feishu] local image path auto-send failed:`, err);
           // fall through to plain text as last resort
         }
@@ -712,6 +718,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           }
           return result;
         } catch (err) {
+          // Configuration errors (unresolved SecretRef) must propagate — re-throw
+          // instead of silently degrading to a URL link, which would mask the
+          // root cause. See: https://github.com/OpenClaw/openclaw/issues/89338
+          if (isFeishuSecretRefUnavailableError(err)) {
+            throw err;
+          }
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
           // Fallback to URL link if upload fails
