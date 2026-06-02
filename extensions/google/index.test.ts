@@ -65,7 +65,7 @@ describe("google provider plugin hooks", () => {
         modelApi: "google-generative-ai",
         modelId: "gemini-3.1-pro-preview",
       } as never),
-    ).toBe("tagged");
+    ).toBe("native");
 
     const sanitized = await Promise.resolve(
       provider.sanitizeReplayHistory?.({
@@ -100,6 +100,22 @@ describe("google provider plugin hooks", () => {
     });
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
+  });
+
+  it("keeps google-gemini-cli on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    expect(
+      cliProvider.resolveReasoningOutputMode?.({
+        provider: "google-gemini-cli",
+        modelApi: "google-gemini-cli",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toBe("tagged");
   });
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {

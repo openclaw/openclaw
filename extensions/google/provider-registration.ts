@@ -76,6 +76,11 @@ export function buildGoogleProvider(): ProviderPlugin {
       return undefined;
     },
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+    // Gemini 2.5+ delivers reasoning via native thinkingParts (thinkingConfig.includeThoughts).
+    // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
+    // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps
+    // tagged mode because it emits JSON text, not native thought parts.
+    resolveReasoningOutputMode: () => "native" as const,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };
 }
