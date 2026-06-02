@@ -3,6 +3,38 @@ import Testing
 
 @Suite("DeviceAuthPayload")
 struct DeviceAuthPayloadTests {
+    @Test("builds canonical v2 payload vector")
+    func buildsCanonicalV2PayloadVector() {
+        let payload = GatewayDeviceAuthPayload.buildV2(
+            deviceId: "dev-1",
+            clientId: "openclaw-macos",
+            clientMode: "ui",
+            role: "operator",
+            scopes: ["operator.admin", "operator.read"],
+            signedAtMs: 1_700_000_000_000,
+            token: "tok-123",
+            nonce: "nonce-abc")
+        #expect(
+            payload
+                == "v2|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|1700000000000|tok-123|nonce-abc")
+    }
+
+    @Test("builds Swift connect compatibility payload with v2 canonical fields")
+    func buildsSwiftConnectCompatibilityPayloadWithV2CanonicalFields() {
+        let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
+            deviceId: "dev-1",
+            clientId: "openclaw-macos",
+            clientMode: "ui",
+            role: "operator",
+            scopes: ["operator.admin", "operator.read"],
+            signedAtMs: 1_700_000_000_000,
+            token: "tok-123",
+            nonce: "nonce-abc")
+        #expect(
+            payload
+                == "v2|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|1700000000000|tok-123|nonce-abc")
+    }
+
     @Test("builds canonical v3 payload vector")
     func buildsCanonicalV3PayloadVector() {
         let payload = GatewayDeviceAuthPayload.buildV3(
