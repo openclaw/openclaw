@@ -509,8 +509,113 @@ describe("renderWorkboard", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".workboard-toolbar__actions .btn.primary"),
     ).toBeNull();
+    expect(container.querySelector<HTMLSelectElement>(".workboard-card__move-select")).toBeNull();
     expect(container.querySelector(".workboard-card")?.getAttribute("draggable")).toBe("false");
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
+  });
+
+  it("moves a card from the compact status control", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Keyboard move",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn(async () => ({
+      card: { ...state.cards[0], status: "blocked", position: 1000, updatedAt: 2 },
+    }));
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.value).toBe("todo");
+    expect(moveSelect?.tagName).toBe("SELECT");
+    expect(moveSelect?.getAttribute("aria-keyshortcuts")).toBe("ArrowLeft ArrowRight");
+    expect(moveSelect?.getAttribute("aria-label")).toBe("Status: Keyboard move");
+
+    moveSelect!.value = "blocked";
+    moveSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    render(renderWorkboard(props), container);
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: "card-1",
+      status: "blocked",
+      position: 1000,
+    });
+    const blockedColumn = [...container.querySelectorAll<HTMLElement>(".workboard-column")].find(
+      (column) => column.querySelector("h2")?.textContent === "Blocked",
+    );
+    expect(blockedColumn?.textContent).toContain("Keyboard move");
+    expect(state.cards[0]).toMatchObject({ status: "blocked", updatedAt: 2 });
+  });
+
+  it("moves a focused status control with keyboard arrows", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Keyboard arrow move",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn(async () => ({
+      card: { ...state.cards[0], status: "scheduled", position: 1000, updatedAt: 2 },
+    }));
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    const dispatched = moveSelect!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dispatched).toBe(false);
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: "card-1",
+      status: "scheduled",
+      position: 1000,
+    });
+    expect(state.cards[0]).toMatchObject({ status: "scheduled", updatedAt: 2 });
   });
 
   it("offers start controls when a linked session no longer exists", () => {

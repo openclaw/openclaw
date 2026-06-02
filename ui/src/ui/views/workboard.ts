@@ -299,6 +299,71 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
+function moveCardToStatus(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  status: WorkboardStatus,
+  state: WorkboardUiState,
+) {
+  if (status === card.status) {
+    return;
+  }
+  void moveWorkboardCard({
+    host: props.host,
+    client: props.client,
+    cardId: card.id,
+    status,
+    position: nextPosition(state.cards, status),
+    requestUpdate: props.onRequestUpdate,
+  });
+}
+
+function renderCardMoveControl(props: WorkboardProps, card: WorkboardCard, busy: boolean) {
+  const state = getWorkboardState(props.host);
+  const statuses = state.statuses.includes(card.status)
+    ? state.statuses
+    : [card.status, ...state.statuses];
+  if (statuses.length < 2) {
+    return nothing;
+  }
+  return html`
+    <label class="workboard-card__move" title=${t("workboard.fieldStatus")}>
+      <span class="workboard-card__move-icon" aria-hidden="true">${icons.cornerDownRight}</span>
+      <select
+        class="workboard-card__move-select"
+        aria-keyshortcuts="ArrowLeft ArrowRight"
+        aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
+        .value=${card.status}
+        ?disabled=${busy || !props.connected || !props.client}
+        @change=${(event: Event) => {
+          const target = event.currentTarget as HTMLSelectElement;
+          moveCardToStatus(props, card, target.value as WorkboardStatus, state);
+        }}
+        @keydown=${(event: KeyboardEvent) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+            return;
+          }
+          const currentIndex = statuses.indexOf(card.status);
+          const offset = event.key === "ArrowRight" ? 1 : -1;
+          const status = statuses[currentIndex + offset];
+          if (!status) {
+            return;
+          }
+          event.preventDefault();
+          moveCardToStatus(props, card, status, state);
+        }}
+      >
+        ${statuses.map(
+          (status) =>
+            html`<option value=${status} ?selected=${status === card.status}>
+              ${formatStatusLabel(status)}
+            </option>`,
+        )}
+      </select>
+    </label>
+  `;
+}
+
 function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
   state.detailCardId = card.id;
   state.detailCommentBody = "";
@@ -1223,6 +1288,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         ${showStartControls ? renderStartExecutionButton(props, card, null, "autonomous") : nothing}
         ${writable
           ? html`
+              ${renderCardMoveControl(props, card, busy)}
               <button
                 class="btn btn--icon workboard-card__icon"
                 title=${t("workboard.archiveCard")}
