@@ -1,4 +1,10 @@
 type SubagentDeliveryPath = "steered" | "direct" | "none";
+export type SubagentAnnounceDeliveryFailureReason =
+  | "completion_handoff_pending"
+  | "generated_media_missing"
+  | "message_tool_delivery_missing"
+  | "requester_abandoned"
+  | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
@@ -9,6 +15,7 @@ export type SubagentAnnounceDeliveryResult = {
   path: SubagentDeliveryPath;
   deliveredAt?: number;
   enqueuedAt?: number;
+  reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   terminal?: boolean;
   phases?: SubagentAnnounceDispatchPhaseResult[];
@@ -22,6 +29,7 @@ type SubagentAnnounceDispatchPhaseResult = {
   path: SubagentDeliveryPath;
   deliveredAt?: number;
   enqueuedAt?: number;
+  reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
 };
 
@@ -59,6 +67,7 @@ export async function runSubagentAnnounceDispatch(params: {
       path: result.path,
       deliveredAt: result.deliveredAt,
       enqueuedAt: result.enqueuedAt,
+      ...(result.reason ? { reason: result.reason } : {}),
       error: result.error,
     });
   };

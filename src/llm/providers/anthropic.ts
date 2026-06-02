@@ -930,19 +930,19 @@ function createClient(
 function buildParams(
   model: Model<"anthropic-messages">,
   context: Context,
-  isOAuthToken: boolean,
+  isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const params: MessageCreateParamsStreaming = {
     model: model.id,
-    messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
+    messages: convertMessages(context.messages, model, isOAuthTokenResult, cacheControl),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
   };
 
   // For OAuth tokens, we MUST include Claude Code identity
-  if (isOAuthToken) {
+  if (isOAuthTokenResult) {
     params.system = [
       {
         type: "text",
@@ -973,11 +973,15 @@ function buildParams(
     params.temperature = options.temperature;
   }
 
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop_sequences = options.stop;
+  }
+
   if (context.tools && context.tools.length > 0) {
     const compat = getAnthropicCompat(model);
     params.tools = convertTools(
       context.tools,
-      isOAuthToken,
+      isOAuthTokenResult,
       compat.supportsEagerToolInputStreaming,
       compat.supportsCacheControlOnTools ? cacheControl : undefined,
     );
@@ -1041,7 +1045,7 @@ function normalizeToolCallId(id: string): string {
 function convertMessages(
   messages: Message[],
   model: Model<"anthropic-messages">,
-  isOAuthToken: boolean,
+  isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
 ): MessageParam[] {
   const params: MessageParam[] = [];
@@ -1138,7 +1142,7 @@ function convertMessages(
           blocks.push({
             type: "tool_use",
             id: block.id,
-            name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
+            name: isOAuthTokenValue ? toClaudeCodeName(block.name) : block.name,
             input: block.arguments ?? {},
           });
         }
@@ -1220,12 +1224,14 @@ function shouldUseFineGrainedToolStreamingBeta(
   model: Model<"anthropic-messages">,
   context: Context,
 ): boolean {
-  return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
+  return (
+    Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
+  );
 }
 
 function convertTools(
   tools: Tool[],
-  isOAuthToken: boolean,
+  isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming: boolean,
   cacheControl?: CacheControlEphemeral,
 ): Anthropic.Messages.Tool[] {
@@ -1237,7 +1243,7 @@ function convertTools(
     const schema = tool.parameters as { properties?: unknown; required?: string[] };
 
     return {
-      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      name: isOAuthTokenLocal ? toClaudeCodeName(tool.name) : tool.name,
       description: tool.description,
       ...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
       input_schema: {

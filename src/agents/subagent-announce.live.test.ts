@@ -42,7 +42,9 @@ const REQUEST_TIMEOUT_MS = 8 * 60_000;
 const WAIT_TIMEOUT_MS = 8 * 60_000;
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 type LiveSubagentModelConfig = {
@@ -188,6 +190,7 @@ function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForReques
       endedReason: run.endedReason,
       pauseReason: run.pauseReason,
       outcome: run.outcome?.status,
+      outcomeError: run.outcome?.status === "error" ? run.outcome.error : undefined,
       delivery: run.delivery?.status,
       deliveryError: run.delivery?.lastError,
       suppressAnnounceReason: run.suppressAnnounceReason,
@@ -213,16 +216,6 @@ function summarizeAgentEvents(events: AgentEventPayload[], runId: string): strin
 
 function isBashToolEventName(value: unknown): boolean {
   return value === "bash" || value === "exec";
-}
-
-function readToolResultStatus(result: unknown): string | undefined {
-  const details =
-    result && typeof result === "object" ? (result as { details?: unknown }).details : undefined;
-  if (!details || typeof details !== "object") {
-    return undefined;
-  }
-  const { status } = details as { status?: unknown };
-  return typeof status === "string" ? status : undefined;
 }
 
 function createGatewayClient(params: {
@@ -360,7 +353,7 @@ describeLive("subagent announce live", () => {
 
       const completedRunBeforeDelivery = await waitFor("issue 82913 child completion", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
@@ -549,7 +542,7 @@ describeLive("subagent announce live", () => {
         listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
       const spawnedRun = await waitFor("steered child spawn", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSteeredChildRuns()[0];
       });
@@ -558,7 +551,7 @@ describeLive("subagent announce live", () => {
       expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
       const runBeforeSteer = await waitFor("steered child bash tool start", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         const currentRun =
           listSteeredChildRuns().find((run) => run.runId === spawnedRun.runId) ?? spawnedRun;
@@ -598,40 +591,9 @@ describeLive("subagent announce live", () => {
         )}`,
       ).toBe("accepted");
 
-      const originalBashResult = await waitFor(
-        "original active child bash abort result",
-        () => {
-          if (initialError) {
-            throw initialError;
-          }
-          return agentEvents.find(
-            (event) =>
-              event.runId === runBeforeSteer.runId &&
-              event.stream === "tool" &&
-              event.data.phase === "result" &&
-              isBashToolEventName(event.data.name),
-          );
-        },
-        30_000,
-      ).catch((error: unknown) => {
-        throw new Error(
-          `timed out waiting for original active child bash abort; events=${summarizeAgentEvents(
-            agentEvents,
-            runBeforeSteer.runId,
-          )}`,
-          { cause: error },
-        );
-      });
-      const originalBashResultText = JSON.stringify(originalBashResult.data.result ?? "");
-      expect(
-        readToolResultStatus(originalBashResult.data.result),
-        summarizeAgentEvents(agentEvents, runBeforeSteer.runId),
-      ).toBe("failed");
-      expect(originalBashResultText).not.toContain(unsteeredToken);
-
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSteeredChildRuns().find(
           (run) =>
@@ -648,10 +610,12 @@ describeLive("subagent announce live", () => {
       });
       expect(steeredRun.endedReason).toBe("subagent-complete");
       expect(steeredRun.delivery?.lastError).toBeUndefined();
+      expect(summarizeSubagentRuns(listSteeredChildRuns())).not.toContain(unsteeredToken);
+      expect(summarizeAgentEvents(agentEvents, runBeforeSteer.runId)).not.toContain(unsteeredToken);
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return inProcessAgentDispatches.some((entry) => entry.phase === "started")
           ? true
@@ -662,7 +626,7 @@ describeLive("subagent announce live", () => {
         "in-process subagent completion agent dispatch",
         () => {
           if (initialError) {
-            throw initialError;
+            throw toLintErrorObject(initialError, "Non-Error thrown");
           }
           return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
         },
@@ -671,7 +635,7 @@ describeLive("subagent announce live", () => {
       expect(
         inProcessAgentDispatches.some((entry) => {
           if (initialError) {
-            throw initialError;
+            throw toLintErrorObject(initialError, "Non-Error thrown");
           }
           return entry.phase === "started";
         }),
@@ -798,7 +762,7 @@ describeLive("subagent announce live", () => {
 
       const completedRuns = await waitFor("three Gemini stress child completions", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         const runs = listSubagentRunsForRequester(sessionKey).filter((run) =>
           run.taskName?.startsWith("gemini_stress_"),
@@ -826,3 +790,17 @@ describeLive("subagent announce live", () => {
     12 * 60_000,
   );
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -25,9 +25,15 @@ import {
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
+const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([
+  "generated_media_missing",
+  "message_tool_delivery_missing",
+  "visible_reply_missing",
+]);
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -40,6 +46,11 @@ export type MediaGenerationTaskHandle = {
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
+
+export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+  const normalizedSessionKey = sessionKey?.trim();
+  return Boolean(normalizedSessionKey);
+}
 
 export type MediaGenerationExecutionResult = {
   provider: string;
@@ -138,6 +149,9 @@ function createMediaGenerationTaskRun(params: {
       lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
+    if (!task) {
+      return null;
+    }
     const handle = {
       taskId: task.taskId,
       runId,
@@ -267,7 +281,7 @@ function buildMediaGenerationReplyInstruction(params: {
     return [
       `The ${params.completionLabel} is ready for the original chat.`,
       'Use the current visible-reply contract: if this session requires message-tool replies, call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
-      "Otherwise, write the normal final reply and include each generated media path with MEDIA: so automatic source delivery can attach it.",
+      "Otherwise, write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
     ].join(" ");
   }
   return [
@@ -283,7 +297,7 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
     queueMicrotask(() => {
-      void work().catch((error) => {
+      void work().catch((error: unknown) => {
         params.onCrash(`Detached ${params.toolName} job crashed`, { error });
       });
     });
@@ -325,7 +339,6 @@ export function buildMediaGenerationStartedToolResult(params: {
         : {}),
       ...params.detailExtras,
     },
-    terminate: true,
   };
 }
 
@@ -556,10 +569,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     return true;
   }
   const canTryDirectCompletionFallback =
-    delivery.error === "completion agent did not deliver generated media" ||
-    delivery.error === "completion agent did not produce a visible reply" ||
-    delivery.error ===
-      "completion agent did not use the message tool for message-tool-only delivery";
+    delivery.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
   if (params.status === "ok" && canTryDirectCompletionFallback) {
     const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
     const delivered = await tryDeliverMediaGenerationDirect({

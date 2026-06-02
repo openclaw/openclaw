@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -7,7 +8,6 @@ import {
   shouldRetrySameKeyProviderOperation,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
 
 type ApiKeyRetryParams = {
@@ -93,5 +93,19 @@ export async function executeWithApiKeyRotation<T>(
   if (lastError === undefined) {
     throw new Error(`Failed to run API request for ${params.provider}.`);
   }
-  throw lastError;
+  throw toLintErrorObject(lastError, "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

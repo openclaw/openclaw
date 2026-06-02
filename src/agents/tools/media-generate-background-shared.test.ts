@@ -13,11 +13,21 @@ vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliv
 import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
 } from "./media-generate-background-shared.js";
 
 beforeEach(() => {
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
+});
+
+describe("shouldDetachMediaGenerationTask", () => {
+  it("detaches session-backed media generation", () => {
+    expect(shouldDetachMediaGenerationTask("agent:main:discord:direct:123")).toBe(true);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media")).toBe(true);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media:run:run-123")).toBe(true);
+    expect(shouldDetachMediaGenerationTask(undefined)).toBe(false);
+  });
 });
 
 describe("scheduleMediaGenerationTaskCompletion", () => {
@@ -440,6 +450,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
   it("direct-delivers generated media when the completion wake misses the requester", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
@@ -489,6 +500,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
       path: "none",
+      reason: "requester_abandoned",
       error: "requester session abandoned after timeout",
     });
     const lifecycle = createMediaGenerationTaskLifecycle({

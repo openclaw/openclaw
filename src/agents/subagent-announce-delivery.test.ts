@@ -41,17 +41,6 @@ function createGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeCallGateway;
 }
 
-function createGatewaySequenceMock(
-  responses: Record<string, unknown>[],
-): ReturnType<typeof vi.fn> & typeof runtimeCallGateway {
-  let index = 0;
-  return vi.fn(async () => {
-    const response = responses[Math.min(index, responses.length - 1)] ?? {};
-    index += 1;
-    return response;
-  }) as unknown as ReturnType<typeof vi.fn> & typeof runtimeCallGateway;
-}
-
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
 }
@@ -1295,6 +1284,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "visible_reply_missing",
       error: "completion agent did not produce a visible reply",
     });
     expect(sendMessage).not.toHaveBeenCalled();
@@ -1489,6 +1479,69 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectFinal: true,
       forceSyntheticClient: true,
       timeoutMs: 120_000,
+    });
+  });
+
+  it("does not require generated media delivery for no-target cron completion handoffs", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "cron saw generated media completion" }],
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      queueEmbeddedAgentMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "cron-run-session",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:cron:media-job:run:run-123",
+      targetRequesterSessionKey: "agent:main:cron:media-job:run:run-123",
+      triggerMessage: "image done",
+      steerMessage: "image done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-cron-media-no-target",
+      sourceTool: "image_generate",
+      sourceSessionKey: "image_generate:task-123",
+      sourceChannel: "internal",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "cron proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-cron-proof.png",
+          mediaUrls: ["/tmp/generated-cron-proof.png"],
+          replyInstruction: "Continue the cron job after the generated image is ready.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "cron-run-session",
+      "image done",
+      expect.objectContaining({
+        waitForTranscriptCommit: true,
+      }),
+    );
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      sessionKey: "agent:main:cron:media-job:run:run-123",
     });
   });
 
@@ -2075,6 +2128,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "none",
+      reason: "requester_abandoned",
       error: "requester session abandoned after timeout",
     });
     expect(result.phases).toEqual([
@@ -2082,6 +2136,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         phase: "direct-primary",
         delivered: false,
         path: "none",
+        reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
       }),
       expect.objectContaining({
@@ -2300,6 +2355,106 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: undefined,
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not fallback when current-chat message-tool media also has target telemetry", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "message",
+            to: undefined,
+            threadId: undefined,
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back when targetless message-tool media names a different provider", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: undefined,
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        content: "The generated music is ready.",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
   });
 
   it("falls back when message-tool media went to a different target", async () => {
@@ -3267,6 +3422,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     expectGatewayAgentParams(callGateway, {
@@ -4175,6 +4331,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
     });
   });

@@ -1,8 +1,9 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
+  shouldRunOpenAIOAuthTlsPrerequisites,
 } from "./oauth-tls-preflight.js";
 
 describe("runOpenAIOAuthTlsPreflight", () => {
@@ -92,5 +93,24 @@ describe("formatOpenAIOAuthTlsPreflightFix", () => {
     expect(text).toContain("- brew postinstall ca-certificates");
     expect(text).toContain("- brew postinstall openssl@3");
     expect(text).toContain("- Retry the OAuth login flow.");
+  });
+});
+
+describe("shouldRunOpenAIOAuthTlsPrerequisites", () => {
+  it("runs for OpenAI OAuth profiles", () => {
+    expect(
+      shouldRunOpenAIOAuthTlsPrerequisites({
+        cfg: {
+          auth: {
+            profiles: {
+              "openai:default": {
+                provider: "openai",
+                mode: "oauth",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

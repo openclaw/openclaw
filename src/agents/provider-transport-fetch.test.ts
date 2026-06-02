@@ -1,7 +1,7 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
@@ -20,27 +20,60 @@ const {
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,
-} = vi.hoisted(() => ({
-  buildProviderRequestDispatcherPolicyMock: vi.fn<
-    (_request?: unknown) => { mode: "direct" } | undefined
-  >(() => undefined),
-  fetchWithSsrFGuardMock: vi.fn(),
-  ensureModelProviderLocalServiceMock: vi.fn(),
-  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
-    ...current,
-    ...overrides,
-  })),
-  resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
-    () => ({
-      allowPrivateNetwork: false,
-    }),
-  ),
-  shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
-  withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  })),
-}));
+  managedStreamCleanupRegistrations,
+} = vi.hoisted(() => {
+  const managedStreamCleanupRegistrationsLocal: Array<{
+    callback: (held: { finalize: () => Promise<void> }) => void;
+    held: { finalize: () => Promise<void> };
+    token: object;
+  }> = [];
+
+  class MockFinalizationRegistry {
+    constructor(private callback: (held: { finalize: () => Promise<void> }) => void) {}
+
+    register(_target: object, held: { finalize: () => Promise<void> }, token?: object) {
+      managedStreamCleanupRegistrationsLocal.push({
+        callback: this.callback,
+        held,
+        token: token ?? {},
+      });
+    }
+
+    unregister(token: object) {
+      const index = managedStreamCleanupRegistrationsLocal.findIndex(
+        (entry) => entry.token === token,
+      );
+      if (index >= 0) {
+        managedStreamCleanupRegistrationsLocal.splice(index, 1);
+      }
+    }
+  }
+
+  vi.stubGlobal("FinalizationRegistry", MockFinalizationRegistry);
+
+  return {
+    buildProviderRequestDispatcherPolicyMock: vi.fn<
+      (_request?: unknown) => { mode: "direct" } | undefined
+    >(() => undefined),
+    fetchWithSsrFGuardMock: vi.fn(),
+    ensureModelProviderLocalServiceMock: vi.fn(),
+    mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
+      ...current,
+      ...overrides,
+    })),
+    resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
+      () => ({
+        allowPrivateNetwork: false,
+      }),
+    ),
+    shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
+    withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    })),
+    managedStreamCleanupRegistrations: managedStreamCleanupRegistrationsLocal,
+  };
+});
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -82,6 +115,7 @@ function latestTrustedEnvProxyParams(): Record<string, unknown> {
 
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
+    managedStreamCleanupRegistrations.length = 0;
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://api.openai.com/v1/responses",
@@ -130,6 +164,45 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 
+  it("rejects successful streamed OpenAI-compatible responses with HTML content", async () => {
+    const release = vi.fn(async () => undefined);
+    const model = {
+      id: "private-model",
+      provider: "custom-openai",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com",
+    } as unknown as Model<"openai-completions">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("<html>not the API</html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+      finalUrl: "https://proxy.example.com/chat/completions",
+      release,
+    });
+
+    let error: unknown;
+    try {
+      await buildGuardedModelFetch(model)("https://proxy.example.com/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "private-model", stream: true }),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      name: "ProviderHttpError",
+      status: 200,
+      code: "invalid_provider_content_type",
+      errorType: "invalid_response",
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/baseUrl.*\/v1 path prefix/);
+    expect(release).toHaveBeenCalled();
+  });
+
   it("ensures configured local services before the model request", async () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
@@ -149,6 +222,47 @@ describe("buildGuardedModelFetch", () => {
     expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("releases guarded fetch slots when streamed bodies are abandoned", async () => {
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("chunk-1"));
+            controller.enqueue(encoder.encode("chunk-2"));
+          },
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://api.anthropic.com/v1/messages",
+      release,
+    });
+    const model = {
+      id: "claude-sonnet-4-6",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    } as unknown as Model<"anthropic-messages">;
+
+    const fetcher = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
+    const response = await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"stream":true}',
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const firstChunk = await reader?.read();
+    expect(firstChunk?.done).toBe(false);
+    const registration = managedStreamCleanupRegistrations.at(-1);
+    expect(registration).toBeDefined();
+    await registration?.held.finalize();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(managedStreamCleanupRegistrations).toHaveLength(0);
   });
 
   it("passes model request headers to local service health probes", async () => {
@@ -1207,6 +1321,23 @@ describe("buildGuardedModelFetch", () => {
         expect(response.headers.get("x-should-retry")).toBe("false");
       },
     );
+
+    it("ignores invalid obsolete asctime retry-after values", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after": "Sun Nov 99 99:99:99 9999" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
 
     it("respects OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10";

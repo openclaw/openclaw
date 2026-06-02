@@ -11,8 +11,8 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
@@ -97,10 +97,8 @@ function printSessionUpdate(notification: SessionNotification): void {
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
-      return;
     }
     default:
-      return;
   }
 }
 
@@ -204,29 +202,31 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log('Type a prompt, or "exit" to quit.\n');
 
   const prompt = () => {
-    rl.question("> ", async (input) => {
-      const text = input.trim();
-      if (!text) {
+    rl.question("> ", (input) => {
+      void (async () => {
+        const text = input.trim();
+        if (!text) {
+          prompt();
+          return;
+        }
+        if (text === "exit" || text === "quit") {
+          agent.kill();
+          rl.close();
+          process.exit(0);
+        }
+
+        try {
+          const response = await client.prompt({
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
+          console.log(`\n[${response.stopReason}]\n`);
+        } catch (err) {
+          console.error(`\n[error] ${String(err)}\n`);
+        }
+
         prompt();
-        return;
-      }
-      if (text === "exit" || text === "quit") {
-        agent.kill();
-        rl.close();
-        process.exit(0);
-      }
-
-      try {
-        const response = await client.prompt({
-          sessionId,
-          prompt: [{ type: "text", text }],
-        });
-        console.log(`\n[${response.stopReason}]\n`);
-      } catch (err) {
-        console.error(`\n[error] ${String(err)}\n`);
-      }
-
-      prompt();
+      })();
     });
   };
 

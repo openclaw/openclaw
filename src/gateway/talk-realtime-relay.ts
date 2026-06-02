@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
@@ -216,6 +220,34 @@ function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   return session.activeAgentRuns.size;
 }
 
+function broadcastToolResultToOwner(
+  session: RelaySession,
+  params: {
+    callId: string;
+    turnId: string;
+    result: unknown;
+    final: boolean;
+    forced?: boolean;
+  },
+): void {
+  const payload =
+    params.forced === true
+      ? { result: params.result, forced: true }
+      : { result: params.result };
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "toolResult",
+    callId: params.callId,
+    talkEvent: session.talk.emit({
+      type: "tool.result",
+      callId: params.callId,
+      turnId: params.turnId,
+      payload,
+      final: params.final,
+    }),
+  });
+}
+
 function submitRelayAgentControlProviderResults(
   session: RelaySession,
   result: RealtimeVoiceAgentControlResult,
@@ -237,17 +269,11 @@ function submitRelayAgentControlProviderResults(
     } else {
       session.bridge.submitToolResult(callId, result.providerResult, { suppressResponse: true });
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolResult",
+    broadcastToolResultToOwner(session, {
       callId,
-      talkEvent: session.talk.emit({
-        type: "tool.result",
-        callId,
-        turnId,
-        payload: { result: result.providerResult },
-        final: true,
-      }),
+      turnId,
+      result: result.providerResult,
+      final: true,
     });
     session.activeAgentToolCalls.delete(callId);
     session.completedAgentToolCalls.add(callId);
@@ -275,8 +301,13 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
+  const validNowMs = asDateTimestampMs(nowMs);
+  if (validNowMs === undefined) {
+    return;
+  }
   for (const session of relaySessions.values()) {
-    if (nowMs > session.expiresAtMs) {
+    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
+    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
       closeRelaySession(session, "completed");
     }
   }
@@ -308,7 +339,10 @@ export function createTalkRealtimeRelaySession(
   enforceRelaySessionLimits(params.connId);
   const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
-  const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Realtime relay session expiry is outside the supported Date range");
+  }
   const talk = createTalkSessionController(
     {
       sessionId: relaySessionId,
@@ -319,7 +353,6 @@ export function createTalkRealtimeRelaySession(
     },
     { onEvent: recordTalkObservabilityEvent },
   );
-  let relay: RelaySession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {
       ...event,
@@ -327,6 +360,7 @@ export function createTalkRealtimeRelaySession(
     });
   let currentOutputItemId: string | undefined;
   let currentOutputResponseId: string | undefined;
+  const relayRef: { current?: RelaySession } = {};
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     cfg: params.cfg,
@@ -338,9 +372,9 @@ export function createTalkRealtimeRelaySession(
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
-      isOpen: () => Boolean(relay && relaySessions.has(relay.id)),
+      isOpen: () => Boolean(relayRef.current && relaySessions.has(relayRef.current.id)),
       sendAudio: (audio) => {
-        const turnId = relay ? ensureRelayTurn(relay) : undefined;
+        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
           {
             relaySessionId,
@@ -357,7 +391,7 @@ export function createTalkRealtimeRelaySession(
         );
       },
       clearAudio: () => {
-        const turnId = relay ? ensureRelayTurn(relay) : undefined;
+        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
           { relaySessionId, type: "clear" },
           {
@@ -369,7 +403,7 @@ export function createTalkRealtimeRelaySession(
         );
       },
       sendMark: (markName) => {
-        const turnId = relay ? ensureRelayTurn(relay) : undefined;
+        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
           { relaySessionId, type: "mark", markName },
           {
@@ -416,6 +450,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onTranscript: (role, text, final) => {
+      const relay = relayRef.current;
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
@@ -476,6 +511,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onToolCall: (toolCall) => {
+      const relay = relayRef.current;
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (relay && toolCall.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
         const forcedConsult = relay.forcedConsults.recordNativeConsult(
@@ -533,7 +569,7 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
-  relay = {
+  const relay: RelaySession = {
     id: relaySessionId,
     connId: params.connId,
     context: params.context,
@@ -553,6 +589,7 @@ export function createTalkRealtimeRelaySession(
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
     transcript: [],
   };
+  relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {
@@ -688,7 +725,15 @@ function ensureRelayTurn(session: RelaySession): string {
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   const session = relaySessions.get(relaySessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+  const nowMs = asDateTimestampMs(Date.now());
+  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
+  if (
+    !session ||
+    session.connId !== connId ||
+    nowMs === undefined ||
+    expiresAtMs === undefined ||
+    nowMs > expiresAtMs
+  ) {
     if (session) {
       closeRelaySession(session, "completed");
     }
@@ -764,17 +809,12 @@ export function submitTalkRealtimeRelayToolResult(params: {
     if (final && !cancelled && !isWorkingToolResult(params.result)) {
       session.forcedConsults.markDelivered(forcedConsult);
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolResult",
+    broadcastToolResultToOwner(session, {
       callId: params.callId,
-      talkEvent: session.talk.emit({
-        type: "tool.result",
-        callId: params.callId,
-        turnId,
-        payload: { result: params.result, forced: true },
-        final,
-      }),
+      turnId,
+      result: params.result,
+      forced: true,
+      final,
     });
     return;
   }
@@ -788,17 +828,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
       session.activeAgentToolCalls.delete(params.callId);
     }
   }
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "toolResult",
+  broadcastToolResultToOwner(session, {
     callId: params.callId,
-    talkEvent: session.talk.emit({
-      type: "tool.result",
-      callId: params.callId,
-      turnId,
-      payload: { result: params.result },
-      final,
-    }),
+    turnId,
+    result: params.result,
+    final,
   });
 }
 

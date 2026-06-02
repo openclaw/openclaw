@@ -56,6 +56,9 @@ export const pluginSdkDocMetadata = {
   "channel-config-schema-legacy": {
     category: "channel",
   },
+  "chat-channel-ids": {
+    category: "channel",
+  },
   "channel-contract": {
     category: "channel",
   },
@@ -117,6 +120,9 @@ export const pluginSdkDocMetadata = {
     category: "provider",
   },
   "tts-runtime": {
+    category: "runtime",
+  },
+  "inline-image-data-url-runtime": {
     category: "runtime",
   },
   "allow-from": {

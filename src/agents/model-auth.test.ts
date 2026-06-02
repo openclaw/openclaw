@@ -172,6 +172,14 @@ afterEach(() => {
 });
 
 describe("createRuntimeProviderAuthLookup", () => {
+  it("marks env auth maps as authoritative so hot checks skip setup runtime fallback", () => {
+    expect(
+      createRuntimeProviderAuthLookup({
+        env: {},
+      }).envApiKey.skipSetupProviderFallback,
+    ).toBe(true);
+  });
+
   it("omits synthetic auth refs when plugin synthetic auth is disabled", () => {
     expect(
       createRuntimeProviderAuthLookup({
@@ -358,7 +366,7 @@ describe("resolveModelAuthMode", () => {
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "token",
         refresh: "refresh",
         expires: Date.now() + 60_000,
@@ -416,6 +424,28 @@ describe("requireApiKey", () => {
     ).toThrow(
       'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
     );
+  });
+
+  it("throws typed missing auth errors with source metadata", () => {
+    let thrown: unknown;
+    try {
+      requireApiKey(
+        {
+          source: "env: OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        "openai",
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({
+      name: "MissingProviderAuthError",
+      code: "missing-api-key",
+      provider: "openai",
+      mode: "api-key",
+      source: "env: OPENAI_API_KEY",
+    });
   });
 });
 

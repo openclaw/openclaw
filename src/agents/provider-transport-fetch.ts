@@ -4,6 +4,12 @@ import {
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
 import {
+  asFiniteNumberInRange,
+  clampTimerTimeoutMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -17,14 +23,9 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import {
-  asFiniteNumberInRange,
-  clampTimerTimeoutMs,
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "../shared/number-coercion.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
+import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
 import {
   ensureModelProviderLocalService,
   type ProviderLocalServiceLease,
@@ -42,6 +43,13 @@ const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+const HTTP_DATE_MONTH_INDEX = new Map(
+  ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map(
+    (month, index) => [month, index],
+  ),
+);
+const OBSOLETE_ASCTIME_HTTP_DATE_RE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -212,6 +220,39 @@ function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
   }
 }
 
+function isJsonContentType(contentType: string): boolean {
+  return /\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType);
+}
+
+function isOpenAISdkStreamContentType(contentType: string): boolean {
+  return /\btext\/event-stream\b/i.test(contentType) || isJsonContentType(contentType);
+}
+
+async function assertOpenAISdkStreamContentType(params: {
+  response: Response;
+  model: Model;
+  release: () => Promise<void>;
+  localServiceLease?: ProviderLocalServiceLease;
+}): Promise<void> {
+  const contentType = params.response.headers.get("content-type") ?? "";
+  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+    return;
+  }
+  const body = await readResponseTextLimited(params.response).catch(() => "");
+  await params.release().catch(() => undefined);
+  params.localServiceLease?.release();
+  const hint =
+    "OpenAI-compatible streamed responses must be text/event-stream or JSON; got " +
+    `${contentType || "missing content-type"}. Check the provider baseUrl; ` +
+    "OpenAI-compatible APIs commonly require a /v1 path prefix.";
+  throw new ProviderHttpError(`${params.model.provider}/${params.model.id}: ${hint}`, {
+    status: params.response.status,
+    code: "invalid_provider_content_type",
+    type: "invalid_response",
+    body,
+  });
+}
+
 async function requestBodyHasStreamTrue(
   request: Request | undefined,
   init: RequestInit | undefined,
@@ -268,12 +309,53 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const retryAt = Date.parse(trimmedRetryAfter);
+  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
 
   return Math.max(0, (retryAt - Date.now()) / 1000);
+}
+
+function parseRetryAfterHttpDateMs(value: string): number {
+  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
+  if (match) {
+    const month = HTTP_DATE_MONTH_INDEX.get(match[1] ?? "");
+    if (month === undefined) {
+      return Number.NaN;
+    }
+    const year = Number.parseInt(match[6] ?? "", 10);
+    const day = Number.parseInt((match[2] ?? "").trim(), 10);
+    const hours = Number.parseInt(match[3] ?? "", 10);
+    const minutes = Number.parseInt(match[4] ?? "", 10);
+    const seconds = Number.parseInt(match[5] ?? "", 10);
+    if (
+      day < 1 ||
+      day > 31 ||
+      hours > 23 ||
+      minutes > 59 ||
+      seconds > 59 ||
+      [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
+    ) {
+      return Number.NaN;
+    }
+    const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
+    const parsedDate = new Date(timestamp);
+    return parsedDate.getUTCFullYear() === year &&
+      parsedDate.getUTCMonth() === month &&
+      parsedDate.getUTCDate() === day &&
+      parsedDate.getUTCHours() === hours &&
+      parsedDate.getUTCMinutes() === minutes &&
+      parsedDate.getUTCSeconds() === seconds
+      ? timestamp
+      : Number.NaN;
+  }
+
+  const parsed = Date.parse(value);
+  if (!Number.isNaN(parsed)) {
+    return parsed;
+  }
+  return Number.NaN;
 }
 
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
@@ -322,6 +404,12 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
+const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
+  (held) => {
+    void held.finalize();
+  },
+);
+
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -338,12 +426,15 @@ function buildManagedResponse(
   const source = response.body;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let released = false;
+  const cleanupRegistrationToken = {};
   const finalize = async () => {
     if (released) {
       return;
     }
     released = true;
+    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
     try {
+      await reader?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     } finally {
       finalizeLocalServiceLease();
@@ -376,6 +467,9 @@ function buildManagedResponse(
       }
     },
   });
+  // Stream consumers should cancel deterministically; this catches abandoned
+  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
+  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
@@ -658,6 +752,14 @@ export function buildGuardedModelFetch(
         status: response.status,
         statusText: response.statusText,
         headers,
+      });
+    }
+    if (synthesizeJsonAsSse && options?.sanitizeSse !== false) {
+      await assertOpenAISdkStreamContentType({
+        response,
+        model,
+        release: result.release,
+        localServiceLease,
       });
     }
     response = buildManagedResponse(

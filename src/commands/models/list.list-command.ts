@@ -1,10 +1,10 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
@@ -125,15 +125,15 @@ export async function modelsListCommand(
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async (opts?: {
+  const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
   }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, {
       providerFilter,
-      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: opts?.loadAvailability,
+      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: optsLocal?.loadAvailability,
       workspaceDir,
     });
     modelRegistry = loaded.registry;

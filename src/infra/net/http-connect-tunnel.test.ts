@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 
 class FakeSocket extends EventEmitter {
   public readonly writes: string[] = [];
@@ -303,7 +303,9 @@ describe("openHttpConnectTunnel", () => {
       return socket;
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     targetTlsSocket.emit("secureConnect");
@@ -342,6 +344,7 @@ describe("openHttpConnectTunnel", () => {
       targetPort: 443,
       timeoutMs: 1,
     });
+    void tunnel.catch(() => undefined);
     const rejected = expect(tunnel).rejects.toThrow(
       "Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after 1ms",
     );
@@ -364,6 +367,7 @@ describe("openHttpConnectTunnel", () => {
       targetPort: 443,
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
+    void tunnel.catch(() => undefined);
     const rejected = expect(tunnel).rejects.toThrow(
       `Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
     );

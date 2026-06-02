@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -16,10 +20,6 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -152,6 +152,7 @@ export function buildThreadingToolContext(params: {
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
+        ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
         TransportThreadId: sessionCtx.TransportThreadId,
@@ -159,10 +160,13 @@ export function buildThreadingToolContext(params: {
       },
       hasRepliedRef,
     }) ?? {};
+  const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
-    currentMessageId: context.currentMessageId ?? currentMessageId,
+    // Some providers expose only thread resources as reply targets; explicit
+    // `undefined` means the adapter rejected the generic message-id fallback.
+    currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
   };
 }
 

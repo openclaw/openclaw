@@ -4,7 +4,10 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
@@ -196,7 +199,7 @@ function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
   if (raw === undefined) {
     return fallback;
   }
-  return parseStrictPositiveInteger(raw) ?? fallback;
+  return resolveTimerTimeoutMs(parseStrictPositiveInteger(raw), fallback);
 }
 
 function createMatrixQaRunDeadline() {
@@ -701,7 +704,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs = 0;
+  let initialGatewayBootMs;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;
@@ -884,8 +887,8 @@ export async function runMatrixQaLive(params: {
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
                 gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
-                gatewayCall: async (method, params, opts) =>
-                  await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
+                gatewayCall: async (method, paramsLocal, opts) =>
+                  await scenarioGateway.harness.gateway.call(method, paramsLocal ?? {}, opts),
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {

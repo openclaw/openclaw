@@ -40,6 +40,10 @@ export type AgentRunTerminalInput = {
   endedAt?: unknown;
 };
 
+export type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
+  status?: unknown;
+};
+
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
 
 function asFiniteTimestamp(value: unknown): number | undefined {
@@ -69,6 +73,12 @@ export function isStickyAgentRunTerminalOutcome(
 
 function isCancellationStopReason(value: string | undefined): boolean {
   return value === "rpc" || value === "stop";
+}
+
+function asAgentRunWaitStatus(value: unknown): AgentRunWaitStatus | "pending" | undefined {
+  return value === "ok" || value === "timeout" || value === "error" || value === "pending"
+    ? value
+    : undefined;
 }
 
 export function buildAgentRunTerminalOutcome(
@@ -130,6 +140,25 @@ export function buildAgentRunTerminalOutcome(
       ? { endedAt: asFiniteTimestamp(input.endedAt) }
       : {}),
   };
+}
+
+export function buildAgentRunTerminalOutcomeFromWaitResult(
+  wait: AgentRunTerminalWaitInput | undefined,
+): AgentRunTerminalOutcome | undefined {
+  const status = asAgentRunWaitStatus(wait?.status);
+  if (!status || status === "pending") {
+    return undefined;
+  }
+  return buildAgentRunTerminalOutcome({
+    status,
+    error: wait?.error,
+    stopReason: wait?.stopReason,
+    livenessState: wait?.livenessState,
+    timeoutPhase: wait?.timeoutPhase,
+    providerStarted: wait?.providerStarted,
+    startedAt: wait?.startedAt,
+    endedAt: wait?.endedAt,
+  });
 }
 
 function completedBeforeOrAtTimeout(params: {

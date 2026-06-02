@@ -104,7 +104,6 @@ function run(command, args, cwd, options = {}) {
     let stdout = "";
     let stdoutBytes = 0;
     let settled = false;
-    let timeout;
     let forceKillTimeout;
     const maxCapturedStdoutBytes = Math.max(
       1,
@@ -127,7 +126,7 @@ function run(command, args, cwd, options = {}) {
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve(value);
@@ -143,16 +142,33 @@ function run(command, args, cwd, options = {}) {
       }
       child.kill(signal);
     };
+    const processGroupAlive = () => {
+      if (!useProcessGroup || !child.pid) {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    };
     const terminateChild = () => {
       killChild("SIGTERM");
       forceKillTimeout = setTimeout(
-        () => killChild("SIGKILL"),
+        () => {
+          forceKillTimeout = undefined;
+          if (settled && !processGroupAlive()) {
+            return;
+          }
+          killChild("SIGKILL");
+        },
         options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
       );
       forceKillTimeout.unref?.();
     };
     ACTIVE_CHILD_KILLERS.add(killChild);
-    timeout =
+    const timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
@@ -263,7 +279,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
   console.error("==> Packing OpenClaw package");
   await prepareChangelog(sourceDir);
-  let packOutput = "";
+  let packOutput;
   try {
     packOutput = await runCaptureImpl(
       "npm",
@@ -347,8 +363,24 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+    },
+  );
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

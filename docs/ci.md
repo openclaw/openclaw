@@ -15,7 +15,7 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 | Job                                | Purpose                                                                                                   | When it runs                       |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `preflight`                        | Detect docs-only changes, changed scopes, changed extensions, and build the CI manifest                   | Always on non-draft pushes and PRs |
-| `security-fast`                    | Private key detection, workflow audit via `zizmor`, and production lockfile audit                         | Always on non-draft pushes and PRs |
+| `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs |
 | `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes              |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes              |
 | `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes              |
@@ -80,6 +80,7 @@ apply to that PR.
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
 - **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
+- **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
 - **TUI PTY** is a focused workflow for TUI changes. It runs `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` on Linux Node 24 for `src/tui/**`, the watch harness, package script, lockfile, and workflow edits. The required lane uses a deterministic `TuiBackend` fixture; the slower `tui --local` smoke is opt-in with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` and mocks only the external model endpoint.
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
@@ -564,6 +565,13 @@ The repo wrapper refuses a stale Crabbox binary that does not advertise `blacksm
 
 ```bash
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+```
+
+Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. When using the sibling checkout, rebuild the ignored local binary before timing or proof work:
+
+```bash
+version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
+  && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
 ```
 
 Changed gate:

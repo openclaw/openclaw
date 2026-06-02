@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   jsonResult,
   readNonNegativeIntegerParam,
@@ -179,5 +179,7 @@ async function invokeNodeCommandPayload(params: {
     params: params.commandParams ?? {},
     idempotencyKey: crypto.randomUUID(),
   });
-  return raw?.payload ?? {};
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload")
+    ? raw.payload
+    : {};
 }

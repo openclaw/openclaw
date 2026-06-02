@@ -28,9 +28,11 @@ import {
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
+  shouldPrintHelp,
   stopGateway,
   summarizeProcessSamples,
   tailFile,
+  unwrapRpcPayload,
   usesBuiltOpenClawEntry,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
@@ -43,6 +45,25 @@ afterEach(() => {
 });
 
 describe("kitchen-sink RPC isolated state", () => {
+  it("prints help without creating temp state or installing the plugin", async () => {
+    const result = await runCommand(process.execPath, [
+      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--help",
+    ]);
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
+    expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
+    expect(result.stdout).not.toContain("temp root preserved");
+  });
+
+  it("detects short and long help flags", () => {
+    expect(shouldPrintHelp(["--help"])).toBe(true);
+    expect(shouldPrintHelp(["-h"])).toBe(true);
+    expect(shouldPrintHelp([])).toBe(false);
+  });
+
   it("keeps loose numeric env values from corrupting runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
     expect(readPositiveInt("1000", 60_000)).toBe(1000);
@@ -102,6 +123,43 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
     expect(child.stderr.destroy).toHaveBeenCalledOnce();
     expect(child.unref).toHaveBeenCalledOnce();
+  });
+
+  it("treats ESRCH during gateway teardown as already exited", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      const error = Object.assign(new Error("process already exited"), { code: "ESRCH" });
+      throw error;
+    });
+
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("treats failed gateway kill signals as already exited", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => false);
+
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 
   it("fails readiness waits before polling after signaled gateway exits", async () => {
@@ -293,8 +351,8 @@ setInterval(() => {}, 1000);
 
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
       detached: undefined,
-      timeoutKillGraceMs: 50,
-      timeoutMs: 1000,
+      timeoutKillGraceMs: 25,
+      timeoutMs: 500,
     });
 
     try {
@@ -303,7 +361,7 @@ setInterval(() => {}, 1000);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 1000ms");
+      await expect(runPromise).rejects.toThrow("timed out after 500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -312,6 +370,48 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("records resource samples for command process trees", async () => {
+    const samples: Array<{
+      aggregateRssMiB?: number;
+      elapsedMs?: number;
+      label?: string;
+      processId?: number;
+      rssMiB?: number;
+    }> = [];
+    const seenPids: number[] = [];
+
+    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+      resourceLabel: "plugins install",
+      resourceSampleIntervalMs: 1,
+      resourceSamples: samples,
+      sampleProcessImpl: async (pid: number) => {
+        seenPids.push(pid);
+        return {
+          aggregateRssMiB: 640,
+          cpuPercent: 12,
+          processId: pid + 1,
+          rssMiB: 512,
+        };
+      },
+    });
+
+    expect(result.stdout).toBe("");
+    expect(seenPids.length).toBeGreaterThan(0);
+    expect(samples[0]).toMatchObject({
+      aggregateRssMiB: 640,
+      label: "plugins install",
+      processId: seenPids[0] + 1,
+      rssMiB: 512,
+    });
+    expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("rejects command spawn failures as Error objects", async () => {
+    await expect(runCommand("openclaw-definitely-missing-command", [])).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
@@ -345,6 +445,19 @@ describe("kitchen-sink RPC caller loading", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("kitchen-sink RPC payload unwrapping", () => {
+  it("preserves explicit nullish JSON-RPC result fields", () => {
+    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
+    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
+  });
+
+  it("prefers result before legacy payload and data envelopes", () => {
+    expect(unwrapRpcPayload({ result: false, payload: { stale: true } })).toBe(false);
+    expect(unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
+    expect(unwrapRpcPayload({ data: 0 })).toBe(0);
   });
 });
 
@@ -526,7 +639,7 @@ describe("kitchen-sink RPC process sampling", () => {
       platform: "linux",
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
@@ -551,7 +664,7 @@ describe("kitchen-sink RPC process sampling", () => {
       posixCommandLineNeedles: ["gateway", "--port", "19080"],
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
@@ -723,7 +836,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: () => new Promise(() => undefined),
+      text: () => new Promise(() => {}),
     });
 
     const result = fetchJson("http://127.0.0.1:19680/readyz", {

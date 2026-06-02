@@ -1,8 +1,15 @@
 import crypto from "node:crypto";
 import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -10,9 +17,11 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
+import { formatAuthProfileFailureMessage } from "../../agents/auth-profiles/failure-copy.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
+  classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -31,9 +40,11 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { isFailoverError } from "../../agents/failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
@@ -41,7 +52,7 @@ import {
   resolveModelRefFromString,
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../../agents/openai-codex-routing.js";
+import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
@@ -60,13 +71,6 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import {
-  hasNonEmptyString,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  readStringValue,
-} from "../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -100,7 +104,7 @@ import {
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -622,14 +626,17 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
-const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
+const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
 
 type ExternalRunFailureReply = {
   text: string;
   isGenericRunnerFailure: boolean;
 };
+
+type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
 function isNonDirectConversationContext(ctx: TemplateContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
@@ -692,6 +699,27 @@ function buildCodexAppServerFailureText(message: string): string | null {
   return null;
 }
 
+export function buildPreflightCompactionFailureText(
+  message: string,
+  options?: { includeDetails?: boolean },
+): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (!normalizedMessage.startsWith(PREFLIGHT_COMPACTION_FAILURE_PREFIX)) {
+    return null;
+  }
+  const reason = sanitizeUserFacingText(
+    normalizedMessage.slice(PREFLIGHT_COMPACTION_FAILURE_PREFIX.length),
+    { errorContext: true },
+  )
+    .trim()
+    .replace(/\s+/gu, " ");
+  const reasonSuffix = options?.includeDetails && reason ? ` Reason: ${reason}.` : "";
+  return (
+    "⚠️ Context is too large and auto-compaction could not recover this turn." +
+    `${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`
+  );
+}
+
 function buildCliBackendTimeoutFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const stall = normalizedMessage.match(CLI_BACKEND_NO_OUTPUT_STALL_RE);
@@ -710,23 +738,39 @@ function buildCliBackendTimeoutFailureText(message: string): string | null {
   );
 }
 
-function buildMissingApiKeyFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
-  const provider = providerMatch?.[1]?.trim().toLowerCase();
+function buildMissingApiKeyFailureText(input: { message: string; error?: unknown }): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(input.message);
+  const provider = isMissingProviderAuthError(input.error)
+    ? input.error.provider.trim().toLowerCase()
+    : normalizedMessage
+        .match(/No API key found for provider "([^"]+)"/u)?.[1]
+        ?.trim()
+        .toLowerCase();
   if (!provider) {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
-  if (provider === "openai-codex") {
-    return "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai-codex` or run `openclaw configure`.";
+  if (provider === "openai") {
+    return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
   }
   return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
+function buildAuthProfileFailoverFailureText(error: unknown): string | null {
+  if (!isFailoverError(error) || !error.provider || !error.authProfileFailure) {
+    return null;
+  }
+  return formatAuthProfileFailureMessage({
+    reason: error.reason,
+    provider: error.provider,
+    allInCooldown: error.authProfileFailure.allInCooldown,
+    cause: error.cause,
+  });
 }
 
 function formatForwardedExternalRunFailureText(message: string): string {
@@ -746,10 +790,16 @@ function formatForwardedExternalRunFailureText(message: string): string {
 }
 
 function buildExternalRunFailureReply(
-  message: string,
+  input: ExternalRunFailureInput,
   options?: { includeDetails?: boolean; isHeartbeat?: boolean },
 ): ExternalRunFailureReply {
+  const message = typeof input === "string" ? input : input.message;
+  const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
+  if (authProfileFailoverFailure) {
+    return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
   const providerRequestError = classifyProviderRequestError(normalizedMessage);
   if (providerRequestError) {
     return {
@@ -757,11 +807,15 @@ function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
-  const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
+  const missingApiKeyFailure = buildMissingApiKeyFailureText({
+    message: normalizedMessage,
+    error,
+  });
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
     if (oauthRefreshFailure.reason) {
@@ -820,6 +874,20 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     });
   }
 
+  const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
+    includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+  });
+  if (preflightCompactionFailureText) {
+    return markAgentRunFailureReplyPayload({
+      text: resolveExternalRunFailureTextForConversation({
+        text: preflightCompactionFailureText,
+        sessionCtx: params.sessionCtx,
+        isGenericRunnerFailure: false,
+        cfg: params.cfg,
+      }),
+    });
+  }
+
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
@@ -853,9 +921,12 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     });
   }
 
-  const externalRunFailureReply = buildExternalRunFailureReply(message, {
-    includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
-  });
+  const externalRunFailureReply = buildExternalRunFailureReply(
+    { message, error: params.err },
+    {
+      includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+    },
+  );
   if (externalRunFailureReply.isGenericRunnerFailure) {
     return undefined;
   }
@@ -1419,7 +1490,7 @@ export async function runAgentTurnWithFallback(params: {
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
-  let runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+  const runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
     run: params.followupRun.run,
     entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
     sessionKey: params.sessionKey,
@@ -1428,7 +1499,7 @@ export async function runAgentTurnWithFallback(params: {
     params.followupRun.run = runnableRun;
   }
   const runtimeConfig = resolveQueuedReplyRuntimeConfig(runnableRun.config);
-  let effectiveRun =
+  const effectiveRun =
     runtimeConfig === runnableRun.config
       ? runnableRun
       : {
@@ -1584,6 +1655,7 @@ export async function runAgentTurnWithFallback(params: {
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
+      ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
@@ -1595,7 +1667,8 @@ export async function runAgentTurnWithFallback(params: {
   let attemptedRuntimeProvider = fallbackProvider;
   let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let didRetryTransientHttpError = false;
+  let transientHttpRetriesRemaining = 1;
+  const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
@@ -1676,10 +1749,15 @@ export async function runAgentTurnWithFallback(params: {
             model: effectiveRun.model,
           }
         : candidateRun;
+    const persistedProvider = resolveOpenAIRuntimeProvider({
+      provider,
+      config: runtimeConfig,
+      workspaceDir: params.followupRun.run.workspaceDir,
+    });
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
       run: selectionRun,
-      provider,
+      provider: persistedProvider,
       model,
       force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
       ...(effectiveRun.autoFallbackPrimaryProbe
@@ -2065,9 +2143,9 @@ export async function runAgentTurnWithFallback(params: {
                   },
                   transformResult:
                     params.followupRun.currentInboundEventKind === "room_event"
-                      ? (result) =>
+                      ? (resultLocal) =>
                           keepCliSessionBindingOnlyWhenReused({
-                            result,
+                            result: resultLocal,
                             existingSessionId: cliSessionBinding?.sessionId,
                             onDroppedReplacement: () => {
                               droppedCliSessionReplacement = true;
@@ -2537,7 +2615,7 @@ export async function runAgentTurnWithFallback(params: {
                                   text,
                                 });
                               })
-                              .catch((err) => {
+                              .catch((err: unknown) => {
                                 // Keep chain healthy after an error so later tool results still deliver.
                                 logVerbose(`tool result delivery failed: ${String(err)}`);
                               });
@@ -2778,8 +2856,7 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
-        didRetryTransientHttpError = true;
+      if (isTransientHttp && consumeTransientHttpRetry()) {
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) typically affect the whole provider, so falling
         // back to an alternate model first would not help. Instead we wait
@@ -2819,10 +2896,13 @@ export async function runAgentTurnWithFallback(params: {
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi
-          ? buildExternalRunFailureReply(message, {
-              includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
-              isHeartbeat: params.isHeartbeat,
-            })
+          ? buildExternalRunFailureReply(
+              { message, error: err },
+              {
+                includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+                isHeartbeat: params.isHeartbeat,
+              },
+            )
           : undefined;
       const genericFallbackText = params.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT

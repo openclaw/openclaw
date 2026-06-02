@@ -1,13 +1,12 @@
-import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
-  loadCronStoreWithConfigJobs,
+  loadCronJobsStoreWithConfigJobs,
   saveCronQuarantineFile,
-  saveCronStore,
+  saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -49,15 +48,6 @@ function warnInvalidPersistedCronJob(params: {
   );
 }
 
-async function getFileMtimeMs(path: string): Promise<number | null> {
-  try {
-    const stats = await fs.promises.stat(path);
-    return stats.mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
 async function flushPendingQuarantine(
   state: CronServiceState,
   nowMs: number,
@@ -91,6 +81,7 @@ async function flushPendingQuarantine(
   }
 }
 
+/** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
 export async function ensureLoaded(
   state: CronServiceState,
   opts?: {
@@ -109,20 +100,19 @@ export async function ensureLoaded(
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  // Force reload always re-reads the file to avoid missing cross-service
-  // edits on filesystems with coarse mtime resolution.
-
-  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-  const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
+  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, job] of loadedJobs.entries()) {
-    const raw = job as unknown as Record<string, unknown>;
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
+    const decodedRaw = job as unknown as Record<string, unknown>;
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(decodedRaw);
+    const raw = decodedRaw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
-    const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
+    // Accept old `jobId` rows at the raw boundary only; the in-memory store
+    // uses canonical `id` before validation and scheduling.
+    normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
     try {
       normalized = normalizeCronJobInput(raw);
@@ -149,6 +139,8 @@ export async function ensureLoaded(
       };
       const runtimeState = runtimeEntry?.state ?? raw.state;
       if (runtimeState && typeof runtimeState === "object" && !Array.isArray(runtimeState)) {
+        // Preserve runtime state with the quarantined config so doctor can
+        // repair shape without losing last/next run information.
         quarantineEntry.state = structuredClone(runtimeState as Record<string, unknown>);
       }
       const updatedAtMs = runtimeEntry?.updatedAtMs ?? raw.updatedAtMs;
@@ -163,78 +155,27 @@ export async function ensureLoaded(
       continue;
     }
     jobs.push(hydrated);
-    if (legacyJobIdIssue) {
-      const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: resolvedId },
-        "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
-      );
-    }
-    // Persisted legacy jobs may predate the required `enabled` field.
-    // Keep runtime behavior backward-compatible without rewriting the store.
-    if (typeof hydrated.enabled !== "boolean") {
-      hydrated.enabled = true;
-    }
     invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
-    // Same shape: persisted jobs missing `sessionTarget` crash downstream
-    // on any code path that dereferences `.startsWith` (e.g.
-    // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the
-    // defaulter applied at create time: systemEvent payloads -> "main",
-    // agentTurn -> "isolated". Use `Object.hasOwn` rather than `in` so a
-    // poisoned prototype cannot feed a crafted `kind` into the defaulter.
-    if (typeof hydrated.sessionTarget !== "string") {
-      const payload = hydrated.payload as unknown;
-      const payloadKind =
-        payload &&
-        typeof payload === "object" &&
-        !Array.isArray(payload) &&
-        Object.hasOwn(payload, "kind")
-          ? (payload as { kind?: unknown }).kind
-          : undefined;
-      let defaulted: "main" | "isolated" | undefined;
-      if (payloadKind === "systemEvent") {
-        defaulted = "main";
-      } else if (payloadKind === "agentTurn") {
-        defaulted = "isolated";
-      }
-      if (defaulted) {
-        hydrated.sessionTarget = defaulted;
-        // `ensureLoaded` is called with `forceReload: true` on every tick;
-        // warn once per jobId per process to avoid log spam on repeated
-        // loads of the same still-broken store file.
-        const jobId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-        const dedupeKey = jobId ?? "<unknown>";
-        if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
-          state.warnedMissingSessionTargetJobIds.add(dedupeKey);
-          state.deps.log.warn(
-            { storePath: state.deps.storePath, jobId, defaulted },
-            "cron: job missing sessionTarget; defaulted in memory (edit jobs.json to persist canonical shape)",
-          );
-        }
-      }
-    }
   }
   state.store = {
     version: 1,
     jobs,
   };
   state.storeLoadedAtMs = state.deps.nowMs();
-  state.storeFileMtimeMs = fileMtimeMs;
 
   if (quarantinedConfigJobs.length > 0) {
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
     if (quarantinePath) {
       try {
-        await saveCronStore(state.deps.storePath, state.store);
-        state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+        await saveCronJobsStore(state.deps.storePath, state.store);
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
             quarantinePath,
             quarantinedJobs: quarantinedConfigJobs.length,
           },
-          "cron: sanitized active jobs.json after quarantining malformed persisted jobs",
+          "cron: sanitized active cron store after quarantining malformed persisted jobs",
         );
       } catch (error) {
         state.deps.log.warn(
@@ -253,6 +194,7 @@ export async function ensureLoaded(
   }
 }
 
+/** Emits the cron-disabled warning once per service state. */
 export function warnIfDisabled(state: CronServiceState, action: string) {
   if (state.deps.cronEnabled) {
     return;
@@ -267,10 +209,8 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(
-  state: CronServiceState,
-  opts?: { skipBackup?: boolean; stateOnly?: boolean },
-) {
+/** Persists the in-memory cron store, flushing pending quarantine records first. */
+export async function persist(state: CronServiceState, opts?: { stateOnly?: boolean }) {
   if (!state.store) {
     return;
   }
@@ -282,8 +222,9 @@ export async function persist(
     }
     flushedPendingQuarantine = true;
   }
-  const saveOpts = flushedPendingQuarantine ? { skipBackup: opts?.skipBackup } : opts;
-  await saveCronStore(state.deps.storePath, state.store, saveOpts);
-  // Update file mtime after save to prevent immediate reload
-  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+  await saveCronJobsStore(
+    state.deps.storePath,
+    state.store,
+    flushedPendingQuarantine ? undefined : opts,
+  );
 }

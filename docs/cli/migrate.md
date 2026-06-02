@@ -218,6 +218,17 @@ Target-side auth-required installs are reported on the affected plugin item with
 Their explicit config entries are written disabled until you reauthorize and
 enable them. Other install failures are item-scoped `error` results.
 
+The native Codex plugin config also accepts first-party `openai-bundled` and
+`openai-primary-runtime` marketplace identities, but migration does not
+auto-discover or install them from source state.
+
+OpenAI-side app/plugin availability still comes from the signed-in Codex
+account and workspace app controls. See
+[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
+for OpenAI's account and workspace-control overview, then use
+[Native Codex plugins](/plugins/codex-native-plugins#manual-first-party-marketplace-entries)
+for manual first-party marketplace entries.
+
 If Codex app-server plugin inventory is unavailable during planning, migration
 falls back to cached bundle advisory items instead of failing the whole
 migration.
@@ -236,7 +247,7 @@ The bundled Hermes provider detects state at `~/.hermes` by default. Use `--from
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
 - Skills that include a `SKILL.md` file under `skills/<name>/`.
 - Per-skill config values from `skills.config`.
-- Supported OAuth credentials from Hermes `auth.json` and OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
+- OpenCode OpenAI OAuth credentials from OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set. Hermes `auth.json` OAuth entries are legacy state reported for manual OpenAI reauth or doctor repair.
 - Supported API keys and tokens from Hermes `.env` and OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
 ### Supported `.env` keys
