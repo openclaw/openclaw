@@ -274,6 +274,7 @@ describe("sessionsCommand", () => {
       count?: number;
       totalCount?: number;
       limitApplied?: number | null;
+      nextOffset?: number | null;
       hasMore?: boolean;
       sessions?: Array<{ key: string }>;
     }>(sessionsCommand, store, { limit: "2" });
@@ -281,6 +282,7 @@ describe("sessionsCommand", () => {
     expect(payload.count).toBe(2);
     expect(payload.totalCount).toBe(3);
     expect(payload.limitApplied).toBe(2);
+    expect(payload.nextOffset).toBe(2);
     expect(payload.hasMore).toBe(true);
     expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "middle"]);
   });
@@ -298,6 +300,7 @@ describe("sessionsCommand", () => {
       count?: number;
       totalCount?: number;
       limitApplied?: number | null;
+      nextOffset?: number | null;
       hasMore?: boolean;
       sessions?: Array<{ key: string }>;
     }>(sessionsCommand, store, { limit: "all" });
@@ -305,6 +308,7 @@ describe("sessionsCommand", () => {
     expect(payload.count).toBe(2);
     expect(payload.totalCount).toBe(2);
     expect(payload.limitApplied).toBeNull();
+    expect(payload.nextOffset).toBeNull();
     expect(payload.hasMore).toBe(false);
     expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
   });
