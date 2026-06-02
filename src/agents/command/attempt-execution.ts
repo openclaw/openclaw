@@ -170,6 +170,10 @@ function resolveHarnessAuthProfileSelection(params: {
     };
   }
 
+  if (!params.allowHarnessAuthProfileForwarding) {
+    return { authProfileProvider: params.authProfileProvider };
+  }
+
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
