@@ -1,6 +1,9 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
@@ -70,6 +73,13 @@ type ResetCommandAction = "new" | "reset";
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
+
+function resolveFallbackResetHookAction(trigger: string | undefined): ResetCommandAction {
+  const normalized = normalizeLowercaseStringOrEmpty(trigger);
+  return normalized === "/reset" || normalized === "!reset" || normalized === "reset"
+    ? "reset"
+    : "new";
+}
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
   const stripped = stripHeartbeatToken(text, {
@@ -509,6 +519,7 @@ export async function getReplyFromConfig(
     isGroup,
     triggerBodyNormalized,
     bodyStripped,
+    matchedResetTrigger,
   } = sessionState;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
@@ -832,12 +843,10 @@ export async function getReplyFromConfig(
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
     }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
-    if (!resetMatch) {
-      return;
-    }
     const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
-    const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    const action = resolveFallbackResetHookAction(
+      matchedResetTrigger ?? command.commandBodyNormalized,
+    );
     await emitResetCommandHooks({
       action,
       ctx,

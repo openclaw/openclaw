@@ -1440,6 +1440,54 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("tracks the arbitrary custom Discord reset trigger alias that matched", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-discord-custom-reset-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:user-1";
+    const existingSessionId = "session-existing";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["!fresh"],
+      },
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "!fresh take notes",
+        CommandBody: "!fresh take notes",
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: "12345",
+        From: "discord:12345",
+        To: "user:12345",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.bodyStripped).toBe("take notes");
+    expect(result.matchedResetTrigger).toBe("!fresh");
+  });
+
   it("keeps normal /new behavior for unbound ACP-shaped session keys", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-unbound-reset-");
     const storePath = path.join(root, "sessions.json");
