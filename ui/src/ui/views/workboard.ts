@@ -343,6 +343,10 @@ function renderCardMoveControl(props: WorkboardProps, card: WorkboardCard, busy:
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
             return;
           }
+          if (state.busyCardId === card.id || !props.connected || !props.client) {
+            event.preventDefault();
+            return;
+          }
           const currentIndex = statuses.indexOf(card.status);
           const offset = event.key === "ArrowRight" ? 1 : -1;
           const status = statuses[currentIndex + offset];
