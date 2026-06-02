@@ -4,7 +4,9 @@ import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import {
+  createManagedDownloadCaptureForPage,
   ensurePageState,
+  isDownloadStartingNavigationError,
   refLocator,
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
@@ -38,6 +40,14 @@ function fakePage(): {
     handlers.set(event, list);
     return undefined as unknown;
   });
+  const off = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+    const list = handlers.get(event) ?? [];
+    handlers.set(
+      event,
+      list.filter((handler) => handler !== cb),
+    );
+    return undefined as unknown;
+  });
   const getByRole = vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) }));
   const frameLocator = vi.fn(() => ({
     getByRole: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
@@ -47,6 +57,7 @@ function fakePage(): {
 
   const page = {
     on,
+    off,
     getByRole,
     frameLocator,
     locator,
@@ -236,6 +247,53 @@ describe("pw-session ensurePageState", () => {
 
     expect(download).not.toHaveProperty("path");
     expect(download.saveAs).not.toHaveBeenCalled();
+  });
+
+  it("captures navigation downloads under managed paths", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = createManagedDownloadCaptureForPage(page, 1_000);
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "attachment", "utf8");
+    });
+    const download = {
+      url: () => "https://example.com/export.csv",
+      suggestedFilename: () => "export.csv",
+      saveAs,
+    };
+
+    for (const handler of handlers.get("download") ?? []) {
+      handler(download);
+    }
+
+    const result = await capture.promise;
+    expect(result.triggered).toBe(true);
+    expect(result.url).toBe("https://example.com/export.csv");
+    expect(result.suggestedFilename).toBe("export.csv");
+    expect(path.dirname(result.path)).toBe(DEFAULT_DOWNLOAD_DIR);
+    expect(path.basename(result.path)).toMatch(/-export\.csv$/);
+    expect(firstSavePath(saveAs)).not.toBe(result.path);
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("attachment");
+  });
+
+  it("recognizes Playwright download-starting navigation aborts", () => {
+    expect(isDownloadStartingNavigationError(new Error("page.goto: Download is starting"))).toBe(
+      true,
+    );
+    expect(isDownloadStartingNavigationError(new Error("page.goto: net::ERR_ABORTED"))).toBe(false);
+    expect(
+      isDownloadStartingNavigationError(
+        new Error("page.goto: net::ERR_ABORTED at http://127.0.0.1:3333/download"),
+        "http://127.0.0.1:3333/download",
+      ),
+    ).toBe(true);
+    expect(
+      isDownloadStartingNavigationError(
+        new Error("page.goto: net::ERR_ABORTED at http://127.0.0.1:3333/other"),
+        "http://127.0.0.1:3333/download",
+      ),
+    ).toBe(false);
+    expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
   });
 
   it("tracks page errors and network requests (best-effort)", () => {

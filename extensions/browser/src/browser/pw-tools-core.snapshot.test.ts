@@ -7,14 +7,21 @@ const withPageScopedCdpClient = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
 const gotoPageWithNavigationGuard = vi.fn();
+const createManagedDownloadCaptureForPage = vi.fn(() => ({
+  armed: true,
+  promise: new Promise(() => {}),
+  cancel: vi.fn(),
+}));
 
 vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
   closeBlockedNavigationTarget: vi.fn(),
+  createManagedDownloadCaptureForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget: vi.fn(),
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isDownloadStartingNavigationError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn(() => false),
   storeRoleRefsForTarget,
 }));

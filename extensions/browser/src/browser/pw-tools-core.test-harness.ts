@@ -2,6 +2,18 @@ import { beforeEach, vi } from "vitest";
 
 let currentPage: Record<string, unknown> | null = null;
 let currentRefLocator: Record<string, unknown> | null = null;
+let currentDownloadCapture:
+  | {
+      armed: boolean;
+      promise: Promise<{
+        triggered: true;
+        url: string;
+        suggestedFilename: string;
+        path: string;
+      }>;
+      cancel: ReturnType<typeof vi.fn>;
+    }
+  | undefined;
 let pageState: {
   console: unknown[];
   armIdUpload: number;
@@ -25,6 +37,14 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
+  createManagedDownloadCaptureForPage: vi.fn(
+    () =>
+      currentDownloadCapture ?? {
+        armed: true,
+        promise: new Promise(() => {}),
+        cancel: vi.fn(),
+      },
+  ),
   gotoPageWithNavigationGuard: vi.fn(
     async (opts: {
       url: string;
@@ -33,6 +53,19 @@ const sessionMocks = vi.hoisted(() => ({
     }) => (await opts.page.goto(opts.url, { timeout: opts.timeoutMs })) ?? null,
   ),
   // Match by name so mocked errors are recognized without importing real classes.
+  isDownloadStartingNavigationError: vi.fn((err: unknown, expectedUrl?: string) => {
+    if (!(err instanceof Error)) {
+      return false;
+    }
+    const message = err.message.toLowerCase();
+    if (message.includes("download is starting")) {
+      return true;
+    }
+    const normalizedUrl = expectedUrl?.trim().toLowerCase();
+    return Boolean(
+      normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
+    );
+  }),
   isPolicyDenyNavigationError: vi.fn((err: unknown) => {
     if (!(err instanceof Error)) {
       return false;
@@ -89,10 +122,28 @@ export function setPwToolsCoreCurrentRefLocator(locator: Record<string, unknown>
   currentRefLocator = locator;
 }
 
+export function setPwToolsCoreDownloadCapture(
+  capture:
+    | {
+        armed: boolean;
+        promise: Promise<{
+          triggered: true;
+          url: string;
+          suggestedFilename: string;
+          path: string;
+        }>;
+        cancel: ReturnType<typeof vi.fn>;
+      }
+    | undefined,
+) {
+  currentDownloadCapture = capture;
+}
+
 export function installPwToolsCoreTestHooks() {
   beforeEach(() => {
     currentPage = null;
     currentRefLocator = null;
+    currentDownloadCapture = undefined;
     pageState = {
       console: [],
       armIdUpload: 0,

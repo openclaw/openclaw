@@ -9,6 +9,7 @@ import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -21,11 +22,14 @@ import {
 } from "./pw-role-snapshot.js";
 import {
   assertPageNavigationCompletedSafely,
+  type BrowserManagedDownload,
   closeBlockedNavigationTarget,
+  createManagedDownloadCaptureForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
@@ -377,7 +381,7 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string }> {
+}): Promise<{ url: string; download?: BrowserManagedDownload }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -395,11 +399,12 @@ export async function navigateViaPlaywright(opts: {
   if (!url) {
     throw new Error("url is required");
   }
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   await assertBrowserNavigationAllowed({
     url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
-      browserProxyMode: opts.browserProxyMode,
-    }),
+    ...navigationPolicy,
   });
   const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
@@ -414,9 +419,37 @@ export async function navigateViaPlaywright(opts: {
       browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
-  let response;
+  const navigateWithDownloadCapture = async (): Promise<{
+    response: Awaited<ReturnType<typeof navigate>> | null;
+    download?: BrowserManagedDownload;
+  }> => {
+    const downloadCapture = createManagedDownloadCaptureForPage(page, timeout);
+    try {
+      const response = await navigate();
+      downloadCapture.cancel();
+      return { response };
+    } catch (err) {
+      if (!isDownloadStartingNavigationError(err, url) || !downloadCapture.armed) {
+        downloadCapture.cancel();
+        throw err;
+      }
+      try {
+        return { response: null, download: await downloadCapture.promise };
+      } catch (downloadErr) {
+        if (
+          downloadErr instanceof Error &&
+          downloadErr.message === "Timeout waiting for navigation download"
+        ) {
+          throw err;
+        }
+        throw downloadErr;
+      }
+    }
+  };
+
+  let navigationResult: Awaited<ReturnType<typeof navigateWithDownloadCapture>>;
   try {
-    response = await navigate();
+    navigationResult = await navigateWithDownloadCapture();
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
       throw err;
@@ -430,17 +463,24 @@ export async function navigateViaPlaywright(opts: {
     }).catch(() => {});
     page = await getPageForTargetId(opts);
     ensurePageState(page);
-    response = await navigate();
+    navigationResult = await navigateWithDownloadCapture();
   }
   try {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      browserProxyMode: opts.browserProxyMode,
-      targetId: opts.targetId,
-    });
+    if (navigationResult.download) {
+      await assertBrowserNavigationResultAllowed({
+        url: navigationResult.download.url || url,
+        ...navigationPolicy,
+      });
+    } else {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: navigationResult.response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: opts.targetId,
+      });
+    }
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
       await closeBlockedNavigationTarget({
@@ -451,8 +491,11 @@ export async function navigateViaPlaywright(opts: {
     }
     throw err;
   }
-  const finalUrl = page.url();
-  return { url: finalUrl };
+  const finalUrl = navigationResult.download?.url || page.url();
+  return {
+    url: finalUrl,
+    ...(navigationResult.download ? { download: navigationResult.download } : {}),
+  };
 }
 
 export async function resizeViewportViaPlaywright(opts: {

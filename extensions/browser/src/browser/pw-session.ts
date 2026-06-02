@@ -131,6 +131,20 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
+export type BrowserManagedDownload = {
+  triggered: true;
+  url: string;
+  suggestedFilename: string;
+  path: string;
+};
+
+type DownloadPayload = {
+  url?: () => string;
+  suggestedFilename?: () => string;
+  saveAs?: (outPath: string) => Promise<void>;
+  path?: () => Promise<string>;
+};
+
 type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
@@ -209,6 +223,112 @@ function buildManagedDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
   const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
   return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
+}
+
+async function saveManagedDownloadPayload(
+  download: DownloadPayload,
+): Promise<BrowserManagedDownload> {
+  const suggestedFilename = download.suggestedFilename?.() || "download.bin";
+  const managedPath = buildManagedDownloadPath(suggestedFilename);
+  await writeViaSiblingTempPath({
+    rootDir: DEFAULT_DOWNLOAD_DIR,
+    targetPath: managedPath,
+    writeTemp: async (tempPath) => {
+      await download.saveAs?.(tempPath);
+    },
+  });
+  return {
+    triggered: true,
+    url: download.url?.() || "",
+    suggestedFilename,
+    path: managedPath,
+  };
+}
+
+export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: string): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  if (message.includes("download is starting")) {
+    return true;
+  }
+  const normalizedUrl = normalizeOptionalString(expectedUrl)?.toLowerCase();
+  return Boolean(
+    normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
+  );
+}
+
+export function createManagedDownloadCaptureForPage(
+  page: Page,
+  timeoutMs: number,
+): {
+  armed: boolean;
+  promise: Promise<BrowserManagedDownload>;
+  cancel: () => void;
+} {
+  const state = ensurePageState(page);
+  if (state.downloadWaiterDepth > 0) {
+    return {
+      armed: false,
+      promise: new Promise<BrowserManagedDownload>(() => {}),
+      cancel: () => {},
+    };
+  }
+
+  state.downloadWaiterDepth += 1;
+  let done = false;
+  let depthReleased = false;
+  let timer: NodeJS.Timeout | undefined;
+  let handler: ((download: unknown) => void) | undefined;
+
+  const cleanup = () => {
+    if (!depthReleased) {
+      depthReleased = true;
+      state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
+    }
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (handler) {
+      page.off("download", handler as never);
+      handler = undefined;
+    }
+  };
+
+  const promise = new Promise<BrowserManagedDownload>((resolve, reject) => {
+    handler = (download: unknown) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+      void saveManagedDownloadPayload(download as DownloadPayload).then(resolve, reject);
+    };
+    page.on("download", handler as never);
+    timer = setTimeout(
+      () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        cleanup();
+        reject(new Error("Timeout waiting for navigation download"));
+      },
+      Math.max(1, timeoutMs),
+    );
+    timer.unref?.();
+  });
+
+  return {
+    armed: true,
+    promise,
+    cancel: () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      cleanup();
+    },
+  };
 }
 
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
@@ -658,35 +778,14 @@ export function ensurePageState(page: Page): PageState {
     page.on("dialog", (dialog: Dialog) => {
       observeDialog(state, dialog);
     });
-    page.on(
-      "download",
-      (download: {
-        suggestedFilename?: () => string;
-        saveAs?: (outPath: string) => Promise<void>;
-        path?: () => Promise<string>;
-      }) => {
-        if (state.downloadWaiterDepth > 0) {
-          return;
-        }
-        const suggested = sanitizeUntrustedFileName(
-          download.suggestedFilename?.() || "download.bin",
-          "download.bin",
-        );
-        const managedPath = buildManagedDownloadPath(suggested);
-        const managedSave = (async () => {
-          await writeViaSiblingTempPath({
-            rootDir: DEFAULT_DOWNLOAD_DIR,
-            targetPath: managedPath,
-            writeTemp: async (tempPath) => {
-              await download.saveAs?.(tempPath);
-            },
-          });
-          return managedPath;
-        })();
-        managedSave.catch(() => {});
-        download.path = async () => await managedSave;
-      },
-    );
+    page.on("download", (download: DownloadPayload) => {
+      if (state.downloadWaiterDepth > 0) {
+        return;
+      }
+      const managedSave = saveManagedDownloadPayload(download);
+      managedSave.catch(() => {});
+      download.path = async () => (await managedSave).path;
+    });
     page.on("close", () => {
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {
