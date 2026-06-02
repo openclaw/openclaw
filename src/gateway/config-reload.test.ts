@@ -1404,6 +1404,96 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("queues restart-required gateway auth changes in hot mode instead of leaving runtime stale", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+        auth: { mode: "token", token: "old-token" },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+        auth: { mode: "token", token: "new-token" },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-auth-restart-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    const [plan, restartedConfig] = getOnlyRestartCall(harness);
+    expect(plan.changedPaths).toEqual(["gateway.auth.token"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["gateway.auth.token"]);
+    expect(restartedConfig).toBe(nextConfig);
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      "config reload requires gateway restart; hot mode scheduling restart (gateway.auth.token)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("hot-reloads doctor-repaired OpenAI model route changes in hot mode", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot", debounceMs: 0 } },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5", fallbacks: ["openai-codex/gpt-5.4"] },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot", debounceMs: 0 } },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-model-route-repair-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual([
+      "agents.defaults.model.primary",
+      "agents.defaults.model.fallbacks",
+      "agents.defaults.models",
+    ]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("queues restart when an external plugin source write also changes plugin config", async () => {
     const previousConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
