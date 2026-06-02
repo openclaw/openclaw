@@ -557,6 +557,8 @@ export function buildEmbeddedRunPayloads(params: {
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
       sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });

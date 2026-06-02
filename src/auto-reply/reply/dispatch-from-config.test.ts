@@ -2177,20 +2177,24 @@ describe("dispatchReplyFromConfig", () => {
           mutatingAction: true,
         },
         messageProvider: ctx.Provider,
-        sessionKey: ctx.SessionKey,
+        sessionKey: ctx.SessionKey ?? "",
         inlineToolResultsAllowed: false,
         verboseLevel: "off",
         toolResultFormat: "plain",
       });
-      return payload ?? ({ text: "" } satisfies ReplyPayload);
+      return payload;
     });
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(JSON.stringify(dispatcher.sendToolResult.mock.calls)).not.toContain(rawCommand);
-    expect(JSON.stringify(dispatcher.sendFinalReply.mock.calls)).not.toContain(rawError);
+    expect(
+      JSON.stringify((dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls),
+    ).not.toContain(rawCommand);
+    expect(
+      JSON.stringify((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls),
+    ).not.toContain(rawError);
   });
 
   it("forwards channel-owned group progress callbacks while verbose is off", async () => {
