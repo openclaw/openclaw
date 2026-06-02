@@ -175,7 +175,6 @@ plugins.
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run. On Telegram, use as a reply-scoped stop command |
-    | `/cancel` | Stop the replied-to run. On Telegram, use as a reply-scoped alias for `/stop` |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
     | `/export-session [path]` | Export the current session to HTML. Alias: `/export` |
@@ -471,6 +470,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
     - **`/stop`** targets the active chat session to abort the current run. On Telegram, reply with `/stop` or `/cancel` to stop work for that message; bare Telegram stop commands ask you to reply first.
+    - **Telegram `/cancel`** is a Telegram-only reply-scoped alias for `/stop`; it is not registered as a shared slash command on other providers.
 
   </Accordion>
   <Accordion title="Slack specifics">

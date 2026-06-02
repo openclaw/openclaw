@@ -19,6 +19,7 @@ import {
   resolveCommandArgMenu,
   resolveStoredModelOverride,
   type CommandArgs,
+  type NativeCommandSpec,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
@@ -109,6 +110,13 @@ export {
 } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TELEGRAM_REPLY_SCOPED_NATIVE_COMMANDS: NativeCommandSpec[] = [
+  {
+    name: "cancel",
+    description: "Stop the replied-to run.",
+    acceptsArgs: false,
+  },
+];
 
 type TelegramNativeCommandContext = Context & { match?: string };
 type TelegramChunkMode = ReturnType<
@@ -745,14 +753,20 @@ export const registerTelegramNativeCommands = ({
     reservedSkillCommands = activeSkillCommands,
   ) => {
     const nativeCommands = nativeEnabled
-      ? listNativeCommandSpecsForConfig(cfg, {
-          skillCommands: activeSkillCommands,
-          provider: "telegram",
-        })
+      ? [
+          ...listNativeCommandSpecsForConfig(cfg, {
+            skillCommands: activeSkillCommands,
+            provider: "telegram",
+          }),
+          ...TELEGRAM_REPLY_SCOPED_NATIVE_COMMANDS,
+        ]
       : [];
     const reservedCommands = new Set(
       listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
     );
+    for (const command of TELEGRAM_REPLY_SCOPED_NATIVE_COMMANDS) {
+      reservedCommands.add(normalizeTelegramCommandName(command.name));
+    }
     for (const command of reservedSkillCommands) {
       reservedCommands.add(normalizeLowercaseStringOrEmpty(command.name));
     }

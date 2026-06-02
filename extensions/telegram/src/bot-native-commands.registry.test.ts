@@ -186,6 +186,22 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("registers Telegram-only reply-scoped cancel as a native command", async () => {
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}),
+      bot,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expectRegisteredCommand(registeredCommands, {
+      command: "cancel",
+      description: "Stop the replied-to run.",
+    });
+    expect(commandHandlers.has("cancel")).toBe(true);
+  });
+
   it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
     const { bot, commandHandlers, setMyCommands, sendMessage } = createCommandBot();
 

@@ -220,6 +220,7 @@ describe("commands registry", () => {
       "whoami",
       "compact",
     ]);
+    expectSetOmitsAll(nativeNameSet(specs), ["cancel"]);
   });
 
   it("exposes /side as a BTW text and native alias", () => {
