@@ -14,6 +14,21 @@ import type {
 import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+export type WhatsAppAllowFromGroup =
+  | "trusted"
+  | "partner"
+  | "friends"
+  | "family"
+  | "work"
+  | "restricted";
+
+export type WhatsAppGroupedAllowFromEntry = {
+  number: string;
+  group: WhatsAppAllowFromGroup;
+};
+
+export type WhatsAppAllowFromEntry = string | WhatsAppGroupedAllowFromEntry;
+
 export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
@@ -57,8 +72,8 @@ type WhatsAppSharedConfig = {
   dmPolicy?: DmPolicy;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
-  /** Optional allowlist for WhatsApp direct chats (E.164). */
-  allowFrom?: string[];
+  /** Optional allowlist for WhatsApp direct chats (E.164), optionally tagged with an access group. */
+  allowFrom?: WhatsAppAllowFromEntry[];
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
   defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   formatWhatsAppConfigAllowFromEntries,
@@ -7,7 +8,7 @@ import {
 
 describe("whatsapp config accessors", () => {
   it("reads merged allowFrom/defaultTo from resolved account config", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         whatsapp: {
           defaultTo: " root:chat ",
@@ -15,14 +16,14 @@ describe("whatsapp config accessors", () => {
           accounts: {
             alt: {
               defaultTo: " alt:chat ",
-              allowFrom: ["+49222", "+49333"],
+              allowFrom: ["+49222", { number: "+49333", group: "friends" }],
             },
           },
         },
       },
     };
 
-    expect(resolveWhatsAppConfigAllowFrom({ cfg, accountId: "alt" })).toEqual(["+49222", "+49333"]);
+    expect(resolveWhatsAppConfigAllowFrom({ cfg, accountId: "alt" })).toEqual(["49222", "49333"]);
     expect(resolveWhatsAppConfigDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
   });
 

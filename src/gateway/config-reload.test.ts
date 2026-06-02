@@ -202,6 +202,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadHooks).toBe(true);
   });
 
+  it("reloads hooks when a DM policy changes", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.dmPolicy"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadHooks).toBe(true);
+  });
+
   it("restarts providers when provider config prefixes change", () => {
     const changedPaths = ["web.enabled", "channels.telegram.botToken"];
     const plan = buildGatewayReloadPlan(changedPaths);

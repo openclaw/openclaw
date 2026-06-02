@@ -3,9 +3,20 @@ import type { Message } from "grammy/types";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createInternalHookEvent,
+  deriveInboundMessageHookContext,
+  fireAndForgetBoundedHook,
+  toInternalMessagePreAuthContext,
+  toPluginMessageContext,
+  toPluginMessagePreAuthEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
+import { getTelegramTextParts, renderTelegramTextEntities } from "./bot/body-helpers.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   createTelegramIngressSubject,
@@ -16,6 +27,10 @@ import {
 type TelegramDmAccessLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
+type MessagePreAuthHookRunner = Pick<
+  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
+  "hasHooks" | "runMessagePreAuth"
+>;
 
 type TelegramSenderIdentity = {
   username: string;
@@ -23,6 +38,12 @@ type TelegramSenderIdentity = {
   candidateId: string;
   firstName?: string;
   lastName?: string;
+};
+
+const TELEGRAM_MESSAGE_PRE_AUTH_HOOK_LIMITS = {
+  maxConcurrency: 8,
+  maxQueue: 128,
+  timeoutMs: 2_000,
 };
 
 function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSenderIdentity {
@@ -56,6 +77,73 @@ async function decideTelegramDmAccess(params: {
   return result.ingress;
 }
 
+function resolveTelegramPreAuthContent(msg: Message): string {
+  const textParts = getTelegramTextParts(msg);
+  return renderTelegramTextEntities(textParts.text, textParts.entities).trim();
+}
+
+export function emitTelegramMessagePreAuthHooks(params: {
+  accountId: string;
+  chatId: number;
+  sender: TelegramSenderIdentity;
+  content: string;
+  messageId?: number;
+  messageTimestampMs?: number;
+  hookRunner?: MessagePreAuthHookRunner | null;
+}): void {
+  const from = `telegram:${params.sender.candidateId}`;
+  const to = `telegram:${params.chatId}`;
+  const senderName =
+    [params.sender.firstName, params.sender.lastName].filter(Boolean).join(" ").trim() ||
+    params.sender.username ||
+    undefined;
+  const canonical = deriveInboundMessageHookContext({
+    From: from,
+    To: to,
+    Body: params.content,
+    RawBody: params.content,
+    BodyForCommands: params.content,
+    Timestamp: params.messageTimestampMs,
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: to,
+    AccountId: params.accountId,
+    SenderId: params.sender.userId ?? params.sender.candidateId,
+    SenderName: senderName,
+    SenderUsername: params.sender.username || undefined,
+    MessageSid: params.messageId != null ? String(params.messageId) : undefined,
+    CommandAuthorized: false,
+  });
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_pre_auth")) {
+    fireAndForgetBoundedHook(
+      () =>
+        hookRunner.runMessagePreAuth(
+          toPluginMessagePreAuthEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      "telegram: message_pre_auth plugin hook failed",
+      undefined,
+      TELEGRAM_MESSAGE_PRE_AUTH_HOOK_LIMITS,
+    );
+  }
+  fireAndForgetBoundedHook(
+    () =>
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "pre-auth",
+          "",
+          toInternalMessagePreAuthContext(canonical),
+        ),
+      ),
+    "telegram: message_pre_auth internal hook failed",
+    undefined,
+    TELEGRAM_MESSAGE_PRE_AUTH_HOOK_LIMITS,
+  );
+}
+
 export async function enforceTelegramDmAccess(params: {
   isGroup: boolean;
   dmPolicy: DmPolicy;
@@ -66,6 +154,7 @@ export async function enforceTelegramDmAccess(params: {
   bot: Bot;
   logger: TelegramDmAccessLogger;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
+  messagePreAuthHookRunner?: MessagePreAuthHookRunner | null;
 }): Promise<boolean> {
   const {
     isGroup,
@@ -95,6 +184,15 @@ export async function enforceTelegramDmAccess(params: {
   if (access.decision === "allow") {
     return true;
   }
+  emitTelegramMessagePreAuthHooks({
+    accountId,
+    chatId,
+    sender,
+    content: resolveTelegramPreAuthContent(msg),
+    messageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
+    messageTimestampMs: msg.date ? msg.date * 1000 : undefined,
+    hookRunner: params.messagePreAuthHookRunner,
+  });
 
   if (dmPolicy === "open") {
     logVerbose(`Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=open)`);

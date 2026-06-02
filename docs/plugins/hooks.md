@@ -127,6 +127,7 @@ observation-only.
 **Messages and delivery**
 
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
+- `message_pre_auth` - observe supported direct-message content from not-yet-admitted senders, without creating a session or reply path
 - `message_received` — observe inbound content, sender, thread, and metadata
 - **`message_sending`** — rewrite outbound content or cancel delivery
 - **`reply_payload_sending`** — mutate or cancel normalized reply payloads before delivery
@@ -408,6 +409,13 @@ generation.
 
 Use message hooks for channel-level routing and delivery policy:
 
+- `message_pre_auth`: observe supported direct-message content from senders the
+  channel has not already admitted. It fires before the channel blocks the
+  message or sends any pairing challenge, and receives `channelId`, `senderId`,
+  `senderName`, `content`, account/conversation/message ids when available, and
+  provider metadata. It is observation-only: handlers cannot return a reply,
+  OpenClaw does not create an agent session, and the sender receives no
+  automatic response from this hook.
 - `message_received`: observe inbound content, sender, `threadId`, `messageId`,
   `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
@@ -421,7 +429,7 @@ even when the channel payload has no visible text/caption. Rewriting that
 media caption.
 
 Message hook contexts expose stable correlation fields when available:
-`ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
+`ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.senderGroup`, `ctx.trace`,
 `ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Inbound
 and `before_dispatch` contexts also expose reply metadata when the channel has
 visibility-filtered quoted message data: `replyToId`, `replyToBody`, and

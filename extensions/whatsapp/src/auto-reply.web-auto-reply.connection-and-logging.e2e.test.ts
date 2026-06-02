@@ -901,6 +901,31 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
+  it("preserves grouped allowFrom entries in the live monitor config snapshot", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const allowFrom = [{ number: "+111", group: "friends" }] as const;
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom,
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+    );
+
+    expect(capture.getLastOptions()?.cfg?.channels?.whatsapp?.allowFrom).toEqual(allowFrom);
+    expect(capture.getLastOptions()?.loadConfig?.().channels?.whatsapp?.allowFrom).toEqual(allowFrom);
+    resetLoadConfigMock();
+  });
+
   it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
     const capture = createWebListenerFactoryCapture();
 

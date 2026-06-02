@@ -46,6 +46,8 @@ const hoisted = vi.hoisted(() => ({
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  setInternalHooksEnabled: vi.fn((_enabled: boolean) => {}),
+  loadInternalHooks: vi.fn(async (_cfg: OpenClawConfig, _workspaceDir: string) => 0),
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -123,6 +125,14 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
+vi.mock("../hooks/internal-hooks.js", () => ({
+  setInternalHooksEnabled: hoisted.setInternalHooksEnabled,
+}));
+
+vi.mock("../hooks/loader.js", () => ({
+  loadInternalHooks: hoisted.loadInternalHooks,
+}));
+
 function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
@@ -153,6 +163,7 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload,
+    defaultWorkspaceDir: "/tmp/openclaw-workspace",
     createHealthMonitor: () => null,
   });
 }
@@ -174,6 +185,9 @@ afterEach(() => {
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+  hoisted.setInternalHooksEnabled.mockClear();
+  hoisted.loadInternalHooks.mockClear();
+  hoisted.loadInternalHooks.mockResolvedValue(0);
 });
 
 describe("gateway hot reload model state", () => {
@@ -269,6 +283,36 @@ describe("gateway hot reload model state", () => {
 
     expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
+  });
+
+  it("reloads internal hooks during hook hot reloads", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      channels: { telegram: { dmPolicy: "allowlist", allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    hoisted.loadInternalHooks.mockResolvedValueOnce(1);
+
+    await applyHotReload(
+      {
+        changedPaths: ["channels.telegram.dmPolicy"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["channels.telegram.dmPolicy"],
+        reloadHooks: true,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(true);
+    expect(hoisted.loadInternalHooks).toHaveBeenCalledWith(nextConfig, "/tmp/openclaw-workspace");
   });
 });
 

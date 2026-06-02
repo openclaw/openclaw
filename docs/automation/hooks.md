@@ -58,6 +58,7 @@ openclaw hooks info session-memory
 | `gateway:startup`        | After channels start and hooks are loaded                  |
 | `gateway:shutdown`       | When gateway shutdown begins                               |
 | `gateway:pre-restart`    | Before an expected gateway restart                         |
+| `message:pre-auth`       | Before a channel blocks a not-yet-admitted inbound DM sender |
 | `message:received`       | Inbound message from any channel                           |
 | `message:transcribed`    | After audio transcription completes                        |
 | `message:preprocessed`   | After media and link preprocessing completes or is skipped |
@@ -131,7 +132,9 @@ reply channel and ignore pushed messages.
 
 **Command events** (`command:new`, `command:reset`): `context.sessionEntry`, `context.previousSessionEntry`, `context.commandSource`, `context.workspaceDir`, `context.cfg`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `senderGroup`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+
+**Message events** (`message:pre-auth`): `context.senderId`, `context.senderName`, `context.content`, `context.channelId`, `context.accountId`, `context.conversationId`, `context.messageId`, and `context.metadata`. This event fires for supported direct-message senders that are not already admitted, before the channel blocks the message or sends any pairing challenge. It is observation-only: OpenClaw does not create an agent session, does not run the model, ignores `event.messages`, and does not reply to the sender.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
 
@@ -190,7 +193,7 @@ Hooks are discovered from these directories, in order of increasing override pre
 
 Workspace hooks can add new hook names but cannot override bundled, managed, or plugin-provided hooks with the same name.
 
-The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled or managed hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. When you enable one named hook, the Gateway loads only that hook's handler; `hooks.internal.enabled=true`, extra hook directories, and legacy handlers opt into broad discovery.
+The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled, managed, or workspace hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. When you enable one named hook, the Gateway loads only that hook's handler; `hooks.internal.enabled=true`, extra hook directories, and legacy handlers opt into broad discovery. The trusted bundled or managed `access-request` hook is the exception: when any channel or channel account uses `dmPolicy: "allowlist"`, OpenClaw auto-loads that hook if it exists, and unloads it again when no DM allowlist policy remains. Workspace hooks always require explicit opt-in because they execute local workspace code inside the Gateway process.
 
 ### Hook packs
 

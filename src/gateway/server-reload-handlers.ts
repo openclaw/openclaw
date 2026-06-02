@@ -14,6 +14,8 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setInternalHooksEnabled } from "../hooks/internal-hooks.js";
+import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -157,6 +159,7 @@ type GatewayReloadHandlerParams = {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
+  defaultWorkspaceDir?: string;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
   createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
   clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
@@ -319,6 +322,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
+      }
+      try {
+        setInternalHooksEnabled(nextConfig.hooks?.internal?.enabled !== false);
+        const loadedCount = await loadInternalHooks(
+          nextConfig,
+          params.defaultWorkspaceDir ?? process.cwd(),
+        );
+        params.logHooks.info(
+          `reloaded ${loadedCount} internal hook handler${loadedCount === 1 ? "" : "s"}`,
+        );
+      } catch (err) {
+        params.logHooks.warn(`internal hooks reload failed: ${String(err)}`);
       }
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);

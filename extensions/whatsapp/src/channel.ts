@@ -8,6 +8,15 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
+import {
+  createWhatsAppAllowFromEntry,
+  DEFAULT_WHATSAPP_ALLOW_FROM_GROUP,
+  isWhatsAppAllowFromGroup,
+  normalizeWhatsAppAllowFromEntryNumbers,
+  readWhatsAppAllowFromEntryGroup,
+  readWhatsAppAllowFromEntryNumber,
+  WHATSAPP_ALLOW_FROM_GROUPS,
+} from "./allow-from-groups.js";
 import { whatsappApprovalCapability } from "./approval-native.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
@@ -94,15 +103,28 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       }),
       agentTools: () => [createWhatsAppLoginTool()],
-      allowlist: buildDmGroupAccountAllowlistAdapter({
-        channelId: "whatsapp",
-        resolveAccount: resolveWhatsAppAccount,
-        normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
-        resolveDmAllowFrom: (account) => account.allowFrom,
-        resolveGroupAllowFrom: (account) => account.groupAllowFrom,
-        resolveDmPolicy: (account) => account.dmPolicy,
-        resolveGroupPolicy: (account) => account.groupPolicy,
-      }),
+      allowlist: {
+        ...buildDmGroupAccountAllowlistAdapter({
+          channelId: "whatsapp",
+          resolveAccount: resolveWhatsAppAccount,
+          normalize: ({ values }) => formatWhatsAppConfigAllowFromEntries(values),
+          resolveDmAllowFrom: (account) =>
+            normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
+          resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+          resolveDmPolicy: (account) => account.dmPolicy,
+          resolveGroupPolicy: (account) => account.groupPolicy,
+          readConfigEntry: readWhatsAppAllowFromEntryNumber,
+          readConfigEntryAccessGroup: readWhatsAppAllowFromEntryGroup,
+          formatConfigEntry: ({ entry, accessGroup }) =>
+            accessGroup && isWhatsAppAllowFromGroup(accessGroup)
+              ? createWhatsAppAllowFromEntry({ number: entry, group: accessGroup })
+              : entry,
+        }),
+        accessGroups: {
+          groups: WHATSAPP_ALLOW_FROM_GROUPS,
+          defaultGroup: DEFAULT_WHATSAPP_ALLOW_FROM_GROUP,
+        },
+      },
       mentions: {
         stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
       },
@@ -296,7 +318,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               lastEventAt: runtime?.lastEventAt ?? null,
               healthState: runtime?.healthState ?? undefined,
               dmPolicy: account.dmPolicy,
-              allowFrom: account.allowFrom,
+              allowFrom: normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
             },
           };
         },

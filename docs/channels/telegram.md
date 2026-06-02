@@ -123,6 +123,39 @@ After a successful startup, OpenClaw caches the bot identity in the state direct
     `dmPolicy: "open"` with `allowFrom: ["*"]` lets any Telegram account that finds or guesses the bot username command the bot. Use it only for intentionally public bots with tightly restricted tools; one-owner bots should use `allowlist` with numeric user IDs.
 
     `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
+    It also accepts grouped entries:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "123456789",
+        { "number": "987654321", "group": "friends" }
+      ]
+    }
+  }
+}
+```
+
+    Supported groups are `trusted`, `partner`, `friends`, `family`, `work`, and `restricted`. Grouped entries still authorize the sender like the legacy string form, and admitted Telegram turns include the sender group in message context as `SenderGroup`, hook context metadata as `senderGroup`, and trusted inbound system prompt metadata as `sender_group`.
+
+    You can reference `sender_group` from your agent's `SOUL.md` to adjust behavior by access group:
+
+```md
+## Telegram sender groups
+
+The current Telegram sender group is available in trusted inbound metadata as `sender_group`.
+
+- `trusted`: Full access.
+- `partner`: Broad access; ask the operator to confirm sensitive actions.
+- `friends`: Normal conversation, without sensitive tools.
+- `family`: Warm, supportive tone, without tools.
+- `work`: Professional and formal focus.
+- `restricted`: Basic and reserved behavior for unknown or newly approved senders.
+```
+
     In multi-account configs, a restrictive top-level `channels.telegram.allowFrom` is treated as a safety boundary: account-level `allowFrom: ["*"]` entries do not make that account public unless the effective account allowlist still contains an explicit wildcard after merging.
     `dmPolicy: "allowlist"` with empty `allowFrom` blocks all DMs and is rejected by config validation.
     Setup asks for numeric user IDs only.
@@ -177,6 +210,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
     Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
     Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
+
+    Use `/allowlist add dm --channel telegram --group <group> <sender-id>` to add a sender to a DM access group or move an existing sender between groups.
 
     Owner-only group setup:
 
@@ -285,6 +320,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Tab>
 </Tabs>
+
+## Plugin hooks and privacy
+
+Telegram emits the observation-only `message_pre_auth` plugin hook and `message:pre-auth` internal hook for direct messages from senders that are not already admitted by `dmPolicy` and `allowFrom`. This pre-auth event fires before the channel blocks the message or sends any pairing challenge, carries the raw text available before preprocessing plus sender profile fields, creates no agent session, never runs the model, and has no reply path to the sender. Use it for silent operator-side workflows such as phrase-gated access requests.
 
 ## Runtime behavior
 

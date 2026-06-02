@@ -8,6 +8,7 @@ import {
 } from "../pairing-security.test-harness.js";
 
 export const sendMessageMock = vi.fn() as AsyncMock;
+export const runMessagePreAuthMock = vi.fn() as AsyncMock;
 export { readAllowFromStoreMock, upsertPairingRequestMock };
 
 let config: Record<string, unknown> = {};
@@ -32,6 +33,7 @@ export function setupAccessControlTestHarness(): void {
       },
     };
     sendMessageMock.mockReset().mockResolvedValue(undefined);
+    runMessagePreAuthMock.mockReset().mockResolvedValue(undefined);
     resetPairingSecurityMocks(config);
   });
 }

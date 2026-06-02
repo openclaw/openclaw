@@ -1,6 +1,7 @@
 import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { normalizeWhatsAppAllowFromEntryNumbers } from "./allow-from-groups.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
 export function resolveAuthorizedWhatsAppOutboundTarget(params: {
@@ -15,7 +16,7 @@ export function resolveAuthorizedWhatsAppOutboundTarget(params: {
   });
   const resolution = resolveWhatsAppOutboundTarget({
     to: params.chatJid,
-    allowFrom: account.allowFrom ?? [],
+    allowFrom: normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
     mode: "implicit",
   });
   if (!resolution.ok) {

@@ -664,6 +664,10 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
 };
 
 export type ChannelAllowlistAdapter = {
+  accessGroups?: {
+    groups: readonly string[];
+    defaultGroup: string;
+  };
   applyConfigEdit?: (params: {
     cfg: OpenClawConfig;
     parsedConfig: Record<string, unknown>;
@@ -671,12 +675,15 @@ export type ChannelAllowlistAdapter = {
     scope: "dm" | "group";
     action: "add" | "remove";
     entry: string;
+    accessGroup?: string;
+    accessGroupExplicit?: boolean;
   }) =>
     | {
         kind: "ok";
         changed: boolean;
         pathLabel: string;
         writeTarget: ConfigWriteTarget;
+        accessGroupChanged?: { from?: string; to: string };
       }
     | {
         kind: "invalid-entry";
@@ -687,6 +694,7 @@ export type ChannelAllowlistAdapter = {
             changed: boolean;
             pathLabel: string;
             writeTarget: ConfigWriteTarget;
+            accessGroupChanged?: { from?: string; to: string };
           }
         | {
             kind: "invalid-entry";

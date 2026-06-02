@@ -9,14 +9,18 @@ import {
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
+import {
+  normalizeTelegramAllowFromEntries,
+  type TelegramAllowFromEntry,
+} from "./allow-from.js";
 
 export async function expandTelegramAllowFromWithAccessGroups(params: {
   cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   accountId?: string;
   senderId?: string;
 }): Promise<string[]> {
-  const allowFrom = (params.allowFrom ?? []).map(String);
+  const allowFrom = normalizeTelegramAllowFromEntries(params.allowFrom ?? []);
   const senderId = params.senderId?.trim() ?? "";
   const expanded =
     params.cfg && senderId
@@ -42,14 +46,14 @@ export async function expandTelegramAllowFromWithAccessGroups(params: {
 
 export async function resolveTelegramDmAllow(params: {
   cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowOverride?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
+  groupAllowOverride?: readonly TelegramAllowFromEntry[];
   storeAllowFrom?: string[];
   dmPolicy?: DmPolicy;
   accountId?: string;
   senderId?: string;
 }): Promise<{
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   expandedAllowFrom: string[];
   effectiveAllow: NormalizedAllowFrom;
 }> {

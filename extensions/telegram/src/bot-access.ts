@@ -1,7 +1,6 @@
 import {
   firstDefined,
   isSenderIdAllowed,
-  mergeDmAllowFromSources,
 } from "openclaw/plugin-sdk/allow-from";
 import type {
   DmPolicy,
@@ -10,6 +9,10 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeTelegramAllowFromEntries,
+  type TelegramAllowFromEntry,
+} from "./allow-from.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -42,14 +45,10 @@ function warnInvalidAllowFromEntries(entries: string[]) {
   }
 }
 
-export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
-  const entries = (list ?? [])
-    .map((value) => normalizeOptionalString(String(value)) ?? "")
-    .filter(Boolean);
+export const normalizeAllowFrom = (list?: readonly TelegramAllowFromEntry[]): NormalizedAllowFrom => {
+  const entries = normalizeTelegramAllowFromEntries(list ?? []);
   const hasWildcard = entries.includes("*");
-  const normalized = entries
-    .filter((value) => value !== "*")
-    .map((value) => value.replace(/^(telegram|tg):/i, ""));
+  const normalized = entries.filter((value) => value !== "*");
   const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
   if (invalidEntries.length > 0) {
     warnInvalidAllowFromEntries(uniqueStrings(invalidEntries));
@@ -64,10 +63,16 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
 };
 
 export const normalizeDmAllowFromWithStore = (params: {
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   storeAllowFrom?: string[];
   dmPolicy?: string;
-}): NormalizedAllowFrom => normalizeAllowFrom(mergeDmAllowFromSources(params));
+}): NormalizedAllowFrom => {
+  const storeEntries =
+    params.dmPolicy === "allowlist" || params.dmPolicy === "open"
+      ? []
+      : (params.storeAllowFrom ?? []);
+  return normalizeAllowFrom([...(params.allowFrom ?? []), ...storeEntries]);
+};
 
 export function resolveTelegramEffectiveDmPolicy(params: {
   isGroup: boolean;

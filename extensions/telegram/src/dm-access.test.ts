@@ -2,6 +2,7 @@ import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/ch
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingChallengeIssuerMock = vi.hoisted(() => vi.fn());
+const runMessagePreAuthMock = vi.hoisted(() => vi.fn(async () => undefined));
 const upsertChannelPairingRequestMock = vi.hoisted(() =>
   vi.fn(async () => ({ code: "123456", created: true })),
 );
@@ -25,6 +26,10 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   createTopLevelChannelReplyToModeResolver: () => () => "off",
   createScopedAccountReplyToModeResolver: () => () => "off",
   resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => null,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -71,6 +76,12 @@ async function enforceDefaultDmAccess(params: {
   return { allowed, bot };
 }
 
+async function flushPreAuthHooks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("enforceTelegramDmAccess", () => {
   beforeAll(async () => {
     ({ enforceTelegramDmAccess } = await import("./dm-access.js"));
@@ -98,6 +109,46 @@ describe("enforceTelegramDmAccess", () => {
 
     expect(allowed).toBe(false);
     expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("emits pre-auth hooks for blocked allowlist DMs before replying", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+
+    const allowed = await enforceTelegramDmAccess({
+      isGroup: false,
+      dmPolicy: "allowlist",
+      msg: createDmMessage({ text: "Let me in" }),
+      chatId: 42,
+      effectiveDmAllow: normalizeAllowFrom(["99999"]),
+      accountId: "main",
+      bot: { api: { sendMessage } } as never,
+      logger: { info: vi.fn() },
+      upsertPairingRequest: upsertChannelPairingRequestMock,
+      messagePreAuthHookRunner: {
+        hasHooks: (hookName) => hookName === "message_pre_auth",
+        runMessagePreAuth: runMessagePreAuthMock as never,
+      },
+    });
+    await flushPreAuthHooks();
+
+    expect(allowed).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(runMessagePreAuthMock).toHaveBeenCalledTimes(1);
+    expect(runMessagePreAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "main",
+        channelId: "telegram",
+        content: "Let me in",
+        conversationId: "telegram:42",
+        senderId: "12345",
+        senderName: "Test",
+        senderUsername: "tester",
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        senderId: "12345",
+      }),
+    );
   });
 
   it("allows allowlisted DMs when open policy was constrained by a restrictive allowFrom", async () => {

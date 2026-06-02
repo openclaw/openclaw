@@ -1,4 +1,5 @@
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
+import { ACCESS_REQUEST_HOOK_NAME, shouldAutoEnableAccessRequestHook } from "./access-request-auto.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookEntry, HookSource } from "./types.js";
 
@@ -88,8 +89,17 @@ export function resolveHookEnableState(params: {
   if (hookConfig?.enabled === false) {
     return { enabled: false, reason: "disabled in config" };
   }
-
   const sourcePolicy = getHookSourcePolicy(entry.hook.source);
+  // A DM policy change may auto-enable trusted installed hooks, but must never
+  // execute mutable workspace code without the existing explicit opt-in.
+  if (
+    entry.hook.name === ACCESS_REQUEST_HOOK_NAME &&
+    shouldAutoEnableAccessRequestHook(config) &&
+    sourcePolicy.defaultEnableMode === "default-on"
+  ) {
+    return { enabled: true };
+  }
+
   if (sourcePolicy.defaultEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
     return { enabled: false, reason: "workspace hook (disabled by default)" };
   }

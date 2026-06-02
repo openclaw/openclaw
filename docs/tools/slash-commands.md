@@ -487,7 +487,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
   <Accordion title="Argument notes">
     - Commands accept an optional `:` between the command and args (`/think: high`, `/send: on`).
     - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
-    - `/allowlist add|remove` requires `commands.config: true` and honors channel `configWrites`.
+    - `/allowlist add|remove` requires `commands.config: true` and honors channel `configWrites`. Use `/allowlist add dm --channel <channel> --group <group> <sender-id>` for channels that support grouped DM `allowFrom` entries.
 
   </Accordion>
 </AccordionGroup>

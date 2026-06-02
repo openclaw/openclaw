@@ -29,6 +29,36 @@ describe("whatsapp config schema", () => {
     }
   });
 
+  it("accepts grouped allowFrom entries", () => {
+    const res = expectWhatsAppConfigValid({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111", { number: "+15550002222", group: "friends" }],
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+          allowFrom: [{ number: "+15550003333", group: "trusted" }],
+        },
+      },
+    });
+
+    if (!res.success) {
+      return;
+    }
+    expect(res.data.allowFrom?.[1]).toEqual({ number: "+15550002222", group: "friends" });
+    expect(res.data.accounts?.work?.allowFrom?.[0]).toEqual({
+      number: "+15550003333",
+      group: "trusted",
+    });
+  });
+
+  it("rejects unknown grouped allowFrom groups", () => {
+    const res = WhatsAppConfigSchema.safeParse({
+      dmPolicy: "allowlist",
+      allowFrom: [{ number: "+15550002222", group: "vip" }],
+    });
+
+    expect(res.success).toBe(false);
+  });
   it("defaults dm/group policy", () => {
     const res = WhatsAppConfigSchema.safeParse({});
 

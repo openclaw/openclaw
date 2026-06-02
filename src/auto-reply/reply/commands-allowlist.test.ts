@@ -78,7 +78,7 @@ vi.mock("../../pairing/pairing-store.js", () => ({
 }));
 
 type TelegramTestSectionConfig = {
-  allowFrom?: string[];
+  allowFrom?: unknown[];
   groupAllowFrom?: string[];
   defaultAccount?: string;
   configWrites?: boolean;
@@ -106,6 +106,26 @@ function normalizeAllowlistValues(values: Array<string | number>): string[] {
     }
   }
   return normalized;
+}
+
+function readGroupedAllowFromEntry(entry: unknown): string | undefined {
+  if (typeof entry === "string" || typeof entry === "number") {
+    const value = String(entry).trim();
+    return value || undefined;
+  }
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const value = (entry as { number?: unknown }).number;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readGroupedAllowFromEntryGroup(entry: unknown): string | undefined {
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const group = (entry as { group?: unknown }).group;
+  return typeof group === "string" && group.trim() ? group.trim() : undefined;
 }
 
 function resolveTelegramTestAccount(
@@ -143,21 +163,31 @@ const telegramAllowlistTestPlugin: ChannelPlugin = {
       (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
       DEFAULT_ACCOUNT_ID,
     clearBaseFields: [],
-    resolveAllowFrom: (account) => account.allowFrom,
+    resolveAllowFrom: (account) => account.allowFrom as Array<string | number> | undefined,
     formatAllowFrom: normalizeTelegramAllowFromEntries,
   }),
   pairing: {
     idLabel: "telegramUserId",
   },
-  allowlist: buildDmGroupAccountAllowlistAdapter({
-    channelId: "telegram",
-    resolveAccount: ({ cfg, accountId }) => resolveTelegramTestAccount(cfg, accountId),
-    normalize: ({ values }) => normalizeTelegramAllowFromEntries(values),
-    resolveDmAllowFrom: (account) => account.allowFrom,
-    resolveGroupAllowFrom: (account) => account.groupAllowFrom,
-    resolveDmPolicy: () => undefined,
-    resolveGroupPolicy: () => undefined,
-  }),
+  allowlist: {
+    ...buildDmGroupAccountAllowlistAdapter({
+      channelId: "telegram",
+      resolveAccount: ({ cfg, accountId }) => resolveTelegramTestAccount(cfg, accountId),
+      normalize: ({ values }) => normalizeTelegramAllowFromEntries(values),
+      resolveDmAllowFrom: (account) => account.allowFrom as Array<string | number> | undefined,
+      resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+      resolveDmPolicy: () => undefined,
+      resolveGroupPolicy: () => undefined,
+      readConfigEntry: readGroupedAllowFromEntry,
+      readConfigEntryAccessGroup: readGroupedAllowFromEntryGroup,
+      formatConfigEntry: ({ entry, accessGroup }) =>
+        accessGroup ? { number: entry, group: accessGroup } : entry,
+    }),
+    accessGroups: {
+      groups: ["trusted", "partner", "friends", "family", "work", "restricted"],
+      defaultGroup: "restricted",
+    },
+  },
 };
 
 const whatsappAllowlistTestPlugin: ChannelPlugin = {
@@ -530,6 +560,78 @@ describe("handleAllowlistCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
     expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("adds grouped DM allowlist entries to config", async () => {
+    const initialConfig = {
+      channels: { telegram: { allowFrom: ["123"] } },
+    };
+    await withTempConfigPath(initialConfig, async (configPath) => {
+      const cfg = {
+        commands: { text: true, config: true },
+        channels: { telegram: { allowFrom: ["123"] } },
+      } as OpenClawConfig;
+      const params = buildAllowlistParams(
+        "/allowlist add dm --channel telegram --config --group friends 789",
+        cfg,
+      );
+      params.command.senderIsOwner = true;
+
+      const result = await handleAllowlistCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("DM allowlist added");
+      const written = await readJsonFile<OpenClawConfig>(configPath);
+      expect(written.channels?.telegram?.allowFrom).toEqual([
+        "123",
+        { number: "789", group: "friends" },
+      ]);
+      expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("updates grouped DM allowlist entries through add", async () => {
+    const initialConfig = {
+      channels: { telegram: { allowFrom: [{ number: "789", group: "restricted" }] } },
+    };
+    await withTempConfigPath(initialConfig, async (configPath) => {
+      const cfg = {
+        commands: { text: true, config: true },
+        channels: { telegram: { allowFrom: [{ number: "789", group: "restricted" }] } },
+      } as OpenClawConfig;
+      const params = buildAllowlistParams(
+        "/allowlist add dm --channel telegram --config --group friends 789",
+        cfg,
+      );
+      params.command.senderIsOwner = true;
+
+      const result = await handleAllowlistCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("DM allowlist added");
+      const written = await readJsonFile<OpenClawConfig>(configPath);
+      expect(written.channels?.telegram?.allowFrom).toEqual([
+        { number: "789", group: "friends" },
+      ]);
+    });
+  });
+
+  it("rejects unknown allowlist groups", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams(
+      "/allowlist add dm --channel telegram --config --group unknown 789",
+      cfg,
+    );
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Invalid allowlist group");
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("blocks allowlist writes from authorized non-owner senders", async () => {

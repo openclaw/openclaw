@@ -3,7 +3,8 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
@@ -237,12 +238,16 @@ export function createWebListenerFactoryCapture(): AnyExport {
         onMessage: (msg: WebInboundMessage) => Promise<void>;
         debounceMs?: number;
         selfChatMode?: boolean;
+        cfg?: OpenClawConfig;
+        loadConfig?: () => OpenClawConfig;
       }
     | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
     debounceMs?: number;
     selfChatMode?: boolean;
+    cfg?: OpenClawConfig;
+    loadConfig?: () => OpenClawConfig;
   }) => {
     capturedOnMessage = opts.onMessage;
     capturedOptions = opts;

@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/directory-config-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
+import { normalizeWhatsAppAllowFromEntryNumbers } from "./allow-from-groups.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 
 type WhatsAppDirectoryAccount = WhatsAppAccountConfig & { accountId: string };
@@ -20,7 +21,7 @@ export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConf
   return listResolvedDirectoryUserEntriesFromAllowFrom<WhatsAppDirectoryAccount>({
     ...params,
     resolveAccount: resolveWhatsAppDirectoryAccount,
-    resolveAllowFrom: (account) => account.allowFrom,
+    resolveAllowFrom: (account) => normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
     normalizeId: (entry) => {
       const normalized = normalizeWhatsAppTarget(entry);
       if (!normalized || isWhatsAppGroupJid(normalized)) {

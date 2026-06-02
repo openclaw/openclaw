@@ -1,6 +1,5 @@
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -17,6 +16,7 @@ import {
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
+import { normalizeTelegramAllowFromEntries } from "./allow-from.js";
 import {
   buildTelegramCommandsListChannelData,
   buildTelegramModelBrowseChannelData,
@@ -126,8 +126,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultTelegramAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
+  formatAllowFrom: (allowFrom) => normalizeTelegramAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
 

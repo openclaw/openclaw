@@ -1,5 +1,6 @@
 import type { HookConfig, HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ACCESS_REQUEST_HOOK_NAME, shouldAutoEnableAccessRequestHook } from "./access-request-auto.js";
 import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 
 function hasEnabledFlag(entry: HookConfig | undefined): boolean {
@@ -19,8 +20,11 @@ function hasConfiguredInstalls(installs: Record<string, HookInstallRecord> | und
 
 export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   const internal = config.hooks?.internal;
-  if (!internal || internal.enabled === false) {
+  if (internal?.enabled === false) {
     return false;
+  }
+  if (!internal) {
+    return shouldAutoEnableAccessRequestHook(config);
   }
   if (internal.enabled === true) {
     return true;
@@ -34,13 +38,21 @@ export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   if (hasConfiguredInstalls(internal.installs)) {
     return true;
   }
+  if (shouldAutoEnableAccessRequestHook(config)) {
+    return true;
+  }
   return getLegacyInternalHookHandlers(config).length > 0;
 }
 
 export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<string> | null {
   const internal = config.hooks?.internal;
-  if (!internal || internal.enabled === false) {
+  if (internal?.enabled === false) {
     return new Set();
+  }
+  if (!internal) {
+    return shouldAutoEnableAccessRequestHook(config)
+      ? new Set([ACCESS_REQUEST_HOOK_NAME])
+      : new Set();
   }
   if (internal.enabled === true) {
     return null;
@@ -64,6 +76,9 @@ export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<
         names.add(trimmedHookName);
       }
     }
+  }
+  if (shouldAutoEnableAccessRequestHook(config)) {
+    names.add(ACCESS_REQUEST_HOOK_NAME);
   }
 
   if ((internal.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {

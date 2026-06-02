@@ -51,6 +51,7 @@ type AllowlistCommand =
       entry: string;
       resolve?: boolean;
       target: AllowlistTarget;
+      group?: string;
     }
   | { action: "error"; message: string };
 
@@ -93,6 +94,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   let target: AllowlistTarget = "both";
   let channel: string | undefined;
   let account: string | undefined;
+  let group: string | undefined;
   const entryTokens: string[] = [];
 
   let i = 0;
@@ -132,6 +134,11 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
       i += 1;
       continue;
     }
+    if (lowered === "--group" && tokens[i + 1]) {
+      group = tokens[i + 1];
+      i += 1;
+      continue;
+    }
     const kv = token.split("=");
     if (kv.length === 2) {
       const key = normalizeOptionalLowercaseString(kv[0]);
@@ -145,6 +152,12 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
       if (key === "account") {
         if (value) {
           account = value;
+        }
+        continue;
+      }
+      if (key === "group") {
+        if (value) {
+          group = value;
         }
         continue;
       }
@@ -162,7 +175,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     if (!entry) {
       return { action: "error", message: "Usage: /allowlist add|remove <entry>" };
     }
-    return { action, scope, entry, channel, account, resolve, target };
+    return { action, scope, entry, channel, account, resolve, target, group };
   }
 
   return { action: "list", scope, channel, account, resolve };
@@ -447,6 +460,38 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
 
   const shouldUpdateConfig = parsed.target !== "store";
   const shouldTouchStore = parsed.target !== "config" && Boolean(plugin?.pairing);
+  const accessGroup = normalizeOptionalLowercaseString(parsed.group);
+  const accessGroupExplicit = Boolean(accessGroup);
+
+  if (accessGroup) {
+    if (parsed.action !== "add" || parsed.scope !== "dm") {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚠️ --group is only supported for /allowlist add dm." },
+      };
+    }
+    if (parsed.target === "store") {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚠️ --group requires a config-backed allowlist edit." },
+      };
+    }
+    const accessGroups = plugin?.allowlist?.accessGroups;
+    if (!accessGroups) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${channelId} does not support grouped allowlist entries.` },
+      };
+    }
+    if (!accessGroups.groups.includes(accessGroup)) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚠️ Invalid allowlist group. Available groups: ${accessGroups.groups.join(", ")}.`,
+        },
+      };
+    }
+  }
 
   if (shouldUpdateConfig) {
     if (parsed.scope === "all") {
@@ -481,6 +526,8 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       scope: parsed.scope,
       action: parsed.action,
       entry: parsed.entry,
+      accessGroup,
+      accessGroupExplicit,
     });
     if (!editResult) {
       return {
@@ -523,6 +570,8 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           scope: editScope,
           action: parsed.action,
           entry: parsed.entry,
+          accessGroup,
+          accessGroupExplicit,
           applyConfigEdit,
         });
       } catch (error) {

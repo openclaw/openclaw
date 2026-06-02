@@ -4,36 +4,36 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-
-function normalizeAllowFromEntry(value: string | number): string {
-  return String(value).trim();
-}
+import {
+  normalizeTelegramAllowFromEntry,
+  type TelegramAllowFromEntry,
+} from "./allow-from.js";
 
 function hasWildcardAllowFrom(value: unknown): boolean {
   return (
     Array.isArray(value) &&
-    value.some((entry) => normalizeAllowFromEntry(entry as string | number) === "*")
+    value.some((entry) => normalizeTelegramAllowFromEntry(entry) === "*")
   );
 }
 
-function hasRestrictiveAllowFrom(value: unknown): value is Array<string | number> {
+function hasRestrictiveAllowFrom(value: unknown): value is TelegramAllowFromEntry[] {
   return (
     Array.isArray(value) &&
     value.some((entry) => {
-      const normalized = normalizeAllowFromEntry(entry as string | number);
+      const normalized = normalizeTelegramAllowFromEntry(entry);
       return normalized.length > 0 && normalized !== "*";
     })
   );
 }
 
-function dropWildcardAllowFrom(value: Array<string | number>): Array<string | number> {
-  return value.filter((entry) => normalizeAllowFromEntry(entry) !== "*");
+function dropWildcardAllowFrom(value: TelegramAllowFromEntry[]): TelegramAllowFromEntry[] {
+  return value.filter((entry) => normalizeTelegramAllowFromEntry(entry) !== "*");
 }
 
 function resolveMergedAllowFrom(params: {
-  baseAllowFrom?: Array<string | number>;
-  accountAllowFrom?: Array<string | number>;
-}): Array<string | number> | undefined {
+  baseAllowFrom?: TelegramAllowFromEntry[];
+  accountAllowFrom?: TelegramAllowFromEntry[];
+}): TelegramAllowFromEntry[] | undefined {
   const { baseAllowFrom, accountAllowFrom } = params;
   if (hasRestrictiveAllowFrom(baseAllowFrom) && hasWildcardAllowFrom(accountAllowFrom)) {
     const accountRestrictiveEntries = Array.isArray(accountAllowFrom)

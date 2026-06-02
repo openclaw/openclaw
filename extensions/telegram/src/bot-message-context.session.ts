@@ -23,6 +23,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { TelegramAllowFromGroup, TelegramAllowFromEntry } from "./allow-from.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -184,8 +185,9 @@ export async function buildTelegramInboundContextPayload(params: {
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
-  dmAllowFrom?: Array<string | number>;
+  dmAllowFrom?: readonly TelegramAllowFromEntry[];
   effectiveGroupAllow?: NormalizedAllowFrom;
+  senderGroup?: TelegramAllowFromGroup;
   topicName?: string;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
 }): Promise<{
@@ -235,6 +237,7 @@ export async function buildTelegramInboundContextPayload(params: {
     options,
     dmAllowFrom,
     effectiveGroupAllow,
+    senderGroup,
     topicName,
     sessionRuntime: sessionRuntimeOverride,
   } = params;
@@ -557,6 +560,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ForwardedFromChatType: visibleForwardOrigin?.fromChatType,
       ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      SenderGroup: senderGroup,
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
       ...locationContext,

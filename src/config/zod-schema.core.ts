@@ -805,12 +805,23 @@ export const CliBackendSchema = z
   })
   .strict();
 
-export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
-  normalizeStringEntries(values);
+function readAllowFromValidationEntry(entry: unknown): string | number | undefined {
+  if (typeof entry === "string" || typeof entry === "number") {
+    return entry;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const number = (entry as Record<string, unknown>).number;
+  return typeof number === "string" || typeof number === "number" ? number : undefined;
+}
+
+export const normalizeAllowFrom = (values?: readonly unknown[]): string[] =>
+  normalizeStringEntries((values ?? []).flatMap((entry) => readAllowFromValidationEntry(entry) ?? []));
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly unknown[];
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
@@ -836,7 +847,7 @@ export const requireOpenAllowFrom = (params: {
  */
 export const requireAllowlistAllowFrom = (params: {
   policy?: string;
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly unknown[];
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;

@@ -16,6 +16,7 @@ import {
   resolveDefaultWhatsAppAccountId,
 } from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
+import type { WhatsAppAllowFromEntry } from "./allow-from-groups.js";
 import { hasWebCredsRegularFileSync, hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
@@ -30,7 +31,7 @@ export type ResolvedWhatsAppAccount = {
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
-  allowFrom?: string[];
+  allowFrom?: WhatsAppAllowFromEntry[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   mentionPatterns?: WhatsAppAccountConfig["mentionPatterns"];

@@ -2,12 +2,13 @@ import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-conf
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { ResolvedTelegramAccount } from "./accounts.js";
+import { normalizeTelegramAllowFromEntries } from "./allow-from.js";
 import { collectTelegramSecurityAuditFindings } from "./security-audit.js";
 
 const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramAccount>({
   channelKey: "telegram",
   resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
+  resolveAllowFrom: (account) => normalizeTelegramAllowFromEntries(account.config.allowFrom ?? []),
   policyPathSuffix: "dmPolicy",
   normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
 });

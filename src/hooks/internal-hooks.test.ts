@@ -6,6 +6,7 @@ import {
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
+  isMessagePreAuthEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
@@ -14,6 +15,7 @@ import {
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
+  type MessagePreAuthHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
@@ -296,6 +298,37 @@ describe("hooks", () => {
     });
   });
 
+  describe("isMessagePreAuthEvent", () => {
+    it.each([
+      {
+        name: "returns true for message:pre-auth events with expected context",
+        event: createInternalHookEvent("message", "pre-auth", "", {
+          senderId: "+1234567890",
+          senderName: "Requester",
+          content: "Let me in",
+          channelId: "whatsapp",
+          conversationId: "chat-123",
+        } satisfies MessagePreAuthHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false for message:received events",
+        event: createInternalHookEvent("message", "received", "test-session", {
+          from: "+1234567890",
+          content: "Hello world",
+          channelId: "whatsapp",
+        } satisfies MessageReceivedHookContext),
+        expected: false,
+      },
+    ] satisfies Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }>)("$name", ({ event, expected }) => {
+      expect(isMessagePreAuthEvent(event)).toBe(expected);
+    });
+  });
+
   describe("isMessageSentEvent", () => {
     it.each([
       {
@@ -362,6 +395,9 @@ describe("hooks", () => {
     it("returns false for non-message and missing-context shapes", () => {
       const cases = [
         {
+          match: isMessagePreAuthEvent,
+        },
+        {
           match: isMessageReceivedEvent,
         },
         {
@@ -378,6 +414,11 @@ describe("hooks", () => {
           // missing channelId
         },
       );
+      const missingPreAuthContext = createInternalHookEvent("message", "pre-auth", "", {
+        content: "Let me in",
+        channelId: "whatsapp",
+        // missing senderId
+      });
       const missingSentContext = createInternalHookEvent("message", "sent", "test-session", {
         to: "+1234567890",
         channelId: "whatsapp",
@@ -387,12 +428,30 @@ describe("hooks", () => {
       for (const { match } of cases) {
         expect(match(nonMessageEvent)).toBe(false);
       }
+      expect(isMessagePreAuthEvent(missingPreAuthContext)).toBe(false);
       expect(isMessageReceivedEvent(missingReceivedContext)).toBe(false);
       expect(isMessageSentEvent(missingSentContext)).toBe(false);
     });
   });
 
   describe("message hooks", () => {
+    it("should trigger message:pre-auth handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("message:pre-auth", handler);
+
+      const context: MessagePreAuthHookContext = {
+        senderId: "+1234567890",
+        content: "Let me in",
+        channelId: "whatsapp",
+      };
+      const event = createInternalHookEvent("message", "pre-auth", "", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+      expect(event.messages).toEqual([]);
+      expect(event.sessionKey).toBe("");
+    });
+
     it("should trigger message:received handlers", async () => {
       const handler = vi.fn();
       registerInternalHook("message:received", handler);

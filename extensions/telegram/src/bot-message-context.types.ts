@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { TelegramAllowFromEntry } from "./allow-from.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
@@ -87,7 +88,7 @@ export type BuildTelegramMessageContextParams = {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
-  allowFrom?: Array<string | number>;
+  allowFrom?: TelegramAllowFromEntry[];
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;

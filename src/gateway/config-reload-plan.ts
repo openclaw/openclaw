@@ -232,6 +232,10 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
+function isDmPolicyConfigPath(path: string): boolean {
+  return path === "dmPolicy" || path.endsWith(".dmPolicy");
+}
+
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
   if (isPluginInstallTimestampPath(path)) {
     return { kind: "none" };
@@ -401,6 +405,9 @@ export function buildGatewayReloadPlan(
   }
 
   if (plan.restartGmailWatcher) {
+    plan.reloadHooks = true;
+  }
+  if (changedPaths.some(isDmPolicyConfigPath)) {
     plan.reloadHooks = true;
   }
 

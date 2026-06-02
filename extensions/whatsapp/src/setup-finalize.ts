@@ -12,6 +12,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
+import { normalizeWhatsAppAllowFromEntryNumbers } from "./allow-from-groups.js";
 import { hasWebCredsSync } from "./creds-files.js";
 import {
   normalizeWhatsAppAllowFromEntries,
@@ -247,7 +248,7 @@ async function promptWhatsAppDmAccess(params: {
   const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId });
   const existingPolicy = account.dmPolicy ?? "pairing";
-  const existingAllowFrom = account.allowFrom ?? [];
+  const existingAllowFrom = normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []);
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
   const configPathPrefix = resolveWhatsAppConfigPathPrefix(params.cfg, accountId);
   const policyKey = `${configPathPrefix}.dmPolicy`;

@@ -1,6 +1,16 @@
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createInternalHookEvent,
+  deriveInboundMessageHookContext,
+  fireAndForgetBoundedHook,
+  toInternalMessagePreAuthContext,
+  toPluginMessageContext,
+  toPluginMessagePreAuthEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
@@ -11,8 +21,17 @@ export type InboundAccessControlResult = {
   isSelfChat: boolean;
   resolvedAccountId: string;
 };
+type MessagePreAuthHookRunner = Pick<
+  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
+  "hasHooks" | "runMessagePreAuth"
+>;
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
+const WHATSAPP_MESSAGE_PRE_AUTH_HOOK_LIMITS = {
+  maxConcurrency: 8,
+  maxQueue: 128,
+  timeoutMs: 2_000,
+};
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (!enabled) {
@@ -21,19 +40,80 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   defaultRuntime.log(message);
 }
 
+export function emitWhatsAppMessagePreAuthHooks(params: {
+  accountId: string;
+  from: string;
+  content: string;
+  senderName?: string;
+  senderE164?: string | null;
+  remoteJid: string;
+  messageId?: string;
+  messageTimestampMs?: number;
+  hookRunner?: MessagePreAuthHookRunner | null;
+}): void {
+  const canonical = deriveInboundMessageHookContext({
+    From: params.from,
+    To: params.remoteJid,
+    Body: params.content,
+    RawBody: params.content,
+    BodyForCommands: params.content,
+    Timestamp: params.messageTimestampMs,
+    Provider: "whatsapp",
+    Surface: "whatsapp",
+    OriginatingChannel: "whatsapp",
+    OriginatingTo: params.from,
+    AccountId: params.accountId,
+    SenderId: params.senderE164 ?? params.from,
+    SenderName: params.senderName,
+    SenderE164: params.senderE164 ?? undefined,
+    MessageSid: params.messageId,
+    CommandAuthorized: false,
+  });
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_pre_auth")) {
+    fireAndForgetBoundedHook(
+      () =>
+        hookRunner.runMessagePreAuth(
+          toPluginMessagePreAuthEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      "whatsapp: message_pre_auth plugin hook failed",
+      undefined,
+      WHATSAPP_MESSAGE_PRE_AUTH_HOOK_LIMITS,
+    );
+  }
+  fireAndForgetBoundedHook(
+    () =>
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "pre-auth",
+          "",
+          toInternalMessagePreAuthContext(canonical),
+        ),
+      ),
+    "whatsapp: message_pre_auth internal hook failed",
+    undefined,
+    WHATSAPP_MESSAGE_PRE_AUTH_HOOK_LIMITS,
+  );
+}
+
 export async function checkInboundAccessControl(params: {
   cfg: OpenClawConfig;
   accountId: string;
   from: string;
   selfE164: string | null;
   senderE164: string | null;
+  content?: string;
   group: boolean;
   pushName?: string;
   isFromMe: boolean;
+  messageId?: string;
   messageTimestampMs?: number;
   connectedAtMs?: number;
   pairingGraceMs?: number;
   verbose?: boolean;
+  messagePreAuthHookRunner?: MessagePreAuthHookRunner | null;
   sock: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
@@ -72,6 +152,19 @@ export async function checkInboundAccessControl(params: {
     dmSenderId: params.from,
   });
   const { senderAccess } = access;
+  if (!params.group && !params.isFromMe && senderAccess.decision !== "allow") {
+    emitWhatsAppMessagePreAuthHooks({
+      accountId: policy.account.accountId,
+      from: params.from,
+      content: params.content ?? "",
+      senderName: (params.pushName ?? "").trim() || undefined,
+      senderE164: params.senderE164,
+      remoteJid: params.remoteJid,
+      messageId: params.messageId,
+      messageTimestampMs: params.messageTimestampMs,
+      hookRunner: params.messagePreAuthHookRunner,
+    });
+  }
   if (params.group && senderAccess.decision !== "allow") {
     if (senderAccess.reasonCode === "group_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked group message (groupPolicy: disabled)");

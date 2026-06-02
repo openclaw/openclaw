@@ -3,6 +3,7 @@ import {
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { normalizeWhatsAppAllowFromEntryNumbers } from "./allow-from-groups.js";
 import { normalizeWhatsAppTarget } from "./normalize.js";
 
 type ApprovalKind = "exec" | "plugin";
@@ -25,7 +26,7 @@ export function getWhatsAppApprovalApprovers(params: {
 }): string[] {
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
   return resolveApprovalApprovers({
-    allowFrom: account.allowFrom,
+    allowFrom: normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
     normalizeApprover: normalizeWhatsAppApproverEntry,
   });
 }

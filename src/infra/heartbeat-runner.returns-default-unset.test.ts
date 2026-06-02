@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeWhatsAppAllowFromEntryNumbers } from "../../extensions/whatsapp/src/allow-from-groups.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -245,7 +246,8 @@ beforeAll(async () => {
   });
   whatsappPlugin.config = {
     ...whatsappPlugin.config,
-    resolveAllowFrom: ({ cfg }) => cfg.channels?.whatsapp?.allowFrom?.map((entry) => entry) ?? [],
+    resolveAllowFrom: ({ cfg }) =>
+      normalizeWhatsAppAllowFromEntryNumbers(cfg.channels?.whatsapp?.allowFrom ?? []),
   };
 
   const telegramPlugin = createOutboundTestPlugin({

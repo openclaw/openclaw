@@ -163,6 +163,20 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
+  it("includes trusted sender group metadata when available", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "whatsapp:+15550001111",
+      OriginatingChannel: "whatsapp",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "direct",
+      SenderGroup: "friends",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["sender_group"]).toBe("friends");
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",

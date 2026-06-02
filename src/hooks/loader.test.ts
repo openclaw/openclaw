@@ -50,6 +50,7 @@ describe("loader", () => {
   async function writeDiscoveredHook(params: {
     sourceDir?: string;
     hookName: string;
+    events?: string[];
     handlerCode?: string;
   }): Promise<string> {
     const sourceDir = params.sourceDir ?? path.join(tmpDir, "hooks");
@@ -61,7 +62,7 @@ describe("loader", () => {
         "---",
         `name: ${params.hookName}`,
         `description: ${params.hookName} test hook`,
-        'metadata: {"openclaw":{"events":["command:new"]}}',
+        `metadata: {"openclaw":{"events":${JSON.stringify(params.events ?? ["command:new"])}}}`,
         "---",
         "",
         `# ${params.hookName}`,
@@ -395,6 +396,89 @@ describe("loader", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect(event.messages).toContain("workspace-hook");
+    });
+
+    it("auto-loads managed access-request when any channel uses DM allowlist", async () => {
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      await writeDiscoveredHook({
+        sourceDir: managedHooksDir,
+        hookName: "access-request",
+        events: ["message:pre-auth"],
+        handlerCode:
+          'export default async function(event) { event.messages.push("access-request"); }\n',
+      });
+
+      const count = await loadInternalHooks(
+        {
+          channels: {
+            telegram: {
+              dmPolicy: "allowlist",
+              allowFrom: ["123"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+        { managedHooksDir },
+      );
+
+      expect(count).toBe(1);
+      expect(hasConfiguredInternalHooks({ channels: { telegram: { dmPolicy: "allowlist" } } })).toBe(
+        true,
+      );
+      expect(
+        resolveConfiguredInternalHookNames({
+          channels: { telegram: { dmPolicy: "allowlist" } },
+        } satisfies OpenClawConfig),
+      ).toEqual(new Set(["access-request"]));
+      expect(getRegisteredEventKeys()).toContain("message:pre-auth");
+    });
+
+    it("keeps workspace access-request opt-in even when a channel uses DM allowlist", async () => {
+      await writeDiscoveredHook({
+        hookName: "access-request",
+        events: ["message:pre-auth"],
+      });
+
+      const count = await loadInternalHooks(
+        {
+          channels: {
+            telegram: {
+              dmPolicy: "allowlist",
+              allowFrom: ["123"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+      );
+
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("message:pre-auth");
+    });
+
+    it("keeps access-request unloaded when no channel uses DM allowlist", async () => {
+      await writeDiscoveredHook({
+        hookName: "access-request",
+        events: ["message:pre-auth"],
+      });
+
+      const count = await loadInternalHooks(
+        {
+          channels: {
+            telegram: {
+              dmPolicy: "pairing",
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+      );
+
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("message:pre-auth");
+      expect(
+        resolveConfiguredInternalHookNames({
+          channels: { telegram: { dmPolicy: "pairing" } },
+        } satisfies OpenClawConfig),
+      ).toEqual(new Set());
     });
 
     it("rejects directory hook handlers that escape hook dir via symlink", async () => {
