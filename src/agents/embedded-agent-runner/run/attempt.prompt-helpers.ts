@@ -93,6 +93,11 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+/**
+ * Resolves prompt-build hook contributions for one attempt. Next-turn
+ * injections are drained once per run and cached for retries so destructive
+ * session-store reads do not lose plugin context after a failed first attempt.
+ */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -115,6 +120,8 @@ export async function resolvePromptBuildHookResult(params: {
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
+  // Hook ordering mirrors the prompt assembly boundary: queued injections first,
+  // then prepare/heartbeat contributions, then prompt-build and legacy start hooks.
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
       ? await params.hookRunner
