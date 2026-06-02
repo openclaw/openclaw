@@ -48,6 +48,7 @@ vi.mock("../config/sessions/paths.js", async () => {
 });
 
 let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
+let resolveAcpProjectionSettings: typeof import("../auto-reply/reply/acp-stream-settings.js").resolveAcpProjectionSettings;
 let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").resolveAcpSpawnStreamLogPath;
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
 
@@ -79,6 +80,7 @@ function firstMockCall(
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeAll(async () => {
     ({ emitAgentEvent } = await import("../infra/agent-events.js"));
+    ({ resolveAcpProjectionSettings } = await import("../auto-reply/reply/acp-stream-settings.js"));
     ({ resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
       await import("./acp-spawn-parent-stream.js"));
   });
@@ -514,7 +516,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("relays ACP status progress when assistant commentary is enabled", () => {
+  it("relays ACP status progress when assistant commentary and tag visibility are enabled", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-enabled",
       parentSessionKey: "agent:main:main",
@@ -523,6 +525,15 @@ describe("startAcpSpawnParentStreamRelay", () => {
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
       assistantCommentary: true,
+      acpProjectionSettings: resolveAcpProjectionSettings({
+        acp: {
+          stream: {
+            tagVisibility: {
+              plan: true,
+            },
+          },
+        },
+      }),
     });
 
     emitAgentEvent({
@@ -577,6 +588,33 @@ describe("startAcpSpawnParentStreamRelay", () => {
     const texts = collectedTexts();
     expectNoTextWithFragment(texts, "usage updated");
     expectNoTextWithFragment(texts, "available commands updated");
+    relay.dispose();
+  });
+
+  it("does not relay ACP status tags hidden by default when assistant commentary is enabled", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-status-commentary-default-hidden",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-status-commentary-default-hidden",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      assistantCommentary: true,
+    });
+
+    emitAgentEvent({
+      runId: "run-status-commentary-default-hidden",
+      stream: "acp",
+      data: {
+        phase: "runtime_event",
+        eventType: "status",
+        tag: "plan",
+        text: "plan: inspect the runtime handoff first",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expectNoTextWithFragment(collectedTexts(), "inspect the runtime handoff");
     relay.dispose();
   });
 
