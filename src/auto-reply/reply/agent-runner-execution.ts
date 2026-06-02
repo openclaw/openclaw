@@ -2143,6 +2143,8 @@ export async function runAgentTurnWithFallback(params: {
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                    allowEmptyAssistantReplyAsSilent:
+                      params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
