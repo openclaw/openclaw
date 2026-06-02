@@ -26,14 +26,21 @@ import type { RunResult } from "./invoke-types.js";
 const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 type SystemRunAllowlistAnalysis = {
+  /** True when the command could be split into auditable execution segments. */
   analysisOk: boolean;
+  /** Matching entries are recorded even when policy mode later denies execution. */
   allowlistMatches: ExecAllowlistEntry[];
+  /** True only for allowlist security mode and fully satisfied analyzed segments. */
   allowlistSatisfied: boolean;
+  /** Parsed command segments used for policy decisions and safe-bin rewrites. */
   segments: ExecCommandSegment[];
+  /** Per-segment allowlist entry selected by the analyzer, if any. */
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  /** Per-segment trust source, used to decide whether execution argv may be rebuilt. */
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+/** Evaluates a system-run command against durable approvals, allowlists, and safe-bin trust. */
 export function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
@@ -119,6 +126,7 @@ export function resolvePlannedAllowlistArgv(params: {
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
+/** Resolves the argv that should actually execute after allowlist/safe-bin hardening. */
 export function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];
@@ -175,6 +183,8 @@ export function resolveSystemRunExecArgv(params: {
     if (!rebuilt.ok || !rebuilt.command) {
       return null;
     }
+    // Keep the original shell wrapper argv but replace only the inline payload. This preserves
+    // caller flags like `-lc` while swapping unsafe path text for the safe-bin rewritten command.
     const rewrittenArgv = replacePosixShellInlineCommand({
       argv: params.argv,
       oldCommand: params.shellCommand,
@@ -263,6 +273,8 @@ function replacePosixShellInlineCommand(params: {
     rewritten[absoluteValueIndex] = params.nextCommand;
     return rewritten;
   }
+  // Combined shell flags can put the command at the end of the option token; only rewrite when
+  // the exact old payload is the suffix so option bytes before it stay untouched.
   if (token.endsWith(params.oldCommand)) {
     rewritten[absoluteValueIndex] =
       token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
@@ -271,6 +283,7 @@ function replacePosixShellInlineCommand(params: {
   return null;
 }
 
+/** Appends the user-visible truncation marker to the stream that carries the final visible text. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;
