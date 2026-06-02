@@ -236,6 +236,7 @@ export function resolveGatewayScopedTools(params: {
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.cfg,
       workspaceDir,
+      toolDenylist: explicitDenylist,
     }),
   });
 

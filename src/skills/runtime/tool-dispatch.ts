@@ -234,6 +234,7 @@ export function resolveSkillDispatchTools(params: {
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      toolDenylist: explicitDenylist,
     }),
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
