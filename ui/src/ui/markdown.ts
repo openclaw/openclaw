@@ -87,6 +87,64 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const markdownCache = new Map<string, string>();
+const DOCS_BASE_URL = "https://docs.openclaw.ai";
+const DOCS_ROOT_PATH_SEGMENTS = new Set([
+  "agent-runtime-architecture",
+  "announcements",
+  "auth-credential-semantics",
+  "automation",
+  "channels",
+  "ci",
+  "clawhub",
+  "cli",
+  "concepts",
+  "date-time",
+  "debug",
+  "diagnostics",
+  "gateway",
+  "help",
+  "install",
+  "logging",
+  "network",
+  "nodes",
+  "openclaw-agent-runtime",
+  "platforms",
+  "plugins",
+  "prose",
+  "providers",
+  "reference",
+  "security",
+  "start",
+  "tools",
+  "vps",
+  "web",
+]);
+const CONTROL_UI_APP_PATHS = new Set([
+  "/activity",
+  "/agents",
+  "/ai-agents",
+  "/appearance",
+  "/automation",
+  "/channels",
+  "/chat",
+  "/communications",
+  "/config",
+  "/cron",
+  "/debug",
+  "/dreaming",
+  "/dreams",
+  "/infrastructure",
+  "/instances",
+  "/logs",
+  "/mcp",
+  "/nodes",
+  "/overview",
+  "/sessions",
+  "/skills",
+  "/skills/workshop",
+  "/usage",
+  "/workboard",
+]);
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
@@ -143,6 +201,22 @@ function isHostLocalFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
 }
 
+function normalizeDocsRootHref(href: string): string | null {
+  if (!href.startsWith("/") || href.startsWith("//")) {
+    return null;
+  }
+  const parsed = new URL(href, DOCS_BASE_URL);
+  const normalizedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+  if (CONTROL_UI_APP_PATHS.has(normalizedPath) || normalizedPath.startsWith("/api/")) {
+    return null;
+  }
+  const firstSegment = normalizedPath.split("/").find(Boolean);
+  if (!firstSegment || !DOCS_ROOT_PATH_SEGMENTS.has(firstSegment)) {
+    return null;
+  }
+  return `${DOCS_BASE_URL}${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -174,6 +248,11 @@ function installHooks() {
       // Relative URLs are fine; malformed absolute URLs with dangerous schemes
       // will fail to parse and keep their href — but DOMPurify already strips
       // javascript: by default. This is defense-in-depth.
+    }
+
+    const normalizedDocsHref = normalizeDocsRootHref(href);
+    if (normalizedDocsHref) {
+      node.setAttribute("href", normalizedDocsHref);
     }
 
     node.setAttribute("rel", "noreferrer noopener");

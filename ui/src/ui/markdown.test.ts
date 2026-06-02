@@ -582,6 +582,45 @@ PY
       expect(html).toBe("<p><a>report.docx</a></p>\n");
     });
 
+    it("rewrites docs-root markdown links to the public docs host", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[Workspace concept](/concepts/agent-workspace#agent-workspace)",
+      );
+      expect(html).toBe(
+        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace#agent-workspace" rel="noreferrer noopener" target="_blank">Workspace concept</a></p>\n',
+      );
+    });
+
+    it("rewrites nested docs links while preserving Control UI app routes", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[Discord docs](/channels/discord) [usage](/usage) [chat](/chat) [media](/api/chat/media/outgoing/file)",
+      );
+      expect(html).toBe(
+        '<p><a href="https://docs.openclaw.ai/channels/discord" rel="noreferrer noopener" target="_blank">Discord docs</a> <a href="/usage" rel="noreferrer noopener" target="_blank">usage</a> <a href="/chat" rel="noreferrer noopener" target="_blank">chat</a> <a href="/api/chat/media/outgoing/file" rel="noreferrer noopener" target="_blank">media</a></p>\n',
+      );
+    });
+
+    it("rewrites docs links rendered in markdown sidebars", () => {
+      const container = document.createElement("div");
+
+      render(
+        renderMarkdownSidebar({
+          content: {
+            kind: "markdown",
+            content: "Read the [agent workspace](/concepts/agent-workspace) docs.",
+          },
+          error: null,
+          onClose: () => undefined,
+          onViewRawText: () => undefined,
+        }),
+        container,
+      );
+
+      expect(container.querySelector(".sidebar-markdown a")?.getAttribute("href")).toBe(
+        "https://docs.openclaw.ai/concepts/agent-workspace",
+      );
+    });
+
     it("keeps app-relative links navigable", () => {
       const html = toSanitizedMarkdownHtml("[usage](/usage)");
       expect(html).toBe(
