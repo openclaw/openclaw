@@ -262,4 +262,65 @@ describe("prepareSessionManagerForRun", () => {
     expect(entries[1]).toEqual(userEntry);
     expect(entries[2]?.message?.role).toBe("assistant");
   });
+
+  it("preserves a forked no-assistant transcript's inherited branch through preparation", async () => {
+    const sessionFile = await makeTempFile();
+    const userEntry = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-05-27T00:00:01.000Z",
+      message: { role: "user", content: "inherited parent turn" },
+    };
+    const parentSession = "/srv/openclaw/main/sessions/parent.jsonl";
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          id: "fork-session",
+          timestamp: "2026-05-27T00:00:00.000Z",
+          cwd: "/srv/openclaw/main",
+          parentSession,
+        }),
+        JSON.stringify(userEntry),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const sessionManager = {
+      sessionId: "fork-session",
+      cwd: "/srv/openclaw/main",
+      flushed: true,
+      fileEntries: [
+        {
+          type: "session",
+          id: "fork-session",
+          timestamp: "2026-05-27T00:00:00.000Z",
+          cwd: "/srv/openclaw/main",
+          parentSession,
+        },
+        userEntry,
+      ],
+      byId: new Map([["user-1", userEntry]]),
+      labelsById: new Map(),
+      leafId: "user-1",
+    };
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "child-session",
+      cwd: "/tmp/task-repo",
+    });
+
+    expect(sessionManager.sessionId).toBe("child-session");
+    expect(sessionManager.cwd).toBe("/tmp/task-repo");
+    expect(sessionManager.fileEntries).toHaveLength(2);
+    expect(sessionManager.fileEntries[1]).toBe(userEntry);
+    expect(sessionManager.byId.get("user-1")).toBe(userEntry);
+    expect(sessionManager.leafId).toBe("user-1");
+    expect(sessionManager.flushed).toBe(false);
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
+  });
 });

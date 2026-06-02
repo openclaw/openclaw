@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 
-type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
+type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string; parentSession?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -69,6 +69,9 @@ export async function prepareSessionManagerForRun(params: {
     return;
   }
 
+  const isForkedSession =
+    typeof header?.parentSession === "string" && header.parentSession.length > 0;
+
   if (params.hadSessionFile && header && !hasAssistant) {
     if (sm.wasRecoveredFromCorruptHeader?.()) {
       header.id = params.sessionId;
@@ -82,17 +85,22 @@ export async function prepareSessionManagerForRun(params: {
       return;
     }
 
-    // Reset file so the first assistant flush includes header+user+assistant in order.
+    // Truncate so the first assistant flush rewrites header+...+assistant once (no duplicate
+    // header). A forked session keeps its inherited assistant-less branch in memory so the child
+    // run does not lose the parent context the fork copied in; a non-forked half-written session
+    // falls back to the bare header.
     await assertExistingHeaderIsReadable(params.sessionFile);
     await fs.writeFile(params.sessionFile, "", "utf-8");
     header.id = params.sessionId;
     header.cwd = params.cwd;
     sm.sessionId = params.sessionId;
     sm.cwd = params.cwd;
-    sm.fileEntries = [header];
-    sm.byId?.clear?.();
-    sm.labelsById?.clear?.();
-    sm.leafId = null;
+    if (!isForkedSession) {
+      sm.fileEntries = [header];
+      sm.byId?.clear?.();
+      sm.labelsById?.clear?.();
+      sm.leafId = null;
+    }
     sm.flushed = false;
     return;
   }
