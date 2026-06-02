@@ -452,11 +452,11 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after built-in install scans, when a built-in scan is
-performed, and after the operator-owned `security.installPolicy` check when one
-is configured. Workspace/local skill installs include `builtinScan`; policy-only
-trusted sources can omit it. Return additional findings or `{ block: true,
-blockReason }` to stop the install.
+`before_install` runs after the operator-owned `security.installPolicy` check
+when one is configured. The `builtinScan` field remains in the event payload for
+compatibility, but OpenClaw no longer runs built-in install-time dangerous-code
+blocking, so it is an empty `ok` result. Return additional findings or
+`{ block: true, blockReason }` to stop the install.
 
 `block: true` is terminal. `block: false` is treated as no decision.
 Handler failures block the install fail-closed.

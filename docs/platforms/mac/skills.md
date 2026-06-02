@@ -19,8 +19,8 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 - `metadata.openclaw.install` defines install options (brew/node/go/uv).
 - The app calls `skills.install` to run installers on the gateway host.
 - Operator-owned `security.installPolicy` can block gateway-backed skill
-  installs before installer metadata runs. The app does not expose a local
-  dangerous-code scan override for skill installs.
+  installs before installer metadata runs. Install-time built-in dangerous-code
+  blocking is not part of the skill install flow.
 - If every install option is `download`, the gateway surfaces all download
   choices.
 - Otherwise, the gateway picks one preferred installer using the current

@@ -32,7 +32,6 @@ function hasNonAscii(value: string): boolean {
 
 type SkillArchiveInstallPolicy = {
   config?: OpenClawConfig;
-  includeBuiltinScan?: boolean;
   installId?: string;
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
@@ -165,7 +164,6 @@ export async function installExtractedSkillRoot(params: {
         installId: params.policy.installId ?? "archive",
         logger: params.logger ?? {},
         origin: params.policy.origin,
-        includeBuiltinScan: params.policy.includeBuiltinScan,
         requestedSpecifier: params.policy.requestedSpecifier,
         source: params.policy.source,
         mode: effectiveMode,

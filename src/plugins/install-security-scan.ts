@@ -157,7 +157,6 @@ export async function evaluateSkillInstallPolicy(params: {
   mode?: "install" | "update";
   skillName: string;
   sourceDir: string;
-  includeBuiltinScan?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
   const { evaluateSkillInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
   return await evaluateSkillInstallPolicyRuntime(params);

@@ -129,7 +129,7 @@ describe("skill archive install", () => {
     await expectFlatRootMarkerRejected({ marker: "skill.md", root });
   });
 
-  it("keeps ClawHub policy-only installs independent from built-in scanner blocks", async () => {
+  it("keeps skill archive policy installs independent from built-in scanner blocks", async () => {
     const root = await tempDirs.make("openclaw-skill-archive-install-");
     const workspaceDir = path.join(root, "workspace");
     const extractedRoot = path.join(root, "extracted");
@@ -146,7 +146,6 @@ describe("skill archive install", () => {
       mode: "install",
       policy: {
         config: {},
-        includeBuiltinScan: false,
         installId: "clawhub",
         origin: { type: "clawhub", slug: "clawhub-policy-only", version: "1.0.0" },
         source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },

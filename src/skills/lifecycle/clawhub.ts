@@ -795,7 +795,6 @@ async function performClawHubSkillInstall(
             logger: params.logger,
             policy: {
               config: params.config,
-              includeBuiltinScan: false,
               installId: "clawhub",
               origin: {
                 type: "clawhub",

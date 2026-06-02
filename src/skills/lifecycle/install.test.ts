@@ -254,7 +254,7 @@ describe("installSkill install policy hooks", () => {
     });
   });
 
-  it("blocks dangerous skill sources before running install commands", async () => {
+  it("allows dangerous-looking skill sources when no operator policy or hook blocks", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeDangerousInstallableSkill(workspaceDir, "dangerous-skill");
 
@@ -264,10 +264,8 @@ describe("installSkill install policy hooks", () => {
         installId: "deps",
       });
 
-      expect(result.ok).toBe(false);
-      expect(result.message).toContain('Skill "dangerous-skill" installation blocked');
-      expect(result.message).toContain("dangerous code patterns detected");
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     });
   });
 
