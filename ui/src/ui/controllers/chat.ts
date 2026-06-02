@@ -202,7 +202,9 @@ function appendDisplayMessageIfMissing(messages: unknown[], message: unknown): u
   if (!signature) {
     return [...messages, message];
   }
-  return messages.some((existing) => messageDisplaySignature(existing) === signature)
+  return messages
+    .slice(lastUserMessageIndex(messages) + 1)
+    .some((existing) => messageDisplaySignature(existing) === signature)
     ? messages
     : [...messages, message];
 }

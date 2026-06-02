@@ -824,7 +824,44 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it("appends final payload message from own run after clearing stream state", () => {
+  it("keeps repeated assistant final text from a later turn", () => {
+    const firstUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      timestamp: 1,
+    };
+    const firstAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "OK" }],
+      timestamp: 2,
+    };
+    const secondUser = {
+      role: "user",
+      content: [{ type: "text", text: "second" }],
+      timestamp: 3,
+    };
+    const secondAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "OK" }],
+      timestamp: 4,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-2",
+      chatMessages: [firstUser, firstAssistant, secondUser],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-2",
+      sessionKey: "main",
+      state: "final",
+      message: secondAssistant,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([firstUser, firstAssistant, secondUser, secondAssistant]);
+  });
+
+  it("appends final payload message from own run before clearing stream state", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -844,7 +881,7 @@ describe("handleChatEvent", () => {
     const assignments = trackChatMessagesAssignments(state);
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(assignments).toMatchObject([{ chatRunId: null, chatStream: null }]);
+    expect(assignments).toMatchObject([{ chatRunId: "run-1", chatStream: "Reply" }]);
     expect(state.chatMessages).toEqual([payload.message]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
