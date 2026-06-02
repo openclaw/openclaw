@@ -92,6 +92,7 @@ const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
+/** Scrubs control characters and bounds carrier/user text before logging close reasons. */
 export function sanitizeLogText(value: string, maxChars: number): string {
   const sanitized = value
     .replace(/\p{Cc}/gu, " ")
@@ -113,6 +114,12 @@ function normalizeWsMessageData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+/**
+ * Parses one Twilio websocket message from any `ws` RawData representation.
+ *
+ * Malformed JSON is surfaced as a typed error so security tests and upgrade
+ * guards can distinguish bad input from normal carrier events.
+ */
 export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
   const raw = normalizeWsMessageData(data);
   try {
@@ -122,9 +129,7 @@ export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
   }
 }
 
-/**
- * Manages WebSocket connections for Twilio media streams.
- */
+/** Manages Twilio media-stream WebSockets, STT sessions, and queued TTS playback. */
 export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private sessions = new Map<string, StreamSession>();
@@ -158,7 +163,10 @@ export class MediaStreamHandler {
   }
 
   /**
-   * Handle WebSocket upgrade for media stream connections.
+   * Handles the HTTP upgrade into a Twilio media-stream socket.
+   *
+   * The handler reserves capacity before `ws` emits `connection` so slow
+   * handshakes cannot bypass global connection limits.
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.wss) {
