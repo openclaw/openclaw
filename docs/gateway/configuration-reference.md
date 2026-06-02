@@ -1202,7 +1202,7 @@ Notes:
 - `stream.hiddenBoundarySeparator`: separator before visible text after hidden tool events (default: `"paragraph"`).
 - `stream.maxOutputChars`: maximum assistant output characters projected per ACP turn.
 - `stream.maxSessionUpdateChars`: maximum characters for projected ACP status/update lines.
-- `stream.assistantCommentary`: when `true`, relay assistant commentary/progress text into ACP parent stream updates. Defaults to `false`.
+- `stream.assistantCommentary`: when `true`, relay assistant commentary and selected ACP status progress text into ACP parent stream updates. Defaults to `false`.
 - `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
 - `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
 - `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.

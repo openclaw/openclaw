@@ -514,6 +514,72 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("relays ACP status progress when assistant commentary is enabled", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-status-commentary-enabled",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-status-commentary-enabled",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      assistantCommentary: true,
+    });
+
+    emitAgentEvent({
+      runId: "run-status-commentary-enabled",
+      stream: "acp",
+      data: {
+        phase: "runtime_event",
+        eventType: "status",
+        tag: "plan",
+        text: "plan: inspect the runtime handoff first",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expectTextWithFragment(collectedTexts(), "codex: plan: inspect the runtime handoff first");
+    relay.dispose();
+  });
+
+  it("does not relay hidden ACP status tags when assistant commentary is enabled", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-status-commentary-hidden",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-status-commentary-hidden",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      assistantCommentary: true,
+    });
+
+    emitAgentEvent({
+      runId: "run-status-commentary-hidden",
+      stream: "acp",
+      data: {
+        phase: "runtime_event",
+        eventType: "status",
+        tag: "usage_update",
+        text: "usage updated: 10/100",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-status-commentary-hidden",
+      stream: "acp",
+      data: {
+        phase: "runtime_event",
+        eventType: "status",
+        tag: "available_commands_update",
+        text: "available commands updated (7)",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expectNoTextWithFragment(texts, "usage updated");
+    expectNoTextWithFragment(texts, "available commands updated");
+    relay.dispose();
+  });
+
   it("classifies opted-in commentary as visible output for stall notices", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-visible-stall",

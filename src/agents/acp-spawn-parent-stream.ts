@@ -24,6 +24,16 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+const HIDDEN_ACP_STATUS_TAGS = new Set([
+  "agent_thought_chunk",
+  "available_commands_update",
+  "config_option_update",
+  "current_mode_update",
+  "session_info_update",
+  "tool_call",
+  "tool_call_update",
+  "usage_update",
+]);
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -51,6 +61,20 @@ function formatProxyEnvSummary(keys: string[]): string {
     return "proxy env: none";
   }
   return `proxy env: ${keys.join(", ")}`;
+}
+
+function shouldRelayAcpStatusProgress(params: {
+  eventType: string | undefined;
+  tag: string | undefined;
+  text: string | undefined;
+}): boolean {
+  if (params.eventType !== "status" || !params.text) {
+    return false;
+  }
+  if (!params.tag) {
+    return true;
+  }
+  return !HIDDEN_ACP_STATUS_TAGS.has(params.tag);
 }
 
 function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: string): string {
@@ -311,6 +335,32 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
+  const appendVisibleProgress = (delta: string) => {
+    if (stallNotified) {
+      stallNotified = false;
+      recordTaskRunProgressByRunId({
+        runId,
+        runtime: "acp",
+        sessionKey: params.childSessionKey,
+        lastEventAt: Date.now(),
+        eventSummary: "Resumed output.",
+      });
+      emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
+    }
+
+    lastProgressAt = Date.now();
+    firstVisibleOutputAt ??= lastProgressAt;
+    pendingText += delta;
+    if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
+      pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
+    }
+    if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
+      flushPending();
+      return;
+    }
+    scheduleFlush();
+  };
+
   const buildNoOutputNotice = () => {
     const seconds = Math.round(noOutputNoticeMs / 1000);
     if (!promptSubmittedAt) {
@@ -405,29 +455,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
 
-      if (stallNotified) {
-        stallNotified = false;
-        recordTaskRunProgressByRunId({
-          runId,
-          runtime: "acp",
-          sessionKey: params.childSessionKey,
-          lastEventAt: Date.now(),
-          eventSummary: "Resumed output.",
-        });
-        emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
-      }
-
-      lastProgressAt = Date.now();
-      firstVisibleOutputAt ??= lastProgressAt;
-      pendingText += delta;
-      if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
-        pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
-      }
-      if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
-        flushPending();
-        return;
-      }
-      scheduleFlush();
+      appendVisibleProgress(delta);
       return;
     }
 
@@ -451,8 +479,21 @@ export function startAcpSpawnParentStreamRelay(params: {
       }
       if (phase === "runtime_event") {
         const eventType = normalizeOptionalString(data?.eventType);
+        const text = normalizeOptionalString(data?.text);
+        const tag = normalizeOptionalString(data?.tag);
         firstRuntimeEventAt ??= Date.now();
         lastRuntimeEventType = eventType;
+        if (
+          shouldRelayAssistantCommentary &&
+          shouldRelayAcpStatusProgress({
+            eventType,
+            tag,
+            text,
+          })
+        ) {
+          appendVisibleProgress(`${text}\n\n`);
+          return;
+        }
         lastProgressAt = Date.now();
         return;
       }

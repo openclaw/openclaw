@@ -221,7 +221,7 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.stream.maxSessionUpdateChars":
     "Maximum characters for projected ACP session/update lines (tool/status updates).",
   "acp.stream.assistantCommentary":
-    "When true, relay assistant commentary/progress text into ACP parent stream updates. Defaults off.",
+    "When true, relay assistant commentary and selected ACP status progress text into ACP parent stream updates. Defaults off.",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
   "acp.runtime.ttlMinutes":
