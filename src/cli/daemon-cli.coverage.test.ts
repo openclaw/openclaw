@@ -28,6 +28,10 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const inspectPortConnections = vi.fn(async (port: number) => ({
+  port,
+  connections: [],
+}));
 
 function collectMatching<T, U>(
   items: readonly T[],
@@ -114,6 +118,7 @@ vi.mock("../daemon/inspect.js", () => ({
 }));
 
 vi.mock("../infra/ports.js", () => ({
+  inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
@@ -192,6 +197,7 @@ describe("daemon-cli coverage", () => {
     serviceReadCommand.mockResolvedValue(null);
     resolveGatewayProbeAuthSafeWithSecretInputs.mockClear();
     findExtraGatewayServices.mockClear();
+    inspectPortConnections.mockClear();
     buildGatewayInstallPlan.mockClear();
   });
 
@@ -238,13 +244,14 @@ describe("daemon-cli coverage", () => {
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);
 
     const parsed = parseFirstJsonRuntimeLine<{
-      gateway?: { port?: number; portSource?: string; probeUrl?: string };
+      gateway?: { port?: number; portSource?: string; probeUrl?: string; version?: string | null };
       config?: { mismatch?: boolean };
       rpc?: { url?: string; ok?: boolean };
     }>();
     expect(parsed.gateway?.port).toBe(19001);
     expect(parsed.gateway?.portSource).toBe("service args");
     expect(parsed.gateway?.probeUrl).toBe("ws://127.0.0.1:19001");
+    expect(parsed.gateway?.version).toBeNull();
     expect(parsed.config?.mismatch).toBe(true);
     expect(parsed.rpc?.url).toBe("ws://127.0.0.1:19001");
     expect(parsed.rpc?.ok).toBe(true);

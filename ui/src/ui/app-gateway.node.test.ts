@@ -1,17 +1,27 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadChatComposerSnapshotMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => { draft: string; queue: ChatQueueItem[] } | null>(() => null),
+);
+const restoreChatComposerStateMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => boolean>(() => false),
+);
 const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+type GatewayRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<GatewayRequest>>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -42,12 +52,15 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
-    readonly request = vi.fn(async (method: string) => {
+    readonly request = vi.fn<GatewayRequest>(async (method: string) => {
       if (method === "update.status") {
         return { sentinel: null };
       }
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
       }
       return {};
     });
@@ -112,12 +125,25 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadControlUiBootstrapConfigMock,
 }));
 
+vi.mock("./chat/composer-persistence.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/composer-persistence.ts")>();
+  return {
+    ...actual,
+    loadChatComposerSnapshot: loadChatComposerSnapshotMock,
+    restoreChatComposerState: restoreChatComposerStateMock,
+  };
+});
+
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
+  chatQueue: import("./ui-types.ts").ChatQueueItem[];
+  chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
+  activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
 };
@@ -130,7 +156,6 @@ function createHost(): TestGatewayHost {
       sessionKey: "main",
       lastActiveSessionKey: "main",
       theme: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       splitRatio: 0.6,
       navCollapsed: false,
@@ -163,8 +188,12 @@ function createHost(): TestGatewayHost {
     updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
+    chatMessage: "",
     chatQueue: [],
+    chatComposerProvisionalRestore: null,
+    chatQueueBySession: {},
     chatToolMessages: [],
+    activityEntries: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
@@ -174,12 +203,13 @@ function createHost(): TestGatewayHost {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
+    execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
-    updateComplete: new Promise(() => undefined),
+    updateComplete: new Promise(() => {}),
   } as unknown as TestGatewayHost;
 }
 
@@ -196,6 +226,18 @@ function connectHostGateway() {
   connectGateway(host);
   const client = requireGatewayClient();
   return { host, client };
+}
+
+function eventPayloads(host: TestGatewayHost, event: string): Array<Record<string, unknown>> {
+  const payloads: Array<Record<string, unknown>> = [];
+  for (const entry of host.eventLogBuffer) {
+    const candidate = entry as { event?: unknown; payload?: unknown };
+    if (candidate.event !== event || !candidate.payload || typeof candidate.payload !== "object") {
+      continue;
+    }
+    payloads.push(candidate.payload as Record<string, unknown>);
+  }
+  return payloads;
 }
 
 function emitToolResultEvent(client: GatewayClientMock) {
@@ -221,6 +263,10 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    loadChatComposerSnapshotMock.mockReset();
+    loadChatComposerSnapshotMock.mockReturnValue(null);
+    restoreChatComposerStateMock.mockReset();
+    restoreChatComposerStateMock.mockReturnValue(false);
     loadControlUiBootstrapConfigMock.mockClear();
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
       setTimeout(() => callback(Date.now()), 0),
@@ -249,6 +295,79 @@ describe("connectGateway", () => {
     expect(gatewayClientInstances).toHaveLength(3);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
     expect(host.lastError).toBeNull();
+  });
+
+  it("lets hello-scoped composer state replace an unchanged provisional restore", () => {
+    const { host, client } = connectHostGateway();
+    const provisionalQueue = [{ id: "queued-old", text: "wrong agent", createdAt: 1 }];
+    const scopedQueue = [{ id: "queued-new", text: "right agent", createdAt: 2 }];
+    host.chatMessage = "fallback draft";
+    host.chatQueue = provisionalQueue;
+    host.chatComposerProvisionalRestore = {
+      sessionKey: "main",
+      chatMessage: "fallback draft",
+      chatQueue: provisionalQueue,
+    };
+    loadChatComposerSnapshotMock.mockReturnValueOnce({
+      draft: "scoped draft",
+      queue: scopedQueue,
+    });
+    restoreChatComposerStateMock.mockImplementationOnce((target: unknown) => {
+      const hostTarget = target as typeof host;
+      expect(hostTarget.chatMessage).toBe("");
+      expect(hostTarget.chatQueue).toEqual([]);
+      hostTarget.chatMessage = "scoped draft";
+      hostTarget.chatQueue = scopedQueue;
+      return true;
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "agent-b",
+          mainKey: "main",
+          mainSessionKey: "agent:agent-b:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    });
+
+    expect(loadChatComposerSnapshotMock).toHaveBeenCalledWith(host, "agent:agent-b:main");
+    expect(host.sessionKey).toBe("agent:agent-b:main");
+    expect(host.chatMessage).toBe("scoped draft");
+    expect(host.chatQueue).toBe(scopedQueue);
+    expect(host.chatComposerProvisionalRestore).toBeNull();
+  });
+
+  it("keeps a provisional composer restore when the user edited before hello", () => {
+    const { host, client } = connectHostGateway();
+    const provisionalQueue = [{ id: "queued-old", text: "offline", createdAt: 1 }];
+    host.chatMessage = "user edit";
+    host.chatQueue = provisionalQueue;
+    host.chatComposerProvisionalRestore = {
+      sessionKey: "main",
+      chatMessage: "fallback draft",
+      chatQueue: provisionalQueue,
+    };
+    loadChatComposerSnapshotMock.mockReturnValueOnce({
+      draft: "scoped draft",
+      queue: [{ id: "queued-new", text: "right agent", createdAt: 2 }],
+    });
+    restoreChatComposerStateMock.mockImplementationOnce((target: unknown) => {
+      const hostTarget = target as typeof host;
+      expect(hostTarget.chatMessage).toBe("user edit");
+      expect(hostTarget.chatQueue).toBe(provisionalQueue);
+      return false;
+    });
+
+    client.emitHello();
+
+    expect(loadChatComposerSnapshotMock).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("user edit");
+    expect(host.chatQueue).toBe(provisionalQueue);
+    expect(host.chatComposerProvisionalRestore).toBeNull();
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
@@ -534,12 +653,83 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("clears stale approval modal errors without interrupting an in-flight local resolve", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-external-1",
+        request: {
+          command: "pnpm test",
+          host: "gateway",
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    host.execApprovalError = "Approval failed: approval already resolved";
+    host.execApprovalBusy = true;
+
+    client.emitEvent({
+      event: "exec.approval.resolved",
+      payload: { id: "approval-external-1", decision: "allow-once" },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(0);
+    expect(host.execApprovalError).toBeNull();
+    expect(host.execApprovalBusy).toBe(true);
+  });
+
+  it("clears active approval errors when event-enqueued approvals expire", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const { host, client } = connectHostGateway();
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const activeExpiresAtMs = Date.now() + 1_000;
+
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-queued",
+          request: {
+            command: "pnpm test",
+            host: "gateway",
+          },
+          createdAtMs: Date.now(),
+          expiresAtMs: queuedExpiresAtMs,
+        },
+      });
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-active-expiring",
+          request: {
+            command: "pnpm check:changed",
+            host: "gateway",
+          },
+          createdAtMs: Date.now() + 1,
+          expiresAtMs: activeExpiresAtMs,
+        },
+      });
+      host.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(host.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears pending session reload timers when the active client closes", () => {
     vi.useFakeTimers();
     try {
       const { host, client } = connectHostGateway();
       const pendingReload = vi.fn();
-      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
       client.emitClose({ code: 1005 });
 
@@ -768,7 +958,7 @@ describe("connectGateway", () => {
     expect(host.lastError).toBe("disconnected (1006): no reason");
   });
 
-  it("refreshes bootstrap config after hello", () => {
+  it("refreshes bootstrap config after hello", async () => {
     const host = createHost();
 
     connectGateway(host);
@@ -776,7 +966,7 @@ describe("connectGateway", () => {
 
     client.emitHello();
 
-    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1));
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
   });
 
@@ -824,7 +1014,7 @@ describe("connectGateway", () => {
     } as GatewayHelloOk);
 
     await vi.waitFor(() => {
-      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host, { startup: false });
     });
     expect(host.sessionKey).toBe("agent:main:main");
     expect(host.settings.sessionKey).toBe("agent:main:main");
@@ -866,6 +1056,95 @@ describe("connectGateway", () => {
       sessionKey: "main",
     });
     expect(host.pendingAbort).toBeNull();
+  });
+
+  it("replays queued selected-global chat aborts with agent scope", async () => {
+    const host = createHost();
+    host.pendingAbort = { sessionKey: "global", agentId: "work" };
+    host.assistantAgentId = "main";
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "global",
+      agentId: "work",
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
+  it("retries reconnectable queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "retry this prompt",
+        createdAt: 1,
+        sendRunId: "run-retry-1",
+        sendState: "waiting-reconnect",
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry this prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-1",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-retry-1");
+    });
+  });
+
+  it("retries saved-session queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.sessionKey = "other";
+    host.chatQueueBySession = {
+      main: [
+        {
+          id: "pending-send-main",
+          text: "retry main prompt",
+          createdAt: 1,
+          sendRunId: "run-retry-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry main prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-main",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueueBySession.main).toBeUndefined();
+      expect(host.chatMessages).toStrictEqual([]);
+      expect(host.chatRunId).toBeNull();
+    });
   });
 
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
@@ -933,6 +1212,111 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("records first assistant paint timing for tracked chat sends", async () => {
+    const { host, client } = connectHostGateway();
+    host.updateComplete = Promise.resolve();
+    host.chatRunId = "run-first-visible";
+    host.chatStream = "";
+    (
+      host as TestGatewayHost & {
+        chatSendTimingsByRun: Map<string, Record<string, unknown>>;
+      }
+    ).chatSendTimingsByRun = new Map([
+      [
+        "run-first-visible",
+        {
+          runId: "run-first-visible",
+          sessionKey: "main",
+          sendAttempts: 1,
+          sendState: "sending",
+          submittedAtMs: 100,
+          requestStartedAtMs: 125,
+          ackAtMs: 150,
+          ackStatus: "started",
+        },
+      ],
+    ]);
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-first-visible",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Hello",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          timestamp: Date.now(),
+        },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        eventPayloads(host, "control-ui.chat.send").some(
+          (payload) => payload.phase === "first-assistant-visible",
+        ),
+      ).toBe(true),
+    );
+    const firstVisible = eventPayloads(host, "control-ui.chat.send").find(
+      (payload) => payload.phase === "first-assistant-visible",
+    );
+    expect(firstVisible).toMatchObject({
+      runId: "run-first-visible",
+      sessionKey: "main",
+      ackStatus: "started",
+      eventState: "delta",
+      sendState: "sending",
+    });
+    expect(firstVisible?.ackToFirstAssistantEventMs).toEqual(expect.any(Number));
+    expect(host.chatStream).toBe("Hello");
+  });
+
+  it("renders session-scoped tool events for externally started runs", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "session.tool",
+      payload: {
+        runId: "external-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 123,
+        sessionKey: "main",
+        data: {
+          toolCallId: "session-tool-1",
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      },
+    });
+
+    expect(host.toolStreamOrder).toStrictEqual(["session-tool-1"]);
+    const entry = host.toolStreamById.get("session-tool-1") as
+      | { args?: unknown; name?: string; runId?: string; sessionKey?: string }
+      | undefined;
+    expect(entry).toMatchObject({
+      args: { command: "pwd" },
+      name: "exec",
+      runId: "external-run-1",
+      sessionKey: "main",
+    });
+    expect(host.activityEntries).toHaveLength(1);
+    expect(host.activityEntries[0]).toMatchObject({
+      toolCallId: "session-tool-1",
+      runId: "external-run-1",
+      sessionKey: "main",
+      toolName: "exec",
+      status: "running",
+      hiddenArgumentCount: 1,
+      summary: "exec running; 1 argument hidden",
+    });
+    expect(JSON.stringify(host.activityEntries[0])).not.toContain("pwd");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("stores BTW side results for the active session", () => {
     const { host, client } = connectHostGateway();
 
@@ -956,6 +1340,58 @@ describe("connectGateway", () => {
     expect(sideResult?.question).toBe("what changed?");
     expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
+  });
+
+  it("stores selected-global BTW side results for agent main aliases", () => {
+    const { host, client } = connectHostGateway();
+    host.sessionKey = "agent:work:main";
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-work-global",
+        sessionKey: "global",
+        agentId: "work",
+        question: "what changed?",
+        text: "The alias now receives canonical global side results.",
+        ts: 123,
+      },
+    });
+
+    const sideResult = host.chatSideResult as
+      | { agentId?: string; kind?: string; runId?: string; sessionKey?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-work-global");
+    expect(sideResult?.sessionKey).toBe("global");
+    expect(sideResult?.agentId).toBe("work");
+    expect(sideResult?.text).toBe("The alias now receives canonical global side results.");
+    expect(host.chatSideResultTerminalRuns.has("btw-work-global")).toBe(true);
+  });
+
+  it("ignores selected-global BTW side results from another agent", () => {
+    const { host, client } = connectHostGateway();
+    host.sessionKey = "global";
+    host.assistantAgentId = "work";
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-main-global",
+        sessionKey: "global",
+        agentId: "main",
+        question: "what changed?",
+        text: "This belongs to the default agent.",
+        ts: 123,
+      },
+    });
+
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns.has("btw-main-global")).toBe(false);
   });
 
   it("ignores tracked BTW terminal finals without tearing down the active run", () => {
@@ -1092,6 +1528,55 @@ describe("connectGateway", () => {
         content: [{ type: "text", text: "Final answer" }],
       },
     ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps source-reply finals live even when message tool events were seen", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-with-message-tool";
+    host.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+    ];
+    emitToolResultEvent(client);
+    expect(host.toolStreamOrder).toHaveLength(1);
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-with-message-tool",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(host.toolStreamOrder).toHaveLength(1);
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 

@@ -7,6 +7,7 @@ import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { detectInsertion, resolveOcPath, setOcPath } from "../universal.js";
+import { parseYaml } from "../yaml/parse.js";
 
 function expectLeaf(
   match: ReturnType<typeof resolveOcPath>,
@@ -187,6 +188,16 @@ describe("resolveOcPath — insertion-point detection", () => {
   });
 });
 
+describe("resolveOcPath — yaml AST", () => {
+  it("preserves source line lookup for numeric map keys", () => {
+    const ast = parseYaml("name: x\n1: one\n").ast;
+    const m = resolveOcPath(ast, parseOcPath("oc://workflow.yaml/1"));
+
+    expectLeaf(m, { valueText: "one", leafType: "string" });
+    expect(m?.line).toBe(2);
+  });
+});
+
 describe("setOcPath — md leaf", () => {
   it("replaces frontmatter value", () => {
     const md = parseMd("---\nname: old\n---\n").ast;
@@ -260,6 +271,62 @@ describe("setOcPath — jsonc leaf with coercion", () => {
   it("rejects non-bool string for boolean leaf", () => {
     const ast = parseJsonc('{ "k": true }').ast;
     const r = setOcPath(ast, parseOcPath("oc://config/k"), "maybe");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("parse-error");
+    }
+  });
+
+  it("resolves slash-deep JSONC paths", () => {
+    const ast = parseJsonc(
+      '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] } }',
+    ).ast;
+    const r = setOcPath(
+      ast,
+      parseOcPath("oc://openclaw.json/agents/list/0/tools/exec/security"),
+      "allowlist",
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
+      expect(JSON.parse(emitJsonc(ast2))).toEqual({
+        agents: { list: [{ tools: { exec: { security: "allowlist" } } }] },
+      });
+    }
+  });
+
+  it("keeps JSON-looking strings as strings by default", () => {
+    const ast = parseJsonc('{ "token": "${TOKEN}" }').ast;
+    const r = setOcPath(ast, parseOcPath("oc://openclaw.json/token"), '{"source":"file"}');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
+      expect(JSON.parse(emitJsonc(ast2))).toEqual({ token: '{"source":"file"}' });
+    }
+  });
+
+  it("replaces a JSONC leaf with parsed JSON when requested", () => {
+    const ast = parseJsonc('{ "token": "${TOKEN}" }').ast;
+    const r = setOcPath(
+      ast,
+      parseOcPath("oc://openclaw.json/token"),
+      '{"source":"file","provider":"secrets","id":"/test"}',
+      { valueJson: true },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
+      expect(JSON.parse(emitJsonc(ast2))).toEqual({
+        token: { source: "file", provider: "secrets", id: "/test" },
+      });
+    }
+  });
+
+  it("rejects non-finite parsed JSON replacement values", () => {
+    const ast = parseJsonc('{ "limit": 1 }').ast;
+    const r = setOcPath(ast, parseOcPath("oc://openclaw.json/limit"), "1e999", {
+      valueJson: true,
+    });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.reason).toBe("parse-error");

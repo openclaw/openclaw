@@ -383,6 +383,26 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it("rejects fractional read limits before invoking Slack actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "read",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            limit: 2.5,
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
       handleSlackMessageAction({
@@ -423,6 +443,32 @@ describe("handleSlackMessageAction", () => {
     expect(action.channelId).toBe("C1");
     expect(action.threadId).toBe("111.222");
     expectForwardedCfg(invoke, cfg);
+  });
+
+  it("forwards tool context for current-channel download-file actions", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+    const toolContext = { currentChannelId: "C1" };
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "download-file",
+        cfg,
+        toolContext,
+        params: {
+          fileId: "F123",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.action).toBe("downloadFile");
+    expect(action.fileId).toBe("F123");
+    expect(action.channelId).toBeUndefined();
+    expectForwardedCfg(invoke, cfg);
+    expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
   });
 
   it("maps download-file target aliases to scope fields", async () => {

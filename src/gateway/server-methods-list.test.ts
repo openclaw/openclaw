@@ -14,10 +14,43 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("advertises ClawHub skill trust methods", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("skills.securityVerdicts");
+    expect(methods).toContain("skills.skillCard");
+  });
+
+  it("does not advertise hidden core handlers", () => {
+    const methods = listGatewayMethods();
+    expect(methods).not.toContain("config.openFile");
+    expect(methods).not.toContain("chat.inject");
+    expect(methods).not.toContain("nativeHook.invoke");
+    expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("preserves the legacy advertised method order", () => {
+    const methods = listGatewayMethods();
+    expect(methods.slice(0, 5)).toEqual([
+      "health",
+      "diagnostics.stability",
+      "doctor.memory.status",
+      "doctor.memory.dreamDiary",
+      "doctor.memory.backfillDreamDiary",
+    ]);
+    expect(methods.slice(32, 37)).toEqual([
+      "exec.approvals.get",
+      "exec.approvals.set",
+      "exec.approvals.node.get",
+      "exec.approvals.node.set",
+      "exec.approval.get",
+    ]);
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
     expect(methods).toContain("talk.client.toolCall");
+    expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
     expect(methods).toContain("talk.session.join");
     expect(methods).toContain("talk.session.appendAudio");
@@ -26,6 +59,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
     expect(methods).toContain("talk.session.submitToolResult");
+    expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
   });
 });

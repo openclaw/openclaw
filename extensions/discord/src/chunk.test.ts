@@ -14,6 +14,18 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  it("uses default chunk limits for non-finite options", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkDiscordText(text, {
+      maxChars: Number.NaN,
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+  });
+
   it("keeps fenced code blocks balanced across chunks", () => {
     const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
     const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;
@@ -38,6 +50,19 @@ describe("chunkDiscordText", () => {
       chunkMode: "newline",
     });
     expect(chunks).toEqual([text]);
+  });
+
+  it("uses default newline chunk limits for non-finite max chars", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkDiscordTextWithMode(text, {
+      maxChars: Number.NaN,
+      maxLines: 50,
+      chunkMode: "newline",
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
+    expect(chunks.join("")).toBe(text);
   });
 
   it("reserves space for closing fences when chunking", () => {
@@ -122,6 +147,19 @@ describe("chunkDiscordText", () => {
     const text = `Reasoning:\n_${body}_`;
 
     const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
+  });
+
+  it("keeps thinking-prefixed reasoning italics balanced across chunks", () => {
+    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
+    const text = `Thinking\n\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
     for (const chunk of chunks) {

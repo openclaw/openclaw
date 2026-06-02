@@ -1,7 +1,7 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 export type ModelAliasIndex = {
   byAlias: Map<
@@ -116,9 +116,13 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     return null;
   }
 
-  // Standard DP with early exit. O(maxDistance * minLen) in common cases.
-  const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
-  const curr = Array.from({ length: bLen + 1 }, () => 0);
+  // Standard DP with early exit. Reuse fixed-size numeric buffers so fuzzy
+  // matching large model catalogs does not allocate a row per candidate.
+  const prev = new Uint32Array(bLen + 1);
+  const curr = new Uint32Array(bLen + 1);
+  for (let index = 0; index <= bLen; index += 1) {
+    prev[index] = index;
+  }
 
   for (let i = 1; i <= aLen; i++) {
     curr[0] = i;
@@ -138,12 +142,12 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     }
 
     for (let j = 0; j <= bLen; j++) {
-      prev[j] = curr[j] ?? 0;
+      prev[j] = curr[j];
     }
   }
 
-  const dist = prev[bLen] ?? null;
-  if (dist == null || dist > maxDistance) {
+  const dist = prev[bLen];
+  if (dist > maxDistance) {
     return null;
   }
   return dist;
@@ -282,16 +286,18 @@ export function resolveModelDirectiveSelection(params: {
     };
   };
 
-  const resolveFuzzy = (params: {
+  const resolveFuzzy = (paramsLocal: {
     provider?: string;
     fragment: string;
   }): { selection?: ModelDirectiveSelection; error?: string } => {
-    const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
+    const fragment = normalizeLowercaseStringOrEmpty(paramsLocal.fragment);
     if (!fragment) {
       return {};
     }
 
-    const providerFilter = params.provider ? normalizeProviderId(params.provider) : undefined;
+    const providerFilter = paramsLocal.provider
+      ? normalizeProviderId(paramsLocal.provider)
+      : undefined;
 
     const candidates: Array<{ provider: string; model: string }> = [];
     for (const key of allowedModelKeys) {
@@ -311,7 +317,7 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     // Also allow partial alias matches when the user didn't specify a provider.
-    if (!params.provider) {
+    if (!paramsLocal.provider) {
       const aliasMatches: Array<{ provider: string; model: string }> = [];
       for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
         if (!aliasKey.includes(fragment)) {

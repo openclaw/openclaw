@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
@@ -959,6 +959,8 @@ async function transcodeToFeishuVoiceOpus(params: {
             "libopus",
             "-b:a",
             FEISHU_VOICE_BITRATE,
+            "-f",
+            "ogg",
             outputPath,
           ]);
         },

@@ -1,11 +1,15 @@
-import {
-  type CodexAppInventoryCache,
-  type CodexAppInventoryCacheRead,
-  type CodexAppInventoryRequest,
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  CodexAppInventoryCache,
+  CodexAppInventoryCacheRead,
+  CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_MARKETPLACE_NAMES,
+  isCodexPluginsMarketplaceName,
   resolveCodexPluginsPolicy,
+  type CodexPluginsMarketplaceName,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
@@ -14,7 +18,7 @@ import type { v2 } from "./protocol.js";
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
 export type CodexPluginMarketplaceRef = {
-  name: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  name: CodexPluginsMarketplaceName;
   path?: string;
   remoteMarketplaceName?: string;
 };
@@ -56,7 +60,6 @@ export type CodexPluginInventoryRecord = {
 
 export type CodexPluginInventory = {
   policy: ResolvedCodexPluginsPolicy;
-  marketplace?: CodexPluginMarketplaceRef;
   records: CodexPluginInventoryRecord[];
   diagnostics: CodexPluginInventoryDiagnostic[];
   appInventory?: CodexAppInventoryCacheRead;
@@ -70,6 +73,7 @@ export type ReadCodexPluginInventoryParams = {
   appCacheKey?: string;
   nowMs?: number;
   readPluginDetails?: boolean;
+  suppressAppInventoryRefresh?: boolean;
 };
 
 export async function readCodexPluginInventory(
@@ -93,25 +97,14 @@ export async function readCodexPluginInventory(
   const listed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
-  if (!marketplaceEntry) {
-    return {
-      policy,
-      records: [],
-      diagnostics: policy.pluginPolicies
-        .filter((pluginPolicy) => pluginPolicy.enabled)
-        .map((pluginPolicy) => ({
-          code: "marketplace_missing",
-          plugin: pluginPolicy,
-          message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
-        })),
-      ...(appInventory ? { appInventory } : {}),
-    };
+  // Index the supported marketplaces (curated + bundled) by name so each plugin
+  // policy is matched to the marketplace its config actually points at.
+  const marketplaceByName = new Map<CodexPluginsMarketplaceName, v2.PluginMarketplaceEntry>();
+  for (const marketplace of listed.marketplaces) {
+    if (isCodexPluginsMarketplaceName(marketplace.name)) {
+      marketplaceByName.set(marketplace.name, marketplace);
+    }
   }
-
-  const marketplace = marketplaceRef(marketplaceEntry);
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
   if (appInventory?.state === "missing") {
@@ -130,12 +123,22 @@ export async function readCodexPluginInventory(
     if (!pluginPolicy.enabled) {
       continue;
     }
+    const marketplaceEntry = marketplaceByName.get(pluginPolicy.marketplaceName);
+    if (!marketplaceEntry) {
+      diagnostics.push({
+        code: "marketplace_missing",
+        plugin: pluginPolicy,
+        message: `Codex marketplace ${pluginPolicy.marketplaceName} was not found.`,
+      });
+      continue;
+    }
+    const marketplace = marketplaceRef(marketplaceEntry);
     const summary = findPluginSummary(marketplaceEntry, pluginPolicy.pluginName);
     if (!summary) {
       diagnostics.push({
         code: "plugin_missing",
         plugin: pluginPolicy,
-        message: `${pluginPolicy.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
+        message: `${pluginPolicy.pluginName} was not found in ${pluginPolicy.marketplaceName}.`,
       });
       continue;
     }
@@ -167,6 +170,7 @@ export async function readCodexPluginInventory(
     }
 
     const apps = resolveOwnedApps({
+      pluginPolicy,
       detail,
       appInventory,
     });
@@ -182,27 +186,44 @@ export async function readCodexPluginInventory(
     });
   }
 
-  return {
+  const inventory = {
     policy,
-    marketplace,
     records,
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
   };
+  return inventory;
 }
 
 export function findOpenAiCuratedPluginSummary(
   listed: v2.PluginListResponse,
   pluginName: string,
+  marketplaceName?: CodexPluginsMarketplaceName,
 ): { marketplace: CodexPluginMarketplaceRef; summary: v2.PluginSummary } | undefined {
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
-  if (!marketplaceEntry) {
-    return undefined;
+  if (marketplaceName) {
+    const marketplaceEntry = listed.marketplaces.find(
+      (marketplace) => marketplace.name === marketplaceName,
+    );
+    if (!marketplaceEntry) {
+      return undefined;
+    }
+    const summary = findPluginSummary(marketplaceEntry, pluginName);
+    return summary ? { marketplace: marketplaceRef(marketplaceEntry), summary } : undefined;
   }
-  const summary = findPluginSummary(marketplaceEntry, pluginName);
-  return summary ? { marketplace: marketplaceRef(marketplaceEntry), summary } : undefined;
+  // No marketplace hint: search every supported marketplace and return the first hit.
+  for (const allowedName of CODEX_PLUGINS_MARKETPLACE_NAMES) {
+    const marketplaceEntry = listed.marketplaces.find(
+      (marketplace) => marketplace.name === allowedName,
+    );
+    if (!marketplaceEntry) {
+      continue;
+    }
+    const summary = findPluginSummary(marketplaceEntry, pluginName);
+    if (summary) {
+      return { marketplace: marketplaceRef(marketplaceEntry), summary };
+    }
+  }
+  return undefined;
 }
 
 export function pluginReadParams(
@@ -230,6 +251,7 @@ function readCachedAppInventory(
     key: params.appCacheKey,
     request,
     nowMs: params.nowMs,
+    suppressRefresh: params.suppressAppInventoryRefresh,
   });
 }
 
@@ -276,6 +298,7 @@ function resolveAppOwnership(params: {
 }
 
 function resolveOwnedApps(params: {
+  pluginPolicy: ResolvedCodexPluginPolicy;
   detail?: v2.PluginDetail;
   appInventory?: CodexAppInventoryCacheRead;
 }): CodexPluginOwnedApp[] {
@@ -284,6 +307,11 @@ function resolveOwnedApps(params: {
     return [];
   }
   if (params.appInventory?.state === "missing") {
+    embeddedAgentLog.warn("codex plugin inventory missing app inventory for detail apps", {
+      configKey: params.pluginPolicy.configKey,
+      pluginName: params.pluginPolicy.pluginName,
+      appIds: detailApps.map((app) => app.id).toSorted(),
+    });
     return [];
   }
   const appInfoById = new Map(
@@ -338,8 +366,12 @@ function pluginNameFromPluginId(pluginId: string, marketplaceName: string): stri
 }
 
 function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
+  // marketplace.name is validated at every call site via isCodexPluginsMarketplaceName.
+  const name = isCodexPluginsMarketplaceName(marketplace.name)
+    ? marketplace.name
+    : CODEX_PLUGINS_MARKETPLACE_NAME;
   return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
+    name,
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };

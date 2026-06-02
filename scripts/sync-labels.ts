@@ -9,13 +9,17 @@ type RepoLabel = {
 };
 
 const COLOR_BY_PREFIX = new Map<string, string>([
-  ["channel", "1d76db"],
-  ["app", "6f42c1"],
-  ["extensions", "0e8a16"],
-  ["docs", "0075ca"],
-  ["cli", "f9d0c4"],
-  ["gateway", "d4c5f9"],
-  ["size", "fbca04"],
+  ["channel", "0969DA"],
+  ["app", "6E7781"],
+  ["extensions", "6E7781"],
+  ["plugin", "6E7781"],
+  ["docs", "0A3069"],
+  ["cli", "0A3069"],
+  ["gateway", "57606A"],
+  ["commands", "0A3069"],
+  ["scripts", "57606A"],
+  ["docker", "D6E3DA"],
+  ["size", "8C959F"],
 ]);
 
 const EXTRA_LABEL_METADATA = new Map<
@@ -128,8 +132,8 @@ function resolveRepo(): string {
   throw new Error(`Unsupported GitHub remote: ${remote}`);
 }
 
-function fetchExistingLabels(repo: string): Map<string, RepoLabel> {
-  const raw = execFileSync("gh", ["api", `repos/${repo}/labels?per_page=100`, "--paginate"], {
+function fetchExistingLabels(repoLocal: string): Map<string, RepoLabel> {
+  const raw = execFileSync("gh", ["api", `repos/${repoLocal}/labels?per_page=100`, "--paginate"], {
     encoding: "utf8",
   });
   const labels = JSON.parse(raw) as RepoLabel[];

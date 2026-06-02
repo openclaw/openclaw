@@ -5,10 +5,12 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
+import type { RuntimeId } from "./runtime-parity.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
 const MULTIPASS_GUEST_REPO_PATH = "/workspace/openclaw";
@@ -74,6 +76,7 @@ type QaMultipassPlan = {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: string;
+  runtimePair?: [RuntimeId, RuntimeId];
   scenarioIds: string[];
   forwardedEnv: Record<string, string>;
   hostCodexHomePath?: string;
@@ -240,13 +243,14 @@ export function createQaMultipassPlan(params: {
   allowFailures?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
+  runtimePair?: [RuntimeId, RuntimeId];
   image?: string;
   cpus?: number;
   memory?: string;
   disk?: string;
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
-  const scenarioIds = [...new Set(params.scenarioIds ?? [])];
+  const scenarioIds = uniqueStrings(params.scenarioIds ?? []);
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
@@ -279,6 +283,7 @@ export function createQaMultipassPlan(params: {
       ...(params.thinkingDefault ? ["--thinking", params.thinkingDefault] : []),
       ...(params.allowFailures ? ["--allow-failures"] : []),
       ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
+      ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
     ],
     scenarioIds,
   );
@@ -303,6 +308,7 @@ export function createQaMultipassPlan(params: {
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
     thinkingDefault: params.thinkingDefault,
+    runtimePair: params.runtimePair,
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -551,6 +557,7 @@ export async function runQaMultipass(params: {
   allowFailures?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
+  runtimePair?: [RuntimeId, RuntimeId];
   image?: string;
   cpus?: number;
   memory?: string;

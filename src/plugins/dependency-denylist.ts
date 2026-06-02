@@ -1,3 +1,5 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES = ["plain-crypto-js"] as const;
 
 export const blockedInstallDependencyPackageNames = [
@@ -58,10 +60,7 @@ function isBlockedInstallDependencyPackagePathName(packageName: string): boolean
 }
 
 function normalizePathSegments(relativePath: string): string[] {
-  return relativePath
-    .split(/[\\/]+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(relativePath.split(/[\\/]+/));
 }
 
 function parseBlockedNodeModulesPackageId(

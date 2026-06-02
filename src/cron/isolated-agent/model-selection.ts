@@ -1,3 +1,4 @@
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -9,6 +10,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveSubagentModelConfigSelectionResult,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -16,26 +18,26 @@ type CronSessionModelOverrides = {
   providerOverride?: string;
 };
 
+type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
+
+/** Inputs used to resolve the model for one isolated cron run. */
 export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  agentConfigOverride?: {
-    model?: unknown;
-    subagents?: {
-      model?: unknown;
-    };
-  };
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
   agentId?: string;
 };
 
+/** Resolved provider/model pair plus the precedence source that selected it. */
 export type ResolveCronModelSelectionResult =
   | {
       ok: true;
       provider: string;
       model: string;
+      modelSource: CronModelSelectionSource;
     }
   | {
       ok: false;
@@ -63,6 +65,7 @@ function formatCronPayloadModelRejection(params: {
   return `cron payload.model '${modelOverride}' rejected: ${error}`;
 }
 
+/** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */
 export async function resolveCronModelSelection(
   params: ResolveCronModelSelectionParams,
 ): Promise<ResolveCronModelSelectionResult> {
@@ -73,6 +76,7 @@ export async function resolveCronModelSelection(
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
+  let modelSource: CronModelSelectionSource = "default";
 
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalogOnce = async () => {
@@ -82,11 +86,17 @@ export async function resolveCronModelSelection(
     return catalog;
   };
 
-  const subagentModelRaw =
-    normalizeModelSelection(params.agentConfigOverride?.subagents?.model) ??
-    normalizeModelSelection(params.agentConfigOverride?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+  const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    agentConfigOverride: params.agentConfigOverride,
+  });
+  const subagentModelRaw = normalizeModelSelection(subagentModelConfigSelection?.raw);
+  const subagentModelSource: CronModelSelectionSource =
+    subagentModelConfigSelection?.source === "agent" ? "agent" : "subagent";
   if (subagentModelRaw) {
+    // Subagent/agent model config is advisory here: invalid refs fall back to
+    // defaults so an agent config typo does not prevent unrelated cron runs.
     const resolvedSubagent = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,
       catalog: await loadCatalogOnce(),
@@ -97,6 +107,7 @@ export async function resolveCronModelSelection(
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
       model = resolvedSubagent.ref.model;
+      modelSource = subagentModelSource;
     }
   }
 
@@ -119,6 +130,7 @@ export async function resolveCronModelSelection(
       provider = hooksGmailModelRef.provider;
       model = hooksGmailModelRef.model;
       hooksGmailModelApplied = true;
+      modelSource = "hook";
     }
   }
 
@@ -144,11 +156,14 @@ export async function resolveCronModelSelection(
     }
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;
+    modelSource = "payload";
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
     const sessionModelOverride = params.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
+      // Stored session overrides are lowest precedence so explicit cron payload
+      // and hook-specific models can intentionally move a run away from history.
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRef({
@@ -161,9 +176,10 @@ export async function resolveCronModelSelection(
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;
         model = resolvedSessionOverride.ref.model;
+        modelSource = "session";
       }
     }
   }
 
-  return { ok: true, provider, model };
+  return { ok: true, provider, model, modelSource };
 }

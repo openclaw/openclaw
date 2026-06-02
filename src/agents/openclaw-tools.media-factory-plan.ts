@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -80,7 +81,7 @@ export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
   const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+  return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
 function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
@@ -95,12 +96,13 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
   const withoutDefaultPluginMarker = allowlist.filter(
     (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
-  return Array.from(new Set(["*", ...withoutDefaultPluginMarker]));
+  return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   modelHasVision?: boolean;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -112,6 +114,7 @@ export function resolveImageToolFactoryAvailable(params: {
   }
   const snapshot = loadCapabilityMetadataSnapshot({
     config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return (
     hasSnapshotCapabilityAvailability({

@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const EXACT_SEMVER_VERSION_RE =
   /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
@@ -115,6 +115,11 @@ function parseRegistryNpmSpecInternal(
 export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
   return parsed.ok ? parsed.parsed : null;
+}
+
+export function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean {
+  const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
+  return parsed?.name.startsWith("@openclaw/") === true;
 }
 
 export function validateRegistryNpmSpec(rawSpec: string): string | null {

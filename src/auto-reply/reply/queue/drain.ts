@@ -13,7 +13,12 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  isFollowupRunDeferredError,
+  type FollowupRun,
+} from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -154,6 +159,185 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
   };
 }
 
+type FollowupRuntimeMetadata = Pick<
+  FollowupRun,
+  | "currentInboundEventKind"
+  | "currentInboundContext"
+  | "abortSignal"
+  | "deliveryCorrelations"
+  | "queuedLifecycle"
+>;
+
+function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
+  return item.currentInboundEventKind === "room_event" || Boolean(item.currentInboundContext);
+}
+
+function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
+  return Boolean(
+    hasCurrentTurnRuntimeMetadata(item) ||
+    item.abortSignal ||
+    item.deliveryCorrelations?.length ||
+    item.queuedLifecycle,
+  );
+}
+
+function combineAbortSignals(items: readonly FollowupRun[]): AbortSignal | undefined {
+  const signals = items.flatMap((item) => (item.abortSignal ? [item.abortSignal] : []));
+  if (signals.length === 0) {
+    return undefined;
+  }
+  if (signals.length === 1) {
+    return signals[0];
+  }
+  const nativeAny = (
+    AbortSignal as typeof AbortSignal & {
+      any?: (signals: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
+  if (nativeAny) {
+    return nativeAny(signals);
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abort();
+      break;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+function collectRuntimeMetadata(
+  items: FollowupRun[],
+  singletonOwner?: FollowupRun,
+): FollowupRuntimeMetadata {
+  const candidates = singletonOwner ? [singletonOwner, ...items] : items;
+  const currentTurnSource =
+    singletonOwner && hasCurrentTurnRuntimeMetadata(singletonOwner)
+      ? singletonOwner
+      : items.find(hasCurrentTurnRuntimeMetadata);
+  const abortSignal = singletonOwner?.abortSignal ?? combineAbortSignals(candidates);
+  const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
+  return {
+    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundContext: currentTurnSource?.currentInboundContext,
+    abortSignal,
+    deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+    queuedLifecycle:
+      singletonOwner?.queuedLifecycle ??
+      (items.length === 1 ? lifecycleSource?.queuedLifecycle : undefined),
+  };
+}
+
+function collectSummaryRuntimeMetadata(items: FollowupRun[]): FollowupRuntimeMetadata {
+  return collectRuntimeMetadata(items, items.length === 1 ? items[0] : undefined);
+}
+
+function clearFollowupQueueSummaryState(queue: {
+  dropPolicy: "summarize" | "old" | "new";
+  droppedCount: number;
+  summaryLines: string[];
+  summarySources?: FollowupRun[];
+}): void {
+  completeFollowupQueueSummarySources(queue);
+  clearQueueSummaryState(queue);
+}
+
+function completeFollowupQueueSummarySources(queue: { summarySources?: FollowupRun[] }): void {
+  for (const item of queue.summarySources ?? []) {
+    completeFollowupRunLifecycle(item);
+  }
+  if (queue.summarySources) {
+    queue.summarySources = [];
+  }
+}
+
+function previewRestorableQueueSummaryPrompt(params: {
+  state: {
+    dropPolicy: "summarize" | "old" | "new";
+    droppedCount: number;
+    summaryLines: string[];
+  };
+  noun: string;
+}): { prompt?: string; restore?: () => void } {
+  const snapshot = {
+    droppedCount: params.state.droppedCount,
+    summaryLines: [...params.state.summaryLines],
+  };
+  const prompt = previewQueueSummaryPrompt(params);
+  if (!prompt) {
+    return {};
+  }
+  return {
+    prompt,
+    restore: () => {
+      const currentLines = params.state.summaryLines;
+      // previewQueueSummaryPrompt reads a snapshot clone; the live queue still
+      // contains this snapshot plus any newer drops that arrived before restore.
+      const hasSnapshotPrefix =
+        params.state.droppedCount >= snapshot.droppedCount &&
+        snapshot.summaryLines.every((line, index) => currentLines[index] === line);
+      if (hasSnapshotPrefix) {
+        return;
+      }
+      params.state.droppedCount =
+        params.state.droppedCount >= snapshot.droppedCount
+          ? params.state.droppedCount
+          : params.state.droppedCount + snapshot.droppedCount;
+      params.state.summaryLines = [...snapshot.summaryLines, ...currentLines];
+    },
+  };
+}
+
+async function runWithSummarySourceCleanup(
+  queue: { summarySources?: FollowupRun[] },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    if (!isFollowupRunDeferredError(err)) {
+      completeFollowupQueueSummarySources(queue);
+    }
+    throw err;
+  }
+  completeFollowupQueueSummarySources(queue);
+}
+
+async function runWithDeferredSummaryRestore<T>(
+  restore: (() => void) | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (isFollowupRunDeferredError(err)) {
+      restore?.();
+    }
+    throw err;
+  }
+}
+
+async function dropAbortedFollowups(
+  items: FollowupRun[],
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<number> {
+  let dropped = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (isFollowupRunAborted(item)) {
+      await runFollowup(item);
+      completeFollowupRunLifecycle(item);
+      items.splice(index, 1);
+      dropped += 1;
+    }
+  }
+  return dropped;
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -180,10 +364,25 @@ export function scheduleFollowupDrain(
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
+    let retryDeferred = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
+        const droppedBeforeDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedBeforeDebounce > 0 && queue.items.length === 0) {
+          clearFollowupQueueSummaryState(queue);
+        }
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         await waitForQueueDebounce(queue);
+        const droppedAfterDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedAfterDebounce > 0 && queue.items.length === 0) {
+          clearFollowupQueueSummaryState(queue);
+        }
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.
@@ -191,7 +390,12 @@ export function scheduleFollowupDrain(
           // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
-          const isCrossChannel = hasCrossChannelItems(queue.items, resolveCrossChannelKey);
+          const isCrossChannel =
+            hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
+            queue.items.some(hasRuntimeOnlyFollowupMetadata);
+          if (collectState.forceIndividualCollect && !isCrossChannel && queue.items.length > 1) {
+            collectState.forceIndividualCollect = false;
+          }
 
           const collectDrainResult = await drainCollectQueueStep({
             collectState,
@@ -200,18 +404,28 @@ export function scheduleFollowupDrain(
             run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
-            const summaryOnlyPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+            const summaryOnly = previewRestorableQueueSummaryPrompt({
+              state: queue,
+              noun: "message",
+            });
+            const summaryOnlyPrompt = summaryOnly.prompt;
             const run = queue.lastRun;
             if (summaryOnlyPrompt && run) {
-              await effectiveRunFollowup({
-                prompt: summaryOnlyPrompt,
-                run,
-                enqueuedAt: Date.now(),
-                ...collectQueuedImages(queue.items),
+              await runWithDeferredSummaryRestore(summaryOnly.restore, async () => {
+                await runWithSummarySourceCleanup(queue, async () => {
+                  await effectiveRunFollowup({
+                    prompt: summaryOnlyPrompt,
+                    run,
+                    enqueuedAt: Date.now(),
+                    ...collectSummaryRuntimeMetadata([]),
+                    ...collectQueuedImages(queue.items),
+                  });
+                });
               });
-              clearQueueSummaryState(queue);
+              clearFollowupQueueSummaryState(queue);
               continue;
             }
+            summaryOnly.restore?.();
             break;
           }
           if (collectDrainResult === "drained") {
@@ -219,19 +433,29 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+          const summaryResult = previewRestorableQueueSummaryPrompt({
+            state: queue,
+            noun: "message",
+          });
+          const summary = summaryResult.prompt;
           const authGroups = splitCollectItemsByAuthorization(items);
           if (authGroups.length === 0) {
             const run = queue.lastRun;
             if (!summary || !run) {
+              summaryResult.restore?.();
               break;
             }
-            await effectiveRunFollowup({
-              prompt: summary,
-              run,
-              enqueuedAt: Date.now(),
+            await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
+              await runWithSummarySourceCleanup(queue, async () => {
+                await effectiveRunFollowup({
+                  prompt: summary,
+                  run,
+                  enqueuedAt: Date.now(),
+                  ...collectSummaryRuntimeMetadata([]),
+                });
+              });
             });
-            clearQueueSummaryState(queue);
+            clearFollowupQueueSummaryState(queue);
             continue;
           }
 
@@ -249,45 +473,65 @@ export function scheduleFollowupDrain(
               summary: pendingSummary,
               renderItem: renderCollectItem,
             });
-            await effectiveRunFollowup({
-              prompt,
-              run,
-              enqueuedAt: Date.now(),
-              ...routing,
-              ...collectQueuedImages(groupItems),
-            });
+            const drainGroup = async () => {
+              await effectiveRunFollowup({
+                prompt,
+                run,
+                enqueuedAt: Date.now(),
+                ...routing,
+                ...collectRuntimeMetadata(groupItems),
+                ...collectQueuedImages(groupItems),
+              });
+            };
+            if (pendingSummary) {
+              await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
+                await runWithSummarySourceCleanup(queue, drainGroup);
+              });
+            } else {
+              await drainGroup();
+            }
             queue.items.splice(0, groupItems.length);
             if (pendingSummary) {
-              clearQueueSummaryState(queue);
+              clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;
             }
           }
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+        const summaryResult = previewRestorableQueueSummaryPrompt({
+          state: queue,
+          noun: "message",
+        });
+        const summaryPrompt = summaryResult.prompt;
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {
+            summaryResult.restore?.();
             break;
           }
           if (
-            !(await drainNextQueueItem(queue.items, async (item) => {
-              await effectiveRunFollowup({
-                prompt: summaryPrompt,
-                run,
-                enqueuedAt: Date.now(),
-                originatingChannel: item.originatingChannel,
-                originatingTo: item.originatingTo,
-                originatingAccountId: item.originatingAccountId,
-                originatingThreadId: item.originatingThreadId,
-                ...collectQueuedImages([item]),
-              });
-            }))
+            !(await runWithDeferredSummaryRestore(summaryResult.restore, async () =>
+              drainNextQueueItem(queue.items, async (item) => {
+                await runWithSummarySourceCleanup(queue, async () => {
+                  await effectiveRunFollowup({
+                    prompt: summaryPrompt,
+                    run,
+                    enqueuedAt: Date.now(),
+                    originatingChannel: item.originatingChannel,
+                    originatingTo: item.originatingTo,
+                    originatingAccountId: item.originatingAccountId,
+                    originatingThreadId: item.originatingThreadId,
+                    ...collectSummaryRuntimeMetadata([item]),
+                    ...collectQueuedImages([item]),
+                  });
+                });
+              }),
+            ))
           ) {
             break;
           }
-          clearQueueSummaryState(queue);
+          clearFollowupQueueSummaryState(queue);
           continue;
         }
 
@@ -297,10 +541,17 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
-      defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
+      if (isFollowupRunDeferredError(err)) {
+        retryDeferred = true;
+      } else {
+        defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
+      }
     } finally {
       queue.draining = false;
-      if (queue.items.length === 0 && queue.droppedCount === 0) {
+      const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
+      if (retryDeferred && hasPendingQueueWork) {
+        scheduleFollowupDrain(key, effectiveRunFollowup);
+      } else if (!hasPendingQueueWork) {
         // Only remove the map entry if it still points to this queue instance.
         // clearSessionQueues can replace the entry mid-drain; deleting
         // unconditionally would orphan the replacement queue.

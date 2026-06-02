@@ -457,15 +457,15 @@ class OpenClawA2UIHost extends LitElement {
         context[key] = resolved;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalString")) {
+      if (Object.hasOwn(value, "literalString")) {
         context[key] = value.literalString ?? "";
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalNumber")) {
+      if (Object.hasOwn(value, "literalNumber")) {
         context[key] = value.literalNumber ?? 0;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalBoolean")) {
+      if (Object.hasOwn(value, "literalBoolean")) {
         context[key] = value.literalBoolean ?? false;
         continue;
       }
@@ -484,7 +484,7 @@ class OpenClawA2UIHost extends LitElement {
       ...(Object.keys(context).length ? { context } : {}),
     };
 
-    globalThis.__openclawLastA2UIAction = userAction;
+    globalThis["__openclawLastA2UIAction"] = userAction;
 
     const handler =
       globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ??

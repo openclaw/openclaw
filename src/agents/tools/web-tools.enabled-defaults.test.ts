@@ -39,8 +39,8 @@ function readConfiguredSearchProvider(config: unknown): string | undefined {
   return typeof provider === "string" ? provider : undefined;
 }
 
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: () => activeSecretsRuntimeSnapshot.current,
 }));
 
 vi.mock("../../web-search/runtime.js", async () => {
@@ -166,7 +166,7 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(tool?.description).toContain("Search the web");
+    expect(tool?.description).toContain("Search web");
     expect((result?.details as { ok?: boolean } | undefined)?.ok).toBe(true);
   });
 

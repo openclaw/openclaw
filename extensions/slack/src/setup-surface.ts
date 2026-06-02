@@ -3,6 +3,7 @@ import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   resolveEntriesWithOptionalToken,
+  createSetupTranslator,
   type OpenClawConfig,
   parseMentionOrPrefixedId,
   promptLegacyChannelAllowFromForAccount,
@@ -13,6 +14,7 @@ import type {
   ChannelSetupWizardAllowFromEntry,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -23,6 +25,8 @@ import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { createSlackSetupWizardBase } from "./setup-core.js";
 import { SLACK_CHANNEL as channel } from "./shared.js";
+
+const t = createSetupTranslator();
 
 async function resolveSlackAllowFromEntries(params: {
   token?: string;
@@ -74,19 +78,19 @@ async function promptSlackAllowFrom(params: {
     resolveExisting: (account, cfg) =>
       resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
     resolveToken: (account) => account.userToken ?? account.botToken ?? "",
-    noteTitle: "Slack allowlist",
+    noteTitle: t("wizard.slack.allowlistTitle"),
     noteLines: [
-      "Allowlist Slack DMs by username (we resolve to user ids).",
-      "Examples:",
+      t("wizard.slack.allowlistIntro"),
+      t("wizard.slack.examples"),
       "- U12345678",
       "- @alice",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/slack", "slack")}`,
+      t("wizard.slack.multipleEntries"),
+      t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
     ],
-    message: "Slack allowFrom (usernames or ids)",
+    message: t("wizard.slack.allowFromPrompt"),
     placeholder: "@alice, U12345678",
     parseId,
-    invalidWithoutTokenNote: "Slack token missing; use user ids (or mention form) only.",
+    invalidWithoutTokenNote: t("wizard.slack.allowFromInvalidWithoutToken"),
     resolveEntries: async ({ token, entries }) =>
       (
         await resolveSlackUserAllowlist({
@@ -134,17 +138,17 @@ async function resolveSlackGroupAllowlist(params: {
         .filter((entry) => entry.resolved && entry.id)
         .map((entry) => entry.id as string);
       const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-      keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+      keys = [...resolvedKeys, ...normalizeStringEntries(unresolved)];
       await noteChannelLookupSummary({
         prompter: params.prompter,
-        label: "Slack channels",
-        resolvedSections: [{ title: "Resolved", values: resolvedKeys }],
+        label: t("wizard.slack.channelsLabel"),
+        resolvedSections: [{ title: t("wizard.channels.resolvedTitle"), values: resolvedKeys }],
         unresolved,
       });
     } catch (error) {
       await noteChannelLookupFailure({
         prompter: params.prompter,
-        label: "Slack channels",
+        label: t("wizard.slack.channelsLabel"),
         error,
       });
     }

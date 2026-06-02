@@ -1,5 +1,10 @@
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { parseStrictFiniteNumber } from "./parse-finite-number.js";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+  readUsageJson,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -54,16 +59,20 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const version = process.env.OPENCLAW_VERSION?.trim();
   const defaultHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
+    originator: "openclaw",
+    ...(version ? { version } : {}),
+    "User-Agent": `openclaw/${version || "dev"}`,
   };
   if (accountId) {
     defaultHeaders["ChatGPT-Account-Id"] = accountId;
   }
   const headers =
     resolveProviderRequestHeaders({
-      provider: "openai-codex",
+      provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api/wham/usage",
       capability: "other",
       transport: "http",
@@ -79,13 +88,17 @@ export async function fetchCodexUsage(
 
   if (!res.ok) {
     return buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
+      provider: "openai",
       status: res.status,
       tokenExpiredStatuses: [401, 403],
     });
   }
 
-  const data = (await res.json()) as CodexUsageResponse;
+  const parsed = await readUsageJson("openai", res);
+  if (!parsed.ok) {
+    return parsed.snapshot;
+  }
+  const data = parsed.data as CodexUsageResponse;
   const windows: UsageWindow[] = [];
 
   if (data.rate_limit?.primary_window) {
@@ -118,13 +131,13 @@ export async function fetchCodexUsage(
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : Number.parseFloat(data.credits.balance) || 0;
+        : (parseStrictFiniteNumber(data.credits.balance) ?? 0);
     plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
   }
 
   return {
-    provider: "openai-codex",
-    displayName: PROVIDER_LABELS["openai-codex"],
+    provider: "openai",
+    displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
   };

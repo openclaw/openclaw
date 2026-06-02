@@ -258,23 +258,35 @@ describe("exec approval reply helpers", () => {
         sessionKey: undefined,
       },
     });
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
           buttons: [
             {
               label: "Allow Once",
+              action: {
+                type: "command",
+                command: "/approve req-1 allow-once",
+              },
               value: "/approve req-1 allow-once",
               style: "success",
             },
             {
               label: "Allow Always",
+              action: {
+                type: "command",
+                command: "/approve req-1 allow-always",
+              },
               value: "/approve req-1 allow-always",
               style: "primary",
             },
             {
               label: "Deny",
+              action: {
+                type: "command",
+                command: "/approve req-1 deny",
+              },
               value: "/approve req-1 deny",
               style: "danger",
             },
@@ -282,6 +294,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
@@ -324,18 +337,26 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain(
       "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
           buttons: [
             {
               label: "Allow Once",
+              action: {
+                type: "command",
+                command: "/approve req-ask-always allow-once",
+              },
               value: "/approve req-ask-always allow-once",
               style: "success",
             },
             {
               label: "Deny",
+              action: {
+                type: "command",
+                command: "/approve req-ask-always deny",
+              },
               value: "/approve req-ask-always deny",
               style: "danger",
             },
@@ -343,6 +364,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
   });
 
   it("stores agent and session metadata for downstream suppression checks", () => {
@@ -442,9 +464,24 @@ describe("exec approval reply helpers", () => {
         {
           type: "buttons",
           buttons: [
-            { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
-            { label: "Allow Always", value: "/approve req-1 allow-always", style: "primary" },
-            { label: "Deny", value: "/approve req-1 deny", style: "danger" },
+            {
+              label: "Allow Once",
+              action: { type: "command", command: "/approve req-1 allow-once" },
+              value: "/approve req-1 allow-once",
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              action: { type: "command", command: "/approve req-1 allow-always" },
+              value: "/approve req-1 allow-always",
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-1 deny" },
+              value: "/approve req-1 deny",
+              style: "danger",
+            },
           ],
         },
       ],

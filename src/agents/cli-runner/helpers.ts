@@ -2,8 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { extensionForMime } from "@openclaw/media-core/mime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -13,15 +17,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { MAX_IMAGE_BYTES } from "../../media/constants.js";
-import { extensionForMime } from "../../media/mime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+import type { ImageContent } from "../../llm/types.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import { detectImageReferences, loadImageFromRef } from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
+import type { AgentTool } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
@@ -67,6 +68,7 @@ export function resolveCliRunQueueKey(params: {
 
 export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
+  cwd?: string;
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
@@ -82,6 +84,7 @@ export function buildCliAgentSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -90,8 +93,8 @@ export function buildCliAgentSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    cwd: process.cwd(),
+    workspaceDir: runtimeWorkspaceDir,
+    cwd: runtimeWorkspaceDir,
     runtime: {
       host: "openclaw",
       os: `${os.type()} ${os.release()}`,
@@ -105,7 +108,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: runtimeWorkspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -116,6 +119,10 @@ export function buildCliAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
+    promptSurface: "cli_backend",
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "cli_backend",
+    }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     skillsPrompt: params.skillsPrompt,
@@ -279,8 +286,7 @@ export async function writeCliImages(params: {
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   const store = privateFileStore(imageRoot);
   const paths: string[] = [];
-  for (let i = 0; i < params.images.length; i += 1) {
-    const image = params.images[i];
+  for (const image of params.images) {
     const fileName = path.basename(resolveCliImagePath(image));
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);
@@ -374,14 +380,14 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -393,7 +399,11 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

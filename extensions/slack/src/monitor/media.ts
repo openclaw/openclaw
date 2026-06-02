@@ -77,7 +77,11 @@ function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
   if (typeof fetchImpl !== "function") {
     return false;
   }
-  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+  const candidate = fetchImpl as typeof fetch & {
+    mock?: unknown;
+    _isMockFunction?: unknown;
+  };
+  return candidate.mock !== undefined || candidate["_isMockFunction"] === true;
 }
 
 function createSlackMediaFetch(): FetchLike {
@@ -205,7 +209,7 @@ async function saveSlackMedia(params: {
           },
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
     }

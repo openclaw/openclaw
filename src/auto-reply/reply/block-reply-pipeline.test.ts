@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   createBlockReplyContentKey,
@@ -14,6 +14,14 @@ const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
     }
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("createBlockReplyPayloadKey", () => {
   it("produces different keys for payloads differing only by replyToId", () => {
@@ -192,6 +200,60 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toEqual([{ presentation }]);
   });
 
+  it("merges coalesced text into a following media payload", async () => {
+    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue({ text: "Preview" });
+    pipeline.enqueue({ text: "below" });
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "Preview below", mediaUrls: ["file:///photo.png"] }]);
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
+    expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
+  });
+
+  it("keeps media separate across assistant message boundaries", async () => {
+    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "First block" }, { assistantMessageIndex: 0 }),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ mediaUrls: ["file:///photo.png"] }, { assistantMessageIndex: 1 }),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([
+      { text: "First block", mediaUrls: undefined },
+      { text: undefined, mediaUrls: ["file:///photo.png"] },
+    ]);
+  });
+
   it("does not track media when text-only blocks are delivered", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},
@@ -230,6 +292,8 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
 describe("createBlockReplyPipeline content coverage dedup", () => {
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (_payload, options) => {
@@ -244,7 +308,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
     pipeline.enqueue({ text: "Third paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
@@ -252,6 +318,8 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   });
 
   it("does not match final assembled text with content that was not streamed", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (_payload, options) => {
@@ -265,11 +333,44 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
     expect(pipeline.hasSentPayload({ text: "First paragraph.\n\nSecond paragraph." })).toBe(false);
+  });
+
+  it("keeps status notices out of streamed final-content accounting", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "1. Inspect\n2. Patch", isStatusNotice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "1. Inspect\n2. Patch" })).toBe(false);
+  });
+
+  it("does not let a status notice de-dupe later matching assistant content", async () => {
+    const sent: Array<{ text?: string; isStatusNotice?: boolean }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, isStatusNotice: payload.isStatusNotice });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "same text", isStatusNotice: true });
+    pipeline.enqueue({ text: "same text" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "same text", isStatusNotice: true }, { text: "same text" }]);
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "same text" })).toBe(true);
   });
 
   it("does not suppress media payloads through streamed text coverage", async () => {

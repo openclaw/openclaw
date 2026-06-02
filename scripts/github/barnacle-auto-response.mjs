@@ -7,6 +7,7 @@ import {
   PROOF_SUFFICIENT_LABEL,
   PROOF_SUPPLIED_LABEL,
   evaluateRealBehaviorProof,
+  hasClawSweeperExactHeadProof,
   labelsForRealBehaviorProof,
 } from "./real-behavior-proof-policy.mjs";
 
@@ -767,6 +768,15 @@ async function listPullRequestFiles(github, context, pullRequest) {
   });
 }
 
+async function listIssueComments(github, context, issueNumber) {
+  return github.paginate(github.rest.issues.listComments, {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    issue_number: issueNumber,
+    per_page: 100,
+  });
+}
+
 async function addMissingLabels(github, context, core, issueNumber, labels, labelSet) {
   const missingLabels = labels.filter((label) => !labelSet.has(label));
   if (missingLabels.length === 0) {
@@ -784,15 +794,62 @@ async function addMissingLabels(github, context, core, issueNumber, labels, labe
   core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
 }
 
-function shouldRemoveProofSufficientLabel(context, proofEvaluation) {
+function isClawSweeperOwnedLabel(label) {
+  return label === "clawsweeper" || label.startsWith("clawsweeper:");
+}
+
+function isActiveClawSweeperWork(pullRequest, labelSet) {
+  const authorLogin = pullRequest.user?.login ?? "";
+  const headRef = pullRequest.head?.ref ?? "";
+  return (
+    /clawsweeper/i.test(authorLogin) ||
+    headRef.startsWith("clawsweeper/") ||
+    [...labelSet].some(isClawSweeperOwnedLabel)
+  );
+}
+
+function shouldRemoveProofSufficientLabel(
+  context,
+  pullRequest,
+  labelSet,
+  proofEvaluation,
+  hasExactHeadClawSweeperProof,
+) {
+  if (hasExactHeadClawSweeperProof) {
+    return false;
+  }
+  if (proofEvaluation.status === "override") {
+    return false;
+  }
+  if (isActiveClawSweeperWork(pullRequest, labelSet)) {
+    return false;
+  }
+  if (!["edited", "synchronize"].includes(context.payload.action)) {
+    return false;
+  }
   if (proofEvaluation.status !== "passed") {
     return true;
   }
-  return ["edited", "synchronize"].includes(context.payload.action);
+  return true;
+}
+
+const negativeProofLabels = new Set([NEEDS_REAL_BEHAVIOR_PROOF_LABEL, MOCK_ONLY_PROOF_LABEL]);
+
+function shouldPreserveClawSweeperProofJudgment(context, labelSet) {
+  return (
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    !["edited", "synchronize"].includes(context.payload.action)
+  );
 }
 
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
   const files = await listPullRequestFiles(github, context, pullRequest);
+  const hasExactHeadClawSweeperProof =
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    hasClawSweeperExactHeadProof({
+      pullRequest,
+      comments: await listIssueComments(github, context, pullRequest.number),
+    });
   const proofEvaluation = evaluateRealBehaviorProof({
     pullRequest: {
       ...pullRequest,
@@ -806,17 +863,33 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     },
     files,
   );
+  const candidateLabelsToApply = shouldPreserveClawSweeperProofJudgment(context, labelSet)
+    ? classifiedLabels.filter((label) => !negativeProofLabels.has(label))
+    : classifiedLabels;
   const staleProofLabels = structuralProofLabelValues.filter(
-    (label) => labelSet.has(label) && !classifiedLabels.includes(label),
+    (label) => labelSet.has(label) && !candidateLabelsToApply.includes(label),
   );
   if (
     labelSet.has(PROOF_SUFFICIENT_LABEL) &&
-    shouldRemoveProofSufficientLabel(context, proofEvaluation)
+    shouldRemoveProofSufficientLabel(
+      context,
+      pullRequest,
+      labelSet,
+      proofEvaluation,
+      hasExactHeadClawSweeperProof,
+    )
   ) {
     staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
   }
   await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
-  await addMissingLabels(github, context, core, pullRequest.number, classifiedLabels, labelSet);
+  await addMissingLabels(
+    github,
+    context,
+    core,
+    pullRequest.number,
+    candidateLabelsToApply,
+    labelSet,
+  );
 }
 
 function isAutomationUser(user, fallbackLogin = "") {
@@ -826,6 +899,16 @@ function isAutomationUser(user, fallbackLogin = "") {
 
 function isAutomationActor(context) {
   return isAutomationUser(context.payload.sender, context.actor ?? "");
+}
+
+function isClawSweeperProofSufficientLabelEvent(context) {
+  const senderLogin = context.payload.sender?.login ?? context.actor ?? "";
+  return (
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === PROOF_SUFFICIENT_LABEL &&
+    isAutomationUser(context.payload.sender, senderLogin) &&
+    /clawsweeper/i.test(senderLogin)
+  );
 }
 
 function isGitHubAppPullRequestAuthor(pullRequest) {
@@ -890,6 +973,9 @@ async function applyPullRequestCandidateAction({
 async function removeLabels(github, context, issueNumber, labels, labelSet) {
   for (const label of labels) {
     if (!labelSet.has(label)) {
+      continue;
+    }
+    if (isClawSweeperOwnedLabel(label)) {
       continue;
     }
     try {
@@ -1071,6 +1157,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (labelSet.has(badBarnacleLabel)) {
       core.info(
         `Skipping PR auto-response checks for #${pullRequest.number} because ${badBarnacleLabel} is present.`,
+      );
+      return;
+    }
+
+    if (isClawSweeperProofSufficientLabelEvent(context)) {
+      core.info(
+        `Skipping PR auto-response checks for #${pullRequest.number} because ClawSweeper owns ${PROOF_SUFFICIENT_LABEL}.`,
       );
       return;
     }

@@ -83,6 +83,7 @@ describe("isRecoverableTelegramNetworkError", () => {
 
   it.each([
     ["ETIMEDOUT", "timeout"],
+    ["ENETDOWN", "network down"],
     ["ECONNABORTED", "aborted"],
     ["ERR_NETWORK", "network"],
   ])("detects recoverable error code %s", (code, message) => {
@@ -218,6 +219,7 @@ describe("isSafeToRetrySendError", () => {
     ["ECONNREFUSED", "connect ECONNREFUSED", true],
     ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
     ["EAI_AGAIN", "getaddrinfo EAI_AGAIN", true],
+    ["ENETDOWN", "connect ENETDOWN", true],
     ["ENETUNREACH", "connect ENETUNREACH", true],
     ["EHOSTUNREACH", "connect EHOSTUNREACH", true],
     ["ECONNRESET", "read ECONNRESET", false],
@@ -252,6 +254,36 @@ describe("isSafeToRetrySendError", () => {
       new TypeError("fetch failed"),
     );
     expect(isSafeToRetrySendError(wrapped)).toBe(false);
+  });
+
+  it.each([
+    ["status", Object.assign(new Error("Misdirected Request"), { status: 421 })],
+    ["statusCode", Object.assign(new Error("Misdirected Request"), { statusCode: "421" })],
+    ["error_code", errorWithTelegramCode("Misdirected Request", 421)],
+    ["message", new Error("421 Misdirected Request")],
+    [
+      "nested cause",
+      Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+        cause: Object.assign(new Error("Misdirected Request"), { status: 421 }),
+      }),
+    ],
+    [
+      "grammY HttpError",
+      new MockHttpError(
+        "Network request for 'sendMessage' failed!",
+        Object.assign(new Error("Misdirected Request"), { status: 421 }),
+      ),
+    ],
+  ])("treats Telegram 421 Misdirected Request as safe to retry via %s", (_name, err) => {
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
+  it("does not parse malformed status strings as Telegram 421", () => {
+    expect(
+      isSafeToRetrySendError(
+        Object.assign(new Error("Misdirected Request"), { statusCode: "421abc" }),
+      ),
+    ).toBe(false);
   });
 });
 

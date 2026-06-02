@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayScopedOptions } from "../../gateway/call.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -66,6 +66,24 @@ describe("gateway tool defaults", () => {
     expect(call.token).toBe("t");
     expect(call.timeoutMs).toBe(5000);
     expect(call.scopes).toEqual(["operator.read"]);
+  });
+
+  it("rejects invalid gateway timeoutMs before RPC", async () => {
+    expect(() => readGatewayCallOptions({ timeoutMs: -1 })).toThrow(
+      "timeoutMs must be a positive integer",
+    );
+    expect(() => readGatewayCallOptions({ timeoutMs: 1.5 })).toThrow(
+      "timeoutMs must be a positive integer",
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("accepts string gateway timeoutMs through the shared numeric reader", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool("health", readGatewayCallOptions({ timeoutMs: "5000" }), {});
+
+    expect(capturedGatewayCall().timeoutMs).toBe(5000);
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN for allowlisted local overrides", () => {
@@ -244,6 +262,57 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("node.pair.approve");
     expect(call.params).toEqual({ requestId: "req-1" });
     expect(call.scopes).toEqual(["operator.admin"]);
+  });
+
+  it("marks local approval request calls as approval runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "approval-id" });
+
+    await callGatewayTool("exec.approval.request", {}, { command: "printf hi" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("exec.approval.request");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("marks local approval wait calls as approval runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("exec.approval.waitDecision");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("marks local approval resolve calls as approval runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "exec.approval.resolve",
+      {},
+      { id: "approval-id", decision: "allow-once" },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("exec.approval.resolve");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("does not send the local approval runtime token to gatewayUrl overrides", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool(
+      "exec.approval.waitDecision",
+      { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t" },
+      { id: "approval-id" },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.url).toBe("ws://127.0.0.1:18789");
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
   });
 
   it("default-denies unknown methods by sending no scopes", async () => {

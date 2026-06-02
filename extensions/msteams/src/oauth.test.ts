@@ -228,6 +228,44 @@ describe("exchangeMSTeamsCodeForTokens", () => {
       }),
     ).rejects.toThrow(/MSTeams token exchange failed \(400\)/);
   });
+
+  it("reports malformed token exchange JSON with a stable OAuth error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "bad-json",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: malformed JSON response");
+  });
+
+  it("rejects unsafe token exchange expiry values", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response('{"access_token":"at-unsafe","refresh_token":"rt-unsafe","expires_in":1e309}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "unsafe-expiry",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
+  });
 });
 
 describe("refreshMSTeamsDelegatedTokens", () => {
@@ -309,5 +347,23 @@ describe("refreshMSTeamsDelegatedTokens", () => {
         refreshToken: "expired-rt",
       }),
     ).rejects.toThrow(/MSTeams token refresh failed \(401\)/);
+  });
+
+  it("reports malformed token refresh JSON with a stable OAuth error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      refreshMSTeamsDelegatedTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        refreshToken: "bad-json",
+      }),
+    ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
   });
 });

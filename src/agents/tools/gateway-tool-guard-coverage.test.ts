@@ -58,7 +58,7 @@ function expectAllowedApply(
 
 describe("gateway config mutation guard coverage", () => {
   it("keeps a narrow allowlist of agent-tunable config paths", () => {
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.systemPromptOverride");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.promptOverlays");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.model");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
@@ -67,6 +67,9 @@ describe("gateway config mutation guard coverage", () => {
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("channels.*.requireMention");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.visibleReplies");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.groupChat.visibleReplies");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain(
+      "messages.groupChat.unmentionedInbound",
+    );
   });
 
   it("allows documented subagent thinking default edits via config.patch", () => {
@@ -273,16 +276,16 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
-  it("blocks per-agent embeddedPi override under agents.list[]", () => {
+  it("blocks per-agent embeddedAgent override under agents.list[]", () => {
     expectBlocked(
       {
         agents: {
-          list: [{ id: "worker", embeddedPi: { executionContract: "strict-agentic" } }],
+          list: [{ id: "worker", embeddedAgent: { executionContract: "strict-agentic" } }],
         },
       },
       {
         agents: {
-          list: [{ id: "worker", embeddedPi: { executionContract: "none" } }],
+          list: [{ id: "worker", embeddedAgent: { executionContract: "none" } }],
         },
       },
     );
@@ -509,13 +512,13 @@ describe("gateway config mutation guard coverage", () => {
     expectAllowed(
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a helpful assistant." },
+          defaults: { reasoningDefault: "low" },
           list: [{ id: "worker", model: "sonnet-4" }],
         },
       },
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a terse assistant." },
+          defaults: { reasoningDefault: "medium" },
           list: [{ id: "worker", model: "opus-4.6" }],
         },
       },
@@ -528,7 +531,7 @@ describe("gateway config mutation guard coverage", () => {
         agents: {
           defaults: {
             sandbox: { mode: "all" },
-            systemPromptOverride: "You are a helpful assistant.",
+            reasoningDefault: "low",
           },
         },
       },
@@ -536,7 +539,7 @@ describe("gateway config mutation guard coverage", () => {
         agents: {
           defaults: {
             sandbox: { mode: "off" },
-            systemPromptOverride: "You are a terse assistant.",
+            reasoningDefault: "medium",
           },
         },
       },
@@ -565,13 +568,13 @@ describe("gateway config mutation guard coverage", () => {
     expectAllowedApply(
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a helpful assistant." },
+          defaults: { reasoningDefault: "low" },
           list: [{ id: "worker", model: "sonnet-4" }],
         },
       },
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a terse assistant." },
+          defaults: { reasoningDefault: "medium" },
           list: [{ id: "worker", model: "opus-4.6" }],
         },
       },

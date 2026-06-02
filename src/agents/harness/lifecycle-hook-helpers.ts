@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -8,6 +9,7 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
+import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
@@ -17,6 +19,10 @@ const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 type FinalizeRetryBudget = Map<string, Map<string, number>>;
+
+export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
+  return getGlobalHookRunner();
+}
 
 function getFinalizeRetryBudget(): FinalizeRetryBudget {
   return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
@@ -69,9 +75,11 @@ export function runAgentHarnessLlmInputHook(params: {
   if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
     return;
   }
-  void hookRunner.runLlmInput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`llm_input hook failed: ${String(error)}`);
-  });
+  void hookRunner
+    .runLlmInput(params.event, buildAgentHookContext(params.ctx))
+    .catch((error: unknown) => {
+      log.warn(`llm_input hook failed: ${String(error)}`);
+    });
 }
 
 export function runAgentHarnessLlmOutputHook(params: {
@@ -83,9 +91,29 @@ export function runAgentHarnessLlmOutputHook(params: {
   if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
     return;
   }
-  void hookRunner.runLlmOutput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`llm_output hook failed: ${String(error)}`);
-  });
+  void hookRunner
+    .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
+    .catch((error: unknown) => {
+      log.warn(`llm_output hook failed: ${String(error)}`);
+    });
+}
+
+async function executeAgentHarnessAgentEndHook(params: {
+  event: PluginHookAgentEndEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+  unrefTimeout?: boolean;
+}): Promise<void> {
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
+    return;
+  }
+  try {
+    const options: VoidHookRunOptions = { unrefTimeout: params.unrefTimeout ?? false };
+    await hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx), options);
+  } catch (error) {
+    log.warn(`agent_end hook failed: ${String(error)}`);
+  }
 }
 
 export function runAgentHarnessAgentEndHook(params: {
@@ -93,13 +121,15 @@ export function runAgentHarnessAgentEndHook(params: {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 }): void {
-  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
-    return;
-  }
-  void hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`agent_end hook failed: ${String(error)}`);
-  });
+  void executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: true });
+}
+
+export async function awaitAgentHarnessAgentEndHook(params: {
+  event: PluginHookAgentEndEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<void> {
+  await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
 export type AgentHarnessBeforeAgentFinalizeOutcome =
@@ -205,12 +235,4 @@ function isBeforeAgentFinalizeRetry(
   value: unknown,
 ): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }

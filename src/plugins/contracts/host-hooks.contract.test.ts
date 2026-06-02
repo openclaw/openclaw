@@ -5,12 +5,12 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
-} from "../../gateway/protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -45,7 +45,9 @@ import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function requireFirstCommandRegistration(
@@ -335,6 +337,114 @@ describe("host-hook fixture plugin contract", () => {
     expectRecordFields(policyResult, {
       block: true,
       blockReason: "blocked by fixture policy",
+    });
+  });
+
+  it("fails closed when a trusted policy throws during evaluation", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          evaluate: () => {
+            throw new Error("fuzzplugin trusted policy failed");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy evaluation failed",
+    });
+  });
+
+  it("fails closed when a trusted policy registration is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableRegistration = {
+      pluginId: "fuzzplugin",
+      pluginName: "Fuzz Plugin",
+      source: "test",
+    };
+    Object.defineProperty(unreadableRegistration, "policy", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [unreadableRegistration as never];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzplugin: policy is unreadable",
+    });
+  });
+
+  it("fails closed when a trusted policy owner id is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableOwnerRegistration = {
+      pluginName: "Fuzz Plugin",
+      source: "test",
+      policy: {
+        id: "fuzzpolicy",
+        description: "synthetic trusted policy",
+        evaluate: () => undefined,
+      },
+    };
+    Object.defineProperty(unreadableOwnerRegistration, "pluginId", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy owner is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [unreadableOwnerRegistration as never];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy owner is unreadable",
+    });
+  });
+
+  it("fails closed when a trusted policy decision is unreadable", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: {
+          id: "fuzzpolicy",
+          description: "synthetic trusted policy",
+          evaluate: () =>
+            Object.defineProperty({}, "allow", {
+              enumerable: true,
+              get() {
+                throw new Error("fuzzplugin trusted policy allow is unreadable");
+              },
+            }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      block: true,
+      blockReason: "blocked by fuzzpolicy: policy decision is unreadable",
     });
   });
 
@@ -1586,6 +1696,14 @@ describe("host-hook fixture plugin contract", () => {
         handler: () => ({ text: "unused" }),
       }),
     ).toBe("Command requiredScopes contains unknown operator scope: operator.unknown");
+    expect(
+      validatePluginCommandDefinition({
+        name: "invalid-owner-status-fixture",
+        description: "Invalid owner status exposure.",
+        exposeSenderIsOwner: "yes" as never,
+        handler: () => ({ text: "unused" }),
+      }),
+    ).toBe("Command exposeSenderIsOwner must be a boolean");
 
     await expect(
       executePluginCommand({
@@ -1715,7 +1833,7 @@ describe("host-hook fixture plugin contract", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;
             });

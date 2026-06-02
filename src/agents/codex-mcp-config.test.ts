@@ -53,6 +53,26 @@ describe("buildCodexMcpServersConfig", () => {
       },
     });
   });
+
+  it("preserves Codex-specific MCP approval mode metadata", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          search: {
+            url: "https://mcp.example.com/mcp",
+            codex: {
+              defaultToolsApprovalMode: "prompt",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      search: {
+        url: "https://mcp.example.com/mcp",
+        default_tools_approval_mode: "prompt",
+      },
+    });
+  });
 });
 
 describe("loadCodexBundleMcpThreadConfig", () => {
@@ -111,7 +131,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.evaluated).toBe(true);
   });
 
-  it("returns an evaluated empty MCP config when Pi would not create a bundle MCP runtime", () => {
+  it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", () => {
     const cfg = {
       mcp: {
         servers: {

@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
@@ -11,20 +15,18 @@ import {
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
 } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   const lowered = normalizeLowercaseStringOrEmpty(key);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
-  if (lowered.startsWith("agent:")) {
-    return lowered;
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(key);
+  if (normalized.startsWith("agent:")) {
+    return normalized;
   }
-  return `agent:${normalizeAgentId(agentId)}:${lowered}`;
+  return `agent:${normalizeAgentId(agentId)}:${normalized}`;
 }
 
 function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
@@ -58,7 +60,7 @@ function resolveParsedSessionStoreKey(
   if (!shouldRemapLegacyDefaultMainAlias(cfg, parsed, options)) {
     return {
       agentId: normalizeAgentId(parsed.agentId),
-      sessionKey: normalizeLowercaseStringOrEmpty(raw),
+      sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
   const agentId = resolveDefaultStoreAgentId(cfg);
@@ -102,7 +104,7 @@ export function resolveSessionStoreKey(params: {
     return resolveMainSessionKey(params.cfg);
   }
   const agentId = resolveDefaultStoreAgentId(params.cfg);
-  return canonicalizeSessionKeyForAgent(agentId, lowered);
+  return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
 export function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
@@ -163,10 +165,11 @@ export function canonicalizeSpawnedByForAgent(
     return lower;
   }
   let result: string;
-  if (lower.startsWith("agent:")) {
-    result = lower;
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+  if (normalized.startsWith("agent:")) {
+    result = normalized;
   } else {
-    result = `agent:${normalizeAgentId(agentId)}:${lower}`;
+    result = `agent:${normalizeAgentId(agentId)}:${normalized}`;
   }
   // Resolve main-alias references (e.g. agent:ops:main -> configured main key).
   const parsed = parseAgentSessionKey(result);

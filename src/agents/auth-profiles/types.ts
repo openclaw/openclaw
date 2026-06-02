@@ -16,12 +16,6 @@ export type OAuthCredentials = {
   idToken?: string;
 };
 
-export type OAuthCredentialRef = {
-  source: "openclaw-credentials";
-  provider: "openai-codex";
-  id: string;
-};
-
 export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
@@ -63,7 +57,6 @@ export type OAuthCredential = OAuthCredentials & {
   copyToAgents?: boolean;
   email?: string;
   displayName?: string;
-  oauthRef?: OAuthCredentialRef;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
@@ -124,7 +117,13 @@ export type AuthProfileStateStore = {
   version: number;
 } & AuthProfileState;
 
-export type AuthProfileStore = AuthProfileSecretsStore & AuthProfileState;
+export type AuthProfileStore = AuthProfileSecretsStore &
+  AuthProfileState & {
+    /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
+    runtimeExternalProfileIds?: string[];
+    /** True when the runtime external profile set was freshly resolved, even if empty. */
+    runtimeExternalProfileIdsAuthoritative?: boolean;
+  };
 
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

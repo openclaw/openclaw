@@ -202,6 +202,10 @@ Useful Slack desktop flags:
 - `--credential-source convex --credential-role ci` uses the shared credential pool instead of direct Slack env tokens.
 - `--provider-mode`, `--model`, `--alt-model`, and `--fast` pass through to the Slack live lane.
 
+Approval checkpoint runs render Slack API message snapshots into checkpoint PNGs
+for CI-safe visual proof. `slack-desktop-smoke.png` is only proof of Slack Web
+when the lease uses a warm browser profile that is already logged in.
+
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
 accepts:
@@ -252,7 +256,7 @@ Telegram Web login state is not required for normal Mantis automation.
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper. A maintainer can trigger it from a PR comment with
-`@Mantis telegram desktop proof`, from the Actions UI with freeform
+`@openclaw-mantis telegram desktop proof`, from the Actions UI with freeform
 instructions, or through the generic `Mantis Scenario` dispatcher. The workflow
 hands the PR, baseline ref, candidate ref, and maintainer instructions to Codex.
 The agent reads the PR, decides what Telegram-visible behavior proves the
@@ -318,9 +322,9 @@ This schema is the handoff between scenario code and GitHub comments:
 ```
 
 Artifact `path` values are relative to the manifest directory. `targetPath`
-values are relative paths under the `qa-artifacts` branch publish directory.
-The publisher rejects path traversal and skips entries marked
-`"required": false` when optional previews or videos are unavailable.
+values are relative paths under the configured Mantis R2/S3 artifact prefix. The
+publisher rejects path traversal and skips entries marked `"required": false`
+when optional previews or videos are unavailable.
 
 Supported artifact kinds:
 
@@ -333,16 +337,25 @@ Supported artifact kinds:
 - `report`: Markdown report.
 
 The reusable publisher is `scripts/mantis/publish-pr-evidence.mjs`. Workflows
-call it with the manifest, target PR, `qa-artifacts` target root, comment marker,
-Actions artifact URL, run URL, and request source. It copies declared artifacts
-to the `qa-artifacts` branch, builds a summary-first PR comment with inline
-images/previews and linked videos, then updates the existing marker comment or
-creates one.
+call it with the manifest, target PR, artifact target root, comment marker,
+Actions artifact URL, run URL, and request source. It uploads declared artifacts
+to the configured Mantis R2/S3 bucket, builds a summary-first PR comment with
+inline images/previews and linked videos, then updates the existing marker
+comment or creates one. The workflows publish to `openclaw-crabbox-artifacts`
+with public URLs under `https://artifacts.openclaw.ai`. They provide bucket,
+region, and public URL values directly. The reusable publisher requires:
+
+- `MANTIS_ARTIFACT_R2_ACCESS_KEY_ID`
+- `MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY`
+- `MANTIS_ARTIFACT_R2_BUCKET`
+- `MANTIS_ARTIFACT_R2_ENDPOINT`
+- `MANTIS_ARTIFACT_R2_REGION`
+- `MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL`
 
 You can also trigger the status-reactions run directly from a PR comment:
 
 ```text
-@Mantis discord status reactions
+@openclaw-mantis discord status reactions
 ```
 
 The comment trigger is intentionally narrow. It only runs on pull request
@@ -352,15 +365,15 @@ and the current PR head SHA as the candidate. Maintainers can override either
 ref:
 
 ```text
-@Mantis discord status reactions baseline=origin/main candidate=HEAD
+@openclaw-mantis discord status reactions baseline=origin/main candidate=HEAD
 ```
 
 Telegram live QA can also be triggered from a PR comment:
 
 ```text
-@Mantis telegram
-@Mantis telegram scenario=telegram-status-command
-@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram
+@openclaw-mantis telegram scenario=telegram-status-command
+@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
 By default it uses the current PR head SHA as the candidate and runs
@@ -627,7 +640,7 @@ after the new secret has been stored.
 
 Mantis workflows should upload the full evidence bundle as a short-lived Actions
 artifact. When the workflow is run for a bug report or fix PR, it should also
-publish the redacted PNG screenshots to the `qa-artifacts` branch and upsert a
+publish redacted inline media to the configured Mantis R2/S3 bucket and upsert a
 comment on that bug or fix PR with inline before/after screenshots. Do not post
 the primary proof only on a generic QA automation PR. Raw logs, observed
 messages, and other bulky evidence stay in the Actions artifact.

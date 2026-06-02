@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createAnthropicThinkingPrefillPayloadWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -28,4 +28,5 @@ export function wrapCloudflareAiGatewayProviderStream(
   return createCloudflareAiGatewayAnthropicThinkingPrefillWrapper(ctx.streamFn);
 }
 
-export const __testing = { log, shouldPatchAnthropicMessagesPayload };
+export const testing = { log, shouldPatchAnthropicMessagesPayload };
+export { testing as __testing };

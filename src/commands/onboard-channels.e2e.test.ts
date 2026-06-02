@@ -374,41 +374,41 @@ function patchTelegramAdapter(overrides: ChannelSetupWizardAdapterPatch) {
   };
   const previous: PatchedSetupAdapterFields = {};
 
-  if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+  if (Object.hasOwn(patch, "getStatus")) {
     previous.getStatus = adapter.getStatus;
     adapter.getStatus = patch.getStatus ?? adapter.getStatus;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+  if (Object.hasOwn(patch, "afterConfigWritten")) {
     previous.afterConfigWritten = adapter.afterConfigWritten;
     adapter.afterConfigWritten = patch.afterConfigWritten;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+  if (Object.hasOwn(patch, "configure")) {
     previous.configure = adapter.configure;
     adapter.configure = patch.configure ?? adapter.configure;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+  if (Object.hasOwn(patch, "configureInteractive")) {
     previous.configureInteractive = adapter.configureInteractive;
     adapter.configureInteractive = patch.configureInteractive;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+  if (Object.hasOwn(patch, "configureWhenConfigured")) {
     previous.configureWhenConfigured = adapter.configureWhenConfigured;
     adapter.configureWhenConfigured = patch.configureWhenConfigured;
   }
 
   return () => {
-    if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+    if (Object.hasOwn(patch, "getStatus")) {
       adapter.getStatus = previous.getStatus!;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+    if (Object.hasOwn(patch, "afterConfigWritten")) {
       adapter.afterConfigWritten = previous.afterConfigWritten;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+    if (Object.hasOwn(patch, "configure")) {
       adapter.configure = previous.configure!;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+    if (Object.hasOwn(patch, "configureInteractive")) {
       adapter.configureInteractive = previous.configureInteractive;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+    if (Object.hasOwn(patch, "configureWhenConfigured")) {
       adapter.configureWhenConfigured = previous.configureWhenConfigured;
     }
   };
@@ -493,15 +493,28 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
   );
+  const listChannelPluginCatalogEntries = (
+    ...args: Parameters<typeof actual.listChannelPluginCatalogEntries>
+  ) => {
+    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
+    if (implementation) {
+      return catalogMocks.listChannelPluginCatalogEntries(...args);
+    }
+    return actual.listChannelPluginCatalogEntries(...args);
+  };
+  const listRawChannelPluginCatalogEntries = (
+    ...args: Parameters<typeof actual.listRawChannelPluginCatalogEntries>
+  ) => {
+    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
+    if (implementation) {
+      return catalogMocks.listChannelPluginCatalogEntries(...args);
+    }
+    return actual.listRawChannelPluginCatalogEntries(...args);
+  };
   return {
     ...actual,
-    listChannelPluginCatalogEntries: ((...args) => {
-      const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
-      if (implementation) {
-        return catalogMocks.listChannelPluginCatalogEntries(...args);
-      }
-      return actual.listChannelPluginCatalogEntries(...args);
-    }) as typeof actual.listChannelPluginCatalogEntries,
+    listChannelPluginCatalogEntries,
+    listRawChannelPluginCatalogEntries,
   };
 });
 

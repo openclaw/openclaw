@@ -118,56 +118,60 @@ describe("registerPreActionHooks", () => {
     | null = null;
 
   function buildProgram() {
-    const program = new Command().name("openclaw");
-    program
+    const programLocal = new Command().name("openclaw");
+    programLocal
       .command("agent")
       .requiredOption("-m, --message <text>")
       .option("--local")
       .option("--json")
       .action(() => {});
-    program
+    programLocal
       .command("status")
       .option("--json")
       .action(() => {});
-    program
+    programLocal
       .command("backup")
       .command("create")
       .option("--json")
       .action(() => {});
-    program.command("doctor").action(() => {});
-    program.command("completion").action(() => {});
-    program.command("secrets").action(() => {});
-    program
+    programLocal
+      .command("doctor")
+      .option("--lint")
+      .action(() => {});
+    programLocal.command("completion").action(() => {});
+    programLocal.command("secrets").action(() => {});
+    programLocal
       .command("agents")
       .command("list")
       .option("--json")
       .action(() => {});
-    program.command("configure").action(() => {});
-    program.command("onboard").action(() => {});
-    const channels = program.command("channels");
+    programLocal.command("configure").action(() => {});
+    programLocal.command("onboard").action(() => {});
+    const channels = programLocal.command("channels");
     channels.command("add").action(() => {});
     channels
       .command("send")
       .option("--json")
       .action(() => {});
     applyParentDefaultHelpAction(channels);
-    program
+    programLocal
       .command("plugins")
       .command("install")
       .argument("<spec>")
       .option("--marketplace <marketplace>")
       .action(() => {});
-    program
+    programLocal
       .command("update")
       .command("status")
       .option("--json")
       .action(() => {});
-    program
+    programLocal
       .command("message")
       .command("send")
       .option("--json")
       .action(() => {});
-    const config = program.command("config");
+    const config = programLocal.command("config");
+    config.option("--section <section>");
     setCommandJsonMode(config.command("set"), "parse-only")
       .argument("<path>")
       .argument("<value>")
@@ -178,8 +182,8 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     config.command("schema").action(() => {});
-    registerPreActionHooks(program, "9.9.9-test");
-    return program;
+    registerPreActionHooks(programLocal, "9.9.9-test");
+    return programLocal;
   }
 
   function resolveActionCommand(parseArgv: string[]): Command {
@@ -313,10 +317,64 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("only allows invalid config for explicit Discord reinstall requests", async () => {
+  it("lets bare config own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["config"],
+      processArgv: ["node", "openclaw", "config"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets guided config sections own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["config"],
+      processArgv: ["node", "openclaw", "config", "--section", "models"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the config guard and plugin loading for doctor lint", async () => {
+    await runPreAction({
+      parseArgv: ["doctor"],
+      processArgv: ["node", "openclaw", "doctor", "--lint"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("only allows invalid config for explicit official recovery reinstall requests", async () => {
     await runPreAction({
       parseArgv: ["plugins", "install", "@openclaw/discord"],
       processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/discord"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/brave-plugin"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/brave-plugin"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/slack"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/slack"],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
@@ -484,6 +542,7 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate when root option values are present", async () => {
@@ -493,6 +552,7 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config schema", async () => {
@@ -502,6 +562,7 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for backup create", async () => {
@@ -511,6 +572,7 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
@@ -550,7 +612,7 @@ describe("registerPreActionHooks", () => {
           preAction?: Array<(thisCommand: Command, actionCommand: Command) => Promise<void> | void>;
         };
       }
-    )._lifeCycleHooks?.preAction;
+    )["_lifeCycleHooks"]?.preAction;
     preActionHook = hooks?.[0] ?? null;
   });
 });

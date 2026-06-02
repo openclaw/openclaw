@@ -26,6 +26,7 @@ type DeepDreamingStatus = DreamingPhaseStatusBase & {
   minUniqueQueries: number;
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
+  maxPromotedSnippetTokens?: number;
 };
 
 type RemDreamingStatus = DreamingPhaseStatusBase & {
@@ -149,8 +150,12 @@ export type WikiMemoryPalaceCluster = {
   items: WikiMemoryPalaceItem[];
 };
 
+export type WikiMemoryPalacePageCounts = Record<WikiMemoryPalaceItem["kind"], number>;
+
 export type WikiMemoryPalace = {
   totalItems: number;
+  totalPages: number;
+  pageCounts: WikiMemoryPalacePageCounts;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
@@ -192,6 +197,8 @@ type WikiImportInsightsPayload = {
 
 type WikiMemoryPalacePayload = {
   totalItems?: unknown;
+  totalPages?: unknown;
+  pageCounts?: unknown;
   totalClaims?: unknown;
   totalQuestions?: unknown;
   totalContradictions?: unknown;
@@ -204,10 +211,19 @@ export type DreamingState = {
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   applySessionKey: string;
+  selectedAgentId: string | null;
+  dreamingStatusRequestAgentId?: string | null;
+  dreamingStatusRequestGeneration?: number;
+  dreamingStatusActiveRequestGeneration?: number | null;
+  dreamingStatusAgentId?: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamDiaryRequestAgentId?: string | null;
+  dreamDiaryRequestGeneration?: number;
+  dreamDiaryActiveRequestGeneration?: number | null;
+  dreamDiaryAgentId?: string | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
   dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
@@ -317,6 +333,22 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveSelectedAgentId(state: DreamingState): string | null {
+  return normalizeTrimmedString(state.selectedAgentId) ?? null;
+}
+
+function buildSelectedAgentPayloadForAgentId(
+  agentId: string | null,
+): { agentId: string } | Record<string, never> {
+  return agentId ? { agentId } : {};
+}
+
+function buildSelectedAgentPayload(
+  state: DreamingState,
+): { agentId: string } | Record<string, never> {
+  return buildSelectedAgentPayloadForAgentId(resolveSelectedAgentId(state));
 }
 
 function normalizeBoolean(value: unknown, fallback = false): boolean {
@@ -552,6 +584,40 @@ function normalizeWikiPageKind(value: unknown): WikiMemoryPalaceItem["kind"] | u
     : undefined;
 }
 
+function createEmptyWikiMemoryPalacePageCounts(): WikiMemoryPalacePageCounts {
+  return {
+    synthesis: 0,
+    entity: 0,
+    concept: 0,
+    source: 0,
+    report: 0,
+  };
+}
+
+function normalizeWikiMemoryPalacePageCounts(
+  raw: unknown,
+  fallback: WikiMemoryPalacePageCounts,
+): WikiMemoryPalacePageCounts {
+  const record = asRecord(raw);
+  return {
+    synthesis: normalizeFiniteInt(record?.synthesis, fallback.synthesis),
+    entity: normalizeFiniteInt(record?.entity, fallback.entity),
+    concept: normalizeFiniteInt(record?.concept, fallback.concept),
+    source: normalizeFiniteInt(record?.source, fallback.source),
+    report: normalizeFiniteInt(record?.report, fallback.report),
+  };
+}
+
+function sumWikiMemoryPalacePageCounts(pageCounts: WikiMemoryPalacePageCounts): number {
+  return (
+    pageCounts.synthesis +
+    pageCounts.entity +
+    pageCounts.concept +
+    pageCounts.source +
+    pageCounts.report
+  );
+}
+
 function normalizeWikiMemoryPalaceItem(raw: unknown): WikiMemoryPalaceItem | null {
   const record = asRecord(raw);
   const pagePath = normalizeTrimmedString(record?.pagePath);
@@ -625,11 +691,20 @@ function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
         .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
         .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
     : [];
+  const totalItems = normalizeFiniteInt(
+    record?.totalItems,
+    clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
+  );
+  const fallbackPageCounts = createEmptyWikiMemoryPalacePageCounts();
+  for (const cluster of clusters) {
+    fallbackPageCounts[cluster.key] += cluster.itemCount;
+  }
+  const pageCounts = normalizeWikiMemoryPalacePageCounts(record?.pageCounts, fallbackPageCounts);
+  const fallbackTotalPages = sumWikiMemoryPalacePageCounts(pageCounts) || totalItems;
   return {
-    totalItems: normalizeFiniteInt(
-      record?.totalItems,
-      clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
-    ),
+    totalItems,
+    totalPages: normalizeFiniteInt(record?.totalPages, fallbackTotalPages),
+    pageCounts,
     totalClaims: normalizeFiniteInt(
       record?.totalClaims,
       clusters.reduce((sum, cluster) => sum + cluster.claimCount, 0),
@@ -672,6 +747,15 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
             recencyHalfLifeDays: normalizeFiniteInt(deepRecord.recencyHalfLifeDays, 0),
             ...(typeof deepRecord.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
               ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
+              : {}),
+            ...(typeof deepRecord.maxPromotedSnippetTokens === "number" &&
+            Number.isFinite(deepRecord.maxPromotedSnippetTokens)
+              ? {
+                  maxPromotedSnippetTokens: normalizeFiniteInt(
+                    deepRecord.maxPromotedSnippetTokens,
+                    0,
+                  ),
+                }
               : {}),
           },
           rem: {
@@ -716,35 +800,83 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
 }
 
 export async function loadDreamingStatus(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.dreamingStatusLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.dreamingStatusLoading && state.dreamingStatusRequestAgentId === agentId) {
+    return;
+  }
+  if (state.dreamingStatusAgentId !== agentId) {
+    state.dreamingStatus = null;
+  }
+  const requestGeneration = (state.dreamingStatusRequestGeneration ?? 0) + 1;
+  state.dreamingStatusRequestGeneration = requestGeneration;
+  state.dreamingStatusActiveRequestGeneration = requestGeneration;
+  state.dreamingStatusRequestAgentId = agentId;
   state.dreamingStatusLoading = true;
   state.dreamingStatusError = null;
   try {
     const payload = await state.client.request<DoctorMemoryStatusPayload>(
       "doctor.memory.status",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.dreamingStatusActiveRequestGeneration !== requestGeneration ||
+      state.dreamingStatusRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.dreamingStatus = normalizeDreamingStatus(payload?.dreaming);
+    state.dreamingStatusAgentId = agentId;
   } catch (err) {
-    state.dreamingStatusError = String(err);
+    if (
+      state.dreamingStatusActiveRequestGeneration === requestGeneration &&
+      state.dreamingStatusRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.dreamingStatusError = String(err);
+    }
   } finally {
-    state.dreamingStatusLoading = false;
+    if (state.dreamingStatusActiveRequestGeneration === requestGeneration) {
+      state.dreamingStatusLoading = false;
+      state.dreamingStatusRequestAgentId = null;
+      state.dreamingStatusActiveRequestGeneration = null;
+    }
   }
 }
 
 export async function loadDreamDiary(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.dreamDiaryLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.dreamDiaryLoading && state.dreamDiaryRequestAgentId === agentId) {
+    return;
+  }
+  if (state.dreamDiaryAgentId !== agentId) {
+    state.dreamDiaryPath = null;
+    state.dreamDiaryContent = null;
+  }
+  const requestGeneration = (state.dreamDiaryRequestGeneration ?? 0) + 1;
+  state.dreamDiaryRequestGeneration = requestGeneration;
+  state.dreamDiaryActiveRequestGeneration = requestGeneration;
+  state.dreamDiaryRequestAgentId = agentId;
   state.dreamDiaryLoading = true;
   state.dreamDiaryError = null;
   try {
     const payload = await state.client.request<DoctorMemoryDreamDiaryPayload>(
       "doctor.memory.dreamDiary",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.dreamDiaryActiveRequestGeneration !== requestGeneration ||
+      state.dreamDiaryRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     const path = normalizeTrimmedString(payload?.path) ?? DEFAULT_DREAM_DIARY_PATH;
     const found = payload?.found === true;
     if (found) {
@@ -754,10 +886,21 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
       state.dreamDiaryPath = path;
       state.dreamDiaryContent = null;
     }
+    state.dreamDiaryAgentId = agentId;
   } catch (err) {
-    state.dreamDiaryError = String(err);
+    if (
+      state.dreamDiaryActiveRequestGeneration === requestGeneration &&
+      state.dreamDiaryRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.dreamDiaryError = String(err);
+    }
   } finally {
-    state.dreamDiaryLoading = false;
+    if (state.dreamDiaryActiveRequestGeneration === requestGeneration) {
+      state.dreamDiaryLoading = false;
+      state.dreamDiaryRequestAgentId = null;
+      state.dreamDiaryActiveRequestGeneration = null;
+    }
   }
 }
 
@@ -843,7 +986,10 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
-    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(
+      method,
+      buildSelectedAgentPayload(state),
+    );
     if (options?.reloadDiary !== false) {
       await loadDreamDiary(state);
     }

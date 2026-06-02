@@ -1,8 +1,6 @@
+import { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 import type { BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 
 function normalizeStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")

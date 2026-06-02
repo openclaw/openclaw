@@ -1,17 +1,17 @@
+import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  presentationToInteractiveReply,
+  normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/outbound-runtime";
-import {
-  resolveOutboundSendDep,
-  type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
@@ -22,6 +22,7 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
@@ -53,7 +54,7 @@ function chunkTelegramOutboundText(
 ): string[] {
   return ctx?.formatting?.parseMode === "HTML"
     ? splitTelegramHtmlChunks(text, limit)
-    : markdownToTelegramHtmlChunks(text, limit);
+    : markdownToTelegramHtmlChunks(text, limit, { tableMode: ctx?.formatting?.tableMode });
 }
 
 async function resolveTelegramSendContext(params: {
@@ -95,6 +96,14 @@ async function resolveTelegramSendContext(params: {
   };
 }
 
+async function resolveTelegramOutboundSendContext(
+  params: Parameters<typeof resolveTelegramSendContext>[0] & { to: string },
+) {
+  const outboundTo = normalizeTelegramOutboundTarget(params.to);
+  const { send, baseOpts } = await resolveTelegramSendContext(params);
+  return { outboundTo, send, baseOpts };
+}
+
 export type CreateTelegramOutboundAdapterOptions = {
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
@@ -116,14 +125,17 @@ export async function sendTelegramPayloadMessages(params: {
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
   const text =
     resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
+      presentation,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
+    presentation,
     interactive: params.payload.interactive,
   });
   const payloadOpts = {
@@ -142,8 +154,8 @@ export async function sendTelegramPayloadMessages(params: {
         ...payloadOpts,
         buttons,
       }),
-    send: async ({ text, mediaUrl, isFirst }) =>
-      await params.send(params.to, text, {
+    send: async ({ text: textLocal, mediaUrl, isFirst }) =>
+      await params.send(params.to, textLocal, {
         ...payloadOpts,
         mediaUrl,
         ...(isFirst ? { buttons } : {}),
@@ -175,6 +187,21 @@ export function createTelegramOutboundAdapter(
       selects: true,
       context: true,
       divider: false,
+      limits: {
+        actions: {
+          maxActions: 100,
+          maxActionsPerRow: 3,
+          maxLabelLength: 64,
+          supportsStyles: false,
+        },
+        selects: {
+          maxOptions: 100,
+          maxLabelLength: 64,
+        },
+        text: {
+          markdownDialect: "html",
+        },
+      },
     },
     deliveryCapabilities: {
       pin: true,
@@ -190,18 +217,34 @@ export function createTelegramOutboundAdapter(
         batch: true,
       },
     },
-    renderPresentation: ({ payload, presentation }) => ({
-      ...payload,
-      text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      interactive: presentationToInteractiveReply(presentation),
-    }),
-    pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
+    renderPresentation: ({ payload, presentation }) => {
+      const telegramData = payload.channelData?.telegram as Record<string, unknown> | undefined;
+      const hasExplicitButtons = (telegramData && "buttons" in telegramData) || payload.interactive;
+      const buttons = hasExplicitButtons
+        ? undefined
+        : resolveTelegramInlineButtons({ presentation });
+      return {
+        ...payload,
+        text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+        channelData: {
+          ...payload.channelData,
+          telegram: {
+            ...telegramData,
+            ...(buttons ? { buttons } : {}),
+          },
+        },
+      };
+    },
+    pinDeliveredMessage: async ({ cfg, target, messageId, pin, gatewayClientScopes }) => {
       const { pinMessageTelegram } = await loadSendModule();
-      await pinMessageTelegram(target.to, messageId, {
+      const outboundTo = normalizeTelegramOutboundTarget(target.to);
+      const pinTarget = parseTelegramTarget(outboundTo);
+      await pinMessageTelegram(pinTarget.chatId, messageId, {
         cfg,
         accountId: target.accountId ?? undefined,
         notify: pin.notify,
         verbose: false,
+        gatewayClientScopes,
       });
     },
     resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
@@ -211,104 +254,43 @@ export function createTelegramOutboundAdapter(
     supportsAnonymousPolls: true,
     ...createAttachedChannelResultAdapter({
       channel: "telegram",
-      sendText: async ({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        formatting,
-        silent,
-        gatewayClientScopes,
-      }) => {
-        const { send, baseOpts } = await resolveTelegramSendContext({
-          cfg,
-          deps,
-          accountId,
-          replyToId,
-          threadId,
-          formatting,
-          silent,
-          gatewayClientScopes,
+      sendText: async (params) => {
+        const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({
+          ...params,
           resolveSend,
         });
-        return await send(to, text, {
+        return await send(outboundTo, params.text, {
           ...baseOpts,
         });
       },
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        formatting,
-        forceDocument,
-        silent,
-        gatewayClientScopes,
-      }) => {
-        const { send, baseOpts } = await resolveTelegramSendContext({
-          cfg,
-          deps,
-          accountId,
-          replyToId,
-          threadId,
-          formatting,
-          silent,
-          gatewayClientScopes,
+      sendMedia: async (params) => {
+        const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({
+          ...params,
           resolveSend,
         });
-        return await send(to, text, {
+        return await send(outboundTo, params.text, {
           ...baseOpts,
-          mediaUrl,
-          mediaLocalRoots,
-          mediaReadFile,
-          forceDocument: forceDocument ?? false,
+          mediaUrl: params.mediaUrl,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+          forceDocument: params.forceDocument ?? false,
         });
       },
     }),
-    sendPayload: async ({
-      cfg,
-      to,
-      payload,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      formatting,
-      forceDocument,
-      silent,
-      gatewayClientScopes,
-    }) => {
-      const { send, baseOpts } = await resolveTelegramSendContext({
-        cfg,
-        deps,
-        accountId,
-        replyToId,
-        threadId,
-        formatting,
-        silent,
-        gatewayClientScopes,
+    sendPayload: async (params) => {
+      const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({
+        ...params,
         resolveSend,
       });
       const result = await sendTelegramPayloadMessages({
         send,
-        to,
-        payload,
+        to: outboundTo,
+        payload: params.payload,
         baseOpts: {
           ...baseOpts,
-          mediaLocalRoots,
-          mediaReadFile,
-          forceDocument: forceDocument ?? false,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+          forceDocument: params.forceDocument ?? false,
         },
       });
       return attachChannelToResult("telegram", result);
@@ -323,8 +305,9 @@ export function createTelegramOutboundAdapter(
       isAnonymous,
       gatewayClientScopes,
     }) => {
+      const outboundTo = normalizeTelegramOutboundTarget(to);
       const { sendPollTelegram } = await loadSendModule();
-      return await sendPollTelegram(to, poll, {
+      return await sendPollTelegram(outboundTo, poll, {
         cfg,
         accountId: accountId ?? undefined,
         messageThreadId: parseTelegramThreadId(threadId),

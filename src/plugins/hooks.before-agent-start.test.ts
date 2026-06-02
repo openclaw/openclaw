@@ -202,19 +202,19 @@ describe("before_agent_start hook merger", () => {
   });
 
   it("passes runId through the agent context to hook handlers", async () => {
-    const registry = createEmptyPluginRegistry();
+    const registryLocal = createEmptyPluginRegistry();
     let capturedCtx: typeof stubCtx | undefined;
     addTestHook({
-      registry,
+      registry: registryLocal,
       pluginId: "ctx-spy",
       hookName: "before_agent_start",
-      handler: ((_event: unknown, ctx: typeof stubCtx) => {
+      handler: ((eventValue: unknown, ctx: typeof stubCtx) => {
         capturedCtx = ctx;
         return {};
       }) as PluginHookRegistration["handler"],
     });
 
-    const runner = createHookRunner(registry);
+    const runner = createHookRunner(registryLocal);
     await runner.runBeforeAgentStart({ prompt: "test" }, stubCtx);
 
     expect(capturedCtx).toBe(stubCtx);

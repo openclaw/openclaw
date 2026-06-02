@@ -1,4 +1,4 @@
-import type { ModelCatalogProvider } from "../types.js";
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 
 export type OpenClawProviderIndexPluginInstall = {
   clawhubSpec?: string;
@@ -29,7 +29,7 @@ export type OpenClawProviderIndexProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation")[];
+  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type OpenClawProviderIndexProvider = {

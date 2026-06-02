@@ -11,10 +11,26 @@ import {
 
 const DEPENDENCY_FILE_PATTERNS = [
   /^package\.json$/u,
+  /^package-lock\.json$/u,
+  /\/package-lock\.json$/u,
+  /^npm-shrinkwrap\.json$/u,
+  /\/npm-shrinkwrap\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^pnpm-workspace\.yaml$/u,
   /^patches\//u,
   /\/package\.json$/u,
+];
+
+const DEPENDENCY_DIFF_PATHS = [
+  "package.json",
+  "package-lock.json",
+  "extensions/*/package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "extensions/*/npm-shrinkwrap.json",
+  "*package.json",
+  "patches",
 ];
 
 function payloadFromLockfile(lockfileText) {
@@ -108,8 +124,8 @@ function renderMarkdownReport(report) {
     "",
     "It reports two related but different things:",
     "",
-    "- Dependency file changes: package manifests, pnpm workspace config, lockfile, and patches.",
-    "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml.",
+    "- Dependency file changes: package manifests, npm shrinkwrap/package-lock, pnpm workspace config, lockfile, and patches.",
+    "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml; inspect shrinkwrap/package-lock diffs directly.",
     "",
     "## Summary",
     "",
@@ -168,24 +184,18 @@ function readGitFile(ref, filePath, cwd) {
   });
 }
 
-function isDependencyFile(filePath) {
+export function isDependencyFile(filePath) {
   return DEPENDENCY_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
+}
+
+export function dependencyDiffPathspecs() {
+  return [...DEPENDENCY_DIFF_PATHS];
 }
 
 function gitDiffDependencyFiles(baseRef, cwd) {
   const output = execFileSync(
     "git",
-    [
-      "diff",
-      "--name-status",
-      baseRef,
-      "--",
-      "package.json",
-      "pnpm-lock.yaml",
-      "pnpm-workspace.yaml",
-      "*package.json",
-      "patches",
-    ],
+    ["diff", "--name-status", baseRef, "--", ...DEPENDENCY_DIFF_PATHS],
     {
       cwd,
       encoding: "utf8",
@@ -289,7 +299,7 @@ export async function main(argv = process.argv.slice(2)) {
   await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeArtifact(options.markdownPath, renderMarkdownReport(report));
   const artifactHint =
-    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+    typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(
     `INFO dependency change report: ${report.summary.addedPackages} added, ` +
       `${report.summary.removedPackages} removed, ${report.summary.changedPackages} changed ` +
@@ -304,7 +314,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     (exitCode) => {
       process.exitCode = exitCode;
     },
-    (error) => {
+    /** @param {unknown} error */ (error) => {
       process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
       process.exitCode = 1;
     },

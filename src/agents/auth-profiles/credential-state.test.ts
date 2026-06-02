@@ -20,6 +20,10 @@ describe("resolveTokenExpiryState", () => {
     expect(resolveTokenExpiryState(Number.POSITIVE_INFINITY, now)).toBe("invalid_expires");
   });
 
+  it("treats Date-invalid future timestamps as invalid_expires", () => {
+    expect(resolveTokenExpiryState(8_700_000_000_000_000, now)).toBe("invalid_expires");
+  });
+
   it("returns expired when expires is in the past", () => {
     expect(resolveTokenExpiryState(now - 1, now)).toBe("expired");
   });
@@ -45,7 +49,7 @@ describe("hasUsableOAuthCredential", () => {
       hasUsableOAuthCredential(
         {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: now + DEFAULT_OAUTH_REFRESH_MARGIN_MS - 1,
@@ -104,22 +108,17 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: false, reasonCode: "invalid_expires" });
   });
 
-  it("marks oauth with oauthRef as eligible", () => {
+  it("marks oauth without inline credential material as ineligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "",
         refresh: "",
         expires: now + 60_000,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: "0123456789abcdef0123456789abcdef",
-        },
       },
       now,
     });
-    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+    expect(result).toEqual({ eligible: false, reasonCode: "missing_credential" });
   });
 });

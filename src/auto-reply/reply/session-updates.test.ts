@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const TEST_WORKSPACE_DIR = "/tmp/workspace";
+
 const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
@@ -10,10 +12,14 @@ const {
   resolveSessionAgentIdMock,
   resolveAgentIdFromSessionKeyMock,
 } = vi.hoisted(() => ({
-  buildWorkspaceSkillSnapshotMock: vi.fn(() => ({ prompt: "", skills: [], resolvedSkills: [] })),
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
+    prompt: "",
+    skills: [] as unknown[],
+    resolvedSkills: [] as unknown[],
+  })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 0),
-  shouldRefreshSnapshotForVersionMock: vi.fn(() => false),
+  shouldRefreshSnapshotForVersionMock: vi.fn((_cached?: number, _next?: number) => false),
   getRemoteSkillEligibilityMock: vi.fn(() => ({
     platforms: [],
     hasBin: () => false,
@@ -29,12 +35,19 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
-vi.mock("../../agents/skills.js", () => ({
+vi.mock("../../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+}));
+
+vi.mock("../../skills/loading/workspace.js", () => ({
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 
-vi.mock("../../agents/skills/refresh.js", () => ({
+vi.mock("../../skills/runtime/refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
+}));
+
+vi.mock("../../skills/runtime/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
@@ -43,10 +56,6 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
   resolveSessionFilePath: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
-}));
-
-vi.mock("../../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
@@ -83,7 +92,7 @@ describe("ensureSkillSnapshot", () => {
     await ensureSkillSnapshot({
       sessionKey: "main",
       isFirstTurnInSession: false,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: {
         agents: {
           list: [{ id: "writer", default: true }],
@@ -102,7 +111,7 @@ describe("ensureSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
     const [[workspaceDir, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock
       .calls as unknown as Array<[string, { agentId?: string }]>;
-    expect(workspaceDir).toBe("/tmp/workspace");
+    expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });

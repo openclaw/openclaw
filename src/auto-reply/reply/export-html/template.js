@@ -20,7 +20,7 @@
 
   // Parse URL parameters for deep linking: leafId and targetId
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
-  const injectedParams = document.querySelector('meta[name="pi-url-params"]');
+  const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
     ? injectedParams.content
     : window.location.search.substring(1);
@@ -348,6 +348,16 @@
         .join("");
     }
     return "";
+  }
+
+  function renderableContentBlocks(content) {
+    if (Array.isArray(content)) {
+      return content;
+    }
+    if (typeof content === "string") {
+      return [{ type: "text", text: content }];
+    }
+    return [];
   }
 
   function getSearchableText(entry, label) {
@@ -1044,7 +1054,7 @@
       if (!result) {
         return "";
       }
-      const textBlocks = result.content.filter((c) => c.type === "text");
+      const textBlocks = renderableContentBlocks(result.content).filter((c) => c.type === "text");
       return textBlocks.map((c) => c.text).join("\n");
     };
 
@@ -1052,7 +1062,7 @@
       if (!result) {
         return [];
       }
-      return result.content.filter((c) => c.type === "image");
+      return renderableContentBlocks(result.content).filter((c) => c.type === "image");
     };
 
     const renderResultImages = () => {
@@ -1241,7 +1251,7 @@
    */
   function buildShareUrl(entryId) {
     // Check for injected base URL (used when loaded in iframe via srcdoc)
-    const baseUrlMeta = document.querySelector('meta[name="pi-share-base-url"]');
+    const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
     const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
@@ -1309,7 +1319,7 @@
    * Render the copy-link button HTML for a message.
    */
   function renderCopyLinkButton(entryId) {
-    return `<button class="copy-link-btn" data-entry-id="${entryId}" title="Copy link to this message">
+    return `<button class="copy-link-btn" data-entry-id="${escapeHtmlAttr(entryId)}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -1320,7 +1330,7 @@
   function renderEntry(entry) {
     const ts = formatTimestamp(entry.timestamp);
     const tsHtml = ts ? `<div class="message-timestamp">${ts}</div>` : "";
-    const entryId = `entry-${entry.id}`;
+    const entryId = `entry-${escapeHtmlAttr(entry.id)}`;
     const copyBtnHtml = renderCopyLinkButton(entry.id);
 
     if (entry.type === "message") {
@@ -1344,10 +1354,12 @@
         const text =
           typeof content === "string"
             ? content
-            : content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n");
+            : Array.isArray(content)
+                ? content
+                    .filter((c) => c.type === "text")
+                    .map((c) => c.text)
+                    .join("\n")
+                : "";
         if (text.trim()) {
           html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
         }
@@ -1357,8 +1369,9 @@
 
       if (msg.role === "assistant") {
         let html = `<div class="assistant-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
+        const contentBlocks = renderableContentBlocks(msg.content);
 
-        for (const block of msg.content) {
+        for (const block of contentBlocks) {
           if (block.type === "text" && block.text.trim()) {
             html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
           } else if (block.type === "thinking" && block.thinking.trim()) {
@@ -1369,7 +1382,7 @@
           }
         }
 
-        for (const block of msg.content) {
+        for (const block of contentBlocks) {
           if (block.type === "toolCall") {
             html += renderToolCall(block);
           }
@@ -1474,7 +1487,7 @@
               cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
             }
           }
-          toolCalls += msg.content.filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
         }
         if (msg.role === "toolResult") {
           toolResults++;

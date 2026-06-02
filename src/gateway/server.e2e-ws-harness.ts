@@ -25,13 +25,16 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
   const port = await getFreePort();
   const server = await startGatewayServer(port, {
     auth: { mode: "none" },
+    bind: "loopback",
     controlUiEnabled: false,
   });
 
   const openClient = async (opts?: Parameters<typeof connectOk>[1]): Promise<GatewayWsClient> => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     trackConnectChallengeNonce(ws);
-    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
     const hello = await connectOk(ws, opts);
     return { ws, hello };
   };

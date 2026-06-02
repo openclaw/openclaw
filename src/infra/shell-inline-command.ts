@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
 
@@ -135,7 +135,7 @@ function isPosixShortOption(token: string, option: string): boolean {
   return hasOption;
 }
 
-function advancePosixInlineOptionScan(token: string): number {
+export function advancePosixInlineOptionScan(token: string): number {
   const combinedValueCount = combinedSeparateValueOptionCount(token);
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;

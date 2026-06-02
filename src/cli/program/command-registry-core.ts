@@ -107,15 +107,27 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("../mcp-cli.js"),
         exportName: "registerMcpCli",
       },
+      {
+        commandNames: ["transcripts"],
+        loadModule: () => import("./register.transcripts.js"),
+        exportName: "registerTranscriptsCli",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(
-    ["agent", "agents"],
-    () => import("./register.agent.js"),
+    ["agent"],
+    () => import("./register.agent-turn.js"),
     (mod, { program, ctx }) => {
-      mod.registerAgentCommands(program, {
+      mod.registerAgentTurnCommand(program, {
         agentChannelOptions: ctx.agentChannelOptions,
       });
+    },
+  ),
+  defineImportedCommandGroupSpec(
+    ["agents"],
+    () => import("./register.agent.js"),
+    (mod, { program }) => {
+      mod.registerAgentsCommands(program);
     },
   ),
   ...withProgramOnlySpecs(

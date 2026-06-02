@@ -1,7 +1,10 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   buildLmstudioModelName,
@@ -25,10 +28,6 @@ type FetchLmstudioModelsResult = {
   error?: unknown;
 };
 
-type LmstudioModelsResponseWire = {
-  models?: LmstudioModelWire[];
-};
-
 type DiscoverLmstudioModelsParams = {
   baseUrl: string;
   apiKey: string;
@@ -46,11 +45,12 @@ async function fetchLmstudioEndpoint(params: {
   ssrfPolicy?: SsrFPolicy;
   auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   if (params.ssrfPolicy) {
     return await fetchWithSsrFGuard({
       url: params.url,
       init: params.init,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
       fetchImpl: params.fetchImpl,
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
@@ -60,10 +60,17 @@ async function fetchLmstudioEndpoint(params: {
   return {
     response: await fetchFn(params.url, {
       ...params.init,
-      signal: AbortSignal.timeout(params.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     }),
     release: async () => {},
   };
+}
+
+function asLmstudioModelWire(value: unknown): LmstudioModelWire {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("LM Studio model list: malformed JSON response");
+  }
+  return value as LmstudioModelWire;
 }
 
 /** Fetches /api/v1/models and reports transport reachability separately from HTTP status. */
@@ -100,12 +107,15 @@ export async function fetchLmstudioModels(params: {
           models: [],
         };
       }
-      // External service payload is untrusted JSON; parse with a permissive wire type.
-      const payload = (await response.json()) as LmstudioModelsResponseWire;
+      const models = await readProviderJsonArrayFieldResponse(
+        response,
+        "LM Studio model list",
+        "models",
+      );
       return {
         reachable: true,
         status: response.status,
-        models: Array.isArray(payload.models) ? payload.models : [],
+        models: models.map(asLmstudioModelWire),
       };
     } finally {
       await release();
@@ -207,18 +217,8 @@ export async function ensureLmstudioModelLoaded(params: {
   }
   const matchingModel = preflight.models.find((entry) => entry.key?.trim() === modelKey);
   const loadedContextWindow = matchingModel ? resolveLoadedContextWindow(matchingModel) : null;
-  const advertisedContextLimit =
-    matchingModel?.max_context_length !== undefined &&
-    Number.isFinite(matchingModel.max_context_length) &&
-    matchingModel.max_context_length > 0
-      ? Math.floor(matchingModel.max_context_length)
-      : null;
-  const requestedContextLength =
-    params.requestedContextLength !== undefined &&
-    Number.isFinite(params.requestedContextLength) &&
-    params.requestedContextLength > 0
-      ? Math.floor(params.requestedContextLength)
-      : null;
+  const advertisedContextLimit = asPositiveSafeInteger(matchingModel?.max_context_length) ?? null;
+  const requestedContextLength = asPositiveSafeInteger(params.requestedContextLength) ?? null;
   const contextLengthForLoad =
     advertisedContextLimit === null
       ? (requestedContextLength ?? LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH)
@@ -255,7 +255,12 @@ export async function ensureLmstudioModelLoaded(params: {
       const body = await response.text();
       throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
     }
-    const payload = (await response.json()) as LmstudioLoadResponse;
+    let payload: LmstudioLoadResponse;
+    try {
+      payload = (await response.json()) as LmstudioLoadResponse;
+    } catch (cause) {
+      throw new Error("LM Studio model load returned malformed JSON", { cause });
+    }
     if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
       throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
     }

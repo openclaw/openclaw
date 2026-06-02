@@ -17,11 +17,12 @@ import type {
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
 import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureCodexRuntimePluginForModelSelection,
 } from "../../codex-runtime-plugin-install.js";
+import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
+import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -34,47 +35,6 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   loadPluginProviderRuntime,
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
-
-function createNonInteractivePluginInstallPrompter(runtime: RuntimeEnv): WizardPrompter {
-  const unavailable = <T>(message: string): Promise<T> =>
-    Promise.reject(new Error(`Non-interactive setup cannot prompt for plugin install: ${message}`));
-  return {
-    async intro(title) {
-      runtime.log(title);
-    },
-    async outro(message) {
-      runtime.log(message);
-    },
-    async note(message, title) {
-      runtime.log(title ? `${title}\n${message}` : message);
-    },
-    async select(params) {
-      return unavailable(params.message);
-    },
-    async multiselect(params) {
-      return unavailable(params.message);
-    },
-    async text(params) {
-      return unavailable(params.message);
-    },
-    async confirm(params) {
-      return unavailable(params.message);
-    },
-    progress(label) {
-      runtime.log(label);
-      return {
-        update(message) {
-          runtime.log(message);
-        },
-        stop(message) {
-          if (message) {
-            runtime.log(message);
-          }
-        },
-      };
-    },
-  };
-}
 
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
@@ -106,10 +66,13 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
-  const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
-    await loadAuthChoicePluginProvidersRuntime();
+  const {
+    resolveOwningPluginIdsForProviderRef,
+    resolveProviderPluginChoice,
+    resolvePluginProviders,
+  } = await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
-    ? resolveOwningPluginIdsForProvider({
+    ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
         config: params.nextConfig,
         workspaceDir,
@@ -204,7 +167,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   if (!selectedModel) {
     return result;
   }
-  const nonInteractivePrompter = createNonInteractivePluginInstallPrompter(params.runtime);
+  const nonInteractivePrompter = createNonInteractiveLoggingPrompter(
+    params.runtime,
+    (message) => `Non-interactive setup cannot prompt for plugin install: ${message}`,
+  );
   const codexInstall = await ensureCodexRuntimePluginForModelSelection({
     cfg: result,
     model: selectedModel,
@@ -226,5 +192,12 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       nonInteractive: true,
     });
   }
-  return codexInstall.cfg;
+  const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
+    cfg: codexInstall.cfg,
+    model: selectedModel,
+    prompter: nonInteractivePrompter,
+    runtime: params.runtime,
+    workspaceDir,
+  });
+  return copilotInstall.cfg;
 }

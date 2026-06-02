@@ -3,6 +3,10 @@ import { rmSync } from "node:fs";
 import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -11,9 +15,20 @@ import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
+const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
+
+function resolveHostedZaloMediaDirName(): string {
+  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
+  if (!workerId) {
+    return ZALO_OUTBOUND_MEDIA_DIR_NAME;
+  }
+  const safeWorkerId = workerId.replaceAll(/[^a-zA-Z0-9_.-]/gu, "_");
+  return `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${safeWorkerId}`;
+}
+
 const ZALO_OUTBOUND_MEDIA_DIR = join(
   resolvePreferredOpenClawTmpDir(),
-  "openclaw-zalo-outbound-media",
+  resolveHostedZaloMediaDirName(),
 );
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 
@@ -53,6 +68,10 @@ async function deleteHostedZaloMediaEntry(id: string): Promise<void> {
 }
 
 async function cleanupExpiredHostedZaloMedia(nowMs = Date.now()): Promise<void> {
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return;
+  }
   let fileNames: string[];
   try {
     fileNames = await readdir(ZALO_OUTBOUND_MEDIA_DIR);
@@ -68,7 +87,8 @@ async function cleanupExpiredHostedZaloMedia(nowMs = Date.now()): Promise<void> 
         try {
           const metadataRaw = await readFile(resolveHostedZaloMediaMetadataPath(id), "utf8");
           const metadata = JSON.parse(metadataRaw) as HostedZaloMediaMetadata;
-          if (metadata.expiresAt <= nowMs) {
+          const expiresAt = asDateTimestampMs(metadata.expiresAt);
+          if (expiresAt === undefined || expiresAt <= now) {
             await deleteHostedZaloMediaEntry(id);
           }
         } catch {
@@ -130,6 +150,15 @@ export async function prepareHostedZaloMediaUrl(params: {
   await ensureHostedZaloMediaDir();
   await cleanupExpiredHostedZaloMedia();
 
+  const now = asDateTimestampMs(Date.now());
+  const expiresAt =
+    now === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(ZALO_OUTBOUND_MEDIA_TTL_MS, { nowMs: now });
+  if (expiresAt === undefined) {
+    throw new Error("Zalo outbound media expiry could not be resolved");
+  }
+
   const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
     ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
@@ -150,7 +179,7 @@ export async function prepareHostedZaloMediaUrl(params: {
       routePath,
       token,
       contentType: media.contentType,
-      expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
+      expiresAt,
     } satisfies HostedZaloMediaMetadata);
   } catch (error) {
     await deleteHostedZaloMediaEntry(id);
@@ -199,7 +228,9 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  if (entry.metadata.expiresAt <= Date.now()) {
+  const now = asDateTimestampMs(Date.now());
+  const expiresAt = asDateTimestampMs(entry.metadata.expiresAt);
+  if (now === undefined || expiresAt === undefined || expiresAt <= now) {
     await deleteHostedZaloMediaEntry(id);
     res.statusCode = 410;
     res.end("Expired");

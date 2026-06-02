@@ -582,6 +582,101 @@ describe("secrets audit", () => {
     expect(report.filesScanned).toContain(externalModelsPath);
   });
 
+  it("does not flag $VAR shorthand env refs in auth profiles as plaintext", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "$OPENAI_API_KEY", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "PLAINTEXT_FOUND" && entry.file === fixture.authStorePath,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag ${VAR} env refs in auth profiles as plaintext", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "${OPENAI_API_KEY}", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "PLAINTEXT_FOUND" && entry.file === fixture.authStorePath,
+      ),
+    ).toBe(false);
+  });
+
+  it("still flags auth profile plaintext when an explicit ref is also configured", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-leftover-plaintext", // pragma: allowlist secret
+          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.authStorePath &&
+          entry.jsonPath === "profiles.openai:default.key",
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["$OPENAI_API_KEY", "${OPENAI_API_KEY}"])(
+    "does not flag %s auth profile env refs when an explicit ref is also configured",
+    async (value) => {
+      await writeJsonFile(fixture.authStorePath, {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: value,
+            keyRef: { source: "env", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
+
+      const report = await runSecretsAudit({ env: fixture.env });
+      expect(
+        hasFinding(
+          report,
+          (entry) =>
+            entry.code === "PLAINTEXT_FOUND" &&
+            entry.file === fixture.authStorePath &&
+            entry.jsonPath === "profiles.openai:default.key",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("does not flag non-sensitive routing headers in openclaw config", async () => {
     await writeJsonFile(fixture.configPath, {
       models: {
@@ -614,5 +709,41 @@ describe("secrets audit", () => {
           entry.jsonPath === "models.providers.openai.headers.X-Proxy-Region",
       ),
     ).toBe(false);
+  });
+
+  it("keeps request headers in openclaw config covered by plaintext audit", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            request: {
+              headers: {
+                "X-Proxy-Region": "us-west",
+              },
+            },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.request.headers.X-Proxy-Region",
+      ),
+    ).toBe(true);
   });
 });

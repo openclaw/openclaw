@@ -21,6 +21,9 @@ Text is supported everywhere; media and reactions vary by channel.
 - Channels that accept bot-authored inbound messages can use shared
   [bot loop protection](/channels/bot-loop-protection) to prevent bot pairs from
   replying to each other indefinitely.
+- Supported always-on rooms can use [ambient room events](/channels/ambient-room-events)
+  so unmentioned room chatter becomes quiet context unless the agent sends with
+  the `message` tool.
 
 ## Supported channels
 
@@ -38,6 +41,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (bundled plugin).
 - [Signal](/channels/signal) - signal-cli; privacy-focused.
 - [Slack](/channels/slack) - Bolt SDK; workspace apps.
+- [SMS](/channels/sms) - Twilio-backed SMS through the Gateway webhook (bundled plugin).
 - [Synology Chat](/channels/synology-chat) - Synology NAS Chat via outgoing+incoming webhooks (bundled plugin).
 - [Telegram](/channels/telegram) - Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) - Urbit-based messenger (bundled plugin).

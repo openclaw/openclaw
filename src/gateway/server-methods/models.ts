@@ -1,66 +1,46 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
-import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateModelsListParams,
-} from "../protocol/index.js";
-import type { GatewayRequestContext } from "./shared-types.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import {
+  loadModelCatalogForBrowse,
+  type ModelCatalogBrowseView,
+} from "../../agents/model-catalog-browse.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-type ModelsListView = "default" | "configured" | "all";
-type GatewayModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
+type ModelsListView = ModelCatalogBrowseView;
 
-const MODELS_LIST_CATALOG_TIMEOUT_MS = 750;
 let loggedSlowModelsListCatalog = false;
 
+// Unknown views are rejected by protocol validation first; this helper keeps the
+// handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
 }
 
-async function loadModelsListCatalog(
-  context: GatewayRequestContext,
-  view: ModelsListView,
-  cfg: OpenClawConfig,
-): Promise<GatewayModelCatalog> {
-  if (view === "all") {
-    return await context.loadGatewayModelCatalog({ readOnly: false });
-  }
-  if (parseConfiguredModelVisibilityEntries({ cfg }).providerWildcards.size > 0) {
-    return await context.loadGatewayModelCatalog({ readOnly: false });
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = Symbol("models-list-catalog-timeout");
-  const catalogPromise = context.loadGatewayModelCatalog({ readOnly: true });
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), MODELS_LIST_CATALOG_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  try {
-    const result = await Promise.race([catalogPromise, timeoutPromise]);
-    if (result === timedOut) {
-      catalogPromise.catch(() => undefined);
-      if (!loggedSlowModelsListCatalog) {
-        loggedSlowModelsListCatalog = true;
-        context.logGateway.debug(
-          `models.list continuing without model catalog after ${MODELS_LIST_CATALOG_TIMEOUT_MS}ms`,
-        );
-      }
-      return [];
-    }
-    return result;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+// Runtime-only model params are useful inside provider routing, but exposing
+// them here would leak provider invocation details into the Control UI API.
+function omitRuntimeModelParams(entry: ModelCatalogEntry): ModelCatalogEntry {
+  const { params: _params, ...rest } = entry as ModelCatalogEntry & {
+    params?: Record<string, unknown>;
+  };
+  return rest;
 }
 
+function omitRuntimeModelParamsFromCatalog(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.map(omitRuntimeModelParams);
+}
+
+// The gateway model list is a browse API, not an auth probe. It reuses the
+// current runtime catalog snapshot and applies visibility rules without doing
+// extra runtime discovery on each request.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
     if (!validateModelsListParams(params)) {
@@ -80,12 +60,25 @@ export const modelsHandlers: GatewayRequestHandlers = {
         resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
         resolveDefaultAgentWorkspaceDir();
       const view = resolveModelsListView(params);
-      const catalog = await loadModelsListCatalog(context, view, cfg);
+      const catalog = await loadModelCatalogForBrowse({
+        cfg,
+        view,
+        loadCatalog: context.loadGatewayModelCatalog,
+        onTimeout: (timeoutMs) => {
+          if (loggedSlowModelsListCatalog) {
+            return;
+          }
+          loggedSlowModelsListCatalog = true;
+          context.logGateway.debug(
+            `models.list continuing without model catalog after ${timeoutMs}ms`,
+          );
+        },
+      });
       if (view === "all") {
-        respond(true, { models: catalog }, undefined);
+        respond(true, { models: omitRuntimeModelParamsFromCatalog(catalog) }, undefined);
         return;
       }
-      const models = resolveVisibleModelCatalog({
+      const models = await resolveVisibleModelCatalog({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
@@ -93,7 +86,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         view,
         runtimeAuthDiscovery: false,
       });
-      respond(true, { models }, undefined);
+      respond(true, { models: omitRuntimeModelParamsFromCatalog(models) }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

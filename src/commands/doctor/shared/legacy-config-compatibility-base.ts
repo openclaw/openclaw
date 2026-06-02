@@ -5,10 +5,10 @@ import {
   normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelMaxTokens,
   normalizeLegacyOpenAIModelProviderApi,
+  normalizeLegacyOllamaNativeNumCtxParams,
   normalizeLegacyRuntimeModelRefs,
   normalizeLegacyNanoBananaSkill,
   normalizeLegacyTalkConfig,
-  normalizeMissingGroupVisibleRepliesDefault,
   seedMissingDefaultAccountsFromSingleAccountBase,
 } from "./legacy-config-core-normalizers.js";
 import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
@@ -42,7 +42,7 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyOpenAIModelProviderApi(next, changes);
   next = normalizeLegacyRuntimeModelRefs(next, changes);
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
-  next = normalizeMissingGroupVisibleRepliesDefault(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
+  next = normalizeLegacyOllamaNativeNumCtxParams(next, changes);
   return normalizeLegacyMistralModelMaxTokens(next, changes);
 }

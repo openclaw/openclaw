@@ -1,4 +1,4 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 type ParsedLogLine = {
   time?: string;
@@ -43,7 +43,7 @@ function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
 export function parseLogLine(raw: string): ParsedLogLine | null {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const meta = parsed._meta as Record<string, unknown> | undefined;
+    const meta = parsed["_meta"] as Record<string, unknown> | undefined;
     const nameMeta = parseMetaName(meta?.name);
     const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
     return {
