@@ -259,6 +259,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
   }
 
+  const { repairHooksTokenReuseGatewayAuth } =
+    await import("./doctor/shared/hooks-token-reuse-repair.js");
+  const hooksTokenReuseRepair = await repairHooksTokenReuseGatewayAuth(candidate, process.env);
+  emitDoctorChangesPanel(hooksTokenReuseRepair.changes, shouldRepair);
+  ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    mutation: hooksTokenReuseRepair,
+    shouldRepair,
+    fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
+  }));
+
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const repairSequence = await runDoctorRepairSequence({
