@@ -3578,21 +3578,31 @@ export const chatHandlers: GatewayRequestHandlers = {
               delete (replacementMessage as unknown as Record<string, unknown>)
                 .openclawTtsSupplement;
             }
+            const replacements = [
+              {
+                entryId: existingEntry.messageId,
+                message: replacementMessage,
+              },
+            ];
             const rewriteResult = await rewriteTranscriptEntriesInSessionFile({
               sessionFile: resolvedTranscriptPath,
               sessionKey,
               config: cfg,
               request: {
                 allowedRewriteSuffixEntryIds: [existingEntry.messageId],
-                replacements: [
-                  {
-                    entryId: existingEntry.messageId,
-                    message: replacementMessage,
-                  },
-                ],
+                replacements,
               },
             });
-            if (rewriteResult.changed) {
+            const finalRewriteResult =
+              !rewriteResult.changed && rewriteResult.reason === "rewrite suffix guard failed"
+                ? await rewriteTranscriptEntriesInSessionFile({
+                    sessionFile: resolvedTranscriptPath,
+                    sessionKey,
+                    config: cfg,
+                    request: { replacements },
+                  })
+                : rewriteResult;
+            if (finalRewriteResult.changed) {
               const rewrittenEntry = await findAssistantTranscriptMessageByIdempotencyKey(
                 resolvedTranscriptPath,
                 webchatAgentMediaIdempotencyKey,
@@ -3610,7 +3620,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
             } else {
               context.logGateway.warn(
-                `webchat transcript rewrite skipped for final media reply: ${rewriteResult.reason ?? "unknown reason"}`,
+                `webchat transcript rewrite skipped for final media reply: ${finalRewriteResult.reason ?? "unknown reason"}`,
               );
               appendedMessage = replacementMessage as unknown as Record<string, unknown>;
             }
