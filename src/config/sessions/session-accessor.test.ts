@@ -6,6 +6,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
+  cleanupSessionLifecycleArtifacts,
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
@@ -264,6 +265,83 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: beforePatch?.updatedAt,
     });
+  });
+
+  it("cleans scoped lifecycle entries and unreferenced transcript artifacts", async () => {
+    const nowMs = Date.now();
+    const oldDate = new Date(nowMs - 600_000);
+    const removedTranscriptPath = path.join(tempDir, "removed-lifecycle.jsonl");
+    const customTranscriptPath = path.join(tempDir, "custom-lifecycle-old.jsonl");
+    const freshDefaultTranscriptPath = path.join(tempDir, "custom-lifecycle.jsonl");
+    const freshTranscriptPath = path.join(tempDir, "fresh-lifecycle.jsonl");
+    const referencedTranscriptPath = path.join(tempDir, "referenced.jsonl");
+    const orphanTranscriptPath = path.join(tempDir, "orphan-lifecycle.jsonl");
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:lifecycle-cleanup-removed": {
+          sessionId: "removed-lifecycle",
+        },
+        "agent:main:lifecycle-cleanup-fresh": {
+          sessionId: "fresh-lifecycle",
+        },
+        "agent:main:lifecycle-cleanup-custom": {
+          sessionFile: "custom-lifecycle-old.jsonl",
+          sessionId: "custom-lifecycle",
+        },
+        "agent:main:telegram:group:lifecycle-cleanup-room": {
+          sessionId: "kept-by-segment",
+        },
+        "agent:main:regular": {
+          sessionId: "referenced",
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(removedTranscriptPath, '{"runId":"lifecycle-marker-removed"}\n', "utf-8");
+    fs.writeFileSync(customTranscriptPath, '{"runId":"lifecycle-marker-custom"}\n', "utf-8");
+    fs.writeFileSync(freshDefaultTranscriptPath, '{"runId":"lifecycle-marker-default"}\n', "utf-8");
+    fs.writeFileSync(freshTranscriptPath, '{"runId":"lifecycle-marker-fresh"}\n', "utf-8");
+    fs.writeFileSync(
+      referencedTranscriptPath,
+      '{"runId":"lifecycle-marker-referenced"}\n',
+      "utf-8",
+    );
+    fs.writeFileSync(orphanTranscriptPath, '{"runId":"lifecycle-marker-orphan"}\n', "utf-8");
+    fs.utimesSync(removedTranscriptPath, oldDate, oldDate);
+    fs.utimesSync(customTranscriptPath, oldDate, oldDate);
+    fs.utimesSync(referencedTranscriptPath, oldDate, oldDate);
+    fs.utimesSync(orphanTranscriptPath, oldDate, oldDate);
+
+    const result = await cleanupSessionLifecycleArtifacts({
+      storePath,
+      sessionKeySegmentPrefix: "lifecycle-cleanup-",
+      transcriptContentMarker: "lifecycle-marker-",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs,
+    });
+
+    expect(result).toEqual({ removedEntries: 2, archivedTranscriptArtifacts: 3 });
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-removed");
+    expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-custom");
+    expect(loaded).toHaveProperty("agent:main:lifecycle-cleanup-fresh");
+    expect(loaded).toHaveProperty("agent:main:telegram:group:lifecycle-cleanup-room");
+    expect(loaded).toHaveProperty("agent:main:regular");
+    const files = fs.readdirSync(tempDir);
+    expect(
+      files.filter((file) => file.startsWith("removed-lifecycle.jsonl.deleted.")),
+    ).toHaveLength(1);
+    expect(files.filter((file) => file.startsWith("orphan-lifecycle.jsonl.deleted."))).toHaveLength(
+      1,
+    );
+    expect(
+      files.filter((file) => file.startsWith("custom-lifecycle-old.jsonl.deleted.")),
+    ).toHaveLength(1);
+    expect(files).toContain("custom-lifecycle.jsonl");
+    expect(files).toContain("fresh-lifecycle.jsonl");
+    expect(files).toContain("referenced.jsonl");
   });
 
   it("loads and appends transcript events through a session scope", async () => {
