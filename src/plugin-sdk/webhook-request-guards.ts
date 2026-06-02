@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
+/** Body read limit profile: strict before auth, roomier after target authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 
 export {
@@ -22,10 +23,12 @@ export {
 } from "../infra/http-body.js";
 
 export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
+  /** Small pre-auth cap limits unauthenticated memory and socket hold time. */
   preAuth: {
     maxBytes: 64 * 1024,
     timeoutMs: 5_000,
   },
+  /** Larger post-auth cap allows legitimate webhook payloads after target selection. */
   postAuth: {
     maxBytes: 1024 * 1024,
     timeoutMs: 30_000,
@@ -38,7 +41,9 @@ export const WEBHOOK_IN_FLIGHT_DEFAULTS = Object.freeze({
 });
 
 export type WebhookInFlightLimiter = {
+  /** Try to reserve one active handler slot; empty keys intentionally fail open. */
   tryAcquire: (key: string) => boolean;
+  /** Release a previously acquired slot. Extra releases for a key are ignored. */
   release: (key: string) => void;
   size: () => number;
   clear: () => void;
@@ -66,6 +71,7 @@ function resolveWebhookBodyReadLimits(params: {
   return { maxBytes, timeoutMs };
 }
 
+/** Translate low-level body read errors into the webhook HTTP response contract. */
 function respondWebhookBodyReadError(params: {
   res: ServerResponse;
   code: string;
@@ -112,6 +118,8 @@ export function createWebhookInFlightLimiter(options?: {
   return {
     tryAcquire: (key: string) => {
       if (!key) {
+        // Unknown callers should not share a global bucket; let the request path
+        // decide whether an empty in-flight key is acceptable.
         return true;
       }
       const current = active.get(key) ?? 0;
@@ -236,6 +244,8 @@ export function beginWebhookRequestPipelineOrReject(params: {
         return;
       }
       released = true;
+      // The caller owns this release hook and must call it from a finally block;
+      // idempotence keeps nested cleanup paths from underflowing the limiter.
       if (inFlightLimiter && inFlightKey) {
         inFlightLimiter.release(inFlightKey);
       }
