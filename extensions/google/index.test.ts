@@ -66,6 +66,12 @@ describe("google provider plugin hooks", () => {
         modelId: "gemini-3.1-pro-preview",
       } as never),
     ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
 
     const sanitized = await Promise.resolve(
       provider.sanitizeReplayHistory?.({
@@ -145,6 +151,12 @@ describe("google provider plugin hooks", () => {
       provider.resolveReasoningOutputMode?.({
         provider: "google-vertex",
         modelApi: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
         modelId: "gemini-3.1-pro-preview",
       } as never),
     ).toBe("native");

@@ -25,9 +25,10 @@ function resolveGoogleReasoningOutputMode(
   ctx: ProviderReasoningOutputModeContext,
 ): "native" | "tagged" {
   if (ctx.provider === "google" || ctx.provider === "google-vertex") {
-    return ctx.modelApi === "google-generative-ai" || ctx.modelApi === "google-vertex"
-      ? "native"
-      : "tagged";
+    const api = ctx.model?.api ?? ctx.modelApi;
+    if (!api || api === "google-generative-ai" || api === "google-vertex") {
+      return "native";
+    }
   }
   return "tagged";
 }
