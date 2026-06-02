@@ -81,7 +81,7 @@ describe("maybeGenerateSessionTitle", () => {
     expect(updateSessionStoreEntry).not.toHaveBeenCalled();
   });
 
-  it("passes the resolved session auth profile to title generation", async () => {
+  it("passes the runtime session model and auth profile to title generation", async () => {
     const transcriptPath = createTranscript(["first", "second", "third"]);
     resolveSessionTranscriptCandidates.mockReturnValue([transcriptPath]);
 
@@ -91,7 +91,7 @@ describe("maybeGenerateSessionTitle", () => {
       sessionEntry: {
         sessionId: "abc",
         modelProvider: "openai",
-        modelOverride: "gpt-test",
+        model: "gpt-runtime",
       } as SessionEntry,
       storePath: "/tmp/store.json",
       agentId: "main",
@@ -111,11 +111,32 @@ describe("maybeGenerateSessionTitle", () => {
       agentDir: "/tmp/agent",
       maxLength: 50,
       modelProvider: "openai",
-      modelId: "gpt-test",
+      modelId: "gpt-runtime",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
     });
     expect(updateSessionStoreEntry).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["manual display name", { displayName: "Manual project" }],
+    ["channel subject", { subject: "Channel topic" }],
+  ])("does not generate titles for sessions with %s", async (_label, titleFields) => {
+    const transcriptPath = createTranscript(["first", "second", "third"]);
+    resolveSessionTranscriptCandidates.mockReturnValue([transcriptPath]);
+
+    maybeGenerateSessionTitle({
+      cfg: { sessionTitle: { enabled: true, turnsBeforeTitle: 3 } },
+      sessionKey: "agent:main:abc",
+      sessionEntry: { sessionId: "abc", ...titleFields } as SessionEntry,
+      storePath: "/tmp/store.json",
+    });
+
+    await Promise.resolve();
+
+    expect(resolveSessionTranscriptCandidates).not.toHaveBeenCalled();
+    expect(generateConversationLabel).not.toHaveBeenCalled();
+    expect(updateSessionStoreEntry).not.toHaveBeenCalled();
   });
 
   it("counts user turns after a long first JSONL record", async () => {

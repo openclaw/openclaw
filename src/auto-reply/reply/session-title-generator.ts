@@ -3,6 +3,7 @@ import { updateSessionStoreEntry, type SessionEntry } from "../../config/session
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-transcript-files.fs.js";
+import { resolveSessionModelRef } from "../../gateway/session-utils.js";
 import { logVerbose } from "../../globals.js";
 import { generateConversationLabel } from "./conversation-label-generator.js";
 
@@ -11,6 +12,12 @@ function buildTitlePrompt(maxChars: number): string {
     `Generate a concise, descriptive title (max ${maxChars} chars) for a conversation based on the user's messages below. ` +
     "Use the same language as the user's messages. Return ONLY the title, nothing else. No quotes, no prefixes."
   );
+}
+
+function hasStoredSessionTitle(
+  entry: Pick<SessionEntry, "autoTitle" | "displayName" | "subject">,
+): boolean {
+  return Boolean(entry.autoTitle?.trim() || entry.displayName?.trim() || entry.subject?.trim());
 }
 
 /**
@@ -43,8 +50,7 @@ export function maybeGenerateSessionTitle(params: {
     return;
   }
 
-  // Already have a title.
-  if (sessionEntry.autoTitle) {
+  if (hasStoredSessionTitle(sessionEntry)) {
     return;
   }
 
@@ -53,10 +59,7 @@ export function maybeGenerateSessionTitle(params: {
     return;
   }
 
-  // Respect the session's selected model so background summarization
-  // uses the same provider the user chose for this session.
-  const sessionModelProvider = sessionEntry.modelProvider ?? sessionEntry.providerOverride;
-  const sessionModelId = sessionEntry.modelOverride;
+  const sessionModel = resolveSessionModelRef(cfg, sessionEntry, agentId);
 
   // Fire and forget — do not block the reply.
   generateAndPersistTitle({
@@ -67,8 +70,8 @@ export function maybeGenerateSessionTitle(params: {
     storePath,
     agentId,
     agentDir,
-    sessionModelProvider,
-    sessionModelId,
+    sessionModelProvider: sessionModel.provider,
+    sessionModelId: sessionModel.model,
     authProfileId,
     authProfileIdSource,
   }).catch((err: unknown) => {
@@ -111,7 +114,6 @@ async function generateAndPersistTitle(params: {
     return;
   }
 
-  // Read first chunk of transcript to extract user messages and count turns.
   let userMessages: string[];
   let userMessageCount: number;
   try {
