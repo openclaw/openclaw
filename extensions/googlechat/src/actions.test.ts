@@ -308,4 +308,83 @@ describe("googlechat message actions", () => {
 
     expect(listGoogleChatReactions).not.toHaveBeenCalled();
   });
+
+  it("falls back to a text link when remote media upload hits an app-auth 403 (#89430)", async () => {
+    const account = buildAccount({ config: { mediaMaxMb: 5 } });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    const readRemoteMediaBuffer = vi.fn(async () => ({
+      buffer: Buffer.from("remote-bytes"),
+      fileName: "remote.png",
+      contentType: "image/png",
+    }));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: { media: { readRemoteMediaBuffer } },
+    });
+    uploadGoogleChatAttachment.mockRejectedValue(
+      new Error(
+        'Google Chat upload 403: {"error":{"status":"PERMISSION_DENIED","message":"Request had insufficient authentication scopes."}}',
+      ),
+    );
+    sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/link" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    const result = await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        media: "https://example.com/file.png",
+        threadId: "thread-1",
+      },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    // The public URL is delivered as plain text instead of throwing, so the reply is not lost.
+    expect(sendGoogleChatMessage).toHaveBeenCalledTimes(1);
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "caption\nhttps://example.com/file.png",
+      thread: "thread-1",
+    });
+    expect(sendGoogleChatMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ attachments: expect.anything() }),
+    );
+    expectJsonResult(result, { ok: true, to: "spaces/AAA", mediaDelivery: "link-fallback" });
+  });
+
+  it("does not fall back for a local-file upload failure (no public URL to link) (#89430)", async () => {
+    const account = buildAccount({ config: { mediaMaxMb: 5 } });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
+    const localRoot = "/tmp/googlechat-action-test";
+    const localPath = path.join(localRoot, "local.md");
+    const readFile = vi.fn(async () => Buffer.from("local-bytes"));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: { media: { readRemoteMediaBuffer: vi.fn() } },
+    });
+    uploadGoogleChatAttachment.mockRejectedValue(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    // A local file has no public URL to fall back to, so the auth failure must still surface.
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "upload-file",
+        params: { to: "spaces/BBB", path: localPath, message: "notes" },
+        cfg: {},
+        accountId: "default",
+        mediaLocalRoots: [localRoot],
+        mediaReadFile: readFile,
+      } as never),
+    ).rejects.toThrow("Google Chat upload 403");
+    expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
 });

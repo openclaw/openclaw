@@ -20,6 +20,11 @@ import {
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
+import {
+  buildMediaLinkFallbackText,
+  isAuthScopeUploadFailure,
+  isRemoteHttpMediaUrl,
+} from "./media-upload-fallback.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { resolveGoogleChatOutboundSpace } from "./targets.js";
 
@@ -140,13 +145,30 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           readStringParam(params, "title") ??
           loaded.fileName ??
           "attachment";
-        const upload = await uploadGoogleChatAttachment({
-          account,
-          space,
-          filename: uploadFileName,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-        });
+        let upload: Awaited<ReturnType<typeof uploadGoogleChatAttachment>>;
+        try {
+          upload = await uploadGoogleChatAttachment({
+            account,
+            space,
+            filename: uploadFileName,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+          });
+        } catch (uploadErr) {
+          // App (bot) auth (chat.bot scope) can't upload attachments → 403. For remote http(s)
+          // media, deliver the URL as a text link instead of throwing; local files (no public
+          // URL) and non-auth failures still surface. #89430
+          if (isAuthScopeUploadFailure(uploadErr) && isRemoteHttpMediaUrl(mediaUrl)) {
+            await sendGoogleChatMessage({
+              account,
+              space,
+              text: buildMediaLinkFallbackText(content, mediaUrl),
+              thread: threadId ?? undefined,
+            });
+            return jsonResult({ ok: true, to: space, mediaDelivery: "link-fallback" });
+          }
+          throw uploadErr;
+        }
         await sendGoogleChatMessage({
           account,
           space,

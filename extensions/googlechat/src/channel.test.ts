@@ -406,6 +406,61 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(result.chatId).toBe("spaces/AAA");
     expect(result.receipt.primaryPlatformMessageId).toBe("spaces/AAA/messages/msg-2");
   });
+
+  it("delivers the media URL as a text link when app-auth upload returns 403 (#89430)", async () => {
+    setupRuntimeMediaMocks({ loadFileName: "remote.png", loadBytes: "remote-bytes" });
+    uploadGoogleChatAttachmentMock.mockRejectedValue(
+      new Error(
+        'Google Chat upload 403: {"error":{"status":"PERMISSION_DENIED","message":"Request had insufficient authentication scopes."}}',
+      ),
+    );
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/link",
+    });
+
+    const cfg = createGoogleChatCfg();
+
+    const result = await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "caption",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "default",
+    });
+
+    // The remote URL is salvaged as a plain text message instead of being dropped.
+    const sendRequest = requireMockArg(sendGoogleChatMessageMock) as {
+      space?: string;
+      text?: string;
+      attachments?: unknown;
+    };
+    expect(sendRequest.space).toBe("spaces/AAA");
+    expect(sendRequest.text).toBe("caption\nhttps://example.com/image.png");
+    expect(sendRequest.attachments).toBeUndefined();
+    expect(result.messageId).toBe("spaces/AAA/messages/link");
+    expect(result.receipt.parts[0]?.kind).toBe("text");
+  });
+
+  it("rethrows non-auth upload failures instead of falling back (#89430)", async () => {
+    setupRuntimeMediaMocks({ loadFileName: "remote.png", loadBytes: "remote-bytes" });
+    uploadGoogleChatAttachmentMock.mockRejectedValue(
+      new Error("Google Chat upload 500: internal error"),
+    );
+
+    const cfg = createGoogleChatCfg();
+
+    // A 500 is not an auth/scope failure, so the error must surface (no silent text fallback).
+    await expect(
+      googlechatOutboundAdapter.attachedResults.sendMedia({
+        cfg,
+        to: "spaces/AAA",
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "default",
+      }),
+    ).rejects.toThrow("Google Chat upload 500");
+    expect(sendGoogleChatMessageMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("googlechatPlugin threading", () => {

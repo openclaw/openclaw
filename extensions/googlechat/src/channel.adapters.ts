@@ -37,6 +37,11 @@ import {
   type OpenClawConfig,
 } from "./channel.deps.runtime.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
+import {
+  buildMediaLinkFallbackText,
+  isAuthScopeUploadFailure,
+  isRemoteHttpMediaUrl,
+} from "./media-upload-fallback.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -310,13 +315,39 @@ export const googlechatOutboundAdapter = {
           });
       const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
         await loadGoogleChatChannelRuntime();
-      const upload = await uploadGoogleChatAttachment({
-        account,
-        space,
-        filename: loaded.fileName ?? "attachment",
-        buffer: loaded.buffer,
-        contentType: loaded.contentType,
-      });
+      let upload: Awaited<ReturnType<typeof uploadGoogleChatAttachment>>;
+      try {
+        upload = await uploadGoogleChatAttachment({
+          account,
+          space,
+          filename: loaded.fileName ?? "attachment",
+          buffer: loaded.buffer,
+          contentType: loaded.contentType,
+        });
+      } catch (uploadErr) {
+        // App (bot) auth (chat.bot scope) can't upload attachments → 403. Deliver the public
+        // media URL as a text link instead of failing the send. Narrowly scoped to remote
+        // http(s) media and auth/scope failures; everything else rethrows. #89430
+        if (isAuthScopeUploadFailure(uploadErr) && isRemoteHttpMediaUrl(mediaUrl)) {
+          const fallback = await sendGoogleChatMessage({
+            account,
+            space,
+            text: buildMediaLinkFallbackText(text, mediaUrl),
+            thread,
+          });
+          const fallbackId = fallback?.messageName ?? "";
+          return {
+            messageId: fallbackId,
+            chatId: space,
+            receipt: createGoogleChatSendReceipt({
+              messageId: fallbackId,
+              chatId: space,
+              kind: "text",
+            }),
+          };
+        }
+        throw uploadErr;
+      }
       const result = await sendGoogleChatMessage({
         account,
         space,

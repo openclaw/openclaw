@@ -10,6 +10,11 @@ import {
   updateGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
+import {
+  buildMediaLinkFallbackText,
+  isAuthScopeUploadFailure,
+  isRemoteHttpMediaUrl,
+} from "./media-upload-fallback.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export async function deliverGoogleChatReply(params: {
@@ -111,13 +116,26 @@ export async function deliverGoogleChatReply(params: {
           url: mediaUrl,
           maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
         });
-        const upload = await uploadAttachmentForReply({
-          account,
-          spaceId,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-          filename: loaded.fileName ?? "attachment",
-        });
+        let upload: Awaited<ReturnType<typeof uploadAttachmentForReply>>;
+        try {
+          upload = await uploadAttachmentForReply({
+            account,
+            spaceId,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+            filename: loaded.fileName ?? "attachment",
+          });
+        } catch (uploadErr) {
+          // App (bot) auth carries only the chat.bot scope, which can't upload attachments and
+          // returns 403; the media is reachable at its public URL, so deliver it as a text link
+          // instead of silently dropping the reply. Non-auth/non-http failures still surface. #89430
+          if (isAuthScopeUploadFailure(uploadErr) && isRemoteHttpMediaUrl(mediaUrl)) {
+            await sendTextMessage(buildMediaLinkFallbackText(caption, mediaUrl));
+            statusSink?.({ lastOutboundAt: Date.now() });
+            return;
+          }
+          throw uploadErr;
+        }
         if (!upload.attachmentUploadToken) {
           throw new Error("missing attachment upload token");
         }

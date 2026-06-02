@@ -141,4 +141,76 @@ describe("Google Chat reply delivery", () => {
       attachments: [{ attachmentUploadToken: "upload-token", contentName: "reply.png" }],
     });
   });
+
+  it("delivers the media URL as a text link when app-auth upload returns 403 (#89430)", async () => {
+    const core = createCore({
+      media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "shot.png" },
+    });
+    const runtime = createRuntime();
+    const statusSink = vi.fn();
+    mocks.uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error(
+        'Google Chat upload 403: {"error":{"status":"PERMISSION_DENIED","message":"Request had insufficient authentication scopes."}}',
+      ),
+    );
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/link" });
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "here you go",
+        mediaUrl: "https://example.invalid/shot.png",
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      statusSink,
+    });
+
+    // The reply is salvaged as a normal text message carrying the public URL instead of dropped.
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "here you go\nhttps://example.invalid/shot.png",
+      thread: "spaces/AAA/threads/root",
+    });
+    // No attachment send is attempted once the upload 403s.
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ attachments: expect.anything() }),
+    );
+    expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back for non-auth upload failures (#89430)", async () => {
+    const core = createCore({
+      media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "shot.png" },
+    });
+    const runtime = createRuntime();
+    mocks.uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 500: internal error"),
+    );
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "here you go",
+        mediaUrl: "https://example.invalid/shot.png",
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+    });
+
+    // A 500 is not an auth/scope failure, so no text-link fallback is sent and the error surfaces.
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Google Chat attachment send failed"),
+    );
+  });
 });
