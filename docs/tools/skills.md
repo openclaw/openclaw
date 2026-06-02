@@ -208,12 +208,11 @@ publish and sync.
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
   </Accordion>
-  <Accordion title="Scan and scan overrides">
-    Gateway-backed skill installs (onboarding, Skills settings UI) run the
-    built-in dangerous-code scanner before executing installer metadata.
-    `critical` findings block by default; `suspicious` findings warn only.
-    `openclaw skills install <slug>` downloads a ClawHub skill folder directly
-    and does not use the installer-metadata scanner.
+  <Accordion title="Install trust model">
+    Gateway-backed skill installs (onboarding, Skills settings UI) do not run a
+    local regex dangerous-code scanner before executing installer metadata.
+    ClawHub skill pages expose registry-side security signals before install;
+    non-ClawHub skills are trusted-by-operator paths.
   </Accordion>
   <Accordion title="Secret injection scope">
     `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the

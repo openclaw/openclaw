@@ -28,6 +28,9 @@ import {
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
+  validateBundleInstallDependencies,
+  validateInstalledPackageDependencyTree,
+  validatePackageInstallDependencies,
 } from "./install-security-scan.js";
 import {
   getPackageManifestMetadata,
@@ -66,6 +69,9 @@ export {
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
+  validateBundleInstallDependencies,
+  validateInstalledPackageDependencyTree,
+  validatePackageInstallDependencies,
   validateRegistryNpmSpec,
   withExtractedArchiveRoot,
 };

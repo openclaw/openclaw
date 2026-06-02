@@ -152,7 +152,7 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install scans and optionally block
+- **`before_install`** - reserved for future configurable pre-install policy or scanner hooks
 
 ## Debug runtime hooks
 
@@ -452,9 +452,9 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the built-in scan for skill and plugin installs.
-Return additional findings or `{ block: true, blockReason }` to stop the
-install.
+`before_install` remains part of the hook contract, but current OpenClaw
+install paths do not invoke it. Future configurable enterprise/custom
+pre-install policy or scanner hooks are planned.
 
 `block: true` is terminal. `block: false` is treated as no decision.
 

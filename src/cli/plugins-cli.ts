@@ -9,7 +9,6 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
 };
 
 export type PluginMarketplaceListOptions = {
@@ -150,11 +149,6 @@ export function registerPluginsCli(program: Command) {
     .option("--force", "Overwrite an existing installed plugin or hook pack", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
-      "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code install blocking (plugin hooks may still block)",
-      false,
-    )
-    .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
@@ -162,7 +156,6 @@ export function registerPluginsCli(program: Command) {
       async (
         raw: string,
         opts: {
-          dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
           pin?: boolean;
@@ -180,11 +173,6 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
-    .option(
-      "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
-      false,
-    )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       await runPluginUpdateCommand({ id, opts });

@@ -1666,20 +1666,20 @@ async function resolvePreparedDirectoryInstallTarget(params: {
   };
 }
 
-async function runInstallSourceScan(params: {
+async function runInstallValidation(params: {
   subject: string;
-  scan: () => Promise<InstallSecurityScanResult | undefined>;
+  validate: () => Promise<InstallSecurityScanResult | undefined>;
 }): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
   try {
-    const scanResult = await params.scan();
-    if (scanResult?.blocked) {
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
+    const validationResult = await params.validate();
+    if (validationResult?.blocked) {
+      return buildBlockedInstallResult({ blocked: validationResult.blocked });
     }
     return null;
   } catch (err) {
     return {
       ok: false,
-      error: `${params.subject} installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
+      error: `${params.subject} installation blocked: dependency validation failed (${String(err)}).`,
       code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
     };
   }
@@ -1874,22 +1874,17 @@ async function installBundleFromSourceDir(
     return { ok: false, error: targetResult.error };
   }
 
-  const scanResult = await runInstallSourceScan({
+  const dependencyValidation = await runInstallValidation({
     subject: `Bundle "${pluginId}"`,
-    scan: async () =>
-      await runtime.scanBundleInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    validate: async () =>
+      await runtime.validateBundleInstallDependencies({
         sourceDir: params.sourceDir,
         pluginId,
         logger,
-        requestKind: params.installPolicyRequest?.kind,
-        requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-        mode: targetResult.target.effectiveMode,
-        version: manifestRes.manifest.version,
       }),
   });
-  if (scanResult) {
-    return scanResult;
+  if (dependencyValidation) {
+    return dependencyValidation;
   }
 
   return await installPluginDirectoryIntoExtensions({
@@ -2068,30 +2063,17 @@ async function validatePackagePluginInstallSource(params: {
     };
   }
 
-  const scanMode = params.resolveEffectiveMode
-    ? await params.resolveEffectiveMode(pluginId)
-    : params.mode;
-  const scanResult = await runInstallSourceScan({
+  const dependencyValidation = await runInstallValidation({
     subject: `Plugin "${pluginId}"`,
-    scan: async () =>
-      await params.runtime.scanPackageInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    validate: async () =>
+      await params.runtime.validatePackageInstallDependencies({
         packageDir: params.packageDir,
         pluginId,
         logger: params.logger,
-        extensions,
-        ...(packageMetadata ? { packageMetadata } : {}),
-        requestKind: params.installPolicyRequest?.kind,
-        requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-        mode: scanMode,
-        packageName: pkgName || undefined,
-        manifestId: manifestPluginId,
-        version: typeof manifest.version === "string" ? manifest.version : undefined,
       }),
   });
-  if (scanResult) {
-    return scanResult;
+  if (dependencyValidation) {
+    return dependencyValidation;
   }
 
   return {
@@ -2119,26 +2101,24 @@ async function scanAndLinkInstalledPackage(params: {
   trustedSourceLinkedOfficialInstall?: boolean;
   logger: PluginInstallLogger;
 }): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
-  const scanResult = await runInstallSourceScan({
+  const dependencyValidation = await runInstallValidation({
     subject: `Plugin "${params.pluginId}"`,
-    scan: async () =>
-      await params.runtime.scanInstalledPackageDependencyTree({
+    validate: async () =>
+      await params.runtime.validateInstalledPackageDependencyTree({
         ...(params.additionalDependencyPackageDirs
           ? { additionalPackageDirs: params.additionalDependencyPackageDirs }
           : {}),
         allowManagedNpmRootPackagePeerSymlinks:
           params.dependencyScanRootDir !== undefined &&
           path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         dependencyScanRootDir: params.dependencyScanRootDir,
         logger: params.logger,
         packageDir: params.installedDir,
         pluginId: params.pluginId,
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       }),
   });
-  if (scanResult) {
-    return scanResult;
+  if (dependencyValidation) {
+    return dependencyValidation;
   }
   const peerLinkRepair = await linkOpenClawPeerDependencies({
     installedDir: params.installedDir,
@@ -2416,22 +2396,6 @@ export async function installPluginFromFile(params: {
 
   if (dryRun) {
     return buildFileInstallResult(pluginId, preparedTarget.targetPath);
-  }
-
-  const scanResult = await runInstallSourceScan({
-    subject: `Plugin file "${pluginId}"`,
-    scan: async () =>
-      await runtime.scanFileInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        filePath,
-        logger,
-        mode: preparedTarget.effectiveMode,
-        pluginId,
-        requestedSpecifier: installPolicyRequest.requestedSpecifier,
-      }),
-  });
-  if (scanResult) {
-    return scanResult;
   }
 
   logger.info?.(`Installing to ${preparedTarget.targetPath}…`);

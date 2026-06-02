@@ -1908,9 +1908,9 @@ lives on the [Models FAQ](/help/faq-models).
 
   <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
     Treat third-party skills and plugins as code you are choosing to trust.
-    ClawHub skill pages expose scan state before install, and OpenClaw plugin
-    install/update flows run built-in dangerous-code checks, but scans are not a
-    complete security boundary.
+    ClawHub exposes registry-side security signals before install. OpenClaw does
+    not run local regex dangerous-code scanning during skill or plugin install;
+    non-ClawHub installs are trusted-by-operator paths.
 
     Safer pattern:
 

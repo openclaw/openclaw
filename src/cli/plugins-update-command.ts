@@ -24,7 +24,7 @@ import { promptYesNo } from "./prompt.js";
 
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
+  opts: { all?: boolean; dryRun?: boolean };
 }) {
   assertConfigWriteAllowedInCurrentMode();
 
@@ -61,7 +61,6 @@ export async function runPluginUpdateCommand(params: {
     pluginIds: pluginSelection.pluginIds,
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
-    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     logger,
     onIntegrityDrift: async (drift) => {
       const specLabel = drift.resolvedSpec ?? drift.spec;

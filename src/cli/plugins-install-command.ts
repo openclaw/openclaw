@@ -14,7 +14,6 @@ import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-instal
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
-import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   installPluginFromNpmPackArchive,
@@ -59,14 +58,12 @@ import {
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "./plugins-install-persist.js";
 
+type PluginInstallTrustOverrides = {
+  trustedSourceLinkedOfficialInstall?: boolean;
+};
+
 function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
-}
-
-function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): InstallSafetyOverrides {
-  return {
-    dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
-  };
 }
 
 function findTrustedCatalogPackageInstall(packageName: string):
@@ -179,7 +176,6 @@ async function tryInstallHookPackFromLocalPath(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   resolvedPath: string;
   installMode: "install" | "update";
-  safetyOverrides?: InstallSafetyOverrides;
   link?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -193,7 +189,6 @@ async function tryInstallHookPackFromLocalPath(params: {
     }
 
     const probe = await installHooksFromPath({
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
       path: params.resolvedPath,
       dryRun: true,
     });
@@ -236,7 +231,6 @@ async function tryInstallHookPackFromLocalPath(params: {
   }
 
   const result = await installHooksFromPath({
-    ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
     path: params.resolvedPath,
     mode: params.installMode,
     logger: createHookPackInstallLogger(params.runtime),
@@ -303,7 +297,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   installMode: "install" | "update";
   spec: string;
   pin?: boolean;
-  safetyOverrides: InstallSafetyOverrides;
+  safetyOverrides: PluginInstallTrustOverrides;
   allowBundledFallback: boolean;
   extensionsDir: string;
   expectedPluginId?: string;
@@ -384,7 +378,7 @@ async function tryInstallPluginFromNpmPackArchive(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   installMode: "install" | "update";
   archivePath: string;
-  safetyOverrides: InstallSafetyOverrides;
+  safetyOverrides: PluginInstallTrustOverrides;
   extensionsDir: string;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
@@ -432,7 +426,7 @@ async function tryInstallPluginFromGitSpec(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   installMode: "install" | "update";
   spec: string;
-  safetyOverrides: InstallSafetyOverrides;
+  safetyOverrides: PluginInstallTrustOverrides;
   extensionsDir: string;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
@@ -561,7 +555,7 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: InstallSafetyOverrides & {
+  opts: PluginInstallTrustOverrides & {
     force?: boolean;
     link?: boolean;
     pin?: boolean;
@@ -648,12 +642,11 @@ export async function runPluginInstallCommand(params: {
   }
   const cfg = snapshot.config;
   const installMode = resolveInstallMode(opts.force);
-  const safetyOverrides = resolveInstallSafetyOverrides(opts);
   const extensionsDir = resolveDefaultPluginExtensionsDir();
+  const safetyOverrides: PluginInstallTrustOverrides = {};
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
-      ...safetyOverrides,
       marketplace: opts.marketplace,
       mode: installMode,
       plugin: raw,

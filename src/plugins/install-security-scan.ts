@@ -93,6 +93,36 @@ export async function scanInstalledPackageDependencyTree(params: {
   return await scanInstalledPackageDependencyTreeRuntime(params);
 }
 
+export async function validateBundleInstallDependencies(params: {
+  logger: InstallScanLogger;
+  pluginId: string;
+  sourceDir: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const { validateBundleInstallDependenciesRuntime } = await loadInstallSecurityScanRuntime();
+  return await validateBundleInstallDependenciesRuntime(params);
+}
+
+export async function validatePackageInstallDependencies(params: {
+  logger: InstallScanLogger;
+  packageDir: string;
+  pluginId: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const { validatePackageInstallDependenciesRuntime } = await loadInstallSecurityScanRuntime();
+  return await validatePackageInstallDependenciesRuntime(params);
+}
+
+export async function validateInstalledPackageDependencyTree(params: {
+  additionalPackageDirs?: string[];
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  dependencyScanRootDir?: string;
+  logger: InstallScanLogger;
+  packageDir: string;
+  pluginId: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const { validateInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
+  return await validateInstalledPackageDependencyTreeRuntime(params);
+}
+
 export async function scanFileInstallSource(
   params: InstallSafetyOverrides & {
     filePath: string;

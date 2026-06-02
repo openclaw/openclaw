@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
@@ -155,46 +151,20 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
-  it("blocks install when skill has dangerous code patterns", async () => {
+  it("does not run local code scanning before executing skill installers", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
+      const skillDir = await writeInstallableSkill(workspaceDir, "operator-trusted-skill");
       mockDangerousSkillScanFinding(skillDir);
 
       const result = await installSkill({
         workspaceDir,
-        skillName: "danger-skill",
+        skillName: "operator-trusted-skill",
         installId: "deps",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toContain('Skill "danger-skill" installation blocked');
-      const warningOutput = (result.warnings ?? []).join("\n");
-      expect(warningOutput).toContain("dangerous code patterns");
-      expect(warningOutput).toContain("runner.js:1");
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("allows dangerous skill installs when forced unsafe install is set", async () => {
-    await withWorkspaceCase(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "forced-danger-skill");
-      mockDangerousSkillScanFinding(skillDir);
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "forced-danger-skill",
-        installId: "deps",
-        dangerouslyForceUnsafeInstall: true,
       });
 
       expect(result.ok).toBe(true);
-      expect(
-        result.warnings?.some((warning) =>
-          warning.includes(
-            "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-          ),
-        ),
-      ).toBe(true);
+      expect(scanDirectoryWithSummaryMock).not.toHaveBeenCalled();
+      expect(runCommandWithTimeoutMock).toHaveBeenCalled();
     });
   });
 
@@ -248,144 +218,5 @@ describe("installSkill code safety scanning", () => {
         platform: "linux",
       }),
     ).toBe("/var/lib/openclaw");
-  });
-
-  it("blocks install when skill scan fails", async () => {
-    await withWorkspaceCase(async ({ workspaceDir }) => {
-      await writeInstallableSkill(workspaceDir, "scanfail-skill");
-      scanDirectoryWithSummaryMock.mockRejectedValue(new Error("scanner exploded"));
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "scanfail-skill",
-        installId: "deps",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toContain("code safety scan failed");
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-    });
-  });
-  it("surfaces plugin scanner findings from before_install", async () => {
-    const handler = vi.fn().mockReturnValue({
-      findings: [
-        {
-          ruleId: "org-policy",
-          severity: "warn",
-          file: "policy.json",
-          line: 1,
-          message: "Organization policy requires manual review",
-        },
-      ],
-    });
-    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
-
-    await withWorkspaceCase(async ({ workspaceDir }) => {
-      await writeInstallableSkill(workspaceDir, "policy-skill");
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "policy-skill",
-        installId: "deps",
-      });
-
-      expect(result.ok).toBe(true);
-      expect(handler).toHaveBeenCalledTimes(1);
-      const handlerCall = handler.mock.calls[0];
-      const payload = handlerCall?.[0] as
-        | {
-            targetName?: string;
-            targetType?: string;
-            origin?: string;
-            sourcePath?: string;
-            sourcePathKind?: string;
-            request?: { kind?: string; mode?: string };
-            builtinScan?: { status?: string; findings?: unknown[] };
-            skill?: {
-              installId?: string;
-              installSpec?: { kind?: string; package?: string };
-            };
-          }
-        | undefined;
-      expect(payload?.targetName).toBe("policy-skill");
-      expect(payload?.targetType).toBe("skill");
-      expect(payload?.origin).toBe("openclaw-workspace");
-      expect(payload?.sourcePath).toContain("policy-skill");
-      expect(payload?.sourcePathKind).toBe("directory");
-      expect(payload?.request).toEqual({
-        kind: "skill-install",
-        mode: "install",
-      });
-      expect(payload?.builtinScan?.status).toBe("ok");
-      expect(payload?.builtinScan?.findings).toEqual([]);
-      expect(payload?.skill?.installId).toBe("deps");
-      expect(payload?.skill?.installSpec?.kind).toBe("node");
-      expect(payload?.skill?.installSpec?.package).toBe("example-package");
-      expect(handlerCall?.[1]).toEqual({
-        origin: "openclaw-workspace",
-        targetType: "skill",
-        requestKind: "skill-install",
-      });
-      expect(
-        result.warnings?.some((warning) =>
-          warning.includes(
-            "Plugin scanner: Organization policy requires manual review (policy.json:1)",
-          ),
-        ),
-      ).toBe(true);
-    });
-  });
-
-  it("blocks install when before_install rejects the skill", async () => {
-    const handler = vi.fn().mockReturnValue({
-      block: true,
-      blockReason: "Blocked by enterprise policy",
-    });
-    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
-
-    await withWorkspaceCase(async ({ workspaceDir }) => {
-      await writeInstallableSkill(workspaceDir, "blocked-skill");
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "blocked-skill",
-        installId: "deps",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toBe("Blocked by enterprise policy");
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps before_install hook blocks even when forced unsafe install is set", async () => {
-    const handler = vi.fn().mockReturnValue({
-      block: true,
-      blockReason: "Blocked by enterprise policy",
-    });
-    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
-
-    await withWorkspaceCase(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "forced-blocked-skill");
-      mockDangerousSkillScanFinding(skillDir);
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "forced-blocked-skill",
-        installId: "deps",
-        dangerouslyForceUnsafeInstall: true,
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toBe("Blocked by enterprise policy");
-      expect(
-        result.warnings?.some((warning) =>
-          warning.includes(
-            "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-          ),
-        ),
-      ).toBe(true);
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-    });
   });
 });

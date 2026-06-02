@@ -214,10 +214,6 @@ async function installLocalSkillDir(params: {
     mode: params.force ? "update" : "install",
     timeoutMs: params.timeoutMs,
     logger: params.logger,
-    scan: {
-      installId: params.source,
-      origin: params.sourceSpec,
-    },
   });
   if (!install.ok) {
     return { ok: false, error: install.error };

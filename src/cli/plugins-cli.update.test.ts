@@ -67,7 +67,7 @@ describe("plugins cli update", () => {
     }
   });
 
-  it("shows the dangerous unsafe install override in update help", () => {
+  it("does not expose the removed dangerous unsafe install override in update help", () => {
     const program = new Command();
     registerPluginsCli(program);
 
@@ -75,9 +75,8 @@ describe("plugins cli update", () => {
     const updateCommand = pluginsCommand?.commands.find((command) => command.name() === "update");
     const helpText = updateCommand?.helpInformation() ?? "";
 
-    expect(helpText).toContain("--dangerously-force-unsafe-install");
-    expect(helpText).toContain("Bypass built-in dangerous-code update");
-    expect(helpText).toContain("blocking for plugins");
+    expect(helpText).not.toContain("--dangerously-force-unsafe-install");
+    expect(helpText).not.toContain("Bypass built-in dangerous-code update");
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
@@ -184,7 +183,7 @@ describe("plugins cli update", () => {
     expect(runtimeLogs.at(-1)).toBe("No tracked plugins or hook packs to update.");
   });
 
-  it("passes dangerous force unsafe install to plugin updates", async () => {
+  it("does not pass removed dangerous force unsafe install to plugin updates", async () => {
     const config = createTrackedPluginConfig({
       pluginId: "openclaw-codex-app-server",
       spec: "openclaw-codex-app-server@beta",
@@ -197,17 +196,12 @@ describe("plugins cli update", () => {
       outcomes: [],
     });
 
-    await runPluginsCommand([
-      "plugins",
-      "update",
-      "openclaw-codex-app-server",
-      "--dangerously-force-unsafe-install",
-    ]);
+    await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server"]);
 
     const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
     expect(updateParams.config).toEqual(config);
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
-    expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
+    expect(updateParams).not.toHaveProperty("dangerouslyForceUnsafeInstall");
   });
 
   it("writes updated config when updater reports changes", async () => {

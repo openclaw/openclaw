@@ -788,7 +788,6 @@ async function performClawHubSkillInstall(
             extractedRoot: rootDir,
             mode: params.force ? "update" : "install",
             logger: params.logger,
-            scan: false,
             rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
           }),
       });

@@ -612,7 +612,10 @@ terminal summary, and sanitized error text.
     `skills.upload.begin` request. This mode is rejected unless
     `skills.install.allowUploadedArchives` is enabled. The setting does not
     affect ClawHub installs.
-  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+  - Gateway installer mode: `{ name, installId, timeoutMs? }`. Older clients
+    may still send `dangerouslyForceUnsafeInstall`; the Gateway accepts it for
+    compatibility but ignores it because installer code scanning is no longer
+    part of the install path.
     runs a declared `metadata.openclaw.install` action on the gateway host.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in

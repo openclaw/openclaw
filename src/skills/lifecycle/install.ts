@@ -5,11 +5,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment as defaultIsContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  type InstallSafetyOverrides,
-  scanSkillInstallSource,
-  type SkillInstallSpecMetadata,
-} from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -23,7 +18,7 @@ import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
-export type SkillInstallRequest = InstallSafetyOverrides & {
+export type SkillInstallRequest = {
   workspaceDir: string;
   skillName: string;
   installId: string;
@@ -78,24 +73,6 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
     }
   }
   return undefined;
-}
-
-function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMetadata {
-  return {
-    ...(spec.id ? { id: spec.id } : {}),
-    kind: spec.kind,
-    ...(spec.label ? { label: spec.label } : {}),
-    ...(spec.bins ? { bins: spec.bins.slice() } : {}),
-    ...(spec.os ? { os: spec.os.slice() } : {}),
-    ...(spec.formula ? { formula: spec.formula } : {}),
-    ...(spec.package ? { package: spec.package } : {}),
-    ...(spec.module ? { module: spec.module } : {}),
-    ...(spec.url ? { url: spec.url } : {}),
-    ...(spec.archive ? { archive: spec.archive } : {}),
-    ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
-    ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
-    ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
-  };
 }
 
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
@@ -471,33 +448,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     };
   }
 
-  const spec = findInstallSpec(entry, params.installId);
   const warnings: string[] = [];
+  const spec = findInstallSpec(entry, params.installId);
   const skillSource = resolveSkillSource(entry.skill);
-  const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
-  const scanResult = await scanSkillInstallSource({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    installId: params.installId,
-    ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
-    logger: {
-      warn: (message) => warnings.push(message),
-    },
-    origin: skillSource,
-    skillName: params.skillName,
-    sourceDir: path.resolve(entry.skill.baseDir),
-  });
-  if (scanResult?.blocked) {
-    return withWarnings(
-      {
-        ok: false,
-        message: scanResult.blocked.reason,
-        stdout: "",
-        stderr: "",
-        code: null,
-      },
-      warnings,
-    );
-  }
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
   const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);

@@ -461,34 +461,24 @@ describe("skill upload gateway handlers", () => {
     await expectPathMissing(path.join(workspaceDir, "skills", "traversal-skill"));
   });
 
-  it("treats security scan blocks as terminal invalid uploads", async () => {
+  it("does not run local code scanning for uploaded skill archives", async () => {
     const { handlers, stateDir } = await makeHarness();
-    installSecurityScanState.scanSkillInstallSource.mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason:
-          'Skill "scan-blocked" installation blocked: blocked dependencies "plain-crypto-js" declared in package.json.',
-      },
-    });
+    installSecurityScanState.scanSkillInstallSource.mockRejectedValueOnce(
+      new Error("scanner should not run"),
+    );
     const upload = await uploadArchive(handlers, {
       archive: await makeSkillArchive({}),
-      slug: "scan-blocked",
+      slug: "operator-trusted",
     });
 
     const install = await call(handlers, "skills.install", {
       source: "upload",
       uploadId: upload.uploadId,
-      slug: "scan-blocked",
+      slug: "operator-trusted",
     });
 
-    expect(install.ok).toBe(false);
-    expect(install.error?.code).toBe("INVALID_REQUEST");
-    expect(install.error?.message).toContain("blocked dependencies");
-    const scanInput = firstCallArg<{ origin?: string; skillName?: string }>(
-      installSecurityScanState.scanSkillInstallSource,
-    );
-    expect(scanInput.origin).toBe("skill-upload");
-    expect(scanInput.skillName).toBe("scan-blocked");
+    expect(install.ok).toBe(true);
+    expect(installSecurityScanState.scanSkillInstallSource).not.toHaveBeenCalled();
     await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", upload.uploadId));
   });
 

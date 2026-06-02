@@ -305,7 +305,6 @@ type MockWithCalls = {
 type PluginInstallCall = {
   allowSourceTypeScriptEntries?: boolean;
   archivePath?: string;
-  dangerouslyForceUnsafeInstall?: boolean;
   dryRun?: boolean;
   expectedIntegrity?: string;
   expectedPluginId?: string;
@@ -1208,17 +1207,11 @@ describe("plugins cli install", () => {
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
 
-    await runPluginsCommand([
-      "plugins",
-      "install",
-      "npm:demo",
-      "--force",
-      "--dangerously-force-unsafe-install",
-    ]);
+    await runPluginsCommand(["plugins", "install", "npm:demo", "--force"]);
 
     expect(npmInstallCall().spec).toBe("demo");
     expect(npmInstallCall().mode).toBe("update");
-    expect(npmInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
+    expect(npmInstallCall()).not.toHaveProperty("dangerouslyForceUnsafeInstall");
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 
@@ -1341,98 +1334,6 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain("openclaw plugins install git:<repo>@<ref>");
   });
 
-  it("passes dangerous force unsafe install to marketplace installs", async () => {
-    await expect(
-      runPluginsCommand([
-        "plugins",
-        "install",
-        "alpha",
-        "--marketplace",
-        "local/repo",
-        "--dangerously-force-unsafe-install",
-      ]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(marketplaceInstallCall().marketplace).toBe("local/repo");
-    expect(marketplaceInstallCall().plugin).toBe("alpha");
-    expect(marketplaceInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
-  });
-
-  it("passes dangerous force unsafe install to npm installs", async () => {
-    primeNpmPluginFallback();
-
-    await runPluginsCommand(["plugins", "install", "demo", "--dangerously-force-unsafe-install"]);
-
-    expect(npmInstallCall().spec).toBe("demo");
-    expect(npmInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
-  });
-
-  it("passes dangerous force unsafe install to linked path probe installs", async () => {
-    const cfg = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledCfg = createEnabledPluginConfig("demo");
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-link-"));
-
-    loadConfig.mockReturnValue(cfg);
-    installPluginFromPath.mockResolvedValueOnce({
-      ok: true,
-      pluginId: "demo",
-      targetDir: tmpRoot,
-      version: "1.2.3",
-      extensions: ["./dist/index.js"],
-    });
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(enabledCfg);
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: enabledCfg,
-      warnings: [],
-    });
-
-    try {
-      await runPluginsCommand([
-        "plugins",
-        "install",
-        tmpRoot,
-        "--link",
-        "--dangerously-force-unsafe-install",
-      ]);
-    } finally {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
-    }
-
-    expect(pathInstallCall().path).toBe(tmpRoot);
-    expect(pathInstallCall().dryRun).toBe(true);
-    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
-    expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
-  });
-
-  it("passes dangerous force unsafe install to linked hook-pack probe fallback", async () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-link-"));
-    primeHookPackPathFallback({
-      tmpRoot,
-      pluginInstallError: "plugin install probe failed",
-    });
-
-    try {
-      await runPluginsCommand([
-        "plugins",
-        "install",
-        tmpRoot,
-        "--link",
-        "--dangerously-force-unsafe-install",
-      ]);
-    } finally {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
-    }
-
-    expect(hookPathInstallCall().path).toBe(tmpRoot);
-    expect(hookPathInstallCall().dryRun).toBe(true);
-    expect(hookPathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
-  });
-
   it("does not fall back to hook pack for linked path when a no-flag security scan blocks", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
     const pluginInstallError = "plugin blocked by security scan";
@@ -1455,29 +1356,6 @@ describe("plugins cli install", () => {
     expect(installHooksFromPath).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
-  });
-
-  it("passes dangerous force unsafe install to local hook-pack fallback installs", async () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-install-"));
-    primeHookPackPathFallback({
-      tmpRoot,
-      pluginInstallError: "plugin install failed",
-    });
-
-    try {
-      await runPluginsCommand([
-        "plugins",
-        "install",
-        tmpRoot,
-        "--dangerously-force-unsafe-install",
-      ]);
-    } finally {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
-    }
-
-    expect(hookPathInstallCall().path).toBe(tmpRoot);
-    expect(hookPathInstallCall().mode).toBe("install");
-    expect(hookPathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
   });
 
   it("passes the active profile extensions dir to local path installs", async () => {
@@ -1586,12 +1464,9 @@ describe("plugins cli install", () => {
           logger?: { warn?: (message: string) => void };
           path: string;
           dryRun?: boolean;
-          dangerouslyForceUnsafeInstall?: boolean;
         },
       ];
-      params.logger?.warn?.(
-        'WARNING: Plugin "demo" forced despite dangerous code patterns via --dangerously-force-unsafe-install: index.js:1',
-      );
+      params.logger?.warn?.('WARNING: Plugin "demo" install warning: index.js:1');
       return {
         ok: true,
         pluginId: "demo",
@@ -1608,13 +1483,7 @@ describe("plugins cli install", () => {
     });
 
     try {
-      await runPluginsCommand([
-        "plugins",
-        "install",
-        localPluginDir,
-        "--link",
-        "--dangerously-force-unsafe-install",
-      ]);
+      await runPluginsCommand(["plugins", "install", localPluginDir, "--link"]);
     } finally {
       fs.rmSync(localPluginDir, { recursive: true, force: true });
     }
@@ -1622,14 +1491,9 @@ describe("plugins cli install", () => {
     expect(pathInstallCall().path).toBe(localPluginDir);
     expect(pathInstallCall().dryRun).toBe(true);
     expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
-    expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
     expect(typeof pathInstallCall().logger?.info).toBe("function");
     expect(typeof pathInstallCall().logger?.warn).toBe("function");
-    expect(
-      runtimeLogsContain(
-        "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-      ),
-    ).toBe(true);
+    expect(runtimeLogsContain('Plugin "demo" install warning')).toBe(true);
   });
 
   it("does not fall back to hook pack for local path when a no-flag security scan fails", async () => {
@@ -1656,88 +1520,6 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
-  it("does not fall back to hook pack for local path when dangerous force unsafe install is set", async () => {
-    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
-    const cfg = {} as OpenClawConfig;
-    const pluginInstallError = "plugin blocked by security scan";
-
-    loadConfig.mockReturnValue(cfg);
-    installPluginFromPath.mockResolvedValue({
-      ok: false,
-      error: pluginInstallError,
-      code: "security_scan_blocked",
-    });
-
-    try {
-      await expect(
-        runPluginsCommand([
-          "plugins",
-          "install",
-          localPluginDir,
-          "--dangerously-force-unsafe-install",
-        ]),
-      ).rejects.toThrow("__exit__:1");
-    } finally {
-      fs.rmSync(localPluginDir, { recursive: true, force: true });
-    }
-
-    expect(installHooksFromPath).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
-  });
-
-  it("does not fall back to hook pack for local path when security scan fails under dangerous force unsafe install", async () => {
-    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
-    const cfg = {} as OpenClawConfig;
-    const pluginInstallError = "plugin security scan failed";
-
-    loadConfig.mockReturnValue(cfg);
-    installPluginFromPath.mockResolvedValue({
-      ok: false,
-      error: pluginInstallError,
-      code: "security_scan_failed",
-    });
-
-    try {
-      await expect(
-        runPluginsCommand([
-          "plugins",
-          "install",
-          localPluginDir,
-          "--dangerously-force-unsafe-install",
-        ]),
-      ).rejects.toThrow("__exit__:1");
-    } finally {
-      fs.rmSync(localPluginDir, { recursive: true, force: true });
-    }
-
-    expect(installHooksFromPath).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
-  });
-
-  it("does not fall back to hook pack for npm installs when dangerous force unsafe install is set", async () => {
-    const cfg = {} as OpenClawConfig;
-    const pluginInstallError = "plugin blocked by security scan";
-
-    loadConfig.mockReturnValue(cfg);
-    installPluginFromClawHub.mockResolvedValue({
-      ok: false,
-      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
-      code: "package_not_found",
-    });
-    installPluginFromNpmSpec.mockResolvedValue({
-      ok: false,
-      error: pluginInstallError,
-      code: "security_scan_blocked",
-    });
-
-    await expect(
-      runPluginsCommand(["plugins", "install", "demo", "--dangerously-force-unsafe-install"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
-  });
-
   it("does not fall back to hook pack for npm installs when a no-flag security scan blocks", async () => {
     primeBlockedNpmPluginInstall({
       spec: "@acme/unsafe-plugin",
@@ -1753,31 +1535,7 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
-  it("does not fall back to hook pack for npm installs when security scan fails under dangerous force unsafe install", async () => {
-    const cfg = {} as OpenClawConfig;
-    const pluginInstallError = "plugin security scan failed";
-
-    loadConfig.mockReturnValue(cfg);
-    installPluginFromClawHub.mockResolvedValue({
-      ok: false,
-      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
-      code: "package_not_found",
-    });
-    installPluginFromNpmSpec.mockResolvedValue({
-      ok: false,
-      error: pluginInstallError,
-      code: "security_scan_failed",
-    });
-
-    await expect(
-      runPluginsCommand(["plugins", "install", "demo", "--dangerously-force-unsafe-install"]),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
-    expect(runtimeErrors.at(-1)).toContain(pluginInstallError);
-  });
-
-  it("still falls back to local hook pack when dangerous force unsafe install is set for non-security errors", async () => {
+  it("still falls back to local hook pack for non-security errors", async () => {
     const localHookDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-hook-pack-"));
     const cfg = {} as OpenClawConfig;
     const installedCfg = {
@@ -1809,12 +1567,7 @@ describe("plugins cli install", () => {
     recordHookInstall.mockReturnValue(installedCfg);
 
     try {
-      await runPluginsCommand([
-        "plugins",
-        "install",
-        localHookDir,
-        "--dangerously-force-unsafe-install",
-      ]);
+      await runPluginsCommand(["plugins", "install", localHookDir]);
     } finally {
       fs.rmSync(localHookDir, { recursive: true, force: true });
     }
@@ -1823,7 +1576,7 @@ describe("plugins cli install", () => {
     expect(runtimeLogsContain("Installed hook pack: demo-hooks")).toBe(true);
   });
 
-  it("still falls back to npm hook pack when dangerous force unsafe install is set for non-security errors", async () => {
+  it("still falls back to npm hook pack for non-security errors", async () => {
     const cfg = {} as OpenClawConfig;
     const installedCfg = {
       hooks: {
@@ -1864,12 +1617,7 @@ describe("plugins cli install", () => {
     });
     recordHookInstall.mockReturnValue(installedCfg);
 
-    await runPluginsCommand([
-      "plugins",
-      "install",
-      "@acme/demo-hooks",
-      "--dangerously-force-unsafe-install",
-    ]);
+    await runPluginsCommand(["plugins", "install", "@acme/demo-hooks"]);
 
     expect(hookNpmInstallCall().spec).toBe("@acme/demo-hooks");
     expect(runtimeLogsContain("Installed hook pack: demo-hooks")).toBe(true);

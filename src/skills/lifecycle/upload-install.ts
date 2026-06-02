@@ -95,10 +95,6 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
-        scan: {
-          installId: "upload",
-          origin: "skill-upload",
-        },
       });
       if (!install.ok) {
         const errorKind = uploadInstallFailureErrorKind(install.failureKind);

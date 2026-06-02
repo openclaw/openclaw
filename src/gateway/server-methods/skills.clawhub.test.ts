@@ -259,7 +259,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.version).toBe("1.2.3");
   });
 
-  it("forwards dangerous override for local skill installs", async () => {
+  it("ignores legacy dangerous override for local skill installs", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
       message: "Installed",
@@ -279,7 +279,6 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace",
       skillName: "calendar",
       installId: "deps",
-      dangerouslyForceUnsafeInstall: true,
       timeoutMs: 120_000,
       config: {},
     });

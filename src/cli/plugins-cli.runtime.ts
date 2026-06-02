@@ -18,7 +18,6 @@ import { formatMissingPluginMessage } from "./error-format.js";
 import type { PluginMarketplaceListOptions, PluginRegistryOptions } from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
-  dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
   link?: boolean;
   pin?: boolean;

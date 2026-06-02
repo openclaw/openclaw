@@ -5,10 +5,6 @@ import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { installPackageDir } from "../../infra/install-package-dir.js";
 import { resolveSafeInstallDir } from "../../infra/install-safe-path.js";
-import {
-  scanSkillInstallSource,
-  type InstallSecurityScanResult,
-} from "../../plugins/install-security-scan.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
@@ -27,14 +23,6 @@ function hasNonAscii(value: string): boolean {
   }
   return false;
 }
-
-type SkillArchiveInstallScan =
-  | false
-  | {
-      dangerouslyForceUnsafeInstall?: boolean;
-      installId?: string;
-      origin: string;
-    };
 
 export type SkillArchiveInstallResult =
   | { ok: true; targetDir: string }
@@ -90,12 +78,6 @@ async function hasSkillArchiveRoot(
   return false;
 }
 
-function scanBlockedFailureKind(
-  blocked: NonNullable<InstallSecurityScanResult["blocked"]>,
-): SkillArchiveInstallFailureKind {
-  return blocked.code === "security_scan_failed" ? "unavailable" : "invalid-request";
-}
-
 const TRANSIENT_ARCHIVE_ERROR_PATTERNS = [
   "enoent",
   "enospc",
@@ -129,7 +111,6 @@ export async function installExtractedSkillRoot(params: {
   mode: "install" | "update";
   timeoutMs?: number;
   logger?: ArchiveLogger;
-  scan?: SkillArchiveInstallScan;
   rootMarkers?: readonly string[];
 }): Promise<SkillArchiveInstallResult> {
   try {
@@ -152,23 +133,6 @@ export async function installExtractedSkillRoot(params: {
         `Skill already exists at ${targetDir}. Re-run with force/update.`,
         "invalid-request",
       );
-    }
-
-    if (params.scan) {
-      const scanResult = await scanSkillInstallSource({
-        dangerouslyForceUnsafeInstall: params.scan.dangerouslyForceUnsafeInstall,
-        installId: params.scan.installId ?? "archive",
-        logger: params.logger ?? {},
-        origin: params.scan.origin,
-        skillName: params.slug,
-        sourceDir: params.extractedRoot,
-      });
-      if (scanResult?.blocked) {
-        return installFailure(
-          scanResult.blocked.reason,
-          scanBlockedFailureKind(scanResult.blocked),
-        );
-      }
     }
 
     const install = await installPackageDir({
@@ -197,7 +161,6 @@ export async function installSkillArchiveFromPath(params: {
   force?: boolean;
   timeoutMs?: number;
   logger?: ArchiveLogger;
-  scan?: SkillArchiveInstallScan;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -213,7 +176,6 @@ export async function installSkillArchiveFromPath(params: {
         mode: params.force ? "update" : "install",
         timeoutMs: params.timeoutMs,
         logger: params.logger,
-        scan: params.scan,
       }),
   });
   if (!result.ok) {

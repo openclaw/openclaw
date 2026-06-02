@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { resetGlobalHookRunner } from "./hook-runner-global.js";
 import {
   installPluginFromFile,
   installPluginFromPath,
@@ -135,14 +134,9 @@ function setupNativePluginInstallFixture() {
   return { caseDir, pluginDir, extensionsDir: path.join(stateDir, "extensions") };
 }
 
-async function installFromFileWithWarnings(params: {
-  extensionsDir: string;
-  filePath: string;
-  dangerouslyForceUnsafeInstall?: boolean;
-}) {
+async function installFromFileWithWarnings(params: { extensionsDir: string; filePath: string }) {
   const warnings: string[] = [];
   const result = await installPluginFromFile({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     filePath: params.filePath,
     extensionsDir: params.extensionsDir,
     logger: {
@@ -198,113 +192,21 @@ beforeEach(() => {
 });
 
 describe("installPluginFromPath", () => {
-  it("runs before_install for plain file plugins with file provenance metadata", async () => {
-    const handler = vi.fn().mockReturnValue({
-      findings: [
-        {
-          ruleId: "manual-review",
-          severity: "warn",
-          file: "payload.js",
-          line: 1,
-          message: "Review single-file plugin before install",
-        },
-      ],
-    });
-    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
-
-    const baseDir = suiteTempRootTracker.makeTempDir();
-    const extensionsDir = path.join(baseDir, "extensions");
-    fs.mkdirSync(extensionsDir, { recursive: true });
-
-    const sourcePath = path.join(baseDir, "payload.js");
-    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
-
-    const result = await installPluginFromFile({
-      filePath: sourcePath,
-      extensionsDir,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(handler).toHaveBeenCalledTimes(1);
-    const [installContext, installMetadata] = handler.mock.calls[0] ?? [];
-    expect(installContext).toEqual({
-      targetName: "payload",
-      targetType: "plugin",
-      origin: "plugin-file",
-      sourcePath,
-      sourcePathKind: "file",
-      request: {
-        kind: "plugin-file",
-        mode: "install",
-        requestedSpecifier: sourcePath,
-      },
-      builtinScan: {
-        status: "ok",
-        scannedFiles: 1,
-        critical: 0,
-        warn: 0,
-        info: 0,
-        findings: [],
-      },
-      plugin: {
-        contentType: "file",
-        pluginId: "payload",
-        extensions: ["payload.js"],
-      },
-    });
-    expect(installMetadata).toEqual({
-      origin: "plugin-file",
-      targetType: "plugin",
-      requestKind: "plugin-file",
-    });
-  });
-
-  it("blocks plain file installs when the scanner finds dangerous code patterns", async () => {
+  it("does not run local code scanning for plain file plugins", async () => {
     const baseDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");
     fs.mkdirSync(extensionsDir, { recursive: true });
 
     const sourcePath = path.join(baseDir, "payload.js");
     fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
-    const expectedFinding = `Dynamic code execution detected (${sourcePath}:1)`;
 
     const { result, warnings } = await installFromFileWithWarnings({
       filePath: sourcePath,
       extensionsDir,
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toBe(
-        `Plugin file "payload" installation blocked: dangerous code patterns detected: ${expectedFinding}`,
-      );
-    }
-    expect(warnings).toEqual([
-      `WARNING: Plugin file "payload" contains dangerous code patterns: ${expectedFinding}`,
-    ]);
-  });
-
-  it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {
-    const baseDir = suiteTempRootTracker.makeTempDir();
-    const extensionsDir = path.join(baseDir, "extensions");
-    fs.mkdirSync(extensionsDir, { recursive: true });
-
-    const sourcePath = path.join(baseDir, "payload.js");
-    fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
-    const expectedFinding = `Dynamic code execution detected (${sourcePath}:1)`;
-
-    const { result, warnings } = await installFromFileWithWarnings({
-      filePath: sourcePath,
-      extensionsDir,
-      dangerouslyForceUnsafeInstall: true,
     });
 
     expect(result.ok).toBe(true);
-    expect(warnings).toEqual([
-      `WARNING: Plugin file "payload" contains dangerous code patterns: ${expectedFinding}`,
-      `WARNING: Plugin file "payload" installation forced despite dangerous code patterns via --dangerously-force-unsafe-install: ${expectedFinding}`,
-    ]);
+    expect(warnings).toEqual([]);
   });
 
   it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
