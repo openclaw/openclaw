@@ -54,9 +54,14 @@ interface MemoryRerankProvider {
 
 **Key constraints:**
 
-- Return one `MemoryRerankScore` per input `ref`. Core rejects responses that
-  drop, duplicate, or add refs.
-- Scores must be in `[0, 1]`. Higher values are more relevant.
+- Return **exactly one** `MemoryRerankScore` per input `ref` — complete coverage
+  is required. Core rejects responses that drop, duplicate, or add refs.
+- Every score must be a finite number in `[0, 1]`. `NaN`, `Infinity`, values
+  below `0`, and values above `1` are all rejected. Higher values are more
+  relevant.
+- Partial responses (fewer scores than candidates) are treated as invalid and
+  cause core to fall back to the pre-rerank order with `debug.rerank: "degraded"`.
+  Core does not append omitted refs after a partial result.
 - The provider must return scored refs, not full result objects. It cannot modify
   candidate content or inject new results.
 - Core owns the deadline and passes an `AbortSignal`. Honor it.
@@ -147,10 +152,12 @@ current rerank state as one of three values:
 - `"disabled"` — no reranker is registered.
 - `"active"` — a reranker is registered and applied scores during this search.
   This value reliably means reranking actually happened.
-- `"degraded"` — a reranker is registered but returned no scores (the provider
-  timed out, returned an error, or was disabled via its own kill-switch). A
-  registered-but-not-working reranker shows `"degraded"`, not a false
-  `"active"`.
+- `"degraded"` — a reranker is registered but its response was unusable. This
+  covers: provider timeout, thrown error, empty score list, incomplete coverage
+  (fewer scores than candidates), duplicate refs, out-of-range refs, and
+  non-finite or out-of-`[0,1]` scores. Core falls back to the pre-rerank order
+  and no `rerankScore` fields are set. A registered-but-not-working reranker
+  shows `"degraded"`, not a false `"active"`.
 
 **Memory-search debug block** — when memory-search debug output is enabled, the
 `debug.rerank` field carries the same state and timing information.
