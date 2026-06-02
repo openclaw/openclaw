@@ -27,6 +27,7 @@ const account = {
   config: {
     audienceType: "app-url",
     audience: "https://chat-app.example.test/googlechat",
+    appPrincipal: "123456789012345678901",
   },
 } as ResolvedGoogleChatAccount;
 
@@ -41,6 +42,7 @@ const cfg: OpenClawConfig = {
       },
       audienceType: "app-url",
       audience: "https://chat-app.example.test/googlechat",
+      appPrincipal: "123456789012345678901",
       dm: { allowFrom: ["users/123"] },
     },
   },
@@ -215,5 +217,50 @@ describe("googleChatApprovalNativeRuntime", () => {
       cardsV2: expect.any(Array),
     });
     expect(JSON.stringify(final.payload)).not.toContain("buttonList");
+  });
+
+  it("uses the named Chat action when app-url add-on principal binding is absent", async () => {
+    const view = createPendingView();
+    const pendingPayload = await googleChatApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccount: {
+              type: "service_account",
+              client_email: "bot@example.com",
+              private_key: "test-key",
+              token_uri: "https://oauth2.googleapis.com/token",
+            },
+            audienceType: "app-url",
+            audience: "https://chat-app.example.test/googlechat",
+            dm: { allowFrom: ["users/123"] },
+          },
+        },
+      },
+      accountId: "default",
+      context: {
+        account: {
+          ...account,
+          config: {
+            audienceType: "app-url",
+            audience: "https://chat-app.example.test/googlechat",
+          },
+        },
+      },
+      request: {
+        id: "approval-1",
+        request: { command: "echo hi" },
+        createdAtMs: Date.now(),
+        expiresAtMs: view.expiresAtMs,
+      },
+      approvalKind: "exec",
+      nowMs: Date.now(),
+      view,
+    });
+
+    expect(JSON.stringify(pendingPayload.cardsV2)).toContain("openclaw.approval");
+    expect(JSON.stringify(pendingPayload.cardsV2)).not.toContain(
+      "https://chat-app.example.test/googlechat",
+    );
   });
 });

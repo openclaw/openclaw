@@ -37,11 +37,30 @@ function isGoogleChatAccountConfigured(params: {
   return account.enabled && account.credentialSource !== "none";
 }
 
+function hasGoogleChatWebhookApprovalAuthConfig(params: {
+  cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
+  accountId?: string | null;
+}): boolean {
+  const account = resolveGoogleChatAccount(params).config;
+  const audience = normalizeOptionalString(account.audience);
+  if (!audience) {
+    return false;
+  }
+  if (account.audienceType === "project-number") {
+    return true;
+  }
+  return account.audienceType === "app-url";
+}
+
 export function isGoogleChatNativeApprovalClientEnabled(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
   accountId?: string | null;
 }): boolean {
-  return isGoogleChatAccountConfigured(params) && getGoogleChatApprovalApprovers(params).length > 0;
+  return (
+    isGoogleChatAccountConfigured(params) &&
+    hasGoogleChatWebhookApprovalAuthConfig(params) &&
+    getGoogleChatApprovalApprovers(params).length > 0
+  );
 }
 
 function resolveTurnSourceGoogleChatOriginTarget(

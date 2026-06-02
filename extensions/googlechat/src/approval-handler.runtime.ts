@@ -253,7 +253,8 @@ function buildPendingPayload(params: {
 function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerContext): string {
   const account = resolveHandlerAccount(params);
   const audience = normalizeOptionalString(account?.config.audience);
-  return account?.config.audienceType === "app-url" && audience
+  const appPrincipal = normalizeOptionalString(account?.config.appPrincipal);
+  return account?.config.audienceType === "app-url" && audience && appPrincipal
     ? audience
     : GOOGLECHAT_APPROVAL_ACTION;
 }

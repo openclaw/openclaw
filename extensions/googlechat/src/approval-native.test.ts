@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   googleChatApprovalCapability,
@@ -19,6 +20,90 @@ describe("googleChatApprovalCapability", () => {
                 private_key: "test-key",
                 token_uri: "https://oauth2.googleapis.com/token",
               },
+              audienceType: "app-url",
+              audience: "https://chat-app.example.test/googlechat",
+              appPrincipal: "123456789012345678901",
+              dm: { allowFrom: ["users/123"] },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not enable native cards when webhook callback audience auth is incomplete", async () => {
+    const runtime = googleChatApprovalCapability.nativeRuntime;
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                type: "service_account",
+                client_email: "bot@example.com",
+                private_key: "test-key",
+                token_uri: "https://oauth2.googleapis.com/token",
+              },
+              dm: { allowFrom: ["users/123"] },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                type: "service_account",
+                client_email: "bot@example.com",
+                private_key: "test-key",
+                token_uri: "https://oauth2.googleapis.com/token",
+              },
+              audienceType: "project-number",
+              dm: { allowFrom: ["users/123"] },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("enables native cards for supported webhook audience modes", async () => {
+    const runtime = googleChatApprovalCapability.nativeRuntime;
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                type: "service_account",
+                client_email: "bot@example.com",
+                private_key: "test-key",
+                token_uri: "https://oauth2.googleapis.com/token",
+              },
+              audienceType: "app-url",
+              audience: "https://chat-app.example.test/googlechat",
+              dm: { allowFrom: ["users/123"] },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      runtime?.availability.isConfigured({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                type: "service_account",
+                client_email: "bot@example.com",
+                private_key: "test-key",
+                token_uri: "https://oauth2.googleapis.com/token",
+              },
+              audienceType: "project-number",
+              audience: "1234567890",
               dm: { allowFrom: ["users/123"] },
             },
           },
@@ -51,7 +136,7 @@ describe("googleChatApprovalCapability", () => {
   });
 
   it("only handles approvals for the originating Google Chat account", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         googlechat: {
           accounts: {
@@ -63,6 +148,9 @@ describe("googleChatApprovalCapability", () => {
                 private_key: "test-key",
                 token_uri: "https://oauth2.googleapis.com/token",
               },
+              audienceType: "app-url",
+              audience: "https://alpha.example.com/googlechat",
+              appPrincipal: "123456789012345678901",
               dm: { allowFrom: ["users/123"] },
             },
             beta: {
@@ -73,6 +161,9 @@ describe("googleChatApprovalCapability", () => {
                 private_key: "test-key",
                 token_uri: "https://oauth2.googleapis.com/token",
               },
+              audienceType: "app-url",
+              audience: "https://beta.example.com/googlechat",
+              appPrincipal: "987654321098765432109",
               dm: { allowFrom: ["users/456"] },
             },
           },
