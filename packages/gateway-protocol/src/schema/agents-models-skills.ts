@@ -127,6 +127,23 @@ export const AgentsUpdateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentsSubagentsPatchParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    addAllowAgents: Type.Array(NonEmptyString, { minItems: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsSubagentsPatchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    agentId: NonEmptyString,
+    allowAgents: Type.Array(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentsDeleteParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,

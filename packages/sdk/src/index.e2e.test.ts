@@ -110,6 +110,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               "agents.create",
               "agents.delete",
               "agents.list",
+              "agents.subagents.patch",
               "agents.update",
               "connect",
               "exec.approval.list",
@@ -160,6 +161,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
 
       if (
         frame.method === "agents.create" ||
+        frame.method === "agents.subagents.patch" ||
         frame.method === "agents.update" ||
         frame.method === "agents.delete"
       ) {
@@ -450,6 +452,10 @@ describe("OpenClaw SDK websocket e2e", () => {
         await oc.agents.update({ id: "sdk-agent", label: "SDK Agent" }),
       );
       expect(updateAgent.method).toBe("agents.update");
+      const patchSubagents = expectJsonObject(
+        await oc.agents.patchSubagents({ agentId: "sdk-agent", addAllowAgents: ["main"] }),
+      );
+      expect(patchSubagents.method).toBe("agents.subagents.patch");
       const deleteAgent = expectJsonObject(await oc.agents.delete({ id: "sdk-agent" }));
       expect(deleteAgent.method).toBe("agents.delete");
 
@@ -517,6 +523,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         "agent.identity.get",
         "agents.create",
         "agents.update",
+        "agents.subagents.patch",
         "agents.delete",
         "sessions.list",
         "sessions.create",

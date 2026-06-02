@@ -352,6 +352,11 @@ See [Configuration reference](/gateway/configuration-reference) and
   Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
 </ParamField>
 
+Gateway clients can add configured target agents through the typed
+`agents.subagents.patch` RPC instead of writing raw config patches. The method
+dedupes ids, preserves existing entries, and rejects target ids that are not in
+`agents.list[]`.
+
 If the requester session is sandboxed, `sessions_spawn` rejects targets
 that would run unsandboxed.
 

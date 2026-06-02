@@ -11,6 +11,7 @@ import {
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
   validateAgentsListParams,
+  validateAgentsSubagentsPatchParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
@@ -44,7 +45,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -52,6 +53,7 @@ import {
   createAgentConfigEntry,
   deleteAgentConfigEntry,
   isConfiguredAgent,
+  patchAgentSubagentAllowAgents,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
@@ -693,6 +695,41 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, agentId }, undefined);
+  },
+  "agents.subagents.patch": async ({ params, respond, context }) => {
+    if (!validateAgentsSubagentsPatchParams(params)) {
+      respondInvalidMethodParams(
+        respond,
+        "agents.subagents.patch",
+        validateAgentsSubagentsPatchParams.errors,
+      );
+      return;
+    }
+
+    const cfg = context.getRuntimeConfig();
+    if (!isValidAgentId(params.agentId)) {
+      respondAgentNotFound(respond, params.agentId.trim());
+      return;
+    }
+    const agentId = normalizeAgentId(params.agentId);
+    if (!isConfiguredAgent(cfg, agentId)) {
+      respondAgentNotFound(respond, agentId);
+      return;
+    }
+
+    try {
+      const allowAgents = await patchAgentSubagentAllowAgents({
+        agentId,
+        addAllowAgents: params.addAllowAgents,
+      });
+      respond(true, { ok: true, agentId, allowAgents }, undefined);
+    } catch (error) {
+      if (error instanceof AgentConfigPreconditionError) {
+        respondAgentConfigPreconditionError(respond, error);
+        return;
+      }
+      throw error;
+    }
   },
   "agents.delete": async ({ params, respond, context }) => {
     if (!validateAgentsDeleteParams(params)) {
