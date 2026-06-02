@@ -14,6 +14,7 @@ import {
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -121,6 +122,29 @@ function resolveProviderHookRefs(
 
 function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: readonly string[]) {
   return providerRefs.some((providerRef) => matchesProviderPluginRef(provider, providerRef));
+}
+
+function getProviderRuntimePluginKey(plugin: ProviderPlugin): string {
+  return `${plugin.pluginId ?? ""}:${plugin.id}`;
+}
+
+function runProviderRuntimeHook<TResult>(params: {
+  plugin: ProviderPlugin | undefined;
+  hookName: string;
+  run: (plugin: ProviderPlugin) => TResult;
+}): TResult | undefined {
+  if (!params.plugin) {
+    return undefined;
+  }
+  try {
+    return params.run(params.plugin);
+  } catch (error) {
+    const pluginId = params.plugin.pluginId ?? params.plugin.id;
+    log.warn(
+      `Provider plugin "${sanitizeForLog(pluginId)}" ${sanitizeForLog(params.hookName)} hook failed; ignoring hook: ${sanitizeForLog(formatErrorMessage(error))}`,
+    );
+    return undefined;
+  }
 }
 
 function hasExplicitProviderRuntimePluginActivation(params: {
@@ -369,8 +393,13 @@ export function normalizeProviderModelIdWithPlugin(params: {
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
   return (
-    normalizeOptionalString(plugin?.normalizeModelId?.(params.context)) ??
-    normalizeProviderModelIdWithManifest(params)
+    normalizeOptionalString(
+      runProviderRuntimeHook({
+        plugin,
+        hookName: "normalizeModelId",
+        run: (providerPlugin) => providerPlugin.normalizeModelId?.(params.context),
+      }),
+    ) ?? normalizeProviderModelIdWithManifest(params)
   );
 }
 
@@ -385,16 +414,28 @@ export function normalizeProviderTransportWithPlugin(params: {
     (normalized.api ?? params.context.api) !== params.context.api ||
     (normalized.baseUrl ?? params.context.baseUrl) !== params.context.baseUrl;
   const matchedPlugin = resolveProviderHookPlugin(params);
-  const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
+  const normalizedMatched = runProviderRuntimeHook({
+    plugin: matchedPlugin,
+    hookName: "normalizeTransport",
+    run: (providerPlugin) => providerPlugin.normalizeTransport?.(params.context),
+  });
+  const matchedPluginKey = matchedPlugin ? getProviderRuntimePluginKey(matchedPlugin) : undefined;
   if (normalizedMatched && hasTransportChange(normalizedMatched)) {
     return normalizedMatched;
   }
 
   for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
+    if (
+      !candidate.normalizeTransport ||
+      (matchedPluginKey && getProviderRuntimePluginKey(candidate) === matchedPluginKey)
+    ) {
       continue;
     }
-    const normalized = candidate.normalizeTransport(params.context);
+    const normalized = runProviderRuntimeHook({
+      plugin: candidate,
+      hookName: "normalizeTransport",
+      run: (providerPlugin) => providerPlugin.normalizeTransport?.(params.context),
+    });
     if (normalized && hasTransportChange(normalized)) {
       return normalized;
     }

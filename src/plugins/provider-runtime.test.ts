@@ -1329,6 +1329,38 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores throwing model-id normalization hooks", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "fuzz-provider",
+        pluginId: "fuzzplugin\nWARN forged",
+        label: "Fuzz Provider",
+        aliases: ["fuzz"],
+        auth: [],
+        normalizeModelId: () => {
+          throw new Error("bad\nmodel hook");
+        },
+      },
+    ]);
+
+    expect(
+      normalizeProviderModelIdWithPlugin({
+        provider: "fuzz",
+        context: {
+          provider: "fuzz",
+          modelId: "demo-model",
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+    const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
+    expect(warning).toContain('Provider plugin "fuzzpluginWARN forged"');
+    expect(warning).toContain("normalizeModelId hook failed");
+    expect(warning).toContain("badmodel hook");
+    expect(warning).not.toContain("\n");
+  });
+
   it("resolves config hooks through hook-only aliases without changing provider surfaces", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
@@ -1660,6 +1692,50 @@ describe("provider-runtime", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
+  });
+
+  it("keeps scanning transport hooks after one provider hook throws", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const plugins: ProviderPlugin[] = [
+        {
+          id: "custom-fuzz",
+          pluginId: "fuzzplugin",
+          label: "Fuzz Provider",
+          auth: [],
+          normalizeTransport: () => {
+            throw new Error("bad transport hook");
+          },
+        },
+        {
+          id: "fuzz-transport-family",
+          pluginId: "fuzzplugin",
+          label: "Fuzz Transport Family",
+          auth: [],
+          normalizeTransport: ({ api, baseUrl }) =>
+            api === "openai-completions" ? { api: "openai-responses", baseUrl } : undefined,
+        },
+      ];
+      return params.providerRefs?.includes("custom-fuzz") ? [plugins[0]] : plugins;
+    });
+
+    expect(
+      normalizeProviderTransportWithPlugin({
+        provider: "custom-fuzz",
+        context: {
+          provider: "custom-fuzz",
+          api: "openai-completions",
+          baseUrl: "https://api.example.com/v1",
+        },
+      }),
+    ).toEqual({
+      api: "openai-responses",
+      baseUrl: "https://api.example.com/v1",
+    });
+
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+    expect(firstMockStringArg(providerRuntimeWarnMock, "provider warning")).toContain(
+      'Provider plugin "fuzzplugin" normalizeTransport hook failed',
+    );
   });
 
   it("invalidates cached runtime providers when config mutates in place", () => {
