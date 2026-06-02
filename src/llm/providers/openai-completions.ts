@@ -366,12 +366,15 @@ export const streamOpenAICompletions: StreamFunction<
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
           const deltaFields = choice.delta as Record<string, unknown>;
+          const reasoningEnabled = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
-          for (const field of reasoningFields) {
-            const value = deltaFields[field];
-            if (typeof value === "string" && value.length > 0) {
-              foundReasoningField = field;
-              break;
+          if (reasoningEnabled) {
+            for (const field of reasoningFields) {
+              const value = deltaFields[field];
+              if (typeof value === "string" && value.length > 0) {
+                foundReasoningField = field;
+                break;
+              }
             }
           }
           if (foundReasoningField) {
