@@ -200,6 +200,45 @@ function buildExecCtx() {
   return buildCtx({ authorizeNodeSystemRunEvent: () => true });
 }
 
+describe("node chat subscription events", () => {
+  beforeEach(() => {
+    loadConfigMock.mockClear();
+    loadConfigMock.mockReturnValue({ session: { mainKey: "agent:main:main" } });
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+  });
+
+  it("canonicalizes chat.subscribe session keys before registering node subscriptions", async () => {
+    loadConfigMock.mockReturnValueOnce({ session: { mainKey: "canon" } });
+    const nodeSubscribe = vi.fn();
+    const ctx = { ...buildCtx(), nodeSubscribe };
+
+    await handleNodeEvent(ctx, "node-1", {
+      event: "chat.subscribe",
+      payloadJSON: JSON.stringify({ sessionKey: "main" }),
+    });
+
+    expect(loadConfigMock).toHaveBeenCalled();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(nodeSubscribe).toHaveBeenCalledWith("node-1", "agent:main:canon");
+  });
+
+  it("canonicalizes chat.unsubscribe session keys before removing node subscriptions", async () => {
+    loadConfigMock.mockReturnValueOnce({ session: { mainKey: "canon" } });
+    const nodeUnsubscribe = vi.fn();
+    const ctx = { ...buildCtx(), nodeUnsubscribe };
+
+    await handleNodeEvent(ctx, "node-1", {
+      event: "chat.unsubscribe",
+      payloadJSON: JSON.stringify({ sessionKey: "main" }),
+    });
+
+    expect(loadConfigMock).toHaveBeenCalled();
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(nodeUnsubscribe).toHaveBeenCalledWith("node-1", "agent:main:canon");
+  });
+});
+
 function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
   return {
     connId,

@@ -15,6 +15,11 @@ const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
+  /**
+   * Canonical session store key used for run cleanup and node delivery. Raw
+   * request keys are resolved before registration and passed as aliases when
+   * callers need to match legacy or pre-resolution entries.
+   */
   sessionKey: string;
   agentId?: string;
   startedAtMs: number;
@@ -177,10 +182,9 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
  * — whose deltas the gateway delivered to a delivery key this client is no longer
  * subscribed to — is restored on switch-back.
  *
- * Matches a run the same way sessions.list's active-run projection does: an abort
- * entry can hold the requested key while chat run state holds the canonical store
- * key, so accept a match on EITHER `requestedSessionKey` or `canonicalSessionKey`,
- * scoping the shared "global" session by agent. Only runs still projected active
+ * Matches a run the same way sessions.list's active-run projection does: abort
+ * entries store the canonical session key (or the shared `global` sentinel), and
+ * the shared `global` session is scoped by agent. Only runs still projected active
  * (`projectSessionActive !== false`, matching sessions.list; the terminal lifecycle
  * flips it to false), not aborted, and visible chat-send runs are returned, so a
  * finalized run — already in persisted history — is not duplicated and hidden
@@ -190,7 +194,6 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  requestedSessionKey: string;
   canonicalSessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
@@ -234,10 +237,7 @@ export function resolveInFlightRunSnapshot(params: {
     ) {
       continue;
     }
-    if (
-      !matchesKey(entry, params.requestedSessionKey) &&
-      !matchesKey(entry, params.canonicalSessionKey)
-    ) {
+    if (!matchesKey(entry, params.canonicalSessionKey)) {
       continue;
     }
     const newer = best === undefined || entry.startedAtMs > best.startedAtMs;

@@ -49,8 +49,8 @@ export function startGatewayEventSubscriptions(params: {
           const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
           for (const candidateRunId of candidateRunIds) {
             const entry = params.chatAbortControllers.get(candidateRunId);
-            // Chat abort entries can hold the requested key while chat run
-            // state holds the canonical key; the run ids are the scoped match.
+            // Chat abort entries store canonical session keys in production;
+            // run ids are the lifecycle-scoped match, so this clear stays key-agnostic.
             if (entry) {
               entry.projectSessionActive = false;
             }

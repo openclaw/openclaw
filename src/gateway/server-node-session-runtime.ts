@@ -8,10 +8,13 @@ import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 
 export function createGatewayNodeSessionRuntime(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  canonicalizeSessionKey?: (sessionKey: string) => string;
 }) {
   const nodeRegistry = new NodeRegistry();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
-  const nodeSubscriptions = createNodeSubscriptionManager();
+  const nodeSubscriptions = createNodeSubscriptionManager({
+    canonicalizeSessionKey: params.canonicalizeSessionKey,
+  });
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
   const nodeSendEvent = (opts: {

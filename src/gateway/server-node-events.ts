@@ -45,6 +45,7 @@ import {
   sendDurableMessageBatch,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -311,6 +312,14 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   const obj = payload as Record<string, unknown>;
   const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
   return sessionKey.length > 0 ? sessionKey : null;
+}
+
+function resolveChatSubscriptionSessionKey(payloadJSON: string): string | null {
+  const sessionKeyRaw = parseSessionKeyFromPayloadJSON(payloadJSON);
+  if (!sessionKeyRaw) {
+    return null;
+  }
+  return resolveSessionStoreKey({ cfg: getRuntimeConfig(), sessionKey: sessionKeyRaw });
 }
 
 function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
@@ -664,7 +673,7 @@ export const handleNodeEvent = async (
       if (!evt.payloadJSON) {
         return undefined;
       }
-      const sessionKey = parseSessionKeyFromPayloadJSON(evt.payloadJSON);
+      const sessionKey = resolveChatSubscriptionSessionKey(evt.payloadJSON);
       if (!sessionKey) {
         return undefined;
       }
@@ -675,7 +684,7 @@ export const handleNodeEvent = async (
       if (!evt.payloadJSON) {
         return undefined;
       }
-      const sessionKey = parseSessionKeyFromPayloadJSON(evt.payloadJSON);
+      const sessionKey = resolveChatSubscriptionSessionKey(evt.payloadJSON);
       if (!sessionKey) {
         return undefined;
       }

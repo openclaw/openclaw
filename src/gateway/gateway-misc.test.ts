@@ -716,6 +716,51 @@ describe("node subscription manager", () => {
     expect(sent[0].event).toBe("chat");
   });
 
+  test("runtime migrates legacy raw node subscriptions on canonical delivery", () => {
+    let canonicalizeSessionKey = (sessionKey: string) => sessionKey;
+    const frames: string[] = [];
+    const socket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn((payload: string) => frames.push(payload)),
+      close: vi.fn(),
+    };
+    const runtime = createGatewayNodeSessionRuntime({
+      broadcast: vi.fn(),
+      canonicalizeSessionKey: (sessionKey) => canonicalizeSessionKey(sessionKey),
+    });
+    runtime.nodeRegistry.register(
+      makeGatewayWsClient("conn-node-a", socket, {
+        role: "node",
+        scopes: [],
+        client: {
+          id: "node-client",
+          version: "1.0.0",
+          platform: "macos",
+          mode: "node",
+        },
+        device: { id: "node-a" },
+      } as unknown as GatewayWsClient["connect"]),
+      {},
+    );
+    runtime.nodeSubscribe("node-a", "main");
+
+    canonicalizeSessionKey = (sessionKey) =>
+      sessionKey === "main" ? "agent:main:main" : sessionKey;
+    runtime.nodeSendToSession("agent:main:main", "chat", { ok: true });
+
+    expect(JSON.parse(frames[0] ?? "{}")).toEqual({
+      type: "event",
+      event: "chat",
+      payload: { ok: true },
+    });
+
+    frames.length = 0;
+    runtime.nodeUnsubscribe("node-a", "main");
+    runtime.nodeSendToSession("agent:main:main", "chat", { ok: true });
+
+    expect(frames).toStrictEqual([]);
+  });
+
   test("runtime forwards subscribed node payload json without parsing it again", () => {
     const frames: string[] = [];
     const socket: TestSocket = {

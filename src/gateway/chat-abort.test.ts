@@ -441,21 +441,17 @@ describe("resolveInFlightRunSnapshot", () => {
     };
   };
 
-  // Most cases request with requestedKey === canonicalKey; default canonical to
-  // the requested key unless a case exercises the requested/canonical split.
   const snap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
     sessionKey: string;
-    canonicalSessionKey?: string;
     agentId?: string;
     defaultAgentId?: string;
   }) =>
     resolveInFlightRunSnapshot({
       chatAbortControllers: p.chatAbortControllers,
       chatRunBuffers: p.chatRunBuffers,
-      requestedSessionKey: p.sessionKey,
-      canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
+      canonicalSessionKey: p.sessionKey,
       agentId: p.agentId,
       defaultAgentId: p.defaultAgentId,
     });
@@ -479,16 +475,13 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toBeUndefined();
   });
 
-  it("matches a run stored under the canonical key when requested with a different key", () => {
-    // Abort entry holds the canonical store key; the client requests history with
-    // a different (requested) key for the same logical session.
+  it("does not adopt fabricated raw-key entries when the canonical key differs", () => {
     const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:main")]]),
+      chatAbortControllers: new Map([["run-1", inFlightEntry("main")]]),
       chatRunBuffers: new Map([["run-1", "partial"]]),
-      sessionKey: "main",
-      canonicalSessionKey: "agent:main:main",
+      sessionKey: "agent:main:main",
     });
-    expect(result).toEqual({ runId: "run-1", text: "partial" });
+    expect(result).toBeUndefined();
   });
 
   it("ignores aborted, completed (not projected active), and other-session runs", () => {

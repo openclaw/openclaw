@@ -2449,6 +2449,79 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
   });
 
+  it("chat.abort by run id uses the canonical key for canonicalized main aliases", async () => {
+    createTranscriptFixture("openclaw-chat-abort-canonical-key-");
+    mockState.mainSessionKey = "canon";
+    mockState.sessionEntry = { canonicalKey: "agent:main:canon" };
+    mockState.finalText = "ok";
+    let releaseDispatch!: () => void;
+    mockState.dispatchWait = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const respond = vi.fn();
+    const abortRespond = vi.fn();
+    const context = createChatContext();
+    const runId = "idem-abort-canonical-key";
+
+    const send = chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: runId,
+      },
+      respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.send"]>[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    try {
+      await waitForAssertion(() => {
+        expect(context.addChatRun).toHaveBeenCalledWith(
+          runId,
+          expect.objectContaining({ sessionKey: "agent:main:canon", clientRunId: runId }),
+        );
+      });
+
+      await chatHandlers["chat.abort"]({
+        params: { sessionKey: "main", runId },
+        respond: abortRespond as unknown as Parameters<
+          (typeof chatHandlers)["chat.abort"]
+        >[0]["respond"],
+        req: {} as never,
+        client: null,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      expect(lastRespondCall(abortRespond)?.[0]).toBe(true);
+      expect(lastRespondCall(abortRespond)?.[1]).toEqual({
+        ok: true,
+        aborted: true,
+        runIds: [runId],
+      });
+      expect(mockCallAt(context.removeChatRun as unknown as ReturnType<typeof vi.fn>, 0)).toEqual([
+        runId,
+        runId,
+        "agent:main:canon",
+      ]);
+      const abortedDelivery = mockCallAt(
+        context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>,
+        0,
+      ) as [string, string, Record<string, any>] | undefined;
+      expect(abortedDelivery?.[0]).toBe("agent:main:canon");
+      expect(abortedDelivery?.[2]).toMatchObject({
+        runId,
+        sessionKey: "agent:main:canon",
+        state: "aborted",
+      });
+    } finally {
+      releaseDispatch();
+      await send;
+    }
+  });
+
   it("chat.send broadcasts final replies for telegram-shaped session keys", async () => {
     createTranscriptFixture("openclaw-chat-send-telegram-final-");
     mockState.finalText = "telegram ok";
@@ -4414,6 +4487,276 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Orphaned media-store files are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
+  it("lets abort win when attachment preprocessing fails after cancellation", async () => {
+    createTranscriptFixture("openclaw-chat-send-abort-stage-error-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    const stageError = Object.assign(new Error("ENOSPC: no space left on device"), {
+      code: "ENOSPC",
+    });
+    mockState.stageSandboxMediaError = stageError;
+    let releaseSave!: () => void;
+    mockState.saveMediaWait = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const respond = vi.fn();
+    const abortRespond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+    const runId = "idem-abort-stage-error";
+
+    const send = chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "read this",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.send"]>[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.activeSaveMediaCalls).toBe(1);
+    });
+
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "main", runId },
+      respond: abortRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.abort"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(lastRespondCall(abortRespond)?.[0]).toBe(true);
+    expect(lastRespondCall(abortRespond)?.[1]).toEqual({
+      ok: true,
+      aborted: true,
+      runIds: [runId],
+    });
+
+    releaseSave();
+    await send;
+
+    expect(lastRespondCall(respond)?.[0]).toBe(true);
+    expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "started" });
+    expect(lastRespondCall(respond)?.[2]).toBeUndefined();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(context.logGateway.error).not.toHaveBeenCalled();
+    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
+  it("cleans partially staged sandbox media when abort wins over staging failure", async () => {
+    createTranscriptFixture("openclaw-chat-send-abort-partial-stage-cleanup-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+      { path: "/home/user/.openclaw/media/inbound/oversize.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/oversize.pdf"];
+    mockState.unstagedSources = ["/home/user/.openclaw/media/inbound/oversize.pdf"];
+    let releaseSave!: () => void;
+    mockState.saveMediaWait = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockResolvedValue(undefined);
+    const respond = vi.fn();
+    const abortRespond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const runId = "idem-abort-partial-stage-cleanup";
+
+    try {
+      const send = chatHandlers["chat.send"]({
+        params: {
+          sessionKey: "main",
+          message: "read these",
+          idempotencyKey: runId,
+          attachments: [
+            { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+            { type: "file", mimeType: "application/pdf", fileName: "oversize.pdf", content: pdf },
+          ],
+        },
+        respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.send"]>[0]["respond"],
+        req: {} as never,
+        client: null,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      await waitForAssertion(() => {
+        expect(mockState.activeSaveMediaCalls).toBe(1);
+      });
+
+      await chatHandlers["chat.abort"]({
+        params: { sessionKey: "main", runId },
+        respond: abortRespond as unknown as Parameters<
+          (typeof chatHandlers)["chat.abort"]
+        >[0]["respond"],
+        req: {} as never,
+        client: null,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      expect(lastRespondCall(abortRespond)?.[0]).toBe(true);
+      expect(lastRespondCall(abortRespond)?.[1]).toEqual({
+        ok: true,
+        aborted: true,
+        runIds: [runId],
+      });
+
+      releaseSave();
+      await send;
+
+      expect(lastRespondCall(respond)?.[0]).toBe(true);
+      expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "started" });
+      expect(lastRespondCall(respond)?.[2]).toBeUndefined();
+      expect(mockState.lastDispatchCtx).toBeUndefined();
+      expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
+        "saved-media",
+        "saved-media",
+      ]);
+      expect(rmSpy).toHaveBeenCalledWith("/sandbox/workspace/media/inbound/report.pdf", {
+        force: true,
+      });
+      expect(rmSpy).not.toHaveBeenCalledWith("/sandbox/workspace/media/inbound/oversize.pdf", {
+        force: true,
+      });
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it("cleans offloaded media when abort wins after attachment preprocessing", async () => {
+    createTranscriptFixture("openclaw-chat-send-abort-cleans-offload-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
+    let releaseSave!: () => void;
+    mockState.saveMediaWait = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockResolvedValue(undefined);
+    const respond = vi.fn();
+    const abortRespond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+    const runId = "idem-abort-clean-offload";
+
+    const send = chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "read this",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.send"]>[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.activeSaveMediaCalls).toBe(1);
+    });
+
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "main", runId },
+      respond: abortRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.abort"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(lastRespondCall(abortRespond)?.[0]).toBe(true);
+    expect(lastRespondCall(abortRespond)?.[1]).toEqual({
+      ok: true,
+      aborted: true,
+      runIds: [runId],
+    });
+
+    releaseSave();
+    await send;
+
+    expect(lastRespondCall(respond)?.[0]).toBe(true);
+    expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "started" });
+    expect(lastRespondCall(respond)?.[2]).toBeUndefined();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+    expect(rmSpy).toHaveBeenCalledWith("/sandbox/workspace/media/inbound/report.pdf", {
+      force: true,
+    });
+    rmSpy.mockRestore();
   });
 
   it("logs chat.send attachment parse failures with stack details", async () => {
