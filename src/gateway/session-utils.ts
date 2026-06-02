@@ -2143,14 +2143,10 @@ export function buildGatewaySessionRow(params: {
   const resolvedStatus = (subagentRun ? subagentStatus : entry?.status) as
     | SessionRunStatus
     | undefined;
-  /**
-   * Sessions in any non-running status (done, failed, timeout, killed) remain
-   * resumable via sessions_send. This field makes that explicit so agents do not
-   * misinterpret the status as a session-lifecycle terminal state.
-   * Running sessions omit resumable because they are obviously active.
-   */
   const resolvedResumable =
-    resolvedStatus != null && resolvedStatus !== "running" ? true : undefined;
+    resolvedStatus != null && resolvedStatus !== "running" && resolvedStatus !== "killed"
+      ? true
+      : undefined;
 
   return {
     key,

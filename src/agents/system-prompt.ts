@@ -751,7 +751,7 @@ export function buildAgentSystemPrompt(params: {
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
       : "List OpenClaw agent ids allowed for sessions_spawn",
     sessions_list:
-      "List other sessions (incl. sub-agents) with filters/last; status (done/failed/timeout/killed) is last-turn communication state only — check resumable field and prefer sessions_send over spawning duplicates",
+      "List other sessions (incl. sub-agents) with filters/last; done/failed/timeout are resumable via sessions_send, killed are not.",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled

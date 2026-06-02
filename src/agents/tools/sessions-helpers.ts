@@ -67,7 +67,6 @@ export type SessionListRow = {
   totalTokens?: number | null;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
-  /** Whether this session can still receive `sessions_send` despite a terminal-looking status. */
   resumable?: boolean;
   startedAt?: number;
   endedAt?: number;
