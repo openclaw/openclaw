@@ -4354,6 +4354,70 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("generates agent-scoped config for absolute qmd stdio servers", async () => {
+    const absoluteQmdCommand = path.join(tmpRoot, "node", "v24.15.0", "bin", "qmd");
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "custom-qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "custom-qmd",
+            source: "user",
+            command: absoluteQmdCommand,
+            args: ["mcp"],
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        { command?: string; args?: string[]; env?: Record<string, string> }
+      >;
+    };
+    const generatedServer = config.mcpServers?.["custom-qmd"];
+    expect(generatedServer?.command).toBe(absoluteQmdCommand);
+    expect(generatedServer?.args).toEqual(["mcp"]);
+    expect(generatedServer?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
+
+    await manager.close();
+  });
+
   it("starts configured stdio daemons with generated agent-scoped config", async () => {
     const userXdgConfigHome = path.join(tmpRoot, "stdio-user-xdg-config");
     const userXdgCacheHome = path.join(tmpRoot, "stdio-user-xdg-cache");

@@ -276,11 +276,20 @@ function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boo
 }
 
 function isGeneratedMcporterQmdStdioServer(server: Record<string, unknown>): boolean {
-  if (normalizeMcporterConfigKey(String(server.command)) !== "qmd") {
+  if (!isQmdExecutableCommand(server.command)) {
     return false;
   }
   const args = server.args;
   return Array.isArray(args) && args.length === 1 && args[0] === "mcp";
+}
+
+function isQmdExecutableCommand(command: unknown): boolean {
+  if (typeof command !== "string" || command.length === 0) {
+    return false;
+  }
+  const normalized = command.replace(/\\/g, "/");
+  const commandName = normalized.split("/").filter(Boolean).at(-1) ?? normalized;
+  return normalizeMcporterConfigKey(commandName) === "qmd";
 }
 
 function hasMcporterAuthLikeArgs(value: unknown): boolean {
