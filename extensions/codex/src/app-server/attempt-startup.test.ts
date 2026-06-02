@@ -239,6 +239,22 @@ describe("startCodexAttemptThread", () => {
     expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
   });
 
+  it("clears the shared app-server when initialize stalls before thread startup", async () => {
+    const { harness, run } = startThreadWithHarness(200);
+    const runError = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    const error = await runError;
+    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
+      interval: 1,
+      timeout: 2_000,
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/codex app-server (initialize|startup) timed out/u);
+  });
+
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
     const { harness, run } = startThreadWithHarness(2_000);
     const runError = run.then(

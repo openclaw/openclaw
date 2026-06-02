@@ -213,6 +213,7 @@ export async function startCodexAttemptThread(params: {
                   }
                 },
                 abandonSignal: startupAbandonController.signal,
+                timeoutMs: params.startupTimeoutMs,
               },
             );
             const activeStartupClient = startupClient;
