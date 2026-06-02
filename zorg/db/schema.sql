@@ -17,6 +17,21 @@ create table if not exists zorg_logic_rules (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists zorg_logic_rule_dynamic_weights (
+  rule_key text primary key,
+  seed_weight numeric(12,5) not null default 1,
+  dynamic_weight numeric(12,5) not null default 1,
+  use_count integer not null default 0,
+  positive_feedback_count integer not null default 0,
+  negative_feedback_count integer not null default 0,
+  last_recalled_at timestamptz,
+  last_feedback_at timestamptz,
+  feedback_basis text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists zorg_markdown_imports (
   id uuid primary key default gen_random_uuid(),
   source_path text not null,
@@ -106,3 +121,22 @@ create index if not exists idx_zorg_logic_rules_priority on zorg_logic_rules(pri
 create index if not exists idx_zorg_memory_logged_at on zorg_memory(logged_at desc);
 create index if not exists idx_lan_chat_session_time on lan_chat_messages(session_key, created_at desc);
 create index if not exists idx_memory_associations_source on memory_associations(source_entity_key, weight desc);
+
+create or replace view zorg_logic_rule_dynamic_ranking_v as
+select
+  r.rule_key,
+  r.rule_title,
+  r.priority,
+  r.privacy,
+  r.rule_type,
+  coalesce(w.seed_weight, 1) as seed_weight,
+  coalesce(w.dynamic_weight, 1) as dynamic_weight,
+  coalesce(w.seed_weight, 1) * coalesce(w.dynamic_weight, 1) as effective_weight,
+  coalesce(w.use_count, 0) as use_count,
+  coalesce(w.positive_feedback_count, 0) as positive_feedback_count,
+  coalesce(w.negative_feedback_count, 0) as negative_feedback_count,
+  w.last_recalled_at,
+  w.last_feedback_at,
+  r.updated_at as rule_updated_at
+from zorg_logic_rules r
+left join zorg_logic_rule_dynamic_weights w on w.rule_key = r.rule_key;

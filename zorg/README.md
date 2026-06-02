@@ -8,6 +8,10 @@ This directory contains the public-safe Zorg MemoryDB and LAN command chat insta
 - `requirements.txt` declares the Python DB driver used by the recall tools.
 - `db/schema.sql` creates the database structure.
 - `db/seed_rules.sql` inserts public-safe production rules.
+- `db/public_canonical_rules_update_2026_06_02.sql` updates existing installs so
+  active rules use `zorg_logic_rules`, compatibility rule tables are disabled
+  when present, and existing chat timing rule weights are raised without
+  creating replacement timing rules.
 - `db/import_markdown_rules.py` imports packaged rules and retired markdown memory files into the database.
 - `lan-command-chat/` contains the LAN command chat source bundle.
 - `rules/` contains public-safe memory and install rules.

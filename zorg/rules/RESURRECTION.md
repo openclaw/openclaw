@@ -19,8 +19,10 @@ fallback.
 - Workspace: `/home/openclaw/.openclaw/workspace`
 - DB config: `/home/openclaw/.openclaw/workspace/sql_memory_map.json`
 - Recovery pointer: `/home/openclaw/.openclaw/workspace/ZORG_MEMORYDB_MASTER_RULES.md`
-- Local backup directory: `/home/openclaw/.openclaw/backups/postgres/local`
-- Private recovery mirror: `/home/openclaw/.openclaw/workspace/Zorg_Hive/backups/postgres/openclaw`
+- Local temporary backup directory: `/home/openclaw/.openclaw/backups/postgres/tmp`
+- Separately approved private/off-host mirrors may exist in local operator
+  documentation, but live DB dumps must not be committed, mirrored, or pushed to
+  GitHub from the public MemoryDB update path.
 - Backup script: `/home/openclaw/.openclaw/workspace/scripts/postgres_memory_backup.sh`
 - Restore/drill script: `/home/openclaw/.openclaw/workspace/scripts/postgres_memory_recovery.sh`
 - Recall CLI: `/home/openclaw/.openclaw/workspace/memory_sql_tool.py`
@@ -29,20 +31,15 @@ fallback.
 ## Find The Latest Backup
 
 ```bash
-cd /home/openclaw/.openclaw/backups/postgres/local
+cd /home/openclaw/.openclaw/backups/postgres/tmp
 ls -1t zorgdb-*.sql.gz | head
 ls -1t zorgdb-schema-*.sql.gz | head
 sha256sum -c zorgdb-*.sql.gz.sha256 2>/dev/null || true
 ```
 
-If the local full dump is missing, use the private mirror:
-
-```bash
-cd /home/openclaw/.openclaw/workspace/Zorg_Hive/backups/postgres/openclaw
-sed -n '1,80p' README.md
-cat zorgdb-*.sql.gz.part-* > /tmp/zorgdb-restore.sql.gz
-sha256sum -c zorgdb-*.sql.gz.sha256
-```
+If the local full dump is missing, search only separately approved private or
+encrypted recovery locations documented by the operator. Do not infer a GitHub
+backup path and do not publish live database dumps while recovering.
 
 ## Restore PostgreSQL Memory
 
@@ -78,7 +75,7 @@ docker exec local-postgres psql -U zorg -d postgres -c "drop database if exists 
 docker exec local-postgres psql -U zorg -d postgres -c "create database zorgdb_restore;"
 
 # Load the latest local full dump.
-zcat /home/openclaw/.openclaw/backups/postgres/local/zorgdb-YYYY-MM-DD_HHMMSS.sql.gz \
+zcat /home/openclaw/.openclaw/backups/postgres/tmp/zorgdb-YYYY-MM-DD_HHMMSS.sql.gz \
   | docker exec -i local-postgres psql -U zorg -d zorgdb_restore
 ```
 

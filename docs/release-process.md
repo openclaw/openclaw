@@ -33,7 +33,7 @@ Before commit, inspect the diff for:
 - private operator context or private strategy
 - absolute private backup contents rather than structural backup locations and commands
 
-Public docs may mention expected local/private backup locations and commands, but must not publish live backup files or private database rows.
+Public docs may mention expected local rollback locations and separately approved private recovery concepts, but must not publish live backup files, private database rows, contacts, transcripts, credentials, or private memory.
 
 ## Local gate
 

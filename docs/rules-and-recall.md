@@ -117,7 +117,7 @@ rules, and legacy embedding slots remain intact and rebuildable.
 
 When the operator reports that replies are still missing active rules, treat the reply format itself as part of the recall test. The assistant should retrieve the active database rules for memory-first behavior, visible timestamp/time-summary requirements, verified-memory wording, summary-before-mutation approval gates, backup gates, publication gates, rule-failure lockout, and completion verification before sending the next visible response.
 
-If a visible reply misses one of those rules, repair recall additively. Add recall hints, query observations, weighted semantic edges, and dynamic rule weights so phrasings such as "timestamps," "last replies," "all rules," "reply incorrectly," "vector database," and "neural connections" retrieve the governing rules together. Run the required PostgreSQL backup and private recovery mirror before production recall/vector/neural/weighted-memory changes. Refresh derived recall surfaces after the additive update and verify natural-language queries return the corrected rules near the top before reporting completion.
+If a visible reply misses one of those rules, repair recall additively. Add recall hints, query observations, weighted semantic edges, and dynamic rule weights so phrasings such as "timestamps," "last replies," "all rules," "reply incorrectly," "vector database," and "neural connections" retrieve the governing rules together. Run the required temporary local PostgreSQL backup before production recall/vector/neural/weighted-memory changes; do not commit, mirror, or push live DB dumps to GitHub. Refresh derived recall surfaces after the additive update and verify natural-language queries return the corrected rules near the top before reporting completion.
 
 The public-safe structure is the repair pattern only: do not publish private operator messages, live database rows, transcripts, contact data, credentials, or private memory contents.
 
@@ -177,13 +177,27 @@ Long-form operating rules, user/project history, and durable process context bel
 
 ## Database recovery and tuning gate
 
-A DB-backed memory system should be treated as mission-critical state. Before any production schema/index/materialized-view/recall-routing/vector/weighted-memory change, create a full local PostgreSQL backup and push a full copy to a private recovery repository. Public distribution repos must never contain private database dumps or rows.
+A DB-backed memory system should be treated as mission-critical state. Before any production schema/index/materialized-view/recall-routing/vector/weighted-memory change, create and verify a temporary local PostgreSQL backup only. Do not commit, mirror, or push live database dumps to GitHub. Public distribution repos must never contain private database dumps or rows.
 
 Performance/tuning cron jobs should be worded LLM instruction jobs. They may apply production DB/index changes only after a concrete recall failure where data existed in the DB but did not return in first-pass recall and was recovered only by deeper search, alternate query, direct inspection, or operator correction. Without that failure signal, they should restrict themselves to benchmarks, research, sandbox/temp experiments, and additive design work such as vector structures, neural-style weights, cue associations, and recall scoring prototypes.
 
-Baseline recovery locations should be documented in local operator markdown. In Stefan's install they are: local `/home/openclaw/.openclaw/backups/postgres/local/`, private GitHub `Zorg_Hive/backups/postgres/openclaw/`, and optional shared mirror `/Zorg/backups/openclaw/postgres` or established jump-box mirror.
+Baseline recovery locations should be documented in local operator markdown. The current public-safe rollback path is a temporary local PostgreSQL dump location such as `/home/openclaw/.openclaw/backups/postgres/tmp/`. Separately approved encrypted/private mirrors may exist in a private environment, but they are not part of the public `Zorg_MemoryDB` update path.
 
-Fresh-install note: if no private GitHub/offsite DB backup target exists, local backup is the minimum, but the agent should explicitly recommend setting up a private GitHub repository because private repos are free and off-host recovery is critical for durable memory.
+Fresh-install note: local temporary rollback backup remains the minimum requirement. Off-host recovery may be recommended only as a separately approved private operations setup, never as an automatic public-repo publication step.
+
+## Canonical rule update path
+
+Active operating rules belong in `zorg_logic_rules`. Older compatibility
+surfaces such as `zorg_rules` and `zorg_rule_catalog` may remain in a database
+for upgrade compatibility, but they must not remain active rule-recall sources
+after a canonical migration.
+
+Use `zorg/db/public_canonical_rules_update_2026_06_02.sql` as the public-safe
+upgrade path for installs that need the current canonical-rule cleanup. It seeds
+sanitized public rules into `zorg_logic_rules`, disables active rows in
+compatibility tables when those tables exist, and raises existing chat-response
+timing rule weights through `zorg_logic_rule_dynamic_weights` without creating
+replacement timing rules.
 
 ## LLM-governed operations, not scripted policy
 

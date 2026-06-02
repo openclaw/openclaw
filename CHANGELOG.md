@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - QA-Lab: add `qa coverage --match <query>` so focused proof selection can discover matching scenarios from existing metadata before running live or remote lanes.
+- Zorg MemoryDB: add the public canonical-rule update path so active rules are consolidated in `zorg_logic_rules`, older compatibility rule tables are disabled when present, existing chat timing dynamic weights are raised without duplicate rules, packaged recall tools rank weighted rule matches first, and current docs/templates supersede old private-GitHub DB-dump guidance with temporary-local-only rollback backups.
 - Zorg MemoryDB: install and document the root-level `RESURRECTION.md` recovery pointer so backups remain useful even when DB recall is unavailable.
 - Zorg MemoryDB: backfill live pgvector ANN coverage for eligible local-hash rows, including missing logic-rule embeddings, refresh ANN planner statistics, add a bounded ANN-neighbor edge batch, and mark low-information derived ANN payloads inactive without deleting source memory.
 - Control UI: add an ephemeral Activity tab for sanitized live tool activity summaries without persisting raw telemetry. Fixes #12831. Thanks @BunsDev.
