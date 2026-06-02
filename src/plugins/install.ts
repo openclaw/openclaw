@@ -2353,10 +2353,6 @@ export async function installPluginFromFile(params: {
   const { logger, mode, dryRun } = runtime.resolveInstallModeOptions(params, defaultLogger);
 
   const filePath = resolveUserPath(params.filePath);
-  const installPolicyRequest = params.installPolicyRequest ?? {
-    kind: "plugin-file",
-    requestedSpecifier: params.filePath,
-  };
   if (!(await runtime.fileExists(filePath))) {
     return { ok: false, error: `file not found: ${filePath}` };
   }
