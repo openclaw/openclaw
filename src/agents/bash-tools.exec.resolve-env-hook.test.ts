@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
     | {
         hasHooks: ReturnType<typeof vi.fn>;
         runResolveExecEnv: ReturnType<typeof vi.fn>;
+        runBeforeToolCall?: ReturnType<typeof vi.fn>;
       }
     | undefined,
+  beforeToolCallParams: [] as Array<Record<string, unknown>>,
   gatewayParams: [] as Array<{
     env: Record<string, string>;
     requestedEnv?: Record<string, string>;
@@ -92,6 +94,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
 
 function installResolveExecEnvHook(result: Record<string, string>) {
   mocks.hookRunner = {
@@ -103,10 +106,12 @@ function installResolveExecEnvHook(result: Record<string, string>) {
 describe("exec resolve_exec_env hook wiring", () => {
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
   });
 
   beforeEach(() => {
     mocks.hookRunner = undefined;
+    mocks.beforeToolCallParams.length = 0;
     mocks.gatewayParams.length = 0;
     mocks.nodeHostParams.length = 0;
     mocks.spawnInputs.length = 0;
@@ -192,5 +197,48 @@ describe("exec resolve_exec_env hook wiring", () => {
       REQUEST_SAFE: "request",
     });
     expect(mocks.nodeHostParams[0]?.env).not.toHaveProperty("LD_PRELOAD");
+  });
+
+  it("includes plugin env in before_tool_call params before approval", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
+      ),
+      runResolveExecEnv: vi.fn(async () => ({ PLUGIN_SAFE: "yes" })),
+      runBeforeToolCall: vi.fn(async (event: { params: Record<string, unknown> }) => {
+        mocks.beforeToolCallParams.push({ ...event.params });
+        return undefined;
+      }),
+    };
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:chat-1",
+      messageProvider: "telegram",
+      currentChannelId: "chat-1",
+    });
+    const [definition] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:telegram:chat-1",
+      channelId: "chat-1",
+    });
+
+    await definition.execute("call-before", {
+      command: "echo ok",
+      env: { EXISTING: "request" },
+      yieldMs: 120_000,
+    });
+
+    expect(mocks.beforeToolCallParams[0]?.env).toEqual({
+      EXISTING: "request",
+      PLUGIN_SAFE: "yes",
+    });
+    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      EXISTING: "request",
+      PLUGIN_SAFE: "yes",
+    });
   });
 });

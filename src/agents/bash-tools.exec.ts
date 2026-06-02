@@ -42,6 +42,7 @@ import {
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -98,6 +99,8 @@ type ExecToolArgs = Record<string, unknown> & {
   ask?: string;
   node?: string;
 };
+const RESOLVE_EXEC_ENV_PREPARED = Symbol("openclaw.resolveExecEnvPrepared");
+type PreparedExecToolArgs = ExecToolArgs & { [RESOLVE_EXEC_ENV_PREPARED]?: true };
 
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "command",
@@ -127,6 +130,19 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
     env[key] = value;
   }
   return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function markResolveExecEnvPrepared<T extends ExecToolArgs>(params: T): T {
+  Object.defineProperty(params, RESOLVE_EXEC_ENV_PREPARED, {
+    value: true,
+    enumerable: true,
+    configurable: true,
+  });
+  return params;
+}
+
+function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
+  return (params as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED] === true;
 }
 
 function buildExecForegroundResult(params: {
@@ -1344,6 +1360,68 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const resolveHostForParams = (params: ExecToolArgs): ExecHost => {
+    const elevatedDefaults = defaults?.elevated;
+    const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
+    const elevatedDefaultMode =
+      elevatedDefaults?.defaultLevel === "full"
+        ? "full"
+        : elevatedDefaults?.defaultLevel === "ask"
+          ? "ask"
+          : elevatedDefaults?.defaultLevel === "on"
+            ? "ask"
+            : "off";
+    const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
+    const elevatedMode =
+      typeof params.elevated === "boolean"
+        ? params.elevated
+          ? elevatedDefaultMode === "full"
+            ? "full"
+            : "ask"
+          : "off"
+        : effectiveDefaultMode;
+    const requestedTarget = requireValidExecTarget(params.host);
+    return resolveExecTarget({
+      configuredTarget: defaults?.host,
+      requestedTarget,
+      elevatedRequested: elevatedMode !== "off",
+      sandboxAvailable: Boolean(defaults?.sandbox),
+    }).effectiveHost;
+  };
+  const prepareParamsWithResolvedExecEnv = async (
+    rawArgs: unknown,
+    context?: { hookContext?: HookContext },
+  ): Promise<ExecToolArgs> => {
+    const params = stripMalformedXmlArgValueSuffixFromKeys(
+      rawArgs as ExecToolArgs,
+      XML_ARG_VALUE_EXEC_PARAM_KEYS,
+    );
+    if (!params.command || isResolveExecEnvPrepared(params)) {
+      return markResolveExecEnvPrepared(params);
+    }
+    const host = resolveHostForParams(params);
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("resolve_exec_env")) {
+      return markResolveExecEnvPrepared(params);
+    }
+    const rawPluginEnv = await hookRunner.runResolveExecEnv(
+      {
+        sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        toolName: "exec",
+        host,
+      },
+      {
+        agentId: agentId ?? context?.hookContext?.agentId,
+        sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
+        messageProvider: defaults?.messageProvider,
+        channelId: defaults?.currentChannelId ?? context?.hookContext?.channelId,
+      },
+    );
+    const pluginEnv = filterPluginExecEnv(rawPluginEnv);
+    return markResolveExecEnvPrepared(
+      pluginEnv ? { ...params, env: { ...params.env, ...pluginEnv } } : params,
+    );
+  };
   const autoReviewer =
     defaults?.autoReviewer ??
     createModelExecAutoReviewer({
@@ -1360,11 +1438,21 @@ export function createExecTool(
       return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
+    prepareBeforeToolCallParams: async (args, context) =>
+      prepareParamsWithResolvedExecEnv(args, {
+        hookContext: context.hookContext as HookContext | undefined,
+      }),
+    finalizeBeforeToolCallParams: (params, preparedParams) =>
+      isResolveExecEnvPrepared(preparedParams as ExecToolArgs)
+        ? markResolveExecEnvPrepared(params as ExecToolArgs)
+        : params,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const params = stripMalformedXmlArgValueSuffixFromKeys(
-        args as ExecToolArgs,
-        XML_ARG_VALUE_EXEC_PARAM_KEYS,
-      );
+      const params = isResolveExecEnvPrepared(args as ExecToolArgs)
+        ? stripMalformedXmlArgValueSuffixFromKeys(
+            args as ExecToolArgs,
+            XML_ARG_VALUE_EXEC_PARAM_KEYS,
+          )
+        : await prepareParamsWithResolvedExecEnv(args);
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
@@ -1625,35 +1713,12 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
-      let pluginEnv: Record<string, string> | undefined;
-      const hookRunner = getGlobalHookRunner();
-      if (hookRunner?.hasHooks("resolve_exec_env")) {
-        const rawPluginEnv = await hookRunner.runResolveExecEnv(
-          {
-            sessionKey: defaults?.sessionKey,
-            toolName: "exec",
-            host,
-          },
-          {
-            agentId,
-            sessionKey: defaults?.sessionKey,
-            messageProvider: defaults?.messageProvider,
-            channelId: defaults?.currentChannelId,
-          },
-        );
-        pluginEnv = filterPluginExecEnv(rawPluginEnv);
-        if (pluginEnv) {
-          Object.assign(env, pluginEnv);
-        }
-      }
-      const requestedEnv = pluginEnv ? { ...params.env, ...pluginEnv } : params.env;
-
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
           workdir,
           env,
-          requestedEnv,
+          requestedEnv: params.env,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
@@ -1690,7 +1755,7 @@ export function createExecTool(
           workdir,
           env,
           pathPrepend: defaultPathPrepend,
-          requestedEnv,
+          requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
