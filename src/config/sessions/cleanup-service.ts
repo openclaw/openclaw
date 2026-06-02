@@ -411,6 +411,7 @@ async function previewStoreCleanup(params: {
     store: previewStore,
     storePath: params.target.storePath,
     olderThanMs: params.maintenance.pruneAfterMs,
+    resetArchiveRetentionMs: params.maintenance.resetArchiveRetentionMs,
     dryRun: true,
     excludeCanonicalPaths: new Set([...budgetRemovedFilePaths, ...entryCleanupArtifactPaths]),
   });
@@ -508,6 +509,7 @@ export async function runSessionsCleanup(params: {
               store: preCleanupStore,
               storePath: target.storePath,
               olderThanMs: maintenance.pruneAfterMs,
+              resetArchiveRetentionMs: maintenance.resetArchiveRetentionMs,
               dryRun: false,
             });
       const dmScopeRemovedSessionFiles = new Map<string, string | undefined>();
@@ -575,6 +577,7 @@ export async function runSessionsCleanup(params: {
               store: afterStore,
               storePath: target.storePath,
               olderThanMs: maintenance.pruneAfterMs,
+              resetArchiveRetentionMs: maintenance.resetArchiveRetentionMs,
               dryRun: false,
             });
       const unreferencedArtifacts = {

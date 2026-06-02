@@ -740,6 +740,93 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshDeleted);
   });
 
+  it("sessions cleanup honors reset archive retention longer than pruneAfter", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          resetArchiveRetention: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const oldDeleted = path.join(
+      testDir,
+      `old-deleted.jsonl.deleted.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    const retainedReset = path.join(
+      testDir,
+      `retained-reset.jsonl.reset.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(oldDeleted, "old deleted", "utf-8");
+    await fs.writeFile(retainedReset, "retained reset", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(1);
+    await expectPathExists(oldDeleted);
+    await expectPathExists(retainedReset);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(1);
+    await expectPathMissing(oldDeleted);
+    await expectPathExists(retainedReset);
+  });
+
+  it("sessions cleanup leaves reset archives when reset archive cleanup is disabled", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          resetArchiveRetention: false,
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const oldDeleted = path.join(
+      testDir,
+      `old-deleted.jsonl.deleted.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    const disabledReset = path.join(
+      testDir,
+      `disabled-reset.jsonl.reset.${archiveTimestamp(now - 60 * DAY_MS)}`,
+    );
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(oldDeleted, "old deleted", "utf-8");
+    await fs.writeFile(disabledReset, "disabled reset", "utf-8");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(1);
+    await expectPathMissing(oldDeleted);
+    await expectPathExists(disabledReset);
+  });
+
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
