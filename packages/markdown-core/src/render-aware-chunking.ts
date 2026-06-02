@@ -128,6 +128,8 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
     return text.length;
   }
 
+  // Prefer split points outside markdown-link destinations so `[label](url)`
+  // survives chunking when there is any whitespace boundary before the limit.
   let lastOutsideParenNewlineBreak = -1;
   let lastOutsideParenWhitespaceBreak = -1;
   let lastOutsideParenWhitespaceRunStart = -1;
@@ -254,6 +256,8 @@ function mergeAdjacentLinkSpans(links: MarkdownLinkSpan[]): MarkdownLinkSpan[] {
 
 function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR {
   const offset = left.text.length;
+  // Shift right-side spans onto the merged text coordinate system before
+  // coalescing, otherwise rendered markers would attach to stale offsets.
   return {
     text: left.text + right.text,
     styles: mergeAdjacentStyleSpans([
