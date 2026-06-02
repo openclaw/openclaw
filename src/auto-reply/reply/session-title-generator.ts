@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { updateSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
+import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -186,43 +187,28 @@ async function readUserMessagesFromTranscriptHead(
   const messages: string[] = [];
   let count = 0;
 
-  const handle = await fs.promises.open(filePath, "r");
-  try {
-    const buffer = Buffer.alloc(8192);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead <= 0) {
-      return { messages: [], count: 0 };
+  for await (const line of streamSessionTranscriptLines(filePath)) {
+    let msg: { role?: unknown; content?: unknown } | undefined;
+    try {
+      const record = JSON.parse(line) as { message?: { role?: unknown; content?: unknown } } | null;
+      msg = record?.message;
+    } catch {
+      continue;
     }
-    const chunk = buffer.toString("utf-8", 0, bytesRead);
-    const lines = chunk.split(/\r?\n/);
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line);
-        const msg = parsed?.message;
-        if (!msg || msg.role !== "user") {
-          continue;
-        }
-        const sample = extractTextFromContent(msg.content);
-        if (sample && /^\[OpenClaw heartbeat/i.test(sample.trim())) {
-          continue;
-        }
-        count++;
-        if (messages.length < maxMessages) {
-          const text = extractTextFromContent(msg.content);
-          if (text) {
-            messages.push(text);
-          }
-        }
-      } catch {
-        // skip malformed lines
-      }
+    if (!msg || msg.role !== "user") {
+      continue;
     }
-  } finally {
-    await handle.close().catch(() => undefined);
+    const text = extractTextFromContent(msg.content);
+    if (text && /^\[OpenClaw heartbeat/i.test(text.trim())) {
+      continue;
+    }
+    count++;
+    if (messages.length < maxMessages && text) {
+      messages.push(text);
+    }
+    if (count >= maxMessages) {
+      break;
+    }
   }
 
   return { messages, count };

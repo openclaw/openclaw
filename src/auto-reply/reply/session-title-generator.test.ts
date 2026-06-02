@@ -117,4 +117,26 @@ describe("maybeGenerateSessionTitle", () => {
     });
     expect(updateSessionStoreEntry).toHaveBeenCalledOnce();
   });
+
+  it("counts user turns after a long first JSONL record", async () => {
+    const longFirstMessage = "a".repeat(9000);
+    const transcriptPath = createTranscript([longFirstMessage, "second", "third"]);
+    resolveSessionTranscriptCandidates.mockReturnValue([transcriptPath]);
+
+    maybeGenerateSessionTitle({
+      cfg: { sessionTitle: { enabled: true, turnsBeforeTitle: 3 } },
+      sessionKey: "agent:main:abc",
+      sessionEntry: { sessionId: "abc" } as SessionEntry,
+      storePath: "/tmp/store.json",
+    });
+
+    await vi.waitFor(() => expect(generateConversationLabel).toHaveBeenCalledOnce());
+
+    expect(generateConversationLabel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userMessage: `${longFirstMessage}\n---\nsecond\n---\nthird`,
+      }),
+    );
+    expect(updateSessionStoreEntry).toHaveBeenCalledOnce();
+  });
 });
