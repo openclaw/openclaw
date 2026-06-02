@@ -65,14 +65,14 @@ function latestZoneParams(): Parameters<WriteWideAreaGatewayZone>[0] {
   return call[0];
 }
 
-function useDevelopmentDiscoveryEnv() {
-  process.env.NODE_ENV = "development";
-  delete process.env.VITEST;
+function enableLocalDiscoveryEnv() {
+  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("VITEST", undefined);
 }
 
 async function expectSshPortOmitted(rawPort: string) {
-  useDevelopmentDiscoveryEnv();
-  process.env.OPENCLAW_SSH_PORT = rawPort;
+  enableLocalDiscoveryEnv();
+  vi.stubEnv("OPENCLAW_SSH_PORT", rawPort);
 
   const service = makeDiscoveryService({ id: "bonjour" });
 
@@ -93,8 +93,8 @@ async function expectSshPortOmitted(rawPort: string) {
 
 function startStuckDiscovery(timeoutMs: string) {
   vi.useFakeTimers();
-  useDevelopmentDiscoveryEnv();
-  process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = timeoutMs;
+  enableLocalDiscoveryEnv();
+  vi.stubEnv("OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS", timeoutMs);
 
   const service = makeDiscoveryService({
     id: "stuck-discovery",
@@ -116,26 +116,17 @@ function startStuckDiscovery(timeoutMs: string) {
 }
 
 describe("startGatewayDiscovery", () => {
-  const prevEnv = { ...process.env };
 
+describe("startGatewayDiscovery", () => {
   afterEach(() => {
     vi.useRealTimers();
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
-    }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
-    }
-
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
   it("starts registered local discovery services with gateway advertisement context", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-    process.env.OPENCLAW_SSH_PORT = "2222";
+    enableLocalDiscoveryEnv();
+    vi.stubEnv("OPENCLAW_SSH_PORT", "2222");
 
     const stopped: string[] = [];
     const bonjour = makeDiscoveryService({
@@ -229,8 +220,7 @@ describe("startGatewayDiscovery", () => {
   });
 
   it("skips local discovery services when mDNS mode is off", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
+    enableLocalDiscoveryEnv();
 
     const service = makeDiscoveryService({ id: "bonjour" });
     const result = await startGatewayDiscovery({
@@ -249,9 +239,8 @@ describe("startGatewayDiscovery", () => {
   });
 
   it("skips local discovery services for truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
-    process.env.OPENCLAW_DISABLE_BONJOUR = "yes";
+    enableLocalDiscoveryEnv();
+    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "yes");
 
     const service = makeDiscoveryService({ id: "bonjour" });
     const result = await startGatewayDiscovery({
@@ -269,8 +258,7 @@ describe("startGatewayDiscovery", () => {
   });
 
   it("keeps wide-area DNS-SD publishing active when local discovery is off", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
+    enableLocalDiscoveryEnv();
 
     const service = makeDiscoveryService({ id: "bonjour" });
     const logs = makeLogs();
@@ -304,8 +292,7 @@ describe("startGatewayDiscovery", () => {
   });
 
   it("logs a warning and skips zone writes when wide-area config is invalid", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
+    enableLocalDiscoveryEnv();
 
     // Drive the gateway through the REAL resolver so an invalid configured
     // domain flows through normalizeWideAreaDomain → caught → null, exactly
@@ -342,8 +329,7 @@ describe("startGatewayDiscovery", () => {
   });
 
   it("omits the CLI path from wide-area DNS-SD in minimal mode", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.VITEST;
+    enableLocalDiscoveryEnv();
 
     const logs = makeLogs();
 
