@@ -2492,7 +2492,6 @@ Docs: https://docs.openclaw.ai
 - Browser/chrome-mcp: read Chrome DevTools MCP screenshot output from the extension-suffixed path, fixing ENOENT on screenshot capture. Fixes #77222. (#74685) Thanks @barbarhan.
 
 - Agents/OpenAI: honor `compat.supportsTools: false` for OpenAI Completions models so chat-only compatible endpoints do not receive `tools`, `tool_choice`, or tool-history fallback payloads. Fixes #74664. Thanks @yelog.
-- Agents/subagents: suppress announce delivery when a sub-agent emits `ANNOUNCE_SKIP` on its own final line after a multi-line summary, while keeping embedded or non-final tokens visible. Fixes #74071. Thanks @yelog.
 - macOS/launchd: set generated Gateway LaunchAgent plists to `ProcessType=Interactive` so the gateway keeps timely execution during idle periods. Fixes #58061; refs #62294 and closed duplicate #66992. (#62308) Thanks @bryanpearson and @zssggle-rgb.
 - Plugins/install: honor the beta update channel for onboarding and doctor-managed plugin installs by requesting floating npm and ClawHub specs with `@beta` while keeping persistent install records on the catalog default. Thanks @vincentkoc.
 - WhatsApp/onboarding: canonicalize setup and pairing allowlist entries to WhatsApp's digit-only phone ids while still accepting E.164, JID, and `whatsapp:` inputs, so personal-phone allowlists match WhatsApp Web sender ids after setup. Thanks @vincentkoc.
