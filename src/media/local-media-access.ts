@@ -16,6 +16,7 @@ export type LocalMediaAccessErrorCode =
   | "invalid-path"
   | "not-file";
 
+/** Error raised when a local media path escapes the configured allowlist. */
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
@@ -26,10 +27,12 @@ export class LocalMediaAccessError extends Error {
   }
 }
 
+/** Returns the default root allowlist for local media reads. */
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+/** Verifies that a local media path is managed inbound media or lives under allowed roots. */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
@@ -64,6 +67,7 @@ export async function assertLocalMediaAllowed(
   }
 
   if (localRoots === undefined) {
+    // Unscoped default roots include workspace, but not sibling workspace-* agent sandboxes.
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
     if (workspaceRoot) {
       const stateDir = path.dirname(workspaceRoot);
