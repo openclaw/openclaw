@@ -166,6 +166,35 @@ describe("gateway-cli coverage", () => {
     expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("gateway --port <N> health routes through config.gateway.port, not a url override (#79100)", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "--port", "18799", "health", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const callArgs = firstMockArg(callGateway) as {
+      config?: { gateway?: { port?: number } };
+      url?: unknown;
+    };
+    // The port is patched onto config.gateway.port (so configured local auth/TLS is
+    // preserved), not turned into a synthetic ws:// url that would demand explicit creds.
+    expect(callArgs.config?.gateway?.port).toBe(18799);
+    expect(callArgs.url).toBeUndefined();
+  });
+
+  it("gateway --port <N> probe passes port as a number, not a ws:// url (#79100)", async () => {
+    gatewayStatusCommand.mockClear();
+
+    await runGatewayCommand(["gateway", "--port", "18799", "probe", "--json"]);
+
+    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+    const probeArgs = firstMockArg(gatewayStatusCommand) as { port?: unknown; url?: unknown };
+    // A numeric port lets gatewayStatusCommand route through resolveTargets, which derives
+    // wss:// vs ws:// from the loaded config's TLS settings instead of hard-coding plaintext.
+    expect(probeArgs.port).toBe(18799);
+    expect(typeof probeArgs.url).not.toBe("string");
+  });
+
   it("registers gateway stability and routes to diagnostics RPC", async () => {
     callGateway.mockClear();
 

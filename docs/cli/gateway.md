@@ -148,7 +148,8 @@ All query commands use WebSocket RPC.
 
   </Tab>
   <Tab title="Shared options">
-    - `--url <url>`: Gateway WebSocket URL.
+    - `--port <port>`: Gateway port on localhost. Pass before the subcommand (e.g. `openclaw gateway --port 18789 health`). Patches the config port; preserves configured auth/TLS and does not override URL semantics.
+    - `--url <url>`: Gateway WebSocket URL (explicit; overrides config and port).
     - `--token <token>`: Gateway token.
     - `--password <password>`: Gateway password.
     - `--timeout <ms>`: timeout/budget (varies per command).
@@ -158,12 +159,14 @@ All query commands use WebSocket RPC.
 </Tabs>
 
 <Note>
-When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error. Using `--port` instead of `--url` preserves configured credentials and does not require explicit auth.
 </Note>
 
 ### `gateway health`
 
 ```bash
+openclaw gateway health
+openclaw gateway --port 18789 health
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
