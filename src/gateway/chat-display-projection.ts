@@ -32,6 +32,14 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
+type VisibleToolMirror = {
+  toolCallId?: string;
+  toolName: string;
+  text: string;
+  anchor: Record<string, unknown>;
+  transcriptAnchor?: Record<string, unknown>;
+};
+
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -727,30 +735,140 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
   return ok !== false;
 }
 
-function buildMessageToolVisibleReplyMirror(
-  pending: PendingMessageToolVisibleReply,
-): Record<string, unknown> {
-  const mirror: Record<string, unknown> = {
-    role: "assistant",
-    content: [{ type: "text", text: pending.text }],
-    openclawMessageToolMirror: {
-      toolName: "message",
-      ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
-    },
-  };
-  for (const field of ["timestamp", "createdAt", "agentId"] as const) {
-    if (pending.anchor[field] !== undefined) {
-      mirror[field] = pending.anchor[field];
+function readToolResultPayloadRecord(
+  message: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  for (const field of ["details", "result", "output", "content", "text"] as const) {
+    const record = readMaybeJsonRecord(message[field]);
+    if (record) {
+      return record;
+    }
+    const value = message[field];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const block of value) {
+      const blockRecord = readMaybeJsonRecord(block);
+      if (blockRecord && blockRecord.status !== undefined) {
+        return blockRecord;
+      }
+      const recordBlock = readRecord(block);
+      if (typeof recordBlock?.text === "string") {
+        const textRecord = readMaybeJsonRecord(recordBlock.text);
+        if (textRecord) {
+          return textRecord;
+        }
+      }
+      if (typeof recordBlock?.content === "string") {
+        const contentRecord = readMaybeJsonRecord(recordBlock.content);
+        if (contentRecord) {
+          return contentRecord;
+        }
+      }
     }
   }
-  const transcriptMeta = readRecord((pending.completionAnchor ?? pending.anchor)["__openclaw"]);
+  return undefined;
+}
+
+function extractSessionsYieldVisibleMirror(
+  message: Record<string, unknown>,
+): VisibleToolMirror | undefined {
+  const role = typeof message.role === "string" ? message.role.toLowerCase().replace(/_/g, "") : "";
+  const toolName = readMessageToolResultName(message)?.toLowerCase();
+  if (
+    role !== "toolresult" &&
+    role !== "tool" &&
+    role !== "function" &&
+    toolName !== "sessions_yield"
+  ) {
+    return undefined;
+  }
+  if (
+    toolName !== "sessions_yield" ||
+    message.isError === true ||
+    (message.error != null && message.error !== false)
+  ) {
+    return undefined;
+  }
+  const payload = readToolResultPayloadRecord(message);
+  if (payload?.status !== "yielded" || typeof payload.message !== "string") {
+    return undefined;
+  }
+  const text = stripInlineDirectiveTagsForDisplay(payload.message).text;
+  if (!text.trim()) {
+    return undefined;
+  }
+  const toolCallId = readMessageToolResultCallId(message);
+  return {
+    anchor: message,
+    text,
+    toolName: "sessions_yield",
+    ...(toolCallId ? { toolCallId } : {}),
+  };
+}
+
+function buildVisibleToolMirror(mirrorInput: VisibleToolMirror): Record<string, unknown> {
+  const mirror: Record<string, unknown> = {
+    role: "assistant",
+    content: [{ type: "text", text: mirrorInput.text }],
+    openclawVisibleToolMirror: {
+      toolName: mirrorInput.toolName,
+      ...(mirrorInput.toolCallId ? { toolCallId: mirrorInput.toolCallId } : {}),
+    },
+  };
+  if (mirrorInput.toolName === "message") {
+    mirror.openclawMessageToolMirror = mirror.openclawVisibleToolMirror;
+  }
+  for (const field of ["timestamp", "createdAt", "agentId"] as const) {
+    if (mirrorInput.anchor[field] !== undefined) {
+      mirror[field] = mirrorInput.anchor[field];
+    }
+  }
+  const transcriptAnchor = mirrorInput.transcriptAnchor ?? mirrorInput.anchor;
+  const transcriptMeta = readRecord(transcriptAnchor["__openclaw"]);
   if (transcriptMeta) {
     mirror["__openclaw"] = { ...transcriptMeta };
   }
   return mirror;
 }
 
-function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
+function buildMessageToolVisibleReplyMirror(
+  pending: PendingMessageToolVisibleReply,
+): Record<string, unknown> {
+  return buildVisibleToolMirror({
+    anchor: pending.anchor,
+    transcriptAnchor: pending.completionAnchor ?? pending.anchor,
+    text: pending.text,
+    toolName: "message",
+    ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
+  });
+}
+
+function isMatchingVisibleToolMirror(message: unknown, mirror: VisibleToolMirror): boolean {
+  const record = readRecord(message);
+  if (!record || record.role !== "assistant") {
+    return false;
+  }
+  const marker = readRecord(record.openclawVisibleToolMirror);
+  if (!marker || normalizeOptionalString(marker.toolName)?.toLowerCase() !== mirror.toolName) {
+    return false;
+  }
+  const markerCallId = normalizeOptionalString(marker.toolCallId);
+  if (mirror.toolCallId ? markerCallId !== mirror.toolCallId : markerCallId) {
+    return false;
+  }
+  return extractAssistantTextForSilentCheck(record) === mirror.text;
+}
+
+function isMatchingVisibleAssistantText(message: unknown, mirror: VisibleToolMirror): boolean {
+  const record = readRecord(message);
+  return (
+    Boolean(record && isRenderableAssistantDisplayMessage(record)) &&
+    extractAssistantTextForSilentCheck(record) === mirror.text
+  );
+}
+
+function mirrorVisibleToolReplies(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
@@ -778,10 +896,25 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
     const record = readRecord(message);
     if (!record) {
       next.push(message);
+      continue;
+    }
+
+    const immediateMirror = extractSessionsYieldVisibleMirror(record);
+    if (immediateMirror) {
+      next.push(message);
+      if (
+        isMatchingVisibleAssistantText(messages[i - 1], immediateMirror) ||
+        isMatchingVisibleToolMirror(messages[i + 1], immediateMirror)
+      ) {
+        continue;
+      }
+      next.push(buildVisibleToolMirror(immediateMirror));
+      changed = true;
       continue;
     }
 
@@ -1196,7 +1329,7 @@ export function projectChatDisplayMessages(
   options?: { maxChars?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
-  const mirrored = mirrorMessageToolVisibleReplies(source);
+  const mirrored = mirrorVisibleToolReplies(source);
   const merged = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
       toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
