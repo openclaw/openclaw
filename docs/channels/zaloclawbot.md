@@ -20,9 +20,19 @@ OpenClaw's official Zalo personal channel plugin, supporting zero-config login a
 - [OpenClaw](https://docs.openclaw.ai/install) must be installed (`openclaw` CLI available).
 - A Zalo account on a mobile device to scan the login QR code.
 
+## Install with onboard (recommended)
+
+Run the OpenClaw onboarding wizard and pick **Zalo ClawBot** from the channel menu:
+
+```bash
+openclaw onboard
+```
+
+The wizard installs the plugin from the official catalog (integrity-verified), renders the login QR right in the terminal, and finishes the channel once you scan it with the Zalo app. No extra commands are needed.
+
 ## Quick Install
 
-Run the following command to install the plugin, enable it, and launch the QR login flow:
+To add the channel to an already-onboarded gateway, run the one-shot installer (installs, enables, restarts, and launches the QR login):
 
 ```bash
 npx -y @zalo-platforms/openclaw-zaloclawbot-cli install
@@ -35,8 +45,10 @@ If the quick installer script does not fit your environment, follow these steps 
 ### 1. Install the plugin
 
 ```bash
-openclaw plugins install "@zalo-platforms/openclaw-zaloclawbot"
+openclaw plugins install "@zalo-platforms/openclaw-zaloclawbot@0.1.4"
 ```
+
+Use the exact pinned version shown above (it matches the official catalog entry), so OpenClaw verifies the package against the catalog integrity hash during install.
 
 ### 2. Enable the plugin in config
 
