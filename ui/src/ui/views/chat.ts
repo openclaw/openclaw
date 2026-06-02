@@ -2150,14 +2150,16 @@ export function renderChat(props: ChatProps) {
                   </button>
                   <button
                     class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--active"
+                      ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalkOptions}
-                    title="Talk options"
-                    aria-label="Talk options"
+                    title="Talk settings"
+                    aria-label="Talk settings"
+                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
                     ?disabled=${!props.connected || props.realtimeTalkActive}
                   >
                     ${icons.settings}
+                    <span class="agent-chat__control-label">Talk settings</span>
                   </button>
                 `
               : nothing}

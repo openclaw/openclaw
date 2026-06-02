@@ -920,6 +920,29 @@ describe("chat composer workbench", () => {
     expect(labels).not.toContain(t("chat.runControls.newSession"));
     expect(labels).not.toContain(t("chat.runControls.exportChat"));
   });
+
+  it("exposes aria-expanded on the Talk settings button reflecting open state", () => {
+    const collapsed = renderChatView({
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkOptions: () => undefined,
+      realtimeTalkOptionsOpen: false,
+    });
+    const collapsedBtn = collapsed.querySelector<HTMLButtonElement>(
+      'button[aria-label="Talk settings"]',
+    );
+    expect(collapsedBtn).not.toBeNull();
+    expect(collapsedBtn?.getAttribute("aria-expanded")).toBe("false");
+
+    const expanded = renderChatView({
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkOptions: () => undefined,
+      realtimeTalkOptionsOpen: true,
+    });
+    const expandedBtn = expanded.querySelector<HTMLButtonElement>(
+      'button[aria-label="Talk settings"]',
+    );
+    expect(expandedBtn?.getAttribute("aria-expanded")).toBe("true");
+  });
 });
 
 afterEach(() => {
