@@ -6,7 +6,6 @@ import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
   canSubmitTuiChatMessage,
-  createStartupConversationSummaryListParams,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   formatStartupConversationSummary,
@@ -323,17 +322,6 @@ describe("startup conversation summary", () => {
     expect(shouldFetchStartupConversationSummary({ isLocalMode: true, reconnected: false })).toBe(
       false,
     );
-  });
-
-  it("scopes startup session lookup to the current agent", () => {
-    expect(createStartupConversationSummaryListParams("Work")).toEqual({
-      limit: 10,
-      includeGlobal: false,
-      includeUnknown: false,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-      agentId: "work",
-    });
   });
 });
 

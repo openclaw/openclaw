@@ -138,6 +138,10 @@ export type TuiBackend = {
   }) => Promise<{ ok: boolean; aborted: boolean }>;
   loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
+  describeSession: (
+    key: string,
+    opts?: { agentId?: string },
+  ) => Promise<TuiSessionList["sessions"][0] | null>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
   resetSession: (

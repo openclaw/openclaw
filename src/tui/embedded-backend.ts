@@ -497,6 +497,27 @@ export class EmbeddedTuiBackend implements TuiBackend {
     })) as TuiSessionList;
   }
 
+  async describeSession(
+    key: string,
+    opts?: { agentId?: string },
+  ): Promise<TuiSessionList["sessions"][0] | null> {
+    const cfg = getRuntimeConfig();
+    const { storePath, store, entry, canonicalKey } = loadSessionEntry(key, {
+      agentId: opts?.agentId,
+    });
+    if (!entry) {
+      return null;
+    }
+    return buildGatewaySessionInfo({
+      cfg,
+      storePath,
+      store,
+      key: canonicalKey,
+      entry,
+      agentId: opts?.agentId,
+    }) as TuiSessionList["sessions"][0];
+  }
+
   async listAgents(): Promise<TuiAgentsList> {
     return listAgentsForGateway(getRuntimeConfig()) as TuiAgentsList;
   }

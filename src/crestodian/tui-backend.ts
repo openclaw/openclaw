@@ -182,6 +182,14 @@ class CrestodianTuiBackend implements TuiBackend {
     };
   }
 
+  async describeSession(key: string): Promise<TuiSessionList["sessions"][0] | null> {
+    if (key !== CRESTODIAN_SESSION_KEY) {
+      return null;
+    }
+    const res = await this.listSessions();
+    return res.sessions[0] ?? null;
+  }
+
   async listAgents(): Promise<TuiAgentsList> {
     return {
       defaultId: CRESTODIAN_AGENT_ID,

@@ -239,17 +239,6 @@ export function shouldFetchStartupConversationSummary(params: {
   return !params.isLocalMode && !params.reconnected;
 }
 
-export function createStartupConversationSummaryListParams(agentId: string): SessionsListParams {
-  return {
-    limit: 10,
-    includeGlobal: false,
-    includeUnknown: false,
-    includeDerivedTitles: true,
-    includeLastMessage: true,
-    agentId: normalizeAgentId(agentId),
-  };
-}
-
 export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
   const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
   const now = params?.now ?? (() => Date.now());
@@ -1533,11 +1522,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await loadHistory();
       if (shouldFetchStartupConversationSummary({ isLocalMode, reconnected })) {
         try {
-          const sessionsRes = await client.listSessions(
-            createStartupConversationSummaryListParams(currentAgentId),
-          );
-          const sessions = sessionsRes.sessions ?? [];
-          const summarySession = sessions.find((s) => s.key === currentSessionKey);
+          const summarySession = await client.describeSession(currentSessionKey, {
+            agentId: currentAgentId,
+          });
           if (summarySession) {
             const summaryStr =
               summarySession.derivedTitle || summarySession.lastMessagePreview || "";
