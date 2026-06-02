@@ -203,7 +203,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.nodeHostParams[0]?.env).not.toHaveProperty("LD_PRELOAD");
   });
 
-  it("includes plugin env in before_tool_call params before approval", async () => {
+  it("keeps plugin env out of before_tool_call params before execution", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn(
         (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
@@ -243,7 +243,6 @@ describe("exec resolve_exec_env hook wiring", () => {
 
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
       EXISTING: "request",
-      PLUGIN_SAFE: "yes",
     });
     expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
@@ -252,7 +251,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
   });
 
-  it("forwards env preparation through the lazy exec tool", async () => {
+  it("forwards private env preparation through the lazy exec tool", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn(
         (hookName: string) => hookName === "resolve_exec_env" || hookName === "before_tool_call",
@@ -290,7 +289,6 @@ describe("exec resolve_exec_env hook wiring", () => {
     );
 
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
-      LAZY_PLUGIN_SAFE: "yes",
       REQUEST_SAFE: "request",
     });
     expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);

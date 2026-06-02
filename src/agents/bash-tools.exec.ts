@@ -103,7 +103,6 @@ const RESOLVE_EXEC_ENV_PREPARED = Symbol("openclaw.resolveExecEnvPrepared");
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
-  previousEnv?: Record<string, string | undefined>;
 };
 type PreparedExecToolArgs = ExecToolArgs & {
   [RESOLVE_EXEC_ENV_PREPARED]?: ResolvedExecEnvPreparedState;
@@ -145,7 +144,7 @@ function markResolveExecEnvPrepared<T extends ExecToolArgs>(
 ): T {
   Object.defineProperty(params, RESOLVE_EXEC_ENV_PREPARED, {
     value: state,
-    enumerable: true,
+    enumerable: false,
     configurable: true,
   });
   return params;
@@ -159,35 +158,6 @@ function getResolvedExecEnvPreparedState(
 
 function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
   return Boolean(getResolvedExecEnvPreparedState(params));
-}
-
-function removeResolvedPluginEnv(
-  params: ExecToolArgs,
-  state: ResolvedExecEnvPreparedState,
-): ExecToolArgs {
-  if (!params.env || !state.pluginEnv) {
-    const next = { ...params };
-    delete (next as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED];
-    return next;
-  }
-  const env = { ...params.env };
-  for (const [key, value] of Object.entries(state.pluginEnv)) {
-    if (env[key] !== value) {
-      continue;
-    }
-    const previous = state.previousEnv?.[key];
-    if (typeof previous === "string") {
-      env[key] = previous;
-    } else {
-      delete env[key];
-    }
-  }
-  const next = {
-    ...params,
-    ...(Object.keys(env).length > 0 ? { env } : { env: undefined }),
-  };
-  delete (next as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED];
-  return next;
 }
 
 function buildExecForegroundResult(params: {
@@ -1468,13 +1438,7 @@ export function createExecTool(
       },
     );
     const pluginEnv = filterPluginExecEnv(rawPluginEnv);
-    const previousEnv = pluginEnv
-      ? Object.fromEntries(Object.keys(pluginEnv).map((key) => [key, params.env?.[key]]))
-      : undefined;
-    return markResolveExecEnvPrepared(
-      pluginEnv ? { ...params, env: { ...params.env, ...pluginEnv } } : params,
-      { host, ...(pluginEnv ? { pluginEnv, previousEnv } : {}) },
-    );
+    return markResolveExecEnvPrepared(params, { host, ...(pluginEnv ? { pluginEnv } : {}) });
   };
   const autoReviewer =
     defaults?.autoReviewer ??
@@ -1504,7 +1468,7 @@ export function createExecTool(
         }
         const execParams = params as ExecToolArgs;
         if (state.host && execParams.command && resolveHostForParams(execParams) !== state.host) {
-          return removeResolvedPluginEnv(execParams, state);
+          return { ...execParams };
         }
         return markResolveExecEnvPrepared(execParams, state);
       })(),
@@ -1704,17 +1668,21 @@ export function createExecTool(
       rejectUnsafeControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
+      const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
+      const requestedEnv = resolvedExecEnvState?.pluginEnv
+        ? { ...params.env, ...resolvedExecEnvState.pluginEnv }
+        : params.env;
       const hostEnvResult =
         host === "sandbox"
           ? null
           : sanitizeHostExecEnvWithDiagnostics({
               baseEnv: inheritedBaseEnv,
-              overrides: params.env,
+              overrides: requestedEnv,
               blockPathOverrides: true,
             });
       if (
         hostEnvResult &&
-        params.env &&
+        requestedEnv &&
         (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
           hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
       ) {
@@ -1751,13 +1719,13 @@ export function createExecTool(
         sandbox && host === "sandbox"
           ? buildSandboxEnv({
               defaultPath: DEFAULT_PATH,
-              paramsEnv: params.env,
+              paramsEnv: requestedEnv,
               sandboxEnv: sandbox.env,
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
           : (hostEnvResult?.env ?? inheritedBaseEnv);
 
-      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+      if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -1780,7 +1748,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          requestedEnv: params.env,
+          requestedEnv,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
@@ -1817,7 +1785,7 @@ export function createExecTool(
           workdir,
           env,
           pathPrepend: defaultPathPrepend,
-          requestedEnv: params.env,
+          requestedEnv,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
