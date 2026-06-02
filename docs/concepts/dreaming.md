@@ -225,9 +225,9 @@ Dreaming settings live under the plugin that owns the active memory slot:
 
 The defaults below apply when `memory-core` owns dreaming. If your memory slot is provided by another plugin, use that plugin's config path and see its docs for dreaming keys.
 
-| Key | Default |
-| --- | --- |
-| `enabled` | `false` |
+| Key         | Default     |
+| ----------- | ----------- |
+| `enabled`   | `false`     |
 | `frequency` | `0 3 * * *` |
 
 Phase policy, thresholds, and storage behavior are internal implementation details (not user-facing config).
