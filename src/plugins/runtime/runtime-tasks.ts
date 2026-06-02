@@ -67,6 +67,34 @@ function assertRequiredString(value: string | undefined, errorMessage: string): 
   return normalized;
 }
 
+const RESERVED_TASK_KIND_NAMESPACES = new Set([
+  "agent",
+  "cli",
+  "core",
+  "cron",
+  "openclaw",
+  "subagent",
+]);
+const PLUGIN_TASK_KIND_NAMESPACE_PATTERN = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;
+
+function normalizePluginTaskKind(params: { taskKind: string; sourceId?: string }): string {
+  const sourceId = params.sourceId?.trim();
+  const taskKind = params.taskKind.trim();
+  if (!PLUGIN_TASK_KIND_NAMESPACE_PATTERN.test(taskKind)) {
+    throw new Error(
+      "Task lifecycle taskKind must be plugin-namespaced, for example my-plugin.session.",
+    );
+  }
+  if (sourceId && !taskKind.startsWith(`${sourceId}.`)) {
+    throw new Error("Task lifecycle taskKind must use the sourceId namespace.");
+  }
+  const rootNamespace = taskKind.split(".", 1)[0];
+  if (RESERVED_TASK_KIND_NAMESPACES.has(rootNamespace)) {
+    throw new Error("Task lifecycle taskKind must not use a core task namespace.");
+  }
+  return taskKind;
+}
+
 function mapCancelledTaskResult(
   result: Awaited<ReturnType<typeof cancelDetachedTaskRunById>>,
 ): TaskRunCancelResult {
@@ -84,7 +112,12 @@ function findLifecycleTask(params: { ownerKey: string; taskKind: string; runId: 
     callerOwnerKey: params.ownerKey,
   }).find(
     (task) =>
-      task.runtime === "cli" && task.taskKind === params.taskKind && task.runId === params.runId,
+      task.runtime === "cli" &&
+      task.scopeKind === "session" &&
+      !task.parentFlowId &&
+      !task.parentTaskId &&
+      task.taskKind === params.taskKind &&
+      task.runId === params.runId,
   );
 }
 
@@ -93,10 +126,10 @@ function createTaskRunLifecycleRuntime(params: {
   requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
 }): TaskRunLifecycleRuntime {
   const create = (input: TaskRunLifecycleCreateParams): TaskRunDetail => {
-    const taskKind = assertRequiredString(
-      input.taskKind,
-      "Task lifecycle create requires taskKind.",
-    );
+    const taskKind = normalizePluginTaskKind({
+      taskKind: assertRequiredString(input.taskKind, "Task lifecycle create requires taskKind."),
+      sourceId: input.sourceId,
+    });
     const runId = assertRequiredString(input.runId, "Task lifecycle create requires runId.");
     const title = assertRequiredString(input.title, "Task lifecycle create requires title.");
     const status = input.status ?? "running";
@@ -117,9 +150,12 @@ function createTaskRunLifecycleRuntime(params: {
       startedAt: status === "running" ? (input.startedAt ?? Date.now()) : input.startedAt,
       lastEventAt: input.lastEventAt,
       progressSummary: input.progressSummary,
-      notifyPolicy: input.notifyPolicy,
+      notifyPolicy: input.notifyPolicy ?? "done_only",
       deliveryStatus: input.deliveryStatus,
     });
+    if (!task) {
+      throw new Error("Task lifecycle persistence failed.");
+    }
     if (status === "running" && task.status !== "running") {
       return mapTaskRunDetail(
         markTaskRunningById({
@@ -134,10 +170,9 @@ function createTaskRunLifecycleRuntime(params: {
   };
 
   const progress = (input: TaskRunLifecycleProgressParams): TaskRunDetail | undefined => {
-    const taskKind = assertRequiredString(
-      input.taskKind,
-      "Task lifecycle progress requires taskKind.",
-    );
+    const taskKind = normalizePluginTaskKind({
+      taskKind: assertRequiredString(input.taskKind, "Task lifecycle progress requires taskKind."),
+    });
     const runId = assertRequiredString(input.runId, "Task lifecycle progress requires runId.");
     const task = findLifecycleTask({ ownerKey: params.ownerKey, taskKind, runId });
     if (!task) {
@@ -153,10 +188,9 @@ function createTaskRunLifecycleRuntime(params: {
   };
 
   const finalize = (input: TaskRunLifecycleFinalizeParams): TaskRunDetail | undefined => {
-    const taskKind = assertRequiredString(
-      input.taskKind,
-      "Task lifecycle finalize requires taskKind.",
-    );
+    const taskKind = normalizePluginTaskKind({
+      taskKind: assertRequiredString(input.taskKind, "Task lifecycle finalize requires taskKind."),
+    });
     const runId = assertRequiredString(input.runId, "Task lifecycle finalize requires runId.");
     const task = findLifecycleTask({ ownerKey: params.ownerKey, taskKind, runId });
     if (!task) {

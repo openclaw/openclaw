@@ -4,6 +4,9 @@ import {
   getDetachedTaskLifecycleRuntime,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.js";
+import { createTaskRecord } from "../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import type { TaskDeliveryState, TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
@@ -312,6 +315,104 @@ describe("runtime tasks", () => {
     });
   });
 
+  it("rejects sourceId lifecycle taskKind shorthand before persistence", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "session",
+        sourceId: "openclaw-code-agent",
+        runId: "code-session-shorthand-kind",
+        title: "Shorthand kind",
+        status: "queued",
+      }),
+    ).toThrow("Task lifecycle taskKind must be plugin-namespaced");
+    expect(taskRuns.list()).toHaveLength(0);
+  });
+
+  it("rejects unnamespaced and core lifecycle taskKind values before persistence", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "codex-native",
+        runId: "code-session-core-kind",
+        title: "Core kind",
+        status: "running",
+      }),
+    ).toThrow("Task lifecycle taskKind must be plugin-namespaced");
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "openclaw.session",
+        runId: "code-session-openclaw-kind",
+        title: "OpenClaw kind",
+        status: "running",
+      }),
+    ).toThrow("Task lifecycle taskKind must not use a core task namespace");
+    expect(taskRuns.list()).toHaveLength(0);
+  });
+
+  it("rejects lifecycle taskKind values outside the sourceId namespace", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "other-plugin.session",
+        sourceId: "openclaw-code-agent",
+        runId: "code-session-foreign-kind",
+        title: "Foreign kind",
+        status: "running",
+      }),
+    ).toThrow("Task lifecycle taskKind must use the sourceId namespace");
+    expect(taskRuns.list()).toHaveLength(0);
+  });
+
+  it("rejects core lifecycle taskKind values before mutation lookup", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const coreTask = createTaskRecord({
+      runtime: "cli",
+      taskKind: "codex-native",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "code-session-core-mutation",
+      task: "Core task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      startedAt: 100,
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.progress({
+        taskKind: "codex-native",
+        runId: "code-session-core-mutation",
+        progressSummary: "Plugin update",
+      }),
+    ).toThrow("Task lifecycle taskKind must be plugin-namespaced");
+    expect(() =>
+      taskRuns.lifecycle.finalize({
+        taskKind: "codex-native",
+        runId: "code-session-core-mutation",
+        status: "succeeded",
+        endedAt: 200,
+      }),
+    ).toThrow("Task lifecycle taskKind must be plugin-namespaced");
+    const unchanged = taskRuns.get(coreTask.taskId);
+    expect(unchanged).toMatchObject({
+      id: coreTask.taskId,
+      status: "running",
+    });
+    expect(unchanged?.progressSummary).toBeUndefined();
+    expect(unchanged?.endedAt).toBeUndefined();
+  });
+
   it("makes plugin lifecycle create idempotent by owner, taskKind, and runId", () => {
     const taskRuns = createRuntimeTaskRuns().bindSession({
       sessionKey: "agent:main:main",
@@ -340,6 +441,7 @@ describe("runtime tasks", () => {
       label: "updated",
       status: "running",
       progressSummary: "Running",
+      notifyPolicy: "done_only",
     });
     expect(
       taskRuns
@@ -350,6 +452,40 @@ describe("runtime tasks", () => {
             task.runId === "code-session-idempotent",
         ),
     ).toHaveLength(1);
+  });
+
+  it("throws a controlled error when plugin lifecycle creation cannot persist", () => {
+    const upsertTaskWithDeliveryState = vi.fn(
+      (_params: { task: TaskRecord; deliveryState?: TaskDeliveryState }) => {
+        throw new Error("SQLITE_FULL: database or disk is full");
+      },
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertTaskWithDeliveryState,
+      },
+    });
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "openclaw-code-agent.session",
+        runId: "create-persist-fail",
+        title: "Create while persistence fails",
+        status: "running",
+      }),
+    ).toThrow("Task lifecycle persistence failed.");
+
+    const attempted = upsertTaskWithDeliveryState.mock.calls[0]?.[0]?.task;
+    expect(attempted?.taskId).toEqual(expect.any(String));
+    expect(taskRuns.get(attempted?.taskId ?? "")).toBeUndefined();
   });
 
   it("scopes plugin lifecycle mutation by owner and taskKind", () => {
@@ -407,6 +543,61 @@ describe("runtime tasks", () => {
       status: "running",
     });
     expect(otherRuns.get(sessionTask.id)).toBeUndefined();
+  });
+
+  it("keeps plugin lifecycle mutation on lifecycle-created session tasks", () => {
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const parentLinkedTask = createTaskRecord({
+      runtime: "cli",
+      taskKind: "openclaw-code-agent.session",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      parentTaskId: "parent-owned-task",
+      runId: "shared-plugin-run",
+      task: "Parent child task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      startedAt: 100,
+      progressSummary: "Parent progress",
+    });
+    if (!parentLinkedTask) {
+      throw new Error("expected parent-linked task creation to succeed");
+    }
+    const lifecycleTask = taskRuns.lifecycle.create({
+      taskKind: "openclaw-code-agent.session",
+      runId: "shared-plugin-run",
+      title: "Lifecycle task",
+      status: "running",
+      progressSummary: "Lifecycle progress",
+    });
+
+    const progressed = taskRuns.lifecycle.progress({
+      taskKind: "openclaw-code-agent.session",
+      runId: "shared-plugin-run",
+      progressSummary: "Lifecycle update",
+    });
+    const finalized = taskRuns.lifecycle.finalize({
+      taskKind: "openclaw-code-agent.session",
+      runId: "shared-plugin-run",
+      status: "succeeded",
+      endedAt: 200,
+      terminalSummary: "Lifecycle done",
+    });
+
+    expect(progressed?.id).toBe(lifecycleTask.id);
+    expect(finalized?.id).toBe(lifecycleTask.id);
+    expect(finalized).toMatchObject({
+      status: "succeeded",
+      progressSummary: "Lifecycle update",
+      terminalSummary: "Lifecycle done",
+    });
+    expect(taskRuns.get(parentLinkedTask.taskId)).toMatchObject({
+      id: parentLinkedTask.taskId,
+      status: "running",
+      progressSummary: "Parent progress",
+    });
   });
 
   it("does not downgrade stronger terminal plugin lifecycle states", async () => {

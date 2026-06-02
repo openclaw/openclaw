@@ -1973,14 +1973,28 @@ describe("task-registry", () => {
         deliveryStatus: "not_applicable",
         startedAt: 120,
       });
+      const unkinded = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-plugin-kind-collision",
+        task: "Plugin task",
+        label: "Plugin task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 140,
+      });
 
       expect(second.taskId).not.toBe(first.taskId);
+      expect(unkinded.taskId).not.toBe(first.taskId);
+      expect(unkinded.taskId).not.toBe(second.taskId);
       expect(
         listTaskRecords()
           .filter((task) => task.runId === "run-plugin-kind-collision")
           .map((task) => task.taskKind)
           .toSorted((left, right) => String(left).localeCompare(String(right))),
-      ).toEqual(["plugin-a.session", "plugin-b.session"]);
+      ).toEqual(["plugin-a.session", "plugin-b.session", undefined]);
     });
   });
 

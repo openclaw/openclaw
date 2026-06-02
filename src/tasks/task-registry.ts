@@ -807,6 +807,7 @@ function findExistingTaskForCreate(params: {
   scopeKind: TaskScopeKind;
   childSessionKey?: string;
   parentFlowId?: string;
+  parentTaskId?: string;
   runId?: string;
   label?: string;
   task: string;
@@ -831,7 +832,9 @@ function findExistingTaskForCreate(params: {
         }
         return (
           (normalizeOptionalString(task.parentFlowId) ?? "") ===
-          (normalizeOptionalString(params.parentFlowId) ?? "")
+            (normalizeOptionalString(params.parentFlowId) ?? "") &&
+          (normalizeOptionalString(task.parentTaskId) ?? "") ===
+            (normalizeOptionalString(params.parentTaskId) ?? "")
         );
       })
     : [];
@@ -845,8 +848,11 @@ function findExistingTaskForCreate(params: {
   if (taskKind) {
     return undefined;
   }
+  const unkindedRunScopeMatches = runScopeMatches.filter(
+    (task) => !normalizeOptionalString(task.taskKind),
+  );
   const exact = runId
-    ? runScopeMatches.find(
+    ? unkindedRunScopeMatches.find(
         (task) =>
           (normalizeOptionalString(task.label) ?? "") ===
             (normalizeOptionalString(params.label) ?? "") &&
@@ -860,10 +866,10 @@ function findExistingTaskForCreate(params: {
   if (!runId || params.runtime !== "acp") {
     return undefined;
   }
-  if (runScopeMatches.length === 0) {
+  if (unkindedRunScopeMatches.length === 0) {
     return undefined;
   }
-  return pickPreferredRunIdTask(runScopeMatches);
+  return pickPreferredRunIdTask(unkindedRunScopeMatches);
 }
 
 function mergeExistingTaskForCreate(
@@ -1770,6 +1776,7 @@ export function createTaskRecord(params: {
     scopeKind,
     childSessionKey: params.childSessionKey,
     parentFlowId: params.parentFlowId,
+    parentTaskId: params.parentTaskId,
     runId: params.runId,
     label: params.label,
     task: params.task,
