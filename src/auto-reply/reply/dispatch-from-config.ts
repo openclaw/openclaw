@@ -2982,9 +2982,24 @@ export async function dispatchReplyFromConfig(
                 if (shouldSuppressProgressDelivery()) {
                   return;
                 }
-                const visibleToolPayload = resolveToolDeliveryPayload(payload);
+                let visibleToolPayload = resolveToolDeliveryPayload(payload);
                 if (!visibleToolPayload) {
                   return;
+                }
+                if (willUseCaptionedFinalTts) {
+                  // Tool results that carry media must drop their text so the caption
+                  // is not duplicated by the final TTS voice note caption. Text-only
+                  // tool results stay intact — they are progress/status, not the
+                  // caption content owned by the final reply.
+                  // NOTE: uses media-only check (not the broader block-path check that
+                  // also covers presentation/interactive/channelData) because tool
+                  // results with interactive/approval content but no media need their
+                  // text preserved — it IS the content, not a duplicate caption.
+                  const hasMedia =
+                    resolveSendableOutboundReplyParts(visibleToolPayload).hasMedia;
+                  if (hasMedia) {
+                    visibleToolPayload = { ...visibleToolPayload, text: undefined };
+                  }
                 }
                 const ttsPayload = await maybeApplyTtsToReplyPayload({
                   payload: visibleToolPayload,
