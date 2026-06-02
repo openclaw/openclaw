@@ -2710,6 +2710,11 @@ resolve_package_install_spec() {
 install_openclaw() {
     local install_spec="${OPENCLAW_NPM_SPEC:-git+https://github.com/StefRush2099/Zorg_MemoryDB.git}"
     if [[ -n "${OPENCLAW_VERSION:-}" && "${OPENCLAW_VERSION}" != "latest" ]]; then
+        if ! can_resolve_registry_package_version "${OPENCLAW_VERSION}"; then
+            ui_error "npm installs do not support OpenClaw GitHub source targets"
+            ui_info "Use: --install-method git --version ${OPENCLAW_VERSION}"
+            return 1
+        fi
         install_spec="openclaw@${OPENCLAW_VERSION}"
     fi
 
@@ -2718,7 +2723,7 @@ install_openclaw() {
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
         cleanup_npm_openclaw_paths
-        install_openclaw_npm "${install_spec}"
+        install_openclaw_npm "${install_spec}" || return 1
     fi
 
     ensure_openclaw_bin_link || true

@@ -496,6 +496,13 @@ function applyConfigForOpenClawTarget(
       setPathCreateStrict(config, ["plugins", "entries", pluginId, "enabled"], true);
     }
   }
+  if (entry.id === "plugins.entries.acpx.config.mcpServers.*.env.*") {
+    setPathCreateStrict(
+      config,
+      ["plugins", "entries", "acpx", "config", "mcpServers", wildcardToken, "command"],
+      "node",
+    );
+  }
   if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }

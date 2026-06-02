@@ -314,10 +314,36 @@ function resolveCompressionModelCandidates(params: {
 }
 
 function imageCompressionPolicyHasDimensionLimit(policy: ImageCompressionModelPolicy): boolean {
-  return (
-    typeof policy.maxSidePx === "number" ||
-    typeof policy.maxPixels === "number"
-  );
+  return typeof policy.maxSidePx === "number" || typeof policy.maxPixels === "number";
+}
+
+function resolveBundledAnthropicImageCompressionPolicy(params: {
+  provider: string;
+  model: string;
+}): ImageCompressionModelPolicy {
+  if (normalizeMediaProviderId(params.provider) !== "anthropic") {
+    return {};
+  }
+  const model = params.model.trim().toLowerCase();
+  if (!model.startsWith("claude-")) {
+    return {};
+  }
+  const isOpus47 = model.startsWith("claude-opus-4-7") || model.startsWith("claude-opus-4.7");
+  const isModernAnthropicImageModel =
+    isOpus47 ||
+    model.startsWith("claude-opus-4-6") ||
+    model.startsWith("claude-opus-4.6") ||
+    model.startsWith("claude-sonnet-4-6") ||
+    model.startsWith("claude-sonnet-4.6");
+  if (!isModernAnthropicImageModel) {
+    return {};
+  }
+  const side = isOpus47 ? 2576 : 1568;
+  return {
+    maxSidePx: side,
+    preferredSidePx: side,
+    tokenMode: "provider",
+  };
 }
 
 function mergeImageCompressionPolicies(params: {
@@ -405,21 +431,26 @@ async function resolveCompressionModelPolicy(params: {
     ...params,
     skipProviderRuntimeHooks: true,
   });
+  const bundledPolicy = resolveBundledAnthropicImageCompressionPolicy(params);
+  const staticWithBundledPolicy = mergeImageCompressionPolicies({
+    runtimePolicy: bundledPolicy,
+    staticPolicy,
+  });
   if (
-    imageCompressionPolicyHasDimensionLimit(staticPolicy) ||
+    imageCompressionPolicyHasDimensionLimit(staticWithBundledPolicy) ||
     !providerUsesRuntimeModelAugment({
       cfg: params.cfg,
       provider: params.provider,
       workspaceDir: params.workspaceDir,
     })
   ) {
-    return staticPolicy;
+    return staticWithBundledPolicy;
   }
   const runtimePolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
     skipProviderRuntimeHooks: false,
   });
-  return mergeImageCompressionPolicies({ runtimePolicy, staticPolicy });
+  return mergeImageCompressionPolicies({ runtimePolicy, staticPolicy: staticWithBundledPolicy });
 }
 
 async function resolveImageCompressionPolicy(params: {

@@ -315,13 +315,16 @@ describe("runGatewayUpdate", () => {
   function createGlobalNpmUpdateRunner(params: {
     pkgRoot: string;
     nodeModules: string;
-    onBaseInstall?: () => Promise<CommandResult>;
-    onOmitOptionalInstall?: () => Promise<CommandResult>;
+    onBaseInstall?: (options?: { env?: NodeJS.ProcessEnv }) => Promise<CommandResult>;
+    onOmitOptionalInstall?: (options?: { env?: NodeJS.ProcessEnv }) => Promise<CommandResult>;
   }) {
     const baseInstallKey = npmGlobalInstallCommand("openclaw@latest");
     const omitOptionalInstallKey = npmGlobalInstallCommand("openclaw@latest", ["--omit=optional"]);
 
-    return async (argv: string[]): Promise<CommandResult> => {
+    return async (
+      argv: string[],
+      options?: { env?: NodeJS.ProcessEnv },
+    ): Promise<CommandResult> => {
       const key = normalizeNpmFreshnessArgs(argv).join(" ");
       if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
         return { stdout: "", stderr: "not a git repository", code: 128 };
@@ -333,11 +336,15 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 1 };
       }
       if (key === baseInstallKey) {
-        return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
+        return (await params.onBaseInstall?.(options)) ?? { stdout: "ok", stderr: "", code: 0 };
       }
       if (key === omitOptionalInstallKey) {
         return (
-          (await params.onOmitOptionalInstall?.()) ?? { stdout: "", stderr: "not found", code: 1 }
+          (await params.onOmitOptionalInstall?.(options)) ?? {
+            stdout: "",
+            stderr: "not found",
+            code: 1,
+          }
         );
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -2061,6 +2068,29 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(stalePresentAtInstall).toBe(false);
     expect(await pathExists(staleDir)).toBe(false);
+  });
+
+  it("marks global package updates as existing installs for npm lifecycle guards", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    let installEnv: NodeJS.ProcessEnv | undefined;
+    const runCommand = createGlobalNpmUpdateRunner({
+      nodeModules,
+      pkgRoot,
+      onBaseInstall: async (options) => {
+        installEnv = options?.env;
+        await writeGlobalPackageVersion(pkgRoot);
+        return { stdout: "ok", stderr: "", code: 0 };
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("ok");
+    expect(installEnv?.ZORG_INSTALL_MODE).toBe("existing");
+    expect(installEnv?.ZORG_ALLOW_EXISTING_UPGRADE).toBe("1");
   });
 
   it("retries global npm update with --omit=optional when initial install fails", async () => {

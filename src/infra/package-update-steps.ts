@@ -496,7 +496,13 @@ export async function runGlobalPackageUpdateSteps(params: {
   failedStep: PackageUpdateStepResult | null;
 }> {
   const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
-  const installEnv = params.env === undefined ? {} : { env: params.env };
+  const installEnv = {
+    env: {
+      ...params.env,
+      ZORG_INSTALL_MODE: "existing",
+      ZORG_ALLOW_EXISTING_UPGRADE: "1",
+    },
+  };
   let stagedInstall: StagedNpmInstall | null = null;
   let packedInstallDir: string | null = null;
 

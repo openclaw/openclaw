@@ -150,7 +150,9 @@ describe("install.sh", () => {
     expect(script).toContain('freshness_flag="--min-release-age=0"');
     expect(script).toContain('npm_config_has_raw_key npm "min-release-age"');
     expect(script).toContain('freshness_flag="--before=$(date -u');
-    expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")');
+    expect(script).toContain(
+      'cmd+=(--no-fund --no-audit --install-links=true "$freshness_flag" install -g "$spec")',
+    );
   });
 
   it("does not emit --before when raw user npmrc config contains min-release-age", () => {
@@ -550,7 +552,7 @@ describe("install.sh", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("[4/4] Verifying installation");
+    expect(result.stdout).toContain("[4/5] Verifying installation");
     expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 

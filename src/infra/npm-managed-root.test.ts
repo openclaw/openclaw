@@ -216,6 +216,7 @@ describe("managed npm root", () => {
       "fast-uri": "3.1.2",
       "follow-redirects": "1.16.0",
       "ip-address": "10.2.0",
+      "lru-cache": "11.5.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
       uuid: "14.0.0",
     });

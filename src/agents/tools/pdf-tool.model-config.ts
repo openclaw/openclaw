@@ -6,6 +6,7 @@ import {
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { isMinimaxVlmProvider, isMinimaxVlmModel } from "../minimax-vlm.js";
 import { findNormalizedProviderValue } from "../model-selection.js";
 import {
   coerceImageModelConfig,
@@ -50,6 +51,42 @@ function resolveConfiguredTextModelFromConfig(params: {
   return modelId || undefined;
 }
 
+function resolveDocumentTextExtractionModel(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  providerId: string;
+}): string | undefined {
+  const configured = resolveDocumentMediaModel({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    providerId: params.providerId,
+    document: "pdf",
+    mode: "textExtraction",
+  });
+  if (configured) {
+    return configured;
+  }
+  return isMinimaxVlmProvider(params.providerId) ? "MiniMax-M2.7" : undefined;
+}
+
+function resolveDocumentImageModel(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  providerId: string;
+}): string | false | undefined {
+  const configured = resolveDocumentMediaModel({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    providerId: params.providerId,
+    document: "pdf",
+    mode: "image",
+  });
+  if (configured !== undefined) {
+    return configured;
+  }
+  return isMinimaxVlmProvider(params.providerId) ? false : undefined;
+}
+
 function resolveImageCandidateRefs(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -73,12 +110,10 @@ function resolveImageCandidateRefs(params: {
       }),
     )
     .map((providerId) => {
-      const documentImageModel = resolveDocumentMediaModel({
+      const documentImageModel = resolveDocumentImageModel({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         providerId,
-        document: "pdf",
-        mode: "image",
       });
       if (documentImageModel === false) {
         return null;
@@ -141,22 +176,18 @@ function resolveTextExtractionCandidateRefs(params: {
     ) {
       continue;
     }
-    const documentTextModel = resolveDocumentMediaModel({
+    const documentTextModel = resolveDocumentTextExtractionModel({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId,
-      document: "pdf",
-      mode: "textExtraction",
     });
     if (!documentTextModel) {
       continue;
     }
-    const documentImageModel = resolveDocumentMediaModel({
+    const documentImageModel = resolveDocumentImageModel({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId,
-      document: "pdf",
-      mode: "image",
     });
     const preferredTextModel =
       providerId === params.primary.provider
@@ -176,7 +207,8 @@ function resolveTextExtractionCandidateRefs(params: {
       Boolean(preferredLocalModel) &&
       ((typeof documentImageModel === "string" &&
         localModelIdForProvider(providerId, documentImageModel) === preferredLocalModel) ||
-        providerDefaultImageModel === preferredLocalModel);
+        providerDefaultImageModel === preferredLocalModel ||
+        isMinimaxVlmModel(providerId, preferredLocalModel));
     const model =
       preferredTextModel && !preferredIsImageModel ? preferredTextModel : documentTextModel;
     addCandidate(providerId, model);
@@ -282,12 +314,10 @@ export function resolvePdfModelConfigForTool(params: {
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
       const providerId = providerKey.trim();
       const documentImageModel = providerId
-        ? resolveDocumentMediaModel({
+        ? resolveDocumentImageModel({
             cfg: params.cfg,
             workspaceDir: params.workspaceDir,
             providerId,
-            document: "pdf",
-            mode: "image",
           })
         : undefined;
       if (
