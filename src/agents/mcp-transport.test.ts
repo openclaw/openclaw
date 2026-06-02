@@ -7,10 +7,21 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
-const { runtimeFetchMock, streamableTransportConstructorMock } = vi.hoisted(() => ({
-  runtimeFetchMock: vi.fn(),
-  streamableTransportConstructorMock: vi.fn(),
-}));
+type SseTransportOptions = {
+  requestInit?: RequestInit;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  eventSourceInit?: {
+    fetch?: (input: string | URL, init?: RequestInit) => Promise<Response>;
+  };
+  authProvider?: unknown;
+};
+
+const { runtimeFetchMock, streamableTransportConstructorMock, sseTransportConstructorMock } =
+  vi.hoisted(() => ({
+    runtimeFetchMock: vi.fn(),
+    streamableTransportConstructorMock: vi.fn(),
+    sseTransportConstructorMock: vi.fn(),
+  }));
 
 vi.mock("../infra/net/undici-runtime.js", () => ({
   loadUndiciRuntimeDeps: () => ({
@@ -25,6 +36,16 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
     options?: StreamableTransportOptions,
   ) {
     streamableTransportConstructorMock(url, options);
+  },
+}));
+
+vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+  SSEClientTransport: function MockSSEClientTransport(
+    this: unknown,
+    url: URL,
+    options?: SseTransportOptions,
+  ) {
+    sseTransportConstructorMock(url, options);
   },
 }));
 
@@ -58,6 +79,33 @@ function latestStreamableFetch() {
   return fetch;
 }
 
+function latestSseTransportOptions(): SseTransportOptions {
+  const latestCall = sseTransportConstructorMock.mock.calls[
+    sseTransportConstructorMock.mock.calls.length - 1
+  ] as unknown[] | undefined;
+  const options = latestCall?.[1];
+  if (!options || typeof options !== "object") {
+    throw new Error("Expected SSE transport options");
+  }
+  return options as SseTransportOptions;
+}
+
+function latestSseFetch() {
+  const fetch = latestSseTransportOptions().fetch;
+  if (typeof fetch !== "function") {
+    throw new Error("Expected SSE transport fetch");
+  }
+  return fetch;
+}
+
+function latestSseEventSourceFetch() {
+  const fetch = latestSseTransportOptions().eventSourceInit?.fetch;
+  if (typeof fetch !== "function") {
+    throw new Error("Expected SSE EventSource fetch");
+  }
+  return fetch;
+}
+
 function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | undefined] {
   const call = runtimeFetchMock.mock.calls[index] as
     | [RequestInfo | URL, RequestInit | undefined]
@@ -72,6 +120,7 @@ describe("resolveMcpTransport", () => {
   beforeEach(() => {
     runtimeFetchMock.mockReset();
     streamableTransportConstructorMock.mockClear();
+    sseTransportConstructorMock.mockClear();
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {
@@ -264,5 +313,104 @@ describe("resolveMcpTransport", () => {
 
     expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
+  });
+
+  it("scrubs custom headers when SSE requests follow a cross-origin redirect", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://redirect.example/message", 307))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/sse",
+      transport: "sse",
+      headers: {
+        "X-Api-Key": "secret",
+        "X-Tenant": "docs",
+      },
+    });
+
+    await latestSseFetch()("https://mcp.example.com/message", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "secret",
+        "x-tenant": "docs",
+      },
+      body: "{}",
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchCall(0)?.[0]).toBe("https://mcp.example.com/message");
+    expect(runtimeFetchCall(0)?.[1]?.redirect).toBe("manual");
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://redirect.example/message");
+    expect(runtimeFetchCall(1)?.[1]?.redirect).toBe("manual");
+    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
+    expect(runtimeFetchCall(1)?.[1]?.body).toBe("{}");
+
+    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
+    expect(redirectedHeaders.get("x-api-key")).toBeNull();
+    expect(redirectedHeaders.get("x-tenant")).toBeNull();
+    expect(redirectedHeaders.get("content-type")).toBe("application/json");
+  });
+
+  it("scrubs configured headers when SSE EventSource follows a cross-origin redirect", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://redirect.example/sse"))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/sse",
+      transport: "sse",
+      headers: {
+        "X-Api-Key": "secret",
+      },
+    });
+
+    await latestSseEventSourceFetch()("https://mcp.example.com/sse", {
+      headers: {
+        accept: "text/event-stream",
+        "mcp-protocol-version": "2025-06-18",
+      },
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchCall(0)?.[0]).toBe("https://mcp.example.com/sse");
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://redirect.example/sse");
+
+    const initialHeaders = new Headers(runtimeFetchCall(0)?.[1]?.headers);
+    expect(initialHeaders.get("x-api-key")).toBe("secret");
+    expect(initialHeaders.get("accept")).toBe("text/event-stream");
+
+    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
+    expect(redirectedHeaders.get("x-api-key")).toBeNull();
+    expect(redirectedHeaders.get("mcp-protocol-version")).toBeNull();
+    expect(redirectedHeaders.get("accept")).toBe("text/event-stream");
+  });
+
+  it("preserves configured SSE headers for same-origin redirects", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://mcp.example.com/next-sse"))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/sse",
+      transport: "sse",
+      headers: {
+        "X-Api-Key": "secret",
+      },
+    });
+
+    await latestSseEventSourceFetch()("https://mcp.example.com/sse", {
+      headers: {
+        accept: "text/event-stream",
+      },
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://mcp.example.com/next-sse");
+
+    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
+    expect(redirectedHeaders.get("x-api-key")).toBe("secret");
+    expect(redirectedHeaders.get("accept")).toBe("text/event-stream");
   });
 });

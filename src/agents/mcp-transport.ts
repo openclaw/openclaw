@@ -59,7 +59,7 @@ type SseEventSourceFetch = NonNullable<
   NonNullable<SSEClientTransportOptions["eventSourceInit"]>["fetch"]
 >;
 
-const STREAMABLE_HTTP_MAX_REDIRECTS = 20;
+const HTTP_TRANSPORT_MAX_REDIRECTS = 20;
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -116,17 +116,13 @@ function getRedirectVisitKey(url: string, init: RequestInit | undefined): string
   return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
 }
 
-function buildStreamableHttpFetch(baseFetch: FetchLike): FetchLike {
+function buildRedirectSafeHttpFetch(baseFetch: FetchLike): FetchLike {
   return async (url, init) => {
     let currentUrl = resolveFetchUrl(url);
     let currentInit = init ? { ...init } : undefined;
     const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
 
-    for (
-      let redirectCount = 0;
-      redirectCount <= STREAMABLE_HTTP_MAX_REDIRECTS;
-      redirectCount += 1
-    ) {
+    for (let redirectCount = 0; redirectCount <= HTTP_TRANSPORT_MAX_REDIRECTS; redirectCount += 1) {
       const parsedUrl = new URL(currentUrl);
       const response = await baseFetch(parsedUrl.toString(), {
         ...(currentInit ? { ...currentInit } : {}),
@@ -140,9 +136,9 @@ function buildStreamableHttpFetch(baseFetch: FetchLike): FetchLike {
       if (!location) {
         return response;
       }
-      if (redirectCount === STREAMABLE_HTTP_MAX_REDIRECTS) {
+      if (redirectCount === HTTP_TRANSPORT_MAX_REDIRECTS) {
         void response.body?.cancel();
-        throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
+        throw new Error(`Too many redirects (limit: ${HTTP_TRANSPORT_MAX_REDIRECTS})`);
       }
 
       const nextParsedUrl = new URL(location, parsedUrl);
@@ -169,7 +165,7 @@ function buildStreamableHttpFetch(baseFetch: FetchLike): FetchLike {
       currentInit = nextInit;
     }
 
-    throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
+    throw new Error(`Too many redirects (limit: ${HTTP_TRANSPORT_MAX_REDIRECTS})`);
   };
 }
 
@@ -245,11 +241,12 @@ export function resolveMcpTransport(
           resourceUrl: resolved.url,
         })
       : baseFetch;
+  const redirectSafeHttpFetch = buildRedirectSafeHttpFetch(httpFetch);
   if (resolved.transportType === "streamable-http") {
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
-        fetch: buildStreamableHttpFetch(httpFetch),
+        fetch: redirectSafeHttpFetch,
         authProvider,
       }),
       description: resolved.description,
@@ -264,9 +261,12 @@ export function resolveMcpTransport(
   return {
     transport: new SSEClientTransport(new URL(resolved.url), {
       requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
-      fetch: httpFetch,
+      fetch: redirectSafeHttpFetch,
       eventSourceInit: {
-        fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
+        fetch: buildSseEventSourceFetch(
+          resolved.auth === "oauth" ? {} : sseHeaders,
+          redirectSafeHttpFetch,
+        ),
       },
       authProvider,
     }),
