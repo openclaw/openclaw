@@ -289,6 +289,7 @@ async function resolveGatewayRestartProbeAuth(
 async function inspectGatewayPortHealth(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
+  env?: NodeJS.ProcessEnv;
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
@@ -310,7 +311,7 @@ async function inspectGatewayPortHealth(params: {
         await confirmGatewayReachable({
           port: params.port,
           auth: params.auth,
-          env: process.env,
+          env: params.env,
         })
       ).reachable;
     } catch {
@@ -583,11 +584,13 @@ export async function waitForGatewayHealthyListener(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  auth?: GatewayRestartProbeAuth;
 }): Promise<GatewayPortHealthSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-  const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
+  const probeAuth =
+    params.auth ?? (await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined));
   let snapshot = await inspectGatewayPortHealth({
     port: params.port,
     auth: probeAuth,

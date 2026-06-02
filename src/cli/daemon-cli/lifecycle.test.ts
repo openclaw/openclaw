@@ -53,6 +53,9 @@ const callGatewayCli = vi.fn();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
+const resolveGatewayProbeAuthSafeWithSecretInputs = vi.hoisted(() =>
+  vi.fn(async () => ({ auth: undefined })),
+);
 const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 const findInstalledSystemdGatewayScope = vi.hoisted(() =>
   vi.fn<() => Promise<{ scope: "user" | "system"; unitName: string; unitPath: string } | null>>(
@@ -131,6 +134,11 @@ vi.mock("../../daemon/systemd.js", () => ({
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
+}));
+
+vi.mock("../../gateway/probe-auth.js", () => ({
+  resolveGatewayProbeAuthSafeWithSecretInputs: (params: unknown) =>
+    resolveGatewayProbeAuthSafeWithSecretInputs(params),
 }));
 
 vi.mock("./start-repair.js", () => ({
@@ -214,6 +222,7 @@ describe("runDaemonRestart health checks", () => {
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockReset();
     repairLoadedGatewayServiceForStart.mockReset();
 
     service.readCommand.mockResolvedValue({
@@ -553,6 +562,36 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("passes resolved probe auth into unmanaged restart health checks", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({
+      auth: { token: "resolved-token" },
+    });
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        port: 18789,
+        auth: { token: "resolved-token" },
+      }),
+    );
+  });
+
+  it("reuses one config/probe-auth lookup across unmanaged restart checks", async () => {
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({
+      auth: { token: "resolved-token" },
+    });
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(resolveGatewayProbeAuthSafeWithSecretInputs).toHaveBeenCalledTimes(1);
   });
 
   it("prefers launchd repair over unmanaged restart when an installed LaunchAgent is unloaded", async () => {
