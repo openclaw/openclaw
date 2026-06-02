@@ -208,8 +208,8 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   };
   return (
     message.role === "assistant" &&
-    message.api === "openai-codex-responses" &&
-    message.provider === "openai-codex" &&
+    message.api === "openai-chatgpt-responses" &&
+    message.provider === "openai" &&
     message.stopReason !== "error" &&
     message.stopReason !== "aborted"
   );
@@ -320,7 +320,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
-  let insertedToolResults = 0;
+  let insertedToolResults;
 
   for (const line of lines) {
     if (!line.trim()) {

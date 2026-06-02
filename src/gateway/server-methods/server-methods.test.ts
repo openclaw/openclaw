@@ -4,6 +4,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +22,6 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -140,6 +140,204 @@ describe("waitForAgentJob", () => {
         endedAt: 200,
         timeoutPhase: "provider",
         providerStarted: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a recorded hard timeout when a later lifecycle error arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-late-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const firstWait = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await firstWait, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 100,
+          endedAt: 250,
+          error: "late rejection",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const secondWait = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(secondWait, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late lifecycle error arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-late-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 100,
+          endedAt: 250,
+          error: "late rejection",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late softer timeout arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-hard-timeout-late-soft-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 250,
+          aborted: true,
+          timeoutPhase: "gateway_draining",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+
+      const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(cached, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late lifecycle completion arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-late-completion-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 250,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
       });
     } finally {
       vi.useRealTimers();
@@ -589,8 +787,8 @@ describe("sanitizeChatHistoryMessages", () => {
             openclawReasoningReplay: {
               v: 1,
               source: "openai-responses",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
+              provider: "openai",
+              api: "openai-chatgpt-responses",
               model: "gpt-5.5",
             },
           },
@@ -1322,22 +1520,8 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
-  it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
-    expect(
-      resolveEffectiveChatHistoryMaxChars(
-        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
-        undefined,
-      ),
-    ).toBe(123);
-  });
-
-  it("prefers RPC maxChars over config", () => {
-    expect(
-      resolveEffectiveChatHistoryMaxChars(
-        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
-        45,
-      ),
-    ).toBe(45);
+  it("uses the RPC maxChars override when present", () => {
+    expect(resolveEffectiveChatHistoryMaxChars({}, 45)).toBe(45);
   });
 
   it("falls back to the default hardcoded limit", () => {
@@ -1528,7 +1712,8 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
-    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    const hasExplicitPlan =
+      params.params !== undefined && Object.hasOwn(params.params, "systemRunPlan");
     if (
       !hasExplicitPlan &&
       (requestParams as { host?: string }).host === "node" &&
@@ -1644,7 +1829,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -1878,7 +2063,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
     const ownerClient = {
       connId: "conn-owner",
@@ -2497,7 +2682,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -2519,7 +2704,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -2569,7 +2754,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();

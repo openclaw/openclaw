@@ -798,7 +798,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run parity lane
         env:
@@ -876,7 +876,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Generate parity report
         run: |
@@ -903,7 +903,7 @@ jobs:
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -934,7 +934,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run runtime parity lane
         id: runtime_parity_lane
@@ -1075,7 +1075,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     continue-on-error: true
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1101,7 +1101,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Matrix live lane
         id: run_lane
@@ -1199,7 +1199,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Telegram live lane
         id: run_lane
@@ -1295,7 +1295,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Discord live lane
         id: run_lane
@@ -1393,7 +1393,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run WhatsApp live lane
         id: run_lane
@@ -1488,7 +1488,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Slack live lane
         id: run_lane

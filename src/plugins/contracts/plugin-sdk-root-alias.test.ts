@@ -488,6 +488,21 @@ describe("plugin-sdk root alias", () => {
     );
   });
 
+  it("keeps agent-core package imports on the source graph when llm-core dist is missing", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const sourceLlmCorePath = path.join(packageRoot, "packages", "llm-core", "src", "index.ts");
+    const lazyModule = loadRootAliasWithStubs({
+      existingPaths: [sourceLlmCorePath],
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["@openclaw/llm-core"]).toBe(sourceLlmCorePath);
+  });
+
   it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
     const lazyModule = loadRootAliasWithStubs({
       distExists: true,
@@ -512,6 +527,11 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/plugin-sdk/group-access",
       "openclaw/plugin-sdk/zeta",
       "@openclaw/plugin-sdk/zeta",
+      "@openclaw/llm-core",
+      "@openclaw/llm-core/diagnostics",
+      "@openclaw/llm-core/event-stream",
+      "@openclaw/llm-core/types",
+      "@openclaw/llm-core/validation",
       "openclaw/plugin-sdk",
       "@openclaw/plugin-sdk",
     ]);
@@ -656,9 +676,8 @@ describe("plugin-sdk root alias", () => {
 
   it("falls back and removes stale diagnostic listeners when the dist subscription is invalid", () => {
     const seen: string[] = [];
-    let lazyModule!: ReturnType<typeof loadRootAliasWithStubs>;
     const preexistingListener = (): void => undefined;
-    lazyModule = loadRootAliasWithStubs({
+    const lazyModule: ReturnType<typeof loadRootAliasWithStubs> = loadRootAliasWithStubs({
       aliasPath: createDistAliasPath(),
       distEntries: ["diagnostic-events-W3Hz61fI.js"],
       monolithicExports: {

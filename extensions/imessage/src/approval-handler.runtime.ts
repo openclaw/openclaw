@@ -8,9 +8,9 @@ import {
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
-import {
-  type ExecApprovalRequest,
-  type PluginApprovalRequest,
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -77,6 +77,18 @@ function buildConversationKeyForTarget(to: string): IMessageApprovalConversation
   } catch {
     return null;
   }
+}
+
+function shouldThreadApprovalUpdate(to: string): boolean {
+  try {
+    const parsed = parseIMessageTarget(to);
+    if (parsed.kind === "handle" && parsed.service === "sms") {
+      return false;
+    }
+  } catch {
+    return true;
+  }
+  return true;
 }
 
 export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
@@ -151,7 +163,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       await sendMessageIMessage(entry.to, payload.text, {
         config: cfg,
         ...(entry.accountId ? { accountId: entry.accountId } : {}),
-        replyToId: entry.messageId,
+        ...(shouldThreadApprovalUpdate(entry.to) ? { replyToId: entry.messageId } : {}),
       });
     },
   },

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
 export type LoadAgentModelRegistryOptions = {
@@ -23,12 +23,13 @@ export function loadAgentModelRegistry(
     config,
     workspaceDir: options.workspaceDir,
   });
+  const pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
+    config,
+    workspaceDir: options.workspaceDir,
+  });
   const registry = discoverModels(authStorage, agentDir, {
-    pluginMetadataSnapshot: resolvePluginMetadataSnapshot({
-      config,
-      env: process.env,
-      ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-    }),
+    config,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     providerFilter: options.providerFilter,
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
     normalizeModels: options.normalizeModels,

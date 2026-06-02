@@ -4,11 +4,11 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -106,6 +106,9 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
+          currentChannelId: requestContext.currentChannelId,
+          currentThreadTs: requestContext.currentThreadTs,
+          currentMessageId: requestContext.currentMessageId,
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,

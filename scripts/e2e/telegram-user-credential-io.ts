@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -20,6 +21,33 @@ type RunCommandOptions = {
 const DEFAULT_OUTPUT_LIMIT = 128 * 1024;
 const DEFAULT_FETCH_BODY_LIMIT = 1024 * 1024;
 const KILL_GRACE_MS = 5_000;
+const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+const ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+let forwardedSignalExitCode: number | undefined;
+let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
+
+for (const signal of Object.keys(SIGNAL_EXIT_CODES) as Array<keyof typeof SIGNAL_EXIT_CODES>) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= SIGNAL_EXIT_CODES[signal];
+    if (ACTIVE_CHILD_TREE_KILLERS.size === 0) {
+      process.exit(forwardedSignalExitCode);
+    }
+    const activeKillers = Array.from(ACTIVE_CHILD_TREE_KILLERS);
+    for (const killChildTree of activeKillers) {
+      killChildTree(signal);
+    }
+    forwardedSignalForceKillTimer ??= setTimeout(() => {
+      for (const killChildTree of activeKillers) {
+        killChildTree("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, KILL_GRACE_MS);
+  });
+}
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
@@ -69,16 +97,19 @@ export function runCommand(
   options: RunCommandOptions,
 ) {
   return new Promise<void>((resolve, reject) => {
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
     });
+    const activeChildTree = registerActiveChildProcessTree(child);
     const outputLimit = options.outputLimit ?? DEFAULT_OUTPUT_LIMIT;
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let timeout: NodeJS.Timeout;
     let killTimer: NodeJS.Timeout | undefined;
+    let pendingTimeoutReject: (() => void) | undefined;
     let timedOutError: Error | undefined;
     const timeoutMs = Math.max(1, options.timeoutMs);
     const timeoutKillGraceMs = Math.max(0, options.timeoutKillGraceMs ?? KILL_GRACE_MS);
@@ -94,20 +125,22 @@ export function runCommand(
       }
       settled = true;
       clearTimers();
+      activeChildTree.unregister();
       reject(error);
     };
-    timeout = setTimeout(() => {
+    const timeout: NodeJS.Timeout = setTimeout(() => {
       if (settled) {
         return;
       }
       timedOutError = timeoutError(
         `${command} ${args.join(" ")} timed out after ${timeoutMs}ms\n${stdout}${stderr}`,
       );
-      child.kill("SIGTERM");
+      activeChildTree.killChildTree("SIGTERM");
       killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
+        killTimer = undefined;
+        activeChildTree.killChildTree("SIGKILL");
+        pendingTimeoutReject?.();
       }, timeoutKillGraceMs);
-      killTimer.unref?.();
     }, timeoutMs);
     timeout.unref?.();
 
@@ -122,8 +155,26 @@ export function runCommand(
       if (settled) {
         return;
       }
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.unregister();
+        return;
+      }
+      if (timedOutError && killTimer && childProcessTreeMayStillExist(child)) {
+        const error = timedOutError;
+        pendingTimeoutReject = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimers();
+          activeChildTree.unregister();
+          reject(error);
+        };
+        return;
+      }
       settled = true;
       clearTimers();
+      activeChildTree.unregister();
       if (timedOutError) {
         reject(timedOutError);
         return;
@@ -138,44 +189,39 @@ export function runCommand(
   });
 }
 
-async function readBoundedResponseText(
-  response: Response,
-  label: string,
-  byteLimit: number,
-  timeoutPromise: Promise<never>,
-) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
+function signalChildProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
     }
   }
-  if (!response.body) {
-    return "";
-  }
+  child.kill(signal);
+}
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
+function childProcessTreeMayStillExist(child: ReturnType<typeof spawn>) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
   }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function registerActiveChildProcessTree(child: ReturnType<typeof spawn>) {
+  const killChildTree = (signal: NodeJS.Signals) => signalChildProcessTree(child, signal);
+  ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
+  return {
+    killChildTree,
+    unregister: () => {
+      ACTIVE_CHILD_TREE_KILLERS.delete(killChildTree);
+    },
+  };
 }
 
 export async function fetchJsonWithTimeout(params: FetchJsonParams) {
@@ -200,12 +246,10 @@ export async function fetchJsonWithTimeout(params: FetchJsonParams) {
       }),
       timeoutPromise,
     ]);
-    const rawPayload = await readBoundedResponseText(
-      response,
-      params.label,
-      maxBodyBytes,
+    const rawPayload = await readBoundedResponseText(response, params.label, maxBodyBytes, {
+      createTooLargeError: bodyTooLargeError,
       timeoutPromise,
-    );
+    });
     const payload = JSON.parse(rawPayload) as JsonObject;
     return { payload, response };
   } finally {

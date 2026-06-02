@@ -1,11 +1,12 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -70,6 +71,18 @@ type PlanningOnlyAttempt = Pick<
   | "messagingToolSentTargets"
   | "toolMetas"
 >;
+
+function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const usage = (message as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") {
+    return false;
+  }
+  const output = asFiniteNumber((usage as { output?: unknown }).output);
+  return output !== undefined && output > 0;
+}
 
 type SilentToolResultAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -144,7 +157,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "anthropic-messages",
   "bedrock-converse-stream",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",
@@ -243,6 +256,7 @@ export function resolveAttemptReplayMetadata(attempt: {
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
+  externalAbort: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -255,7 +269,7 @@ export function resolveIncompleteTurnPayloadText(params: {
 
   if (
     (params.payloadCount !== 0 && !toolUseTerminal) ||
-    params.aborted ||
+    (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
@@ -659,7 +673,8 @@ export function resolveEmptyResponseRetryInstruction(params: {
     assistant?.stopReason === "stop" &&
     OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
-    )
+    ) &&
+    !hasPositiveOutputTokenUsage(assistant)
   ) {
     return null;
   }

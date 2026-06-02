@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import {
@@ -11,7 +12,6 @@ import {
 } from "../infra/windows-encoding.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
 
@@ -510,8 +510,8 @@ export async function runCommandWithTimeout(
       removeAbortListener = null;
       reject(err);
     });
-    child.on("exit", (code, signal) => {
-      childExitState = { code, signal };
+    child.on("exit", (code, signalResult) => {
+      childExitState = { code, signal: signalResult };
       if (settled || closeFallbackTimer) {
         return;
       }
@@ -523,7 +523,7 @@ export async function runCommandWithTimeout(
         child.stderr?.destroy();
       }, 250);
     });
-    const resolveFromClose = (code: number | null, signal: NodeJS.Signals | null) => {
+    const resolveFromClose = (code: number | null, signalValue: NodeJS.Signals | null) => {
       if (settled) {
         return;
       }
@@ -533,7 +533,7 @@ export async function runCommandWithTimeout(
       clearCloseFallbackTimer();
       removeAbortListener?.();
       removeAbortListener = null;
-      const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
+      const resolvedSignal = childExitState?.signal ?? signalValue ?? child.signalCode ?? null;
       const resolvedCode = resolveProcessExitCode({
         explicitCode: childExitState?.code ?? code,
         childExitCode: child.exitCode,
@@ -576,16 +576,16 @@ export async function runCommandWithTimeout(
         noOutputTimedOut,
       });
     };
-    child.on("close", (code, signal) => {
+    child.on("close", (code, signalLocal) => {
       if (
         process.platform !== "win32" ||
         childExitState != null ||
         code != null ||
-        signal != null ||
+        signalLocal != null ||
         child.exitCode != null ||
         child.signalCode != null
       ) {
-        resolveFromClose(code, signal);
+        resolveFromClose(code, signalLocal);
         return;
       }
 
@@ -595,11 +595,11 @@ export async function runCommandWithTimeout(
           return;
         }
         if (childExitState != null || child.exitCode != null || child.signalCode != null) {
-          resolveFromClose(code, signal);
+          resolveFromClose(code, signalLocal);
           return;
         }
         if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
-          resolveFromClose(code, signal);
+          resolveFromClose(code, signalLocal);
           return;
         }
         setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);

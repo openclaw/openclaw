@@ -64,6 +64,18 @@ function requireBytePlusPostBody(): Record<string, unknown> {
   return request.body;
 }
 
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
+}
+
 describe("byteplus video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildBytePlusVideoGenerationProvider());
@@ -93,6 +105,36 @@ describe("byteplus video generation provider", () => {
     expect(video.fileName).toBe("video-1.webm");
     const metadata = result.metadata as Record<string, unknown>;
     expect(metadata.taskId).toBe("task_123");
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task_too_large" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "task_too_large",
+          status: "succeeded",
+          content: {
+            video_url: "https://example.com/too-large.mp4",
+          },
+        }),
+      })
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("BytePlus generated video download exceeds 1 bytes");
   });
 
   it("switches t2v image requests to i2v models and lowercases resolution", async () => {

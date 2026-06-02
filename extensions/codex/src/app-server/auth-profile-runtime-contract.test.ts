@@ -157,10 +157,12 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
+    vi.useRealTimers();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-auth-contract-"));
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     abortAgentHarnessRun(AUTH_PROFILE_RUNTIME_CONTRACT.sessionId);
     resetCodexAppServerClientFactoryForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
@@ -218,7 +220,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",
       cwd: tmpDir,
-      authProfileId: "openai-codex:stale",
+      authProfileId: "openai:stale",
       dynamicToolsFingerprint: "[]",
     });
     const params = createParams(sessionFile, tmpDir);

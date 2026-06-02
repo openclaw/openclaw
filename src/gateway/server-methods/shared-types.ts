@@ -36,6 +36,7 @@ export type GatewayClient = {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     pluginRuntimeOwnerId?: string;
+    agentRunTracking?: "plugin_subagent";
   };
 };
 
@@ -94,12 +95,16 @@ export type GatewayRequestContext = {
   chatDeltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
+  clearChatRunState: (runId: string) => void;
+  addChatRun: (
+    sessionId: string,
+    entry: { sessionKey: string; agentId?: string; clientRunId: string },
+  ) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;

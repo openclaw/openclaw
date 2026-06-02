@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import {
   isCronRunSessionKey,
@@ -5,7 +6,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 
 export {
@@ -90,6 +90,20 @@ export function toAgentRequestSessionKey(storeKey: string | undefined | null): s
     return undefined;
   }
   return parseAgentSessionKey(raw)?.rest ?? raw;
+}
+
+export function agentSessionKeysMatchByRequestKey(
+  left: string | undefined | null,
+  right: string | undefined | null,
+): boolean {
+  const leftRaw = (left ?? "").trim();
+  const rightRaw = (right ?? "").trim();
+  if (!leftRaw || !rightRaw) {
+    return false;
+  }
+  return (
+    leftRaw === rightRaw || toAgentRequestSessionKey(leftRaw) === toAgentRequestSessionKey(rightRaw)
+  );
 }
 
 export function toAgentStoreSessionKey(params: {

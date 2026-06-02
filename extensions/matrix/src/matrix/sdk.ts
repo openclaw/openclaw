@@ -1357,7 +1357,7 @@ export class MatrixClient {
       return await fail("Matrix recovery key is required");
     }
 
-    let stagedKeyId: string | null = null;
+    let stagedKeyId: string | null;
     try {
       stagedKeyId = (await this.resolveDefaultSecretStorageKeyId(crypto)) ?? null;
       this.recoveryKeyStore.stageEncodedRecoveryKey({
@@ -2051,10 +2051,8 @@ export class MatrixClient {
       this.emitter.emit("room.event", roomId, raw);
       if (isEncryptedEvent) {
         this.emitter.emit("room.encrypted_event", roomId, raw);
-      } else {
-        if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
-          this.emitter.emit("room.message", roomId, raw);
-        }
+      } else if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
+        this.emitter.emit("room.message", roomId, raw);
       }
 
       const stateKey = raw.state_key ?? "";

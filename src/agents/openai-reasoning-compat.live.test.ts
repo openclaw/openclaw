@@ -1,6 +1,6 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -20,7 +20,7 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const DEFAULT_TARGET_MODEL_REF = "openai-codex/gpt-5.4-mini";
+const DEFAULT_TARGET_MODEL_REF = "openai/gpt-5.4-mini";
 const TARGET_MODEL_REF =
   process.env.OPENCLAW_LIVE_OPENAI_REASONING_COMPAT_MODEL?.trim() || DEFAULT_TARGET_MODEL_REF;
 const describeLive = LIVE ? describe : describe.skip;
@@ -237,7 +237,7 @@ describeLive("openai reasoning compat live", () => {
         provider: model.provider,
         modelId: model.id,
         sessionManager: SessionManager.inMemory(),
-        sessionId: "openai-codex-tool-replay-live",
+        sessionId: "openai-chatgpt-tool-replay-live",
       });
 
       expect(sanitized.map((message) => message.role)).toEqual([

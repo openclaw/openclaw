@@ -1,7 +1,21 @@
-import type { GatewayClient, GatewayClientOptions } from "./client.js";
-import { waitForEventLoopReady, type EventLoopReadyResult } from "./event-loop-ready.js";
+import type { GatewayClientOptions } from "./client.js";
+import {
+  waitForEventLoopReady,
+  type EventLoopReadyOptions,
+  type EventLoopReadyResult,
+} from "./event-loop-ready.js";
 import { resolveConnectChallengeTimeoutMs } from "./timeouts.js";
 
+export type GatewayClientStartable = {
+  start(): void;
+};
+
+/** Injectable readiness waiter used by tests and alternate event-loop probes. */
+export type EventLoopReadyWaiter = (
+  options?: EventLoopReadyOptions,
+) => Promise<EventLoopReadyResult>;
+
+/** Timeout and abort controls for delaying client start until the loop can process IO. */
 export type GatewayClientStartReadinessOptions = {
   timeoutMs?: number;
   clientOptions?: Pick<
@@ -31,11 +45,13 @@ function resolveGatewayClientStartReadinessTimeoutMs(
   });
 }
 
-export async function startGatewayClientWhenEventLoopReady(
-  client: GatewayClient,
+/** Starts a gateway client only after the supplied readiness probe succeeds. */
+export async function startGatewayClientWithReadinessWait(
+  waitForReady: EventLoopReadyWaiter,
+  client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},
 ): Promise<EventLoopReadyResult> {
-  const readiness = await waitForEventLoopReady({
+  const readiness = await waitForReady({
     maxWaitMs: resolveGatewayClientStartReadinessTimeoutMs(options),
     signal: options.signal,
   });
@@ -43,4 +59,12 @@ export async function startGatewayClientWhenEventLoopReady(
     client.start();
   }
   return readiness;
+}
+
+/** Starts a gateway client after the default event-loop readiness probe succeeds. */
+export async function startGatewayClientWhenEventLoopReady(
+  client: GatewayClientStartable,
+  options: GatewayClientStartReadinessOptions = {},
+): Promise<EventLoopReadyResult> {
+  return startGatewayClientWithReadinessWait(waitForEventLoopReady, client, options);
 }

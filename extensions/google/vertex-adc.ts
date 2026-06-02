@@ -2,6 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GoogleAuthorizedUserCredentials = {
@@ -30,6 +35,8 @@ const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platfor
 // is a 60s buffer) so we don't ship a request that's already revoked when it
 // leaves the gateway.
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
+const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
+const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -40,6 +47,38 @@ let cachedGoogleAuthClient:
     }
   | undefined;
 let cachedGoogleVertexAdcToken: GoogleVertexAdcToken | undefined;
+
+function isGoogleVertexTokenFresh(expiresAtMsRaw: number, nowRaw = Date.now()): boolean {
+  const expiresAtMs = asDateTimestampMs(expiresAtMsRaw);
+  const nowMs = asDateTimestampMs(nowRaw);
+  if (expiresAtMs === undefined || nowMs === undefined) {
+    return false;
+  }
+  const minFreshExpiresAtMs = resolveExpiresAtMsFromDurationMs(
+    GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS,
+    { nowMs },
+  );
+  return minFreshExpiresAtMs !== undefined && expiresAtMs > minFreshExpiresAtMs;
+}
+
+function resolveAuthorizedUserTokenExpiresAtMs(value: unknown, nowRaw: number): number | undefined {
+  const nowMs = asDateTimestampMs(nowRaw);
+  if (nowMs === undefined) {
+    return undefined;
+  }
+  const lifetimeSeconds =
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(1, value)
+      : GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS;
+  return resolveExpiresAtMsFromDurationSeconds(lifetimeSeconds, { nowMs }) ?? nowMs;
+}
+
+function resolveGoogleAuthLibraryTokenExpiresAtMs(nowRaw = Date.now()): number | undefined {
+  const nowMs = asDateTimestampMs(nowRaw);
+  return nowMs === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS, { nowMs });
+}
 
 export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
   cachedGoogleVertexAuthorizedUserToken = undefined;
@@ -161,7 +200,7 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   if (
     cached?.credentialsPath === params.credentialsPath &&
     cached.refreshToken === refreshToken &&
-    cached.expiresAtMs - Date.now() > GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS
+    isGoogleVertexTokenFresh(cached.expiresAtMs)
   ) {
     return cached.token;
   }
@@ -191,16 +230,16 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   if (!token) {
     throw new Error("Google Vertex ADC token refresh response did not include an access_token.");
   }
-  const expiresInSeconds =
-    typeof payload?.expires_in === "number" && Number.isFinite(payload.expires_in)
-      ? payload.expires_in
-      : 3600;
-  cachedGoogleVertexAuthorizedUserToken = {
-    token,
-    expiresAtMs: Date.now() + Math.max(1, expiresInSeconds) * 1000,
-    credentialsPath: params.credentialsPath,
-    refreshToken,
-  };
+  const nowMs = Date.now();
+  const expiresAtMs = resolveAuthorizedUserTokenExpiresAtMs(payload?.expires_in, nowMs);
+  if (expiresAtMs !== undefined) {
+    cachedGoogleVertexAuthorizedUserToken = {
+      token,
+      expiresAtMs,
+      credentialsPath: params.credentialsPath,
+      refreshToken,
+    };
+  }
   return token;
 }
 
@@ -225,7 +264,7 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
   const auth = await cachedGoogleAuthClient.promise;
 
   const cached = cachedGoogleVertexAdcToken;
-  if (cached && cached.expiresAtMs - Date.now() > GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS) {
+  if (cached && isGoogleVertexTokenFresh(cached.expiresAtMs)) {
     return cached.token;
   }
 
@@ -242,10 +281,13 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
   // `getAccessToken()` return type, so we cache for a conservative 5 minutes.
   // The library itself already refreshes well before its own internal expiry,
   // so this cache is mainly to avoid hot-loop calls into the auth client.
-  cachedGoogleVertexAdcToken = {
-    token: normalized,
-    expiresAtMs: Date.now() + 5 * 60_000,
-  };
+  const expiresAtMs = resolveGoogleAuthLibraryTokenExpiresAtMs();
+  if (expiresAtMs !== undefined) {
+    cachedGoogleVertexAdcToken = {
+      token: normalized,
+      expiresAtMs,
+    };
+  }
   return normalized;
 }
 
