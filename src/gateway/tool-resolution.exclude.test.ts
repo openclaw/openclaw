@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+type CreateOpenClawToolsArg = {
+  inheritedToolDenylist?: string[];
+  pluginToolDenylist?: string[];
+};
+
 const hoisted = vi.hoisted(() => ({
-  createOpenClawToolsMock: vi.fn(() => [
+  createOpenClawToolsMock: vi.fn((_args: CreateOpenClawToolsArg) => [
     {
       name: "read",
       description: "Read files",
@@ -19,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/openclaw-tools.js", () => ({
-  createOpenClawTools: (...args: unknown[]) => hoisted.createOpenClawToolsMock(...args),
+  createOpenClawTools: (args: CreateOpenClawToolsArg) => hoisted.createOpenClawToolsMock(args),
 }));
 
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
