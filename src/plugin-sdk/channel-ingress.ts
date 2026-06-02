@@ -266,9 +266,13 @@ export function findChannelIngressCommandGate(
 
 /** Resolves base and command decisions for direct and group state in one pass. */
 export function decideChannelIngressBundle(params: {
+  /** Direct-message state resolved from the same event facts. */
   directState: ChannelIngressState;
+  /** Group/channel state resolved from the same event facts. */
   groupState: ChannelIngressState;
+  /** Normal message policy without command-specific overrides. */
   basePolicy: ChannelIngressPolicyInput;
+  /** Command policy with control-command authorizer overrides applied. */
   commandPolicy: ChannelIngressPolicyInput;
 }): ChannelIngressDecisionBundle {
   return {
@@ -318,7 +322,10 @@ function projectDmDecision(
 }
 
 /** Projects the detailed ingress graph into the older turn access-facts shape. */
-export function projectIngressAccessFacts(decision: ChannelIngressDecision): AccessFacts {
+export function projectIngressAccessFacts(
+  /** Detailed ingress decision graph to expose through the legacy AccessFacts API. */
+  decision: ChannelIngressDecision,
+): AccessFacts {
   const command = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.command);
   const activation = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.activation);
   const dmSender = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.dmSender);
@@ -349,6 +356,8 @@ export function projectIngressAccessFacts(decision: ChannelIngressDecision): Acc
           useAccessGroups: command.command.useAccessGroups,
           allowTextCommands: command.command.allowTextCommands,
           modeWhenAccessGroupsOff: command.command.modeWhenAccessGroupsOff,
+          // Legacy AccessFacts requires authorizer rows, but the ingress graph
+          // only exposes redacted aggregate matches. Keep the field present and empty.
           authorizers: [],
         }
       : undefined,
