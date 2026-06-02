@@ -1116,6 +1116,22 @@
     "target": "Control UI"
   },
   {
+    "source": "Third-party UIs",
+    "target": "第三方 UI"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
+  },
+  {
+    "source": "Bridge protocol",
+    "target": "Bridge 协议"
+  },
+  {
+    "source": "WebChat",
+    "target": "WebChat"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
   }
