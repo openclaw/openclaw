@@ -646,23 +646,26 @@ export async function gatherDaemonStatus(
   }
 
   // Plugin version drift detection.
-  // Compares active official external plugins against the *running* gateway
-  // version reported by the probe handshake, falling back to the invoking CLI
-  // VERSION only when no gateway version is available. Reading records with the
-  // merged daemon environment inspects the managed service's profile/state dir.
+  // Compares active official external plugins against the *running* local
+  // gateway version reported by the probe handshake, falling back to the
+  // invoking CLI VERSION only when no gateway version is available. Reading
+  // records with the merged daemon environment inspects the managed service's
+  // profile/state dir, so remote gateways must provide their own diagnostics.
   // Best-effort: unreadable install records omit this advisory report.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
-  try {
-    const installRecords = await loadInstalledPluginIndexInstallRecords({
-      env: mergedDaemonEnv as NodeJS.ProcessEnv,
-    });
-    pluginVersionDrift = detectPluginVersionDrift({
-      gatewayVersion: gatewayVersion ?? VERSION,
-      installRecords,
-      config: daemonCfg,
-    });
-  } catch {
-    pluginVersionDrift = undefined;
+  if (daemonCfg.gateway?.mode !== "remote") {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords({
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      });
+      pluginVersionDrift = detectPluginVersionDrift({
+        gatewayVersion: gatewayVersion ?? VERSION,
+        installRecords,
+        config: daemonCfg,
+      });
+    } catch {
+      pluginVersionDrift = undefined;
+    }
   }
 
   return {

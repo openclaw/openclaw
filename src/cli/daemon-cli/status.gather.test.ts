@@ -583,7 +583,9 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.connections).toBeUndefined();
+    expect(status.pluginVersionDrift).toBeUndefined();
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {
