@@ -1186,7 +1186,32 @@ describe("refreshChat", () => {
   });
 });
 
-describe("handleSendChat", () => {
+descr
+
+  it("forwards numeric-only chatMessage to chat.send unchanged", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-1" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:main",
+      chatMessage: "123456789",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        message: "123456789",
+      }),
+    );
+  });
+ibe("handleSendChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
   });
