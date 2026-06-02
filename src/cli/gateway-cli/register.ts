@@ -19,6 +19,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parsePort } from "../shared/parse-port.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { addGatewayRunCommand } from "./run-command.js";
@@ -140,16 +141,18 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   return fallback;
 }
 
-function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
+function resolveGatewayRpcOptions<T extends { token?: string; password?: string; port?: string }>(
   opts: T,
   command?: Command,
 ): T {
   const parentToken = inheritOptionFromParent<string>(command, "token");
   const parentPassword = inheritOptionFromParent<string>(command, "password");
+  const parentPort = inheritOptionFromParent<string>(command, "port");
   return {
     ...opts,
     token: opts.token ?? parentToken,
     password: opts.password ?? parentPassword,
+    port: opts.port ?? parentPort,
   };
 }
 
@@ -679,6 +682,10 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option(
+      "--port <port>",
+      "Local port override for the gateway probe (preserves TLS/auth from loaded config)",
+    )
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
@@ -689,8 +696,15 @@ export function registerGatewayCli(program: Command) {
     .action(async (opts, command) => {
       await runGatewayCommand(async () => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        const rawPort = rpcOpts.port;
+        const portNum = rawPort !== undefined ? parsePort(rawPort) : null;
+        if (rawPort !== undefined && portNum === null) {
+          defaultRuntime.error("Invalid port");
+          defaultRuntime.exit(1);
+          return;
+        }
         const { gatewayStatusCommand } = await loadGatewayStatusModule();
-        await gatewayStatusCommand(rpcOpts, defaultRuntime);
+        await gatewayStatusCommand({ ...rpcOpts, port: portNum ?? undefined }, defaultRuntime);
       });
     });
 

@@ -40,6 +40,7 @@ function loadGatewayTlsModule() {
 export async function gatewayStatusCommand(
   opts: {
     url?: string;
+    port?: number;
     token?: string;
     password?: string;
     timeout?: unknown;
@@ -51,7 +52,13 @@ export async function gatewayStatusCommand(
   runtime: RuntimeEnv,
 ) {
   const startedAt = Date.now();
-  const cfg = await readBestEffortConfig();
+  const rawCfg = await readBestEffortConfig();
+  // Apply the port override onto the loaded config so resolveTargets derives the right
+  // scheme (wss:// vs ws://) from gateway.tls settings rather than hard-coding ws://.
+  const cfg =
+    opts.port != null && opts.port > 0
+      ? { ...rawCfg, gateway: { ...rawCfg.gateway, port: opts.port } }
+      : rawCfg;
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
