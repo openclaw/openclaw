@@ -1132,6 +1132,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },

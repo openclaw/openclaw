@@ -122,6 +122,45 @@
       }
     },
     {
+      "name": "@zalo-platforms/openclaw-zaloclawbot",
+      "description": "OpenClaw Zalo ClawBot channel plugin by the Zalo Platforms team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": {
+          "id": "openclaw-zaloclawbot",
+          "label": "Zalo ClawBot"
+        },
+        "channel": {
+          "id": "openclaw-zaloclawbot",
+          "label": "Zalo ClawBot",
+          "selectionLabel": "Zalo ClawBot (personal assistant)",
+          "detailLabel": "Zalo ClawBot",
+          "docsPath": "/channels/zaloclawbot",
+          "docsLabel": "zaloclawbot",
+          "blurb": "Personal Zalo assistant bot via QR-code login — owner-bound, no setup.",
+          "aliases": ["zaloclawbot", "zalo-clawbot"],
+          "order": 82
+        },
+        "channelConfigs": {
+          "openclaw-zaloclawbot": {
+            "label": "Zalo ClawBot",
+            "description": "Personal Zalo assistant — QR-onboarded, owner-bound.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@zalo-platforms/openclaw-zaloclawbot@0.1.0",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-nXXGdFWUKtyvV8nhKLW6h008sbjBvhViSUJmKcLLlB/+N1VeaWFwHZmVTkTRbYYpjPWPDHjl289+pUncwsYxcQ==",
+          "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
       "name": "@openclaw/discord",
       "description": "OpenClaw Discord channel plugin",
       "source": "official",
