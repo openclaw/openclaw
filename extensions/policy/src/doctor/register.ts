@@ -523,6 +523,28 @@ const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restric
 const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
 const SUPPORTED_AUTH_PROFILE_METADATA = ["provider", "mode"] as const;
 const SUPPORTED_AUTH_PROFILE_MODES = ["api_key", "aws-sdk", "oauth", "token"] as const;
+const SUPPORTED_POLICY_SECTIONS = [
+  "auth",
+  "agents",
+  "channels",
+  "dataHandling",
+  "gateway",
+  "ingress",
+  "mcp",
+  "models",
+  "network",
+  "sandbox",
+  "scopes",
+  "secrets",
+  "tools",
+] as const;
+const SUPPORTED_GATEWAY_POLICY_SECTIONS = [
+  "auth",
+  "controlUi",
+  "exposure",
+  "http",
+  "remote",
+] as const;
 const SUPPORTED_GATEWAY_HTTP_ENDPOINTS = ["chatCompletions", "responses"] as const;
 const SUPPORTED_DM_POLICIES = ["pairing", "allowlist", "open", "disabled"] as const;
 const SUPPORTED_DM_SCOPES = [
@@ -1623,21 +1645,7 @@ export function policyContainerShapeFindings(
       ),
     ];
   }
-  const unsupportedTopLevel = unsupportedPolicyKey(policy, [
-    "auth",
-    "agents",
-    "channels",
-    "dataHandling",
-    "gateway",
-    "ingress",
-    "mcp",
-    "models",
-    "network",
-    "sandbox",
-    "scopes",
-    "secrets",
-    "tools",
-  ]);
+  const unsupportedTopLevel = unsupportedPolicyKey(policy, SUPPORTED_POLICY_SECTIONS);
   if (unsupportedTopLevel !== undefined) {
     return [
       policyShapeFinding(
@@ -2862,13 +2870,7 @@ function gatewayPolicyShapeFinding(
       );
     }
   }
-  const unsupportedGatewayKey = unsupportedPolicyKey(value, [
-    "auth",
-    "controlUi",
-    "exposure",
-    "http",
-    "remote",
-  ]);
+  const unsupportedGatewayKey = unsupportedPolicyKey(value, SUPPORTED_GATEWAY_POLICY_SECTIONS);
   if (unsupportedGatewayKey !== undefined) {
     return policyShapeFinding(
       params.policyPath,
