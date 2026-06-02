@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   agentsAddCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
+  agentsCapabilitiesCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
   agentsListCommandMock: vi.fn(),
   agentsSetIdentityCommandMock: vi.fn(),
@@ -23,6 +24,7 @@ const agentCliCommandMock = mocks.agentCliCommandMock;
 const agentsAddCommandMock = mocks.agentsAddCommandMock;
 const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
 const agentsBindCommandMock = mocks.agentsBindCommandMock;
+const agentsCapabilitiesCommandMock = mocks.agentsCapabilitiesCommandMock;
 const agentsDeleteCommandMock = mocks.agentsDeleteCommandMock;
 const agentsListCommandMock = mocks.agentsListCommandMock;
 const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
@@ -42,6 +44,10 @@ vi.mock("../../commands/agents.commands.bind.js", () => ({
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
   agentsBindCommand: mocks.agentsBindCommandMock,
   agentsUnbindCommand: mocks.agentsUnbindCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.capabilities.js", () => ({
+  agentsCapabilitiesCommand: mocks.agentsCapabilitiesCommandMock,
 }));
 
 vi.mock("../../commands/agents.commands.delete.js", () => ({
@@ -78,6 +84,7 @@ describe("registerAgentCommands", () => {
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
+    agentsCapabilitiesCommandMock.mockResolvedValue(undefined);
     agentsDeleteCommandMock.mockResolvedValue(undefined);
     agentsListCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
@@ -179,6 +186,30 @@ describe("registerAgentCommands", () => {
       {
         json: true,
         bindings: true,
+      },
+      runtime,
+    );
+  });
+
+  it("forwards agents capabilities options", async () => {
+    await runCli(["agents", "capabilities", "--agent", "peewee", "--json"]);
+    expect(agentsCapabilitiesCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "peewee",
+        json: true,
+        markdown: false,
+      },
+      runtime,
+    );
+  });
+
+  it("supports the caps alias with markdown output", async () => {
+    await runCli(["agents", "caps", "--markdown"]);
+    expect(agentsCapabilitiesCommandMock).toHaveBeenCalledWith(
+      {
+        agent: undefined,
+        json: false,
+        markdown: true,
       },
       runtime,
     );

@@ -8,6 +8,7 @@ import { registerAgentTurnCommand } from "./register.agent-turn.js";
 
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
+type AgentsCapabilitiesModule = typeof import("../../commands/agents.commands.capabilities.js");
 type AgentsDeleteModule = typeof import("../../commands/agents.commands.delete.js");
 type AgentsIdentityModule = typeof import("../../commands/agents.commands.identity.js");
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
@@ -48,6 +49,12 @@ async function loadAgentsSetIdentityCommand(): Promise<
 
 async function loadAgentsListCommand(): Promise<AgentsListModule["agentsListCommand"]> {
   return (await import("../../commands/agents.commands.list.js")).agentsListCommand;
+}
+
+async function loadAgentsCapabilitiesCommand(): Promise<
+  AgentsCapabilitiesModule["agentsCapabilitiesCommand"]
+> {
+  return (await import("../../commands/agents.commands.capabilities.js")).agentsCapabilitiesCommand;
 }
 
 async function loadAgentsActionRuntime(): Promise<{
@@ -98,6 +105,27 @@ export function registerAgentsCommands(program: Command): void {
         const agentsListCommand = await loadAgentsListCommand();
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
+          runtime,
+        );
+      });
+    });
+
+  agents
+    .command("capabilities")
+    .alias("caps")
+    .description("Report per-profile capability status (read-only)")
+    .option("--agent <id>", "Limit the report to a single agent id")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--markdown", "Output Markdown instead of text", false)
+    .action(async (opts): Promise<void> => {
+      await runAgentsCommandAction(async (runtime) => {
+        const agentsCapabilitiesCommand = await loadAgentsCapabilitiesCommand();
+        await agentsCapabilitiesCommand(
+          {
+            agent: opts.agent as string | undefined,
+            json: Boolean(opts.json),
+            markdown: Boolean(opts.markdown),
+          },
           runtime,
         );
       });

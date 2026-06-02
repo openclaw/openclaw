@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw agents` (list/add/delete/bindings/bind/unbind/set identity)"
+summary: "CLI reference for `openclaw agents` (list/capabilities/add/delete/bindings/bind/unbind/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
 title: "Agents"
@@ -20,6 +20,9 @@ Related:
 ```bash
 openclaw agents list
 openclaw agents list --bindings
+openclaw agents capabilities
+openclaw agents caps --json
+openclaw agents capabilities --agent work --markdown
 openclaw agents add work --workspace ~/.openclaw/workspace-work
 openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:*
 openclaw agents add ops --workspace ~/.openclaw/workspace-ops --bind telegram:ops --non-interactive
@@ -114,6 +117,78 @@ Options:
 
 - `--json`
 - `--bindings`: include full routing rules, not only per-agent counts/summaries
+
+### `agents capabilities` (alias `caps`)
+
+Read-only per-profile capability check for the fleet. It never mutates config,
+never opens network connections, and never prints secret values. Credential
+checks report presence only: a provider counts as credentialed when an auth env
+var is set, the agent's auth profile store holds a usable profile (OAuth / static
+token / api_key), or a config-backed custom-provider api key resolves. Only
+presence is reported — never the credential value.
+
+Options:
+
+- `--agent <id>`: limit the report to a single agent id
+- `--json`: emit the machine-readable capability contract
+- `--markdown`: emit a Markdown report
+
+`--json` and `--markdown` cannot be combined.
+
+Each capability is reported with a status and a stable machine reason code:
+
+- `green` — capability is available.
+- `yellow` — optional capability is missing or unconfigured (degraded, not broken).
+- `red` — a required capability is broken (for example, a configured model with
+  no detectable credentials, or a truncated/corrupted tools list).
+
+Per-profile checks cover: profile config presence, configured provider/model,
+delegation (subagent) model/credentials, tool configuration integrity (including
+truncated/empty tool keys), and provider credential presence. Fleet-level service
+checks cover: gateway configured, OpenClaw state DB (Kanban/cron storage), cron
+store visibility, GitHub CLI/auth, Linear auth, and the delivery bridge (rclone).
+
+Missing optional integrations degrade to `yellow`; a profile only goes `red` when
+a capability it actually requires is broken. Capability status is data, not a
+process result: `red`/`yellow` findings do not by themselves make the command
+exit non-zero. The command still exits non-zero on CLI/config errors — for
+example, combining `--json` with `--markdown`, or when the OpenClaw config exists
+but fails validation.
+
+JSON shape (abridged):
+
+```json
+{
+  "version": 1,
+  "now": "2026-05-31T00:00:00.000Z",
+  "rollup": { "green": 9, "yellow": 2, "red": 0, "status": "yellow" },
+  "services": [
+    {
+      "id": "service.gateway",
+      "label": "Gateway",
+      "status": "green",
+      "reason": "ok",
+      "required": false
+    }
+  ],
+  "profiles": [
+    {
+      "agentId": "work",
+      "isDefault": true,
+      "status": "green",
+      "checks": [
+        {
+          "id": "profile.model",
+          "label": "Configured model",
+          "status": "green",
+          "reason": "ok",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+```
 
 ### `agents add [name]`
 
