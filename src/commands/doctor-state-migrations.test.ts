@@ -1353,6 +1353,125 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives legacy plugin install index when SQLite already has richer matching records", async () => {
+    const root = await makeTempRoot();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          demo: {
+            source: "npm",
+            spec: "demo@1.0.0",
+            version: "1.0.0",
+            resolvedName: "demo",
+            resolvedVersion: "1.0.0",
+            resolvedSpec: "demo@1.0.0",
+            integrity: "sha512-current",
+            shasum: "current",
+            installedAt: "2026-06-01T21:04:35.000Z",
+          },
+        },
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir: root },
+    );
+    const sourcePath = path.join(root, "plugins", "installs.json");
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({
+        records: {
+          demo: {
+            source: "npm",
+            spec: "demo@beta",
+            version: "1.0.0",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+          resolvedVersion: "1.0.0",
+          integrity: "sha512-current",
+        },
+      },
+    });
+  });
+
+  it("keeps legacy plugin install index when same-version npm records name different packages", async () => {
+    const root = await makeTempRoot();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          demo: {
+            source: "npm",
+            spec: "@openclaw/demo@1.0.0",
+            version: "1.0.0",
+            resolvedName: "@openclaw/demo",
+            resolvedVersion: "1.0.0",
+            resolvedSpec: "@openclaw/demo@1.0.0",
+          },
+        },
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir: root },
+    );
+    const sourcePath = path.join(root, "plugins", "installs.json");
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({
+        records: {
+          demo: {
+            source: "npm",
+            spec: "@vendor/demo@1.0.0",
+            version: "1.0.0",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([
+      "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
   it("auto-migrates the shipped plugin-state SQLite sidecar by itself", async () => {
     const root = await makeTempRoot();
     const sourcePath = writeLegacyPluginStateSidecar(root);
@@ -1434,6 +1553,83 @@ describe("doctor legacy state migrations", () => {
         maxEntries: 10,
       });
       await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: false });
+    });
+  });
+
+  it("imports legacy-only plugin-state rows and archives when remaining conflicts are expired", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "plugin-state", "state.sqlite");
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(sourcePath);
+    try {
+      db.exec(`
+        CREATE TABLE plugin_state_entries (
+          plugin_id TEXT NOT NULL,
+          namespace TEXT NOT NULL,
+          entry_key TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER,
+          PRIMARY KEY (plugin_id, namespace, entry_key)
+        );
+      `);
+      const insert = db.prepare(`
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      insert.run(
+        "telegram",
+        "telegram.bot-info-cache",
+        "default",
+        '{"fetchedAt":"2026-05-30T23:20:09.000Z"}',
+        1000,
+        1,
+      );
+      insert.run("telegram", "message-cache", "legacy-only", '{"ok":true}', 2000, null);
+    } finally {
+      db.close();
+    }
+    await withStateDir(root, async () => {
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "telegram",
+          namespace: "telegram.bot-info-cache",
+          key: "default",
+          value: { fetchedAt: "2026-06-01T21:04:35.000Z" },
+          createdAt: 3000,
+          expiresAt: Date.now() + 60_000,
+        },
+      ]);
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 plugin-state sidecar entry → shared SQLite state");
+    expect(result.changes).toContain("Dropped 1 expired plugin-state sidecar entry");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const botInfoStore = createPluginStateKeyedStore<{ fetchedAt: string }>("telegram", {
+        namespace: "telegram.bot-info-cache",
+        maxEntries: 10,
+      });
+      await expect(botInfoStore.lookup("default")).resolves.toEqual({
+        fetchedAt: "2026-06-01T21:04:35.000Z",
+      });
+      const messageStore = createPluginStateKeyedStore<{ ok: boolean }>("telegram", {
+        namespace: "message-cache",
+        maxEntries: 10,
+      });
+      await expect(messageStore.lookup("legacy-only")).resolves.toEqual({ ok: true });
     });
   });
 

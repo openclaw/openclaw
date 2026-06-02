@@ -63,6 +63,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -169,12 +170,6 @@ type LegacyDeliveryQueueFile = {
   status: "pending" | "failed";
 };
 
-class LegacyPluginStateSidecarConflictError extends Error {
-  constructor(readonly conflictedKeys: string[]) {
-    super("legacy plugin-state sidecar conflicts with shared state");
-  }
-}
-
 class LegacyTaskStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
     super("legacy task-state sidecar conflicts with shared state");
@@ -265,6 +260,11 @@ function legacyPluginStateRowsMatch(
     normalizeLegacySqliteInteger(existing.expires_at) ===
       normalizeLegacySqliteInteger(legacy.expires_at)
   );
+}
+
+function isLegacyPluginStateRowExpired(row: LegacyPluginStateSidecarRow, now: number): boolean {
+  const expiresAt = normalizeLegacySqliteInteger(row.expires_at);
+  return expiresAt !== null && expiresAt <= now;
 }
 
 function archiveLegacyPluginStateSidecar(params: {
@@ -374,6 +374,82 @@ function legacyInstalledPluginIndexMatches(
   );
 }
 
+function readInstallRecordIdentityVersion(
+  record: InstalledPluginIndex["installRecords"][string],
+): string | undefined {
+  return record.resolvedVersion ?? record.version;
+}
+
+function readInstallRecordNpmName(
+  record: InstalledPluginIndex["installRecords"][string],
+): string | undefined {
+  return (
+    record.resolvedName ??
+    (record.resolvedSpec ? parseRegistryNpmSpec(record.resolvedSpec)?.name : undefined) ??
+    (record.spec ? parseRegistryNpmSpec(record.spec)?.name : undefined)
+  );
+}
+
+function readInstallRecordField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): unknown {
+  return (record as Partial<Record<string, unknown>>)[key];
+}
+
+function legacyInstallRecordHasCurrentResolvedIdentity(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const currentVersion = readInstallRecordIdentityVersion(params.currentRecord);
+  const legacyVersion = readInstallRecordIdentityVersion(params.legacyRecord);
+  const sameVersion = Boolean(currentVersion && legacyVersion && currentVersion === legacyVersion);
+  const sameNpmPackage =
+    params.currentRecord.source === "npm" &&
+    params.legacyRecord.source === "npm" &&
+    readInstallRecordNpmName(params.currentRecord) ===
+      readInstallRecordNpmName(params.legacyRecord);
+  return Boolean(
+    (sameVersion && sameNpmPackage) ||
+    (params.legacyRecord.resolvedSpec &&
+      params.currentRecord.resolvedSpec === params.legacyRecord.resolvedSpec) ||
+    (params.legacyRecord.spec && params.currentRecord.resolvedSpec === params.legacyRecord.spec),
+  );
+}
+
+function legacyInstallRecordFieldCoveredByCurrent(params: {
+  key: string;
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  if (params.key === "spec") {
+    return legacyInstallRecordHasCurrentResolvedIdentity(params);
+  }
+  if (params.key === "resolvedAt" || params.key === "installedAt") {
+    return typeof readInstallRecordField(params.currentRecord, params.key) === "string";
+  }
+  return false;
+}
+
+function legacyInstallRecordCoveredByCurrent(
+  currentRecord: InstalledPluginIndex["installRecords"][string],
+  legacyRecord: InstalledPluginIndex["installRecords"][string],
+): boolean {
+  if (currentRecord.source !== legacyRecord.source) {
+    return false;
+  }
+  for (const key of Object.keys(legacyRecord).toSorted()) {
+    if (readInstallRecordField(currentRecord, key) === readInstallRecordField(legacyRecord, key)) {
+      continue;
+    }
+    if (legacyInstallRecordFieldCoveredByCurrent({ key, currentRecord, legacyRecord })) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 function mergeLegacyInstalledPluginIndexRecords(
   current: InstalledPluginIndex,
   legacy: InstalledPluginIndex,
@@ -388,7 +464,7 @@ function mergeLegacyInstalledPluginIndexRecords(
       addedCount += 1;
       continue;
     }
-    if (JSON.stringify(currentRecord) !== JSON.stringify(legacyRecord)) {
+    if (!legacyInstallRecordCoveredByCurrent(currentRecord, legacyRecord)) {
       conflicts.push(pluginId);
     }
   }
@@ -1315,6 +1391,7 @@ async function migrateLegacyPluginStateSidecar(params: {
     const conflictedKeys: string[] = [];
     const rowsToInsert: LegacyPluginStateSidecarRow[] = [];
     let imported = 0;
+    let skippedExpired = 0;
     const now = Date.now();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -1339,16 +1416,22 @@ async function migrateLegacyPluginStateSidecar(params: {
               .where("namespace", "=", row.namespace)
               .where("entry_key", "=", row.entry_key),
           );
+          const legacyExpired = isLegacyPluginStateRowExpired(row, now);
           if (existing) {
             if (!legacyPluginStateRowsMatch(existing, row)) {
-              conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+              if (legacyExpired) {
+                skippedExpired += 1;
+              } else {
+                conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+              }
             }
             continue;
           }
+          if (legacyExpired) {
+            skippedExpired += 1;
+            continue;
+          }
           rowsToInsert.push(row);
-        }
-        if (conflictedKeys.length > 0) {
-          throw new LegacyPluginStateSidecarConflictError(conflictedKeys);
         }
         for (const row of rowsToInsert) {
           executeSqliteQuerySync(
@@ -1377,15 +1460,20 @@ async function migrateLegacyPluginStateSidecar(params: {
         `Migrated ${imported} plugin-state sidecar ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
       );
     }
-  } catch (err) {
-    if (err instanceof LegacyPluginStateSidecarConflictError) {
+    if (skippedExpired > 0) {
+      changes.push(
+        `Dropped ${skippedExpired} expired plugin-state sidecar ${skippedExpired === 1 ? "entry" : "entries"}`,
+      );
+    }
+    if (conflictedKeys.length > 0) {
       return {
         changes,
         warnings: [
-          `Left plugin-state sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
+          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${conflictedKeys[0]}`,
         ],
       };
     }
+  } catch (err) {
     return {
       changes,
       warnings: [`Failed migrating plugin-state sidecar ${sourcePath}: ${String(err)}`],
