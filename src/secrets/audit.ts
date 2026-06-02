@@ -6,7 +6,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { parseConfigJson5, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -32,6 +32,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
+  listConfigBackupPaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -39,6 +40,7 @@ import {
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 export type SecretsAuditCode =
+  | "CONFIG_BACKUP_UNREADABLE"
   | "PLAINTEXT_FOUND"
   | "REF_UNRESOLVED"
   | "REF_SHADOWED"
@@ -222,6 +224,86 @@ function collectConfigSecrets(params: {
       message: `${target.path} is stored as plaintext.`,
       provider: target.providerId,
     });
+  }
+}
+
+function collectConfigBackupSecrets(params: {
+  configPath: string;
+  collector: AuditCollector;
+}): void {
+  for (const backupPath of listConfigBackupPaths(params.configPath)) {
+    params.collector.filesScanned.add(backupPath);
+    let parsed: unknown;
+    try {
+      const stats = fs.lstatSync(backupPath);
+      if (!stats.isFile()) {
+        addFinding(params.collector, {
+          code: "CONFIG_BACKUP_UNREADABLE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: "Config backup could not be audited because it is not a regular file.",
+        });
+        continue;
+      }
+      if (stats.size > MAX_AUDIT_MODELS_JSON_BYTES) {
+        addFinding(params.collector, {
+          code: "CONFIG_BACKUP_UNREADABLE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: `Config backup could not be audited because it is oversized (${stats.size} bytes).`,
+        });
+        continue;
+      }
+      const raw = fs.readFileSync(backupPath, "utf8");
+      const parsedResult = parseConfigJson5(raw);
+      if (!parsedResult.ok) {
+        addFinding(params.collector, {
+          code: "CONFIG_BACKUP_UNREADABLE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: `Config backup could not be parsed as JSON5: ${parsedResult.error}`,
+        });
+        continue;
+      }
+      parsed = parsedResult.parsed;
+    } catch (err) {
+      addFinding(params.collector, {
+        code: "CONFIG_BACKUP_UNREADABLE",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: "<root>",
+        message: `Config backup could not be audited: ${formatErrorMessage(err)}`,
+      });
+      continue;
+    }
+    if (!isRecord(parsed)) {
+      continue;
+    }
+    for (const target of discoverConfigSecretTargets(parsed as OpenClawConfig)) {
+      if (!target.entry.includeInAudit) {
+        continue;
+      }
+      if (
+        target.entry.id === "models.providers.*.headers.*" &&
+        !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+      ) {
+        continue;
+      }
+      if (!hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue)) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: target.path,
+        message: `${target.path} is stored as plaintext in a config backup.`,
+        provider: target.providerId,
+      });
+    }
   }
 }
 
@@ -639,6 +721,10 @@ export async function runSecretsAudit(
   if (snapshot.valid) {
     collectConfigSecrets({
       config,
+      configPath,
+      collector,
+    });
+    collectConfigBackupSecrets({
       configPath,
       collector,
     });

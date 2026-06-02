@@ -251,6 +251,188 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
+  it("flags plaintext secrets left in adjacent config backups", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    const backupPath = `${fixture.configPath}.2026-02-28.bak`;
+    await writeJsonFile(backupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-stale-backup-key", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
+  it("flags plaintext secrets left in managed adjacent config snapshots", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    const snapshotPaths = [
+      `${fixture.configPath}.pre-update`,
+      `${fixture.configPath}.rejected.20260228T010203Z`,
+      `${fixture.configPath}.clobbered.20260228T010203Z`,
+    ];
+    for (const snapshotPath of snapshotPaths) {
+      await writeJsonFile(snapshotPath, {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              apiKey: "sk-stale-snapshot-key", // pragma: allowlist secret
+              models: [{ id: "gpt-5", name: "gpt-5" }],
+            },
+          },
+        },
+      });
+    }
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    for (const snapshotPath of snapshotPaths) {
+      expect(report.filesScanned).toContain(snapshotPath);
+      expect(
+        hasFinding(
+          report,
+          (entry) =>
+            entry.code === "PLAINTEXT_FOUND" &&
+            entry.file === snapshotPath &&
+            entry.jsonPath === "models.providers.openai.apiKey",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("reports non-regular adjacent config backups as unreadable", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    const backupDirPath = `${fixture.configPath}.bak`;
+    await fs.mkdir(backupDirPath);
+    const nonRegularBackupPaths = [backupDirPath];
+    if (process.platform !== "win32") {
+      const backupSymlinkPath = `${fixture.configPath}.pre-update`;
+      await fs.symlink(fixture.configPath, backupSymlinkPath);
+      nonRegularBackupPaths.push(backupSymlinkPath);
+    }
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    for (const backupPath of nonRegularBackupPaths) {
+      expect(report.filesScanned).toContain(backupPath);
+      expect(
+        hasFinding(
+          report,
+          (entry) =>
+            entry.code === "CONFIG_BACKUP_UNREADABLE" &&
+            entry.file === backupPath &&
+            entry.jsonPath === "<root>",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("parses adjacent config backups with JSON5 semantics", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    const backupPath = `${fixture.configPath}.bak`;
+    await fs.writeFile(
+      backupPath,
+      `{
+        // JSON5 comments and trailing commas are accepted in OpenClaw config.
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              apiKey: "sk-json5-backup-key",
+              models: [{ id: "gpt-5", name: "gpt-5" }],
+            },
+          },
+        },
+      }\n`,
+      "utf8",
+    );
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
   it("does not mutate legacy auth.json during audit", async () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await writeJsonFile(fixture.authJsonPath, {
