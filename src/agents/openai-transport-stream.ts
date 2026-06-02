@@ -1955,19 +1955,26 @@ function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
   options?: { stream?: boolean },
-): { signal?: AbortSignal; timeout?: number; headers?: Record<string, string> } | undefined {
+  maxRetries?: number,
+): {
+  signal?: AbortSignal;
+  timeout?: number;
+  headers?: Record<string, string>;
+  maxRetries?: number;
+} | undefined {
   const timeout = resolveOpenAISdkTimeoutMs(model);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }
       : undefined;
-  if (timeout === undefined && !signal && !headers) {
+  if (timeout === undefined && !signal && !headers && maxRetries === undefined) {
     return undefined;
   }
   return {
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
+    ...(maxRetries !== undefined ? { maxRetries } : {}),
   };
 }
 
@@ -2054,9 +2061,12 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         }
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-          stream: true,
-        });
+        const requestOptions = buildOpenAISdkRequestOptions(
+          model,
+          firstEventAbort.signal,
+          { stream: true },
+          options?.maxRetries,
+        );
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -2512,7 +2522,12 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         }
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal);
+        const requestOptions = buildOpenAISdkRequestOptions(
+          model,
+          firstEventAbort.signal,
+          undefined,
+          options?.maxRetries,
+        );
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -2780,7 +2795,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
+          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, undefined, options?.maxRetries),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
