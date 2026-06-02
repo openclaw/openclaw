@@ -18,7 +18,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { redactSecrets } from "../logging/redact.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
@@ -530,6 +530,15 @@ function trajectoryJsonlFile(
   return jsonlSupportBundleFile(pathName, lines);
 }
 
+function redactTrajectoryBundleFileContent(
+  file: DiagnosticSupportBundleFile,
+): DiagnosticSupportBundleFile {
+  return {
+    ...file,
+    content: redactToolPayloadText(file.content),
+  };
+}
+
 function buildTrajectoryExportRedaction(params: {
   workspaceDir: string;
 }): TrajectoryExportRedaction {
@@ -1028,16 +1037,20 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     );
   }
 
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
+  const redactedFiles = files.map(redactTrajectoryBundleFileContent);
+  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
   manifest.contents = contents;
   const redactedManifest = redactTrajectoryExportValue(
     manifest,
     redaction,
   ) as TrajectoryBundleManifest;
+  const manifestFile = redactTrajectoryBundleFileContent(
+    jsonSupportBundleFile("manifest.json", redactedManifest),
+  );
 
   await writeSupportBundleDirectory({
     outputDir: params.outputDir,
-    files: [jsonSupportBundleFile("manifest.json", redactedManifest), ...files],
+    files: [manifestFile, ...redactedFiles],
   });
 
   return {

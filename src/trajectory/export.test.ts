@@ -309,7 +309,10 @@ describe("exportTrajectoryBundle", () => {
           type: "toolCall",
           id: "call_1",
           name: "read",
-          arguments: { command: `curl -H 'Authorization: Bearer ${rawSecrets[1]}'` },
+          arguments: {
+            [rawSecrets[5]]: "secret-looking tool argument key",
+            command: `curl -H 'Authorization: Bearer ${rawSecrets[1]}'`,
+          },
         },
       ]),
     };
@@ -370,6 +373,10 @@ describe("exportTrajectoryBundle", () => {
           sessionId: "session-1",
           data: {
             harness: { type: "openclaw", token: rawSecrets[3] },
+            metadata: {
+              [`https://example.test/callback?token=${rawSecrets[1]}`]:
+                "secret-looking metadata key",
+            },
             prompting: {
               skillsPrompt: `skills ${rawSecrets[4]}`,
               userPromptPrefixText: `prefix ${rawSecrets[0]}`,
