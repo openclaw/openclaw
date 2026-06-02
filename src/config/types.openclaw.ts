@@ -46,6 +46,33 @@ export type SecurityConfig = {
     /** Accepted security audit findings to omit from active summary/findings. */
     suppressions?: SecurityAuditSuppression[];
   };
+  installPolicy?: {
+    /**
+     * Enable operator-owned install policy. When true without an exec command,
+     * install/update attempts fail closed for supported targets.
+     */
+    enabled?: boolean;
+    /** Supported install targets. Omit to cover every supported target. */
+    targets?: Array<"skill" | "plugin">;
+    /**
+     * Trusted local policy command. Transport intentionally mirrors exec
+     * SecretRef provider fields: absolute command, no shell, bounded output,
+     * explicit env allowlist, and secure path checks.
+     */
+    exec?: {
+      source: "exec";
+      command: string;
+      args?: string[];
+      timeoutMs?: number;
+      noOutputTimeoutMs?: number;
+      maxOutputBytes?: number;
+      env?: Record<string, string>;
+      passEnv?: string[];
+      trustedDirs?: string[];
+      allowInsecurePath?: boolean;
+      allowSymlinkCommand?: boolean;
+    };
+  };
 };
 
 export type SurfaceConfigEntry = {

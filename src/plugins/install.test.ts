@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -12,6 +13,8 @@ import {
   installPluginFromArchive,
   installPluginFromDir,
   installPluginFromInstalledPackageDir,
+  installPluginFromNpmPackArchive,
+  installPluginFromNpmSpec,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
@@ -230,6 +233,7 @@ function setupInstallPluginFromDirFixture(params?: {
 async function installFromDirWithWarnings(params: {
   pluginDir: string;
   extensionsDir: string;
+  config?: OpenClawConfig;
   dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
@@ -240,6 +244,7 @@ async function installFromDirWithWarnings(params: {
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     dirPath: params.pluginDir,
     extensionsDir: params.extensionsDir,
+    config: params.config,
     mode: params.mode,
     logger: {
       info: () => {},
@@ -249,15 +254,165 @@ async function installFromDirWithWarnings(params: {
   return { result, warnings };
 }
 
+type CapturedInstallPolicyRequest = {
+  request: { kind: string; mode?: string; requestedSpecifier?: string };
+  sourcePath?: string;
+  sourcePathKind?: string;
+  source?: { authority: string; kind: string; mutable: boolean; network: boolean };
+  plugin?: { contentType: string };
+};
+
+function writeAllowingInstallPolicyScript(dir: string) {
+  const scriptPath = path.join(dir, "allow-policy.cjs");
+  const logPath = path.join(dir, "policy-requests.jsonl");
+  fs.writeFileSync(
+    scriptPath,
+    `
+const fs = require("node:fs");
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.OPENCLAW_POLICY_LOG, input + "\\n");
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+});
+`,
+    "utf-8",
+  );
+  fs.chmodSync(scriptPath, 0o700);
+  return { scriptPath, logPath };
+}
+
+function writeBlockingInstallPolicyScript(dir: string) {
+  const scriptPath = path.join(dir, "block-policy.cjs");
+  const logPath = path.join(dir, "policy-requests.jsonl");
+  fs.writeFileSync(
+    scriptPath,
+    `
+const fs = require("node:fs");
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const request = JSON.parse(input);
+  if (request.sourcePath && !fs.existsSync(request.sourcePath)) {
+    process.stdout.write(JSON.stringify({
+      protocolVersion: 1,
+      decision: "block",
+      reason: "policy source path does not exist",
+    }));
+    return;
+  }
+  fs.appendFileSync(process.env.OPENCLAW_POLICY_LOG, input + "\\n");
+  process.stdout.write(JSON.stringify({
+    protocolVersion: 1,
+    decision: "block",
+    reason: "npm installs are disabled by policy",
+  }));
+});
+`,
+    "utf-8",
+  );
+  fs.chmodSync(scriptPath, 0o700);
+  return { scriptPath, logPath };
+}
+
+function writeInstallOnlyBlockingPolicyScript(dir: string) {
+  const scriptPath = path.join(dir, "block-install-policy.cjs");
+  const logPath = path.join(dir, "policy-requests.jsonl");
+  fs.writeFileSync(
+    scriptPath,
+    `
+const fs = require("node:fs");
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.OPENCLAW_POLICY_LOG, input + "\\n");
+  const request = JSON.parse(input).request;
+  if (request.mode === "install") {
+    process.stdout.write(JSON.stringify({
+      protocolVersion: 1,
+      decision: "block",
+      reason: "fresh npm installs are disabled by policy",
+    }));
+    return;
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+});
+`,
+    "utf-8",
+  );
+  fs.chmodSync(scriptPath, 0o700);
+  return { scriptPath, logPath };
+}
+
+function configWithInstallPolicy(scriptPath: string, logPath: string): OpenClawConfig {
+  return {
+    security: {
+      installPolicy: {
+        enabled: true,
+        exec: {
+          source: "exec",
+          command: process.execPath,
+          args: [scriptPath],
+          env: { OPENCLAW_POLICY_LOG: logPath },
+          allowInsecurePath: true,
+          timeoutMs: 5000,
+          maxOutputBytes: 16 * 1024,
+        },
+      },
+    },
+  };
+}
+
+function readCapturedInstallPolicyRequests(logPath: string): CapturedInstallPolicyRequest[] {
+  return fs
+    .readFileSync(logPath, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as CapturedInstallPolicyRequest);
+}
+
+function mockNpmViewMetadata(params: { name: string; version?: string }) {
+  vi.mocked(runCommandWithTimeout).mockResolvedValueOnce({
+    code: 0,
+    killed: false,
+    signal: null,
+    stderr: "",
+    termination: "exit",
+    stdout: JSON.stringify({
+      name: params.name,
+      version: params.version ?? "1.0.0",
+      dist: {
+        integrity: "sha512-test",
+        shasum: "abc123",
+      },
+    }),
+  });
+}
+
 async function installFromArchiveWithWarnings(params: {
   archivePath: string;
   extensionsDir: string;
+  config?: OpenClawConfig;
   dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromArchive({
     archivePath: params.archivePath,
+    config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
@@ -819,6 +974,41 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.MISSING_PLUGIN_MANIFEST);
     }
     expect(fs.existsSync(resolvePluginInstallDir("@openclaw/zipper", extensionsDir))).toBe(false);
+  });
+
+  it("reports direct local archive installs as user-provided archive sources", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { scriptPath, logPath } = writeAllowingInstallPolicyScript(stateDir);
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "local-policy-archive.tgz",
+      packageJson: {
+        name: "local-policy-archive",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+
+    const { result } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+    });
+
+    expect(result.ok).toBe(true);
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.request.kind)).toEqual([
+      "plugin-archive",
+      "plugin-archive",
+    ]);
+    expect(requests.map((request) => request.source)).toEqual([
+      { kind: "archive", authority: "user", mutable: true, network: false },
+      { kind: "archive", authority: "user", mutable: true, network: false },
+    ]);
+    expect(requests[0]?.request.requestedSpecifier).toBe(archivePath);
   });
 
   it("allows archive installs with dangerous code patterns when forced unsafe install is set", async () => {
@@ -2505,6 +2695,49 @@ describe("installPluginFromArchive", () => {
     expectWarningExcludes(warnings, "dangerous code pattern");
   });
 
+  it("forwards policy config and source metadata to bundle scans", async () => {
+    const scanSpy = vi.spyOn(installSecurityScan, "scanBundleInstallSource");
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Policy Source Bundle",
+    });
+    const config: OpenClawConfig = {
+      security: {
+        installPolicy: {
+          enabled: false,
+        },
+      },
+    };
+    const source = {
+      kind: "clawhub",
+      authority: "openclaw",
+      mutable: false,
+      network: true,
+    } as const;
+
+    try {
+      const result = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+        config,
+        installPolicyRequest: {
+          kind: "plugin-archive",
+          requestedSpecifier: "clawhub:policy-source-bundle",
+          source,
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      const scanParams = scanSpy.mock.calls.at(-1)?.[0];
+      expect(scanParams?.config).toBe(config);
+      expect(scanParams?.requestKind).toBe("plugin-archive");
+      expect(scanParams?.requestedSpecifier).toBe("clawhub:policy-source-bundle");
+      expect(scanParams?.source).toEqual(source);
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
   it("blocks bundle installs when a vendored manifest declares a blocked dependency", async () => {
     const { pluginDir, extensionsDir } = setupBundleInstallFixture({
       bundleFormat: "codex",
@@ -2810,6 +3043,30 @@ describe("installPluginFromArchive", () => {
     ).toBe(true);
   });
 
+  it("runs operator policy for local package and dependency-tree scans as plugin-dir", async () => {
+    const { tmpDir, pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const { scriptPath, logPath } = writeAllowingInstallPolicyScript(tmpDir);
+    writeMinimalPackagePlugin(pluginDir, "policy-dir-plugin");
+
+    const { result } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+    });
+
+    expect(result.ok).toBe(true);
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.request.kind)).toEqual(["plugin-dir", "plugin-dir"]);
+    expect(requests.map((request) => request.plugin?.contentType)).toEqual([
+      "package",
+      "dependency-tree",
+    ]);
+    expect(requests.map((request) => request.source?.kind)).toEqual(["local-path", "local-path"]);
+    expect(requests[0]?.request.requestedSpecifier).toBe(pluginDir);
+    expect(requests[1]?.request.requestedSpecifier).toBe(pluginDir);
+  });
+
   it("blocks plugin install when before_install rejects after builtin critical findings", async () => {
     const handler = vi.fn().mockReturnValue({
       block: true,
@@ -2837,7 +3094,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("Blocked by enterprise policy");
-      expect(result.code).toBeUndefined();
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     }
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = requireHookPayload(handler);
@@ -2893,7 +3150,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("Blocked by enterprise policy");
-      expect(result.code).toBeUndefined();
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     }
     expect(
       warnings.some((warning) =>
@@ -2905,6 +3162,29 @@ describe("installPluginFromArchive", () => {
     expect(
       warnings.some((warning) =>
         warning.includes("blocked by plugin hook: Blocked by enterprise policy"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed with a terminal code when before_install throws", async () => {
+    const handler = vi.fn().mockRejectedValue(new Error("policy process unavailable"));
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
+
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    writeMinimalPackagePlugin(pluginDir, "hook-failure-plugin");
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+      expect(result.error).toContain("before_install hook failed");
+      expect(result.error).toContain("policy process unavailable");
+    }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(
+      warnings.some((warning) =>
+        warning.includes("blocked by plugin hook failure: Installation blocked"),
       ),
     ).toBe(true);
   });
@@ -3131,6 +3411,168 @@ describe("installPluginFromArchive", () => {
     }
     expect(warnings).toStrictEqual([]);
     scanSpy.mockRestore();
+  });
+});
+
+describe("installPluginFromNpmSpec", () => {
+  it("runs operator policy before npm install mutates the managed root", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const { scriptPath, logPath } = writeBlockingInstallPolicyScript(root);
+    mockNpmViewMetadata({ name: "@acme/policy-preflight-plugin" });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@acme/policy-preflight-plugin@1.0.0",
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("npm installs are disabled by policy");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
+      "npm",
+      "view",
+      "@acme/policy-preflight-plugin@1.0.0",
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ]);
+    await expect(fsPromises.stat(npmDir)).rejects.toThrow();
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.kind).toBe("plugin-npm");
+    expect(requests[0]?.request.requestedSpecifier).toBe("@acme/policy-preflight-plugin@1.0.0");
+    expect(requests[0]?.source?.kind).toBe("npm");
+    expect(requests[0]?.sourcePathKind).toBe("file");
+    expect(path.basename(requests[0]?.sourcePath ?? "")).toBe("npm-package-metadata.json");
+    expect(requests[0]?.plugin?.contentType).toBe("package");
+  });
+
+  it("reports effective install mode to policy when requested npm update has no installed target", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
+    mockNpmViewMetadata({ name: "@acme/policy-preflight-plugin" });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@acme/policy-preflight-plugin@1.0.0",
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("fresh npm installs are disabled by policy");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.mode).toBe("install");
+    expect(requests[0]?.request.kind).toBe("plugin-npm");
+  });
+
+  it("runs operator policy for npm dry-run probes", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const { scriptPath, logPath } = writeBlockingInstallPolicyScript(root);
+    mockNpmViewMetadata({ name: "@acme/policy-dry-run-plugin" });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@acme/policy-dry-run-plugin@1.0.0",
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+      dryRun: true,
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("npm installs are disabled by policy");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    await expect(fsPromises.stat(npmDir)).rejects.toThrow();
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.kind).toBe("plugin-npm");
+    expect(requests[0]?.request.mode).toBe("install");
+    expect(requests[0]?.source?.kind).toBe("npm");
+    expect(requests[0]?.sourcePathKind).toBe("file");
+  });
+
+  it("reports npm-pack local archives as mutable user archive sources", async () => {
+    const root = suiteTempRootTracker.makeTempDir();
+    const npmDir = path.join(root, "npm");
+    const extensionsDir = path.join(root, "extensions");
+    const { scriptPath, logPath } = writeBlockingInstallPolicyScript(root);
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "npm-pack-policy-archive.tgz",
+      packageJson: {
+        name: "npm-pack-policy-archive",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce({
+      code: 0,
+      killed: false,
+      signal: null,
+      stderr: "",
+      termination: "exit",
+      stdout: JSON.stringify([
+        {
+          filename: path.basename(archivePath),
+          name: "npm-pack-policy-archive",
+          version: "1.0.0",
+          integrity: "sha512-test",
+          shasum: "abc123",
+        },
+      ]),
+    });
+
+    const result = await installPluginFromNpmPackArchive({
+      archivePath,
+      extensionsDir,
+      npmDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+      dryRun: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("npm installs are disabled by policy");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    await expect(fsPromises.stat(npmDir)).rejects.toThrow();
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.kind).toBe("plugin-npm");
+    expect(requests[0]?.request.requestedSpecifier).toBe(`npm-pack:${archivePath}`);
+    expect(requests[0]?.source).toEqual({
+      kind: "archive",
+      authority: "user",
+      mutable: true,
+      network: false,
+    });
+    expect(requests[0]?.sourcePath).toBe(archivePath);
+    expect(requests[0]?.sourcePathKind).toBe("file");
   });
 });
 

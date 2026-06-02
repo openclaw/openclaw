@@ -288,7 +288,13 @@ export const SkillsInstallParamsSchema = Type.Union([
     {
       name: NonEmptyString,
       installId: NonEmptyString,
-      dangerouslyForceUnsafeInstall: Type.Optional(Type.Boolean()),
+      dangerouslyForceUnsafeInstall: Type.Optional(
+        Type.Boolean({
+          deprecated: true,
+          description:
+            "Deprecated compatibility field. Current servers ignore it; install policy is controlled by security.installPolicy.",
+        }),
+      ),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },

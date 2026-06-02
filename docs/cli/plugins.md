@@ -161,7 +161,7 @@ is available, then fall back to `latest`.
 
     Install scans ignore common test files and directories such as `tests/`, `__tests__/`, `*.test.*`, and `*.spec.*` to avoid blocking packaged test mocks; declared plugin runtime entrypoints are still scanned even if they use one of those names.
 
-    This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
+    This CLI flag applies to plugin install/update flows only. Skill installs use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` only affects installs on your own machine; it does not ask ClawHub to rescan the plugin or make a blocked release public.
 
@@ -267,6 +267,10 @@ For local paths and archives, OpenClaw auto-detects:
 - Claude-compatible bundles (`.claude-plugin/plugin.json` or the default Claude component layout)
 - Cursor-compatible bundles (`.cursor-plugin/plugin.json`)
 
+Managed local installs must be plugin directories or archives. Standalone `.js`,
+`.mjs`, `.cjs`, and `.ts` plugin files are not copied into the managed plugin
+root by `plugins install`; list them explicitly in `plugins.load.paths` instead.
+
 <Note>
 Compatible bundles install into the normal plugin root and participate in the same list/info/enable/disable flow. Today, bundle skills, Claude command-skills, Claude `settings.json` defaults, Claude `.lsp.json` / manifest-declared `lspServers` defaults, Cursor command-skills, and compatible Codex hook directories are supported; other detected bundle capabilities are shown in diagnostics/info but are not yet wired into runtime execution.
 </Note>
@@ -320,13 +324,17 @@ For runtime hook debugging:
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
 - Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
-Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
+Use `--link` to avoid copying a local plugin directory (adds to `plugins.load.paths`):
 
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
 
-Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
+Standalone plugin files must be listed in `plugins.load.paths` rather than
+installed with `plugins install` or placed directly in `~/.openclaw/extensions`
+or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin
+package or bundle directories, while top-level script files are treated as local
+helpers and skipped.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not

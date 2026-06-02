@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
@@ -285,6 +286,44 @@ describe("installPluginFromPath", () => {
     ]);
   });
 
+  it("runs install policy before dry-run file install returns", async () => {
+    const baseDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
+    const config = {
+      security: {
+        installPolicy: {
+          enabled: true,
+          exec: {
+            source: "exec",
+            command: process.execPath,
+            args: [
+              "-e",
+              'process.stdin.resume();process.stdin.on("end",()=>{process.stdout.write(JSON.stringify({protocolVersion:1,decision:"block",reason:"blocked file plugin"}));});',
+            ],
+            allowInsecurePath: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await installPluginFromFile({
+      config,
+      filePath: sourcePath,
+      extensionsDir,
+      dryRun: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("blocked by install policy: blocked file plugin");
+    }
+  });
+
   it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {
     const baseDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");
@@ -307,6 +346,29 @@ describe("installPluginFromPath", () => {
     ]);
   });
 
+  it("rejects managed plain file plugin installs through path install", async () => {
+    const baseDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
+
+    const result = await installPluginFromPath({
+      path: sourcePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN);
+    expect(result.error).toBe(
+      "Plain file plugin installs are not supported. Install a plugin directory or archive that contains openclaw.plugin.json, or list standalone plugin files in plugins.load.paths.",
+    );
+  });
+
   it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
     const baseDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");
@@ -322,8 +384,8 @@ describe("installPluginFromPath", () => {
     const targetPath = path.join(extensionsDir, "payload.js");
     fs.linkSync(victimPath, targetPath);
 
-    const result = await installPluginFromPath({
-      path: sourcePath,
+    const result = await installPluginFromFile({
+      filePath: sourcePath,
       extensionsDir,
       mode: "update",
     });

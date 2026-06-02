@@ -452,11 +452,14 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the built-in scan for skill and plugin installs.
-Return additional findings or `{ block: true, blockReason }` to stop the
-install.
+`before_install` runs after built-in install scans, when a built-in scan is
+performed, and after the operator-owned `security.installPolicy` check when one
+is configured. Workspace/local skill installs include `builtinScan`; policy-only
+trusted sources can omit it. Return additional findings or `{ block: true,
+blockReason }` to stop the install.
 
 `block: true` is terminal. `block: false` is treated as no decision.
+Handler failures block the install fail-closed.
 
 ## Gateway lifecycle
 

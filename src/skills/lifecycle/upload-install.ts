@@ -95,9 +95,16 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
-        scan: {
+        policy: {
+          config: params.config,
           installId: "upload",
-          origin: "skill-upload",
+          origin: {
+            type: "upload",
+            uploadId: params.uploadId,
+            sha256: record.actualSha256,
+          },
+          source: { kind: "upload", authority: "user", mutable: false, network: false },
+          requestedSpecifier: `upload:${params.uploadId}`,
         },
       });
       if (!install.ok) {
