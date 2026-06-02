@@ -1265,6 +1265,24 @@ describe("OpenClaw SDK", () => {
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
 
+  it("surfaces pump failures when transport events() throws synchronously", async () => {
+    const failure = new Error("transport events() construction failure");
+    const transport: OpenClawTransport = {
+      async request() {
+        return {} as never;
+      },
+      events(): AsyncIterable<GatewayEvent> {
+        throw failure;
+      },
+    };
+    const oc = new OpenClaw({ transport });
+
+    const iterator = oc.events()[Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toBe(failure);
+
+    await oc.close();
+  });
+
   it("surfaces pump failures when the transport event iterator throws before yielding", async () => {
     const failure = new Error("synthetic transport event failure");
     const transport: OpenClawTransport = {

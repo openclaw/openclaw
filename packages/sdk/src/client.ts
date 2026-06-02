@@ -492,9 +492,10 @@ export class OpenClaw {
       };
     });
     this.eventPumpPromise = (async () => {
-      const iterator = this.transport.events()[Symbol.asyncIterator]();
+      let iterator: AsyncIterator<GatewayEvent> | undefined;
       let pumpError: unknown;
       try {
+        iterator = this.transport.events()[Symbol.asyncIterator]();
         while (true) {
           const next = iterator.next();
           await Promise.resolve();
@@ -511,7 +512,7 @@ export class OpenClaw {
         pumpError = error ?? new Error("OpenClaw SDK event stream failed");
       } finally {
         markReady();
-        await iterator.return?.().catch(() => {});
+        await iterator?.return?.().catch(() => {});
         this.normalizedEvents.close(pumpError);
       }
     })();
