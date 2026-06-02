@@ -27,6 +27,10 @@ import {
 import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+} from "../memory-host-sdk/dreaming.js";
+import {
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
   repairDreamingArtifacts,
@@ -395,6 +399,27 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
  * may spawn a short-lived probe process when `memory.backend=qmd` to verify
  * the configured `qmd` binary is available.
  */
+// Memory-core dreaming runs independently of embedding memory search, so surface its
+// status even when embedding memory search is disabled or unavailable (#87637).
+function noteIndependentDreamingStatus(cfg: OpenClawConfig): void {
+  const dreaming = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+    cfg,
+  });
+  if (!dreaming.enabled) {
+    return;
+  }
+  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  note(
+    [
+      "Memory-core dreaming is enabled independently of embedding memory search.",
+      `Dreaming schedule: ${dreaming.frequency}${timezone}`,
+      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+    ].join("\n"),
+    "Memory dreaming",
+  );
+}
+
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
   opts?: {
@@ -415,6 +440,7 @@ export async function noteMemorySearchHealth(
 
   if (!resolved) {
     note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    noteIndependentDreamingStatus(cfg);
     return;
   }
   const provider =

@@ -266,6 +266,33 @@ describe("doctor.memory.status", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("keeps dreaming status visible when the memory search manager is missing (#87637)", async () => {
+    getMemorySearchManager.mockResolvedValue({ manager: null, error: "memory search disabled" });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    const payload = respondPayload(respond);
+    expectRecordFields(payload.embedding, { ok: false, error: "memory search disabled" });
+    // Dreaming status is still reported even without an active embedding manager (#87637).
+    const dreaming = expectRecordFields(payload.dreaming, { enabled: false });
+    expectRecordFields(dreaming.phases, {});
+  });
+
+  it("resolves the requested agent's workspace from config when no manager is active (#87637)", async () => {
+    getMemorySearchManager.mockResolvedValue({ manager: null, error: "memory search disabled" });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond, { params: { agentId: "research" } });
+
+    // Without a live manager to read the workspace from, the requested-agent scope must resolve
+    // its workspace from config — otherwise dreaming would report an empty selected-agent store.
+    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.anything(), "research");
+    expectRecordFields(respondPayload(respond).dreaming as Record<string, unknown>, {
+      enabled: false,
+    });
+  });
+
   it("returns gateway embedding probe status for the requested agent", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({

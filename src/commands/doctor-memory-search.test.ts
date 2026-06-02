@@ -192,6 +192,35 @@ describe("noteMemorySearchHealth", () => {
     resetMemoryRecallMocks();
   });
 
+  it("distinguishes enabled memory-core dreaming when embedding memory search is disabled (#87637)", async () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+    const cfgWithDreaming = {
+      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: { dreaming: { enabled: true, frequency: "0 */4 * * *" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithDreaming, {});
+
+    expect(note).toHaveBeenCalledTimes(2);
+    expect(note.mock.calls[0]).toEqual([
+      "Memory search is explicitly disabled (enabled: false).",
+      "Memory search",
+    ]);
+    expect(note.mock.calls[1][1]).toBe("Memory dreaming");
+    const message = String(note.mock.calls[1][0]);
+    expect(message).toContain(
+      "Memory-core dreaming is enabled independently of embedding memory search.",
+    );
+    expect(message).toContain("Dreaming schedule: 0 */4 * * * (America/Los_Angeles)");
+    expect(message).toContain("openclaw memory status --deep");
+  });
+
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
