@@ -51,6 +51,19 @@ type ForegroundReplyFenceSnapshot = {
 const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
 const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
 
+function applyRuntimeToolsAllow(
+  replyOptions: Omit<GetReplyOptions, "onBlockReply"> | undefined,
+  toolsAllow: string[] | undefined,
+): Omit<GetReplyOptions, "onBlockReply"> | undefined {
+  if (toolsAllow === undefined) {
+    return replyOptions;
+  }
+  return {
+    ...replyOptions,
+    toolsAllow,
+  };
+}
+
 function normalizeForegroundReplyFencePart(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -453,9 +466,11 @@ export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
+  toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
+  const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
   const finalized = measureDiagnosticsTimelineSpanSync(
     "auto_reply.finalize_context",
     () => finalizeInboundContext(params.ctx),
@@ -475,7 +490,7 @@ export async function dispatchInboundMessage(params: {
     });
   }
   installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, {
-    runId: params.replyOptions?.runId,
+    runId: replyOptions?.runId,
   });
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
@@ -487,7 +502,7 @@ export async function dispatchInboundMessage(params: {
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
-            replyOptions: params.replyOptions,
+            replyOptions,
             replyResolver: params.replyResolver,
           }),
         {
@@ -504,6 +519,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
+  toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
@@ -565,6 +581,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       ctx: finalized,
       cfg: params.cfg,
       dispatcher,
+      toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
       replyOptions: {
         ...params.replyOptions,
@@ -595,6 +612,7 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
+  toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
@@ -619,6 +637,7 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcher,
+    toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
   });

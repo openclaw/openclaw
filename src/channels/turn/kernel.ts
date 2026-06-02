@@ -423,6 +423,7 @@ export async function dispatchAssembledChannelTurn(
             },
             onError: params.delivery.onError,
           },
+          toolsAllow: params.toolsAllow,
           replyOptions: replyPipeline.replyOptions,
           replyResolver: params.replyResolver,
         }),

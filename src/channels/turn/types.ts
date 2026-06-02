@@ -380,6 +380,7 @@ export type AssembledChannelTurn = {
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
+  toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
   record?: ChannelTurnRecordOptions;

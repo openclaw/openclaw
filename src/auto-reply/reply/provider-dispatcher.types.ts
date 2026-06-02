@@ -15,6 +15,7 @@ export type DispatchReplyWithBufferedBlockDispatcher = (params: {
   ctx: DispatchReplyContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
+  toolsAllow?: string[];
   replyOptions?: DispatchReplyOptions;
   replyResolver?: GetReplyFromConfig;
 }) => Promise<DispatchFromConfigResult>;
@@ -23,6 +24,7 @@ export type DispatchReplyWithDispatcher = (params: {
   ctx: DispatchReplyContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
+  toolsAllow?: string[];
   replyOptions?: DispatchReplyOptions;
   replyResolver?: GetReplyFromConfig;
 }) => Promise<DispatchFromConfigResult>;
