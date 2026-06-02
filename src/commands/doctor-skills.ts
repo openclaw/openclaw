@@ -13,11 +13,13 @@ import {
 } from "../skills/lifecycle/gh-config-discovery.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
+  collectPlatformIncompatibleAgentSkills,
   collectUnavailableAgentSkills,
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
 export {
+  collectPlatformIncompatibleAgentSkills,
   collectUnavailableAgentSkills,
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
@@ -114,6 +116,13 @@ export async function maybeRepairSkillReadiness(params: {
     note(githubHint.join("\n"), "GitHub CLI");
   }
   const unavailable = collectUnavailableAgentSkills(report);
+  const platformIncompatible = collectPlatformIncompatibleAgentSkills(report);
+  if (platformIncompatible.length > 0) {
+    note(
+      `${platformIncompatible.length} skill${platformIncompatible.length === 1 ? " is" : "s are"} not supported on this platform and will be skipped by doctor.`,
+      "Skills",
+    );
+  }
   if (unavailable.length === 0) {
     return params.cfg;
   }

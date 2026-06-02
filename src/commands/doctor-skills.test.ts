@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import type { GhConfigDiscoveryInput } from "../skills/lifecycle/gh-config-discovery.js";
 import {
+  collectPlatformIncompatibleAgentSkills,
   collectUnavailableAgentSkills,
   describeGhConfigDirHintFromDiscovery,
   disableUnavailableSkillsInConfig,
@@ -50,15 +51,24 @@ describe("doctor skills", () => {
       commandVisible: false,
       missing: { bins: ["tool"], anyBins: [], env: [], config: [], os: [] },
     });
+    const platformMismatch = createSkill({
+      name: "apple-notes",
+      eligible: false,
+      modelVisible: false,
+      commandVisible: false,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: ["darwin"] },
+    });
     const report = createReport([
       createSkill({ name: "ready" }),
       unavailable,
+      platformMismatch,
       createSkill({ name: "disabled", eligible: false, disabled: true }),
       createSkill({ name: "agent-filtered", eligible: true, blockedByAgentFilter: true }),
       createSkill({ name: "bundled-blocked", eligible: false, blockedByAllowlist: true }),
     ]);
 
     expect(collectUnavailableAgentSkills(report)).toEqual([unavailable]);
+    expect(collectPlatformIncompatibleAgentSkills(report)).toEqual([platformMismatch]);
   });
 
   it("formats actionable missing requirement lines without secret values", () => {
