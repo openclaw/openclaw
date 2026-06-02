@@ -16,6 +16,21 @@ describe("Codex dynamic tool filtering", () => {
     expect(toolNames).not.toContain("image");
   });
 
+  it("does not crash when a sibling tool name is unreadable", () => {
+    const unreadableTool = {
+      get name() {
+        throw new Error("tool name getter exploded");
+      },
+    };
+
+    expect(
+      filterToolsForVisionInputs([unreadableTool, { name: "image" }, { name: "message" }], {
+        modelHasVision: true,
+        hasInboundImages: true,
+      }),
+    ).toEqual([unreadableTool, { name: "message" }]);
+  });
+
   it("keeps the image tool unless both model vision and inbound images are present", () => {
     const tools = [{ name: "image" }, { name: "read" }];
 

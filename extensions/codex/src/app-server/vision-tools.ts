@@ -8,5 +8,11 @@ export function filterToolsForVisionInputs<T extends { name?: string }>(
   if (!params.modelHasVision || !params.hasInboundImages) {
     return tools;
   }
-  return tools.filter((tool) => tool.name !== "image");
+  return tools.filter((tool) => {
+    try {
+      return tool.name !== "image";
+    } catch {
+      return true;
+    }
+  });
 }
