@@ -1239,8 +1239,8 @@ describe("listSessionsFromStore subagent metadata", () => {
       task: "killed task",
       cleanup: "keep",
       createdAt: now - 10_000,
-      startedAt: now - 1_000,
-      endedAt: now - 2_000,
+      startedAt: now - 6_000,
+      endedAt: now - 1_000,
       endedReason: "subagent-killed",
       model: "openai/gpt-5.4",
     });
@@ -1255,7 +1255,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     const killed = result.sessions.find((session) => session.key === "agent:main:subagent:killed");
     expect(killed?.status).toBe("killed");
     expect(killed?.resumable).toBeUndefined();
-    expect(killed?.runtimeMs).toBe(0);
+    expect(killed?.runtimeMs).toBe(5_000);
   });
 
   test("fails closed when model lookup misses", async () => {
