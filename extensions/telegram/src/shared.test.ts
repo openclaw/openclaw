@@ -64,6 +64,13 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     });
   });
 
+  it("advertises captioned final text for TTS voice notes", () => {
+    expect(telegramPluginBase.capabilities.tts?.voice).toMatchObject({
+      synthesisTarget: "voice-note",
+      captionedFinalText: true,
+    });
+  });
+
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();
     const alertsAccount = resolveAccount(cfg, "alerts");
