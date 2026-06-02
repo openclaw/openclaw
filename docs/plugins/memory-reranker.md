@@ -128,15 +128,32 @@ seam is active when a plugin has registered a provider and inactive otherwise.
 To disable the reranker at the operator level, disable or uninstall the plugin
 that registered it, or add a kill-switch inside the plugin's own config.
 
+## Result ordering
+
+The reranker scores the full pre-MMR candidate pool. After scores are applied,
+core runs MMR diversification using those scores, then applies `minScore`
+filtering and result trimming. The final output order is **rerank then MMR
+composed**: the highest-relevance candidate leads, but MMR may reorder
+near-tied tail entries to promote diversity. The output is therefore **not** a
+pure `rerankScore`-descending list — tail reordering is intentional.
+
 ## Observing rerank state
 
 The rerank state is visible in two places:
 
-**`status().custom.rerank`** — check the plugin's own status output for
-`disabled`, `active`, or `degraded`.
+**`status().custom.rerank`** — the plugin's own status output exposes the
+current rerank state as one of three values:
+
+- `"disabled"` — no reranker is registered.
+- `"active"` — a reranker is registered and applied scores during this search.
+  This value reliably means reranking actually happened.
+- `"degraded"` — a reranker is registered but returned no scores (the provider
+  timed out, returned an error, or was disabled via its own kill-switch). A
+  registered-but-not-working reranker shows `"degraded"`, not a false
+  `"active"`.
 
 **Memory-search debug block** — when memory-search debug output is enabled, the
-debug block includes a `rerank` field with the current state and timing.
+`debug.rerank` field carries the same state and timing information.
 
 ## Related
 
