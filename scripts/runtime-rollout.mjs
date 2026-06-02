@@ -644,6 +644,57 @@ export async function runRollout() {
             // operator can grep server logs. Phase 5 reviewer C.
             errorDetails = { async_rollout_id: asyncRolloutId };
           }
+          // When the async path craters mid-rollout (API restarted
+          // and lost the in-memory registry → 404, or sustained CF
+          // transient during polling), fall back to per-tenant Fly
+          // updates if the operator has FLY_API_TOKEN configured.
+          // This is the same fallback the synchronous transient
+          // handler uses below — Phase 10 caught the gap when a
+          // deploy-hetzner restarted the API mid-rollout (build
+          // run 26811103950, #1061).
+          if (flyToken && !scopedRollout) {
+            console.warn(`async poll failed ${polled.code}; switching to per-tenant fallback`);
+            let fallbackResult;
+            try {
+              fallbackResult = await runPerTenantFallback({
+                base,
+                image,
+                apiPassword,
+                adminToken,
+                tenantDevToken,
+                flyToken,
+                flyOrgSlug,
+                flyApiBase,
+                timeoutMs,
+                attempts,
+              });
+            } catch (err) {
+              finalResult = "failed-per-tenant-fallback";
+              errorDetails = {
+                ...errorDetails,
+                fallback_error: err?.message || String(err),
+              };
+              break;
+            }
+            finalResult = fallbackResult.finalResult;
+            supersededBy = fallbackResult.supersededBy;
+            fallback = {
+              trigger: `async poll ${polled.code} after ${asyncRolloutId}`,
+              tenant_source: `${flyApiBase}/apps?org_slug=${flyOrgSlug}`,
+              tenant_ids: fallbackResult.tenantIds,
+              results: fallbackResult.results,
+            };
+            updated = fallbackResult.updated;
+            skipped = fallbackResult.skipped;
+            failed = fallbackResult.failed;
+            errorDetails = {
+              ...errorDetails,
+              ...fallbackResult.errorDetails,
+            };
+            if (failed.length > 0 && fallbackResult.results.length > 0) {
+              finalBody = fallbackResult.results.at(-1)?.response_body || finalBody;
+            }
+          }
           break;
         }
         finalJson = polled.json.result || {};
