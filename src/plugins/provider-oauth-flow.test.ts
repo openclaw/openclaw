@@ -30,6 +30,7 @@ describe("createVpsAwareOAuthHandlers", () => {
       spin: { update: vi.fn(), stop: vi.fn() },
       openUrl: vi.fn(async () => undefined),
       localBrowserMessage: "Complete sign-in in browser...",
+      manualPromptMessage: "Paste the remote redirect URL",
     });
 
     await handlers.onAuth({ url: "https://auth.openai.com/oauth/authorize" });
@@ -43,7 +44,7 @@ describe("createVpsAwareOAuthHandlers", () => {
     ).resolves.toBe("callback-code");
 
     expect(text).toHaveBeenCalledWith({
-      message: "Paste the authorization code:",
+      message: "Paste the remote redirect URL",
       placeholder: undefined,
       signal: promptSignal,
       validate: expect.any(Function),
