@@ -1090,6 +1090,7 @@ export async function handleCodexPlanDecisionCallback(params: {
   ctx: PluginCommandContext;
   pluginConfig?: unknown;
   payload: string;
+  onConsumed?: () => Promise<void> | void;
 }): Promise<{ handled: false } | { handled: true; consumed: boolean; reply: PluginCommandResult }> {
   const parsed = parseCodexPlanDecisionCallback(params.payload);
   if (!parsed) {
@@ -1104,6 +1105,7 @@ export async function handleCodexPlanDecisionCallback(params: {
       params.pluginConfig,
       parsed.action,
       parsed.token,
+      params.onConsumed,
     )),
   };
 }
@@ -1114,6 +1116,7 @@ async function handleConversationPlanDecisionWithStatus(
   pluginConfig: unknown,
   action: CodexPlanDecisionAction,
   token: string,
+  onConsumed?: () => Promise<void> | void,
 ): Promise<{ consumed: boolean; reply: PluginCommandResult }> {
   const sessionFile = await resolveControlSessionFile(ctx);
   const decision = consumeCodexPlanDecision({
@@ -1124,6 +1127,7 @@ async function handleConversationPlanDecisionWithStatus(
   if (!decision.ok) {
     return { consumed: false, reply: { text: decision.message } };
   }
+  await onConsumed?.();
   if (action === "stay") {
     return { consumed: true, reply: { text: "Codex will stay in plan mode." } };
   }

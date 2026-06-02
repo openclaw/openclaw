@@ -473,10 +473,13 @@ describe("codex plugin", () => {
 
   it("disables Discord Codex plan controls after a consumed callback", async () => {
     const registerInteractiveHandler = vi.fn();
-    handleCodexPlanDecisionCallbackMock.mockResolvedValueOnce({
-      handled: true,
-      consumed: true,
-      reply: { text: "Codex will stay in plan mode." },
+    handleCodexPlanDecisionCallbackMock.mockImplementationOnce(async (params) => {
+      await params.onConsumed?.();
+      return {
+        handled: true,
+        consumed: true,
+        reply: { text: "Codex will stay in plan mode." },
+      };
     });
     plugin.register(
       createTestPluginApi({
@@ -517,14 +520,87 @@ describe("codex plugin", () => {
       expect.objectContaining({
         payload: "plan:token-1:stay",
         pluginConfig: {},
+        onConsumed: expect.any(Function),
       }),
     );
     expect(disableComponents).toHaveBeenCalledTimes(1);
     expect(clearComponents).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({
+    expect(reply).toHaveBeenNthCalledWith(1, {
+      text: "Sent answer to Codex.",
+      ephemeral: true,
+    });
+    expect(reply).toHaveBeenNthCalledWith(2, {
       text: "Codex will stay in plan mode.",
       ephemeral: true,
     });
+  });
+
+  it("acknowledges Discord Codex plan controls before slow approval finishes", async () => {
+    const registerInteractiveHandler = vi.fn();
+    let releaseApproval: () => void = () => undefined;
+    const approvalReleased = new Promise<void>((resolve) => {
+      releaseApproval = resolve;
+    });
+    const consumed = new Promise<void>((resolve) => {
+      handleCodexPlanDecisionCallbackMock.mockImplementationOnce(async (params) => {
+        await params.onConsumed?.();
+        resolve();
+        await approvalReleased;
+        return {
+          handled: true,
+          consumed: true,
+          reply: { text: "implemented" },
+        };
+      });
+    });
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: { config: { current: () => ({}) } } as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const discordRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "discord");
+
+    const reply = vi.fn(async () => undefined);
+    const clearComponents = vi.fn(async () => undefined);
+    const disableComponents = vi.fn(async () => undefined);
+    const handler = discordRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      auth: { isAuthorizedSender: true },
+      interaction: { payload: "plan:token-1:approve-clean" },
+      respond: { reply, clearComponents, disableComponents },
+      requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    await consumed;
+
+    expect(disableComponents).toHaveBeenCalledTimes(1);
+    expect(clearComponents).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      text: "Sent answer to Codex.",
+      ephemeral: true,
+    });
+    expect(reply).not.toHaveBeenCalledWith({ text: "implemented", ephemeral: true });
+
+    releaseApproval();
+    await expect(handler).resolves.toEqual({ handled: true });
+    expect(reply).toHaveBeenLastCalledWith({ text: "implemented", ephemeral: true });
   });
 
   it("renders progress reply presentations before channel payload delivery", async () => {

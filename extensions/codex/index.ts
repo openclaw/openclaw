@@ -356,12 +356,13 @@ function registerCodexUserInputInteractiveHandlers(
         }),
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.interaction.payload,
+        onConsumed: async () => {
+          await resolveDiscordCodexControls(ctx.respond);
+          await ctx.respond.reply({ text: "Sent answer to Codex.", ephemeral: true });
+        },
       });
       if (!planResult.handled) {
         return { handled: false };
-      }
-      if (planResult.consumed) {
-        await resolveDiscordCodexControls(ctx.respond);
       }
       if (planResult.reply.text) {
         await ctx.respond.reply({ text: planResult.reply.text, ephemeral: true });

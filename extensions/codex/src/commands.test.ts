@@ -19,6 +19,7 @@ import {
 } from "./app-server/rate-limit-cache.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import {
+  handleCodexPlanDecisionCallback,
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
@@ -3963,6 +3964,63 @@ describe("codex command", () => {
     const prompt = runParams.prompt ?? "";
     expect(prompt).toContain("fresh context");
     expect(prompt).not.toContain("<proposed_plan>");
+  });
+
+  it("notifies plan callback consumption before clean-context execution starts", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const reply = buildCodexPlanDecisionReply({
+      text: "<proposed_plan>Run the focused tests.</proposed_plan>",
+      scope: {
+        sessionFile,
+        threadId: "thread-plan",
+        channel: "test",
+        senderId: "user-1",
+      },
+    });
+    const cleanButton = readInteractiveButtons(reply).find((button) =>
+      button.value.includes(":approve-clean"),
+    );
+    const events: string[] = [];
+    const startCodexConversationThread = vi.fn(async () => {
+      events.push("start-thread");
+      return {
+        kind: "codex-app-server-session" as const,
+        version: 1 as const,
+        sessionFile,
+        workspaceDir: "/repo",
+      };
+    });
+    const runCodexBoundConversationPrompt = vi.fn(async () => {
+      events.push("run");
+      return { reply: { text: "implemented" } };
+    });
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      threadId: "thread-plan",
+      sessionFile,
+      cwd: "/repo",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    }));
+
+    await expect(
+      handleCodexPlanDecisionCallback({
+        deps: createDeps({
+          readCodexAppServerBinding,
+          startCodexConversationThread,
+          runCodexBoundConversationPrompt,
+        }),
+        ctx: createContext("", sessionFile),
+        payload: cleanButton?.value ?? "",
+        onConsumed: () => {
+          events.push("consumed");
+        },
+      }),
+    ).resolves.toEqual({ handled: true, consumed: true, reply: { text: "implemented" } });
+
+    expect(events).toEqual(["consumed", "start-thread", "run"]);
+    const runParams = mockArg(runCodexBoundConversationPrompt, 0, 0) as { prompt?: string };
+    expect(runParams.prompt).toContain("Run the focused tests.");
   });
 
   it("escapes current bound model status before chat display", async () => {
