@@ -172,6 +172,34 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("redacts Feishu-audited sensitive text before sending", async () => {
+    const createMessage = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_send" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: createMessage,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "email test@example.com secret=abcDEF123456 token: Bearer tok_1234567890",
+    });
+
+    const content = JSON.parse(createMessage.mock.calls[0][0].data.content);
+    const text = content.zh_cn.content[0][0].text;
+    expect(text).toBe("email [EMAIL_1] [SECRET_1] [TOKEN_1]");
+    expect(text).not.toContain("test@example.com");
+    expect(text).not.toContain("abcDEF123456");
+    expect(text).not.toContain("tok_1234567890");
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,

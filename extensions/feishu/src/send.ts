@@ -40,6 +40,54 @@ const FEISHU_CARD_TEMPLATES = new Set([
   "lime",
 ]);
 
+const FEISHU_AUDIT_REDACTION_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+  {
+    label: "EMAIL",
+    pattern:
+      /(?<![A-Za-z0-9._%+\-@])(?![A-Za-z_]{2,20}=)[A-Za-z0-9!#$%&*+\-/=^_`{|}~][A-Za-z0-9!#$%&'*+\-/=?^_`{|}~.]*@(?:\.?[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?=$|[^A-Za-z])/gi,
+  },
+  {
+    label: "SECRET",
+    pattern:
+      /(?<![A-Za-z0-9_])(?:secret|client[_-]?secret|app[_-]?secret|appSecret|password|passwd|pwd|private[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9._~+/=\-]{8,}["']?/gi,
+  },
+  {
+    label: "TOKEN",
+    pattern:
+      /(?<![A-Za-z0-9_])(?:token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)\s*[:=]\s*["']?(?:Bearer\s+)?[A-Za-z0-9._~+/=\-]{8,}["']?/gi,
+  },
+  {
+    label: "PHONE",
+    pattern:
+      /(?<![A-Za-z0-9])(?:(?:(?:\+?1)[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}|\+\d{1,3}[\s\-.]?\d{1,4}(?:[\s\-.]?\d{2,4}){2,3})(?![-A-Za-z0-9])/gi,
+  },
+  {
+    label: "SSN",
+    pattern:
+      /(?<!\d)(?:(?!000|666)\d{3}-(?!00)\d{2}-(?!0000)\d{4}|(?!000|666)\d{3}(?!00)\d{2}(?!0000)\d{4})(?!\d)/g,
+  },
+  {
+    label: "CREDIT_CARD",
+    pattern:
+      /\b(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|3[47]\d{13}|(?:(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4})|(?:3[47]\d{2}[-\s]?\d{6}[-\s]?\d{5}))\b/g,
+  },
+];
+
+function redactFeishuAuditSensitiveText(text: string): string {
+  let result = text;
+  const counters: Record<string, number> = {};
+
+  for (const { label, pattern } of FEISHU_AUDIT_REDACTION_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, () => {
+      counters[label] = (counters[label] ?? 0) + 1;
+      return `[${label}_${counters[label]}]`;
+    });
+  }
+
+  return result;
+}
+
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
@@ -579,6 +627,7 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
+  rawText = redactFeishuAuditSensitiveText(rawText);
   const messageText = convertMarkdownTables(rawText, tableMode);
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
