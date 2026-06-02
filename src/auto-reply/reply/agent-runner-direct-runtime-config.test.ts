@@ -397,7 +397,67 @@ describe("runReplyAgent runtime config", () => {
       queueKey: "main",
     });
     expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(replyParams.replyOperation!.updateSessionId).toHaveBeenCalledWith("session-rotated");
     expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("rebinds replyOperation session ID after memory flush exhaustion reset", async () => {
+    const { replyParams, followupRun } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const sessionKey = "agent:main:telegram:default:direct:test";
+    const sessionEntry = {
+      sessionId: "session-before",
+      updatedAt: 1,
+      compactionCount: 7,
+      memoryFlushFailureCount: 2,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    replyParams.sessionKey = sessionKey;
+    replyParams.storePath = "/tmp/sessions.json";
+    replyParams.sessionEntry = sessionEntry;
+    replyParams.sessionStore = sessionStore;
+    const replyOp = createReplyOperation();
+    replyParams.replyOperation = replyOp;
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: {
+        sessionEntry?: typeof sessionEntry;
+        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+      }) => ({
+        ...params.sessionEntry,
+        memoryFlushFailureCount: 3,
+        memoryFlushCompactionCount: 7,
+      }),
+    );
+    resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
+      const resetParams = params as {
+        activeSessionEntry?: typeof sessionEntry;
+        followupRun: typeof followupRun;
+        onActiveSessionEntry: (entry: typeof sessionEntry) => void;
+        onNewSession: (sessionId: string, sessionFile: string) => void;
+      };
+      const nextEntry = {
+        ...resetParams.activeSessionEntry,
+        sessionId: "session-after-exhaustion",
+        sessionFile: "/tmp/session-after-exhaustion.jsonl",
+        compactionCount: 0,
+      };
+      resetParams.followupRun.run.sessionId = nextEntry.sessionId;
+      resetParams.followupRun.run.sessionFile = nextEntry.sessionFile;
+      resetParams.onActiveSessionEntry(nextEntry);
+      resetParams.onNewSession(nextEntry.sessionId, nextEntry.sessionFile);
+      return true;
+    });
+
+    await runReplyAgent(replyParams);
+
+    expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
+    expect(replyOp.updateSessionId).toHaveBeenCalledWith("session-after-exhaustion");
+    expect(followupRun.run.sessionId).toBe("session-after-exhaustion");
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
