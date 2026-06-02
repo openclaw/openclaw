@@ -18,6 +18,7 @@ import type {
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
+import { recordSessionMessageWorkTarget } from "../../config/sessions/message-work-targets.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -991,6 +992,7 @@ async function renderPresentationForDelivery(
 }
 
 function createMessageSentEmitter(params: {
+  cfg?: OpenClawConfig;
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -1025,6 +1027,21 @@ function createMessageSentEmitter(params: {
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
+    if (event.success && event.messageId && params.sessionKeyForInternalHooks) {
+      fireAndForgetHook(
+        recordSessionMessageWorkTarget({
+          cfg: params.cfg,
+          channel: params.channel,
+          to: params.to,
+          messageId: event.messageId,
+          sessionKey: params.sessionKeyForInternalHooks,
+        }),
+        "deliverOutboundPayloads: record session message target failed",
+        (message) => {
+          log.warn(message);
+        },
+      );
+    }
     if (hasMessageSentHooks) {
       fireAndForgetHook(
         params.hookRunner!.runMessageSent(
@@ -1545,6 +1562,7 @@ async function deliverOutboundPayloadsCore(
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
+    cfg: params.cfg,
     hookRunner,
     channel,
     to,

@@ -10,7 +10,9 @@ import {
   deriveSessionKey,
   loadSessionStore,
   patchSessionEntry,
+  recordSessionMessageWorkTarget,
   recordSessionMetaFromInbound,
+  resolveSessionMessageWorkTarget,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionKey,
@@ -686,6 +688,45 @@ describe("sessions", () => {
     expect(store[sessionKey]?.providerOverride).toBe("openai");
     expect(store[sessionKey]?.model).toBeUndefined();
     expect(store[sessionKey]?.modelProvider).toBeUndefined();
+  });
+
+  it("records and resolves session message work targets", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "message-work-targets",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+        },
+      },
+    });
+
+    await recordSessionMessageWorkTarget({
+      storePath,
+      sessionKey,
+      channel: "telegram",
+      to: "123",
+      messageId: "42",
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBe(100);
+    expect(store[sessionKey]?.messageWorkTargets).toMatchObject([
+      {
+        channel: "telegram",
+        to: "123",
+        messageId: "42",
+      },
+    ]);
+    expect(
+      resolveSessionMessageWorkTarget({
+        sessionStore: store,
+        channel: "telegram",
+        toCandidates: ["telegram:123", "123"],
+        messageId: "42",
+      })?.sessionKey,
+    ).toBe(sessionKey);
   });
 
   it("upsertSessionEntry drops legacy embedded ACP metadata", async () => {

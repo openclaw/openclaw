@@ -20,6 +20,7 @@ export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+export { recordSessionMessageWorkTarget } from "../config/sessions/message-work-targets.js";
 export {
   clearSessionStoreCacheForTest,
   getSessionEntry,

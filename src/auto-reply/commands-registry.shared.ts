@@ -677,6 +677,14 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+      key: "cancel",
+      nativeName: "cancel",
+      description: "Stop the replied-to run.",
+      textAlias: "/cancel",
+      category: "session",
+      tier: "essential",
+    }),
+    defineChatCommand({
       key: "restart",
       nativeName: "restart",
       description: "Restart OpenClaw.",

@@ -3,8 +3,11 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import {
@@ -27,6 +30,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { recordSessionMessageWorkTarget } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
@@ -606,6 +610,7 @@ async function maybePinFirstDeliveredMessage(params: {
 }
 
 type EmitMessageSentHookParams = {
+  cfg?: Pick<OpenClawConfig, "session">;
   sessionKeyForInternalHooks?: string;
   chatId: string;
   accountId?: string;
@@ -660,6 +665,21 @@ function emitMessageSentHooks(
     return;
   }
   const canonical = buildTelegramSentHookContext(params);
+  if (params.success && params.messageId && params.sessionKeyForInternalHooks) {
+    fireAndForgetHook(
+      recordSessionMessageWorkTarget({
+        cfg: params.cfg,
+        channel: "telegram",
+        to: params.chatId,
+        messageId: params.messageId,
+        sessionKey: params.sessionKeyForInternalHooks,
+      }),
+      "telegram: record session message target failed",
+      (message) => {
+        silentReplyLogger.warn(message);
+      },
+    );
+  }
   if (params.enabled) {
     fireAndForgetHook(
       Promise.resolve(
@@ -685,7 +705,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
-  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+  cfg?: OpenClawConfig;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -918,6 +938,7 @@ export async function deliverReplies(params: {
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
+        cfg: params.cfg,
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         chatId: params.chatId,
         accountId: params.accountId,
@@ -931,6 +952,7 @@ export async function deliverReplies(params: {
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
+        cfg: params.cfg,
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         chatId: params.chatId,
         accountId: params.accountId,

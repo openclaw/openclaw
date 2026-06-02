@@ -83,6 +83,14 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionMessageWorkTarget = {
+  channel: string;
+  to: string;
+  messageId: string;
+  threadId?: string;
+  recordedAt: number;
+};
+
 export type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
@@ -279,6 +287,12 @@ export type SessionEntry = {
   abortCutoffMessageSid?: string;
   /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
   abortCutoffTimestamp?: number;
+  /**
+   * Recent outbound message ids produced by this session.
+   * Telegram reply-scoped control commands use this to map a replied-to bot
+   * message back to the active run that produced it.
+   */
+  messageWorkTargets?: SessionMessageWorkTarget[];
   chatType?: SessionChatType;
   thinkingLevel?: string;
   fastMode?: boolean;

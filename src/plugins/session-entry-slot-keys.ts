@@ -37,6 +37,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "status",
   "abortCutoffMessageSid",
   "abortCutoffTimestamp",
+  "messageWorkTargets",
   "chatType",
   "thinkingLevel",
   "fastMode",

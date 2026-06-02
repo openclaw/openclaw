@@ -1242,6 +1242,10 @@ export const registerTelegramNativeCommands = ({
           Surface: "telegram",
           Provider: "telegram",
           MessageSid: String(msg.message_id),
+          ReplyToId:
+            msg.reply_to_message?.message_id != null
+              ? String(msg.reply_to_message.message_id)
+              : undefined,
           Timestamp: msg.date ? msg.date * 1000 : undefined,
           WasMentioned: true,
           CommandAuthorized: commandAuthorized,
@@ -1527,6 +1531,7 @@ export const registerTelegramNativeCommands = ({
             });
             recordSentMessage(chatId, progressMessageId, runtimeCfg);
             emitTelegramMessageSentHooks({
+              cfg: runtimeCfg,
               sessionKeyForInternalHooks: targetSessionKey,
               chatId: String(chatId),
               accountId: route.accountId,

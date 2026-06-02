@@ -104,6 +104,7 @@ function buildStopParams(): HandleCommandsParams {
       Surface: "telegram",
       CommandSource: "text",
       CommandTargetSessionKey: "agent:target:telegram:direct:123",
+      ReplyToId: "42",
     },
     command: {
       commandBodyNormalized: "/stop",
@@ -123,7 +124,20 @@ function buildStopParams(): HandleCommandsParams {
       sessionId: "wrapper-session-id",
       updatedAt: Date.now(),
     },
-    sessionStore: {},
+    sessionStore: {
+      "agent:target:telegram:direct:123": {
+        sessionId: "target-session-id",
+        updatedAt: Date.now(),
+        messageWorkTargets: [
+          {
+            channel: "telegram",
+            to: "123",
+            messageId: "42",
+            recordedAt: Date.now(),
+          },
+        ],
+      },
+    },
     storePath: "/tmp/sessions.json",
   } as unknown as HandleCommandsParams;
 }
@@ -133,6 +147,7 @@ describe("handleStopCommand target fallback", () => {
     previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
     persistAbortTargetEntryMock.mockResolvedValue(true);
+    abortSessionRunTargetMock.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -189,6 +204,55 @@ describe("handleStopCommand target fallback", () => {
     );
   });
 
+  it("requires Telegram stop commands to be replies", async () => {
+    const params = buildStopParams();
+    delete (params.ctx as MsgContext).ReplyToId;
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "Reply to a message with /stop or /cancel to stop work for that message." },
+    });
+    expect(abortSessionRunTargetMock).not.toHaveBeenCalled();
+    expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+    expect(createInternalHookEventMock).not.toHaveBeenCalled();
+    expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel Telegram work when the replied-to message has no active target", async () => {
+    const params = buildStopParams();
+    params.sessionStore = {};
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "No active work was found for the replied-to message." },
+    });
+    expect(abortSessionRunTargetMock).not.toHaveBeenCalled();
+    expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+    expect(createInternalHookEventMock).not.toHaveBeenCalled();
+    expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
+  });
+
+  it("treats reply-scoped Telegram /cancel as a stop alias", async () => {
+    const params = buildStopParams();
+    params.command.commandBodyNormalized = "/cancel";
+    params.command.rawBodyNormalized = "/cancel";
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚙️ Agent was aborted." },
+    });
+    expect(abortSessionRunTargetMock).toHaveBeenCalledWith({
+      key: "agent:target:telegram:direct:123",
+      sessionId: undefined,
+    });
+  });
+
   it("rejects native stop commands from non-owner senders when the plugin enforces owner-only commands", async () => {
     registerOwnerEnforcingTelegramPlugin();
     const params = buildStopParams();
@@ -204,6 +268,7 @@ describe("handleStopCommand target fallback", () => {
       SenderId: "999",
       CommandSource: "native",
       CommandTargetSessionKey: "agent:target:telegram:direct:123",
+      ReplyToId: "42",
     } as MsgContext;
     const auth = resolveCommandAuthorization({
       ctx,

@@ -1501,6 +1501,7 @@ export const dispatchTelegramMessage = async ({
         return;
       }
       (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
+        cfg,
         sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
         chatId: deliveryBaseOptions.chatId,
         accountId: deliveryBaseOptions.accountId,

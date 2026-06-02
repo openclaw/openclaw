@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionMessageWorkTarget } from "../../config/sessions/message-work-targets.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -84,9 +85,13 @@ async function applyAbortTarget(params: {
   storePath?: string;
   abortKey?: string;
   abortCutoff?: AbortCutoff;
+  requireActive?: boolean;
 }) {
   const { abortTarget } = params;
-  abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
+  const aborted = abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
+  if (params.requireActive && !aborted) {
+    return false;
+  }
 
   const persisted = await persistAbortTargetEntry({
     entry: abortTarget.entry,
@@ -98,11 +103,13 @@ async function applyAbortTarget(params: {
   if (!persisted && params.abortKey) {
     setAbortMemory(params.abortKey, true);
   }
+  return aborted;
 }
 
 function buildAbortTargetApplyParams(
   params: Parameters<CommandHandler>[0],
   abortTarget: AbortTarget,
+  options?: { requireActive?: boolean },
 ) {
   return {
     abortTarget,
@@ -114,22 +121,75 @@ function buildAbortTargetApplyParams(
       commandSessionKey: params.sessionKey,
       targetSessionKey: abortTarget.key,
     }),
+    requireActive: options?.requireActive,
   };
+}
+
+function telegramWorkTargetCandidates(ctx: Parameters<CommandHandler>[0]["ctx"]): string[] {
+  const candidates = [
+    ctx.OriginatingTo,
+    ctx.From,
+    ctx.To,
+    ctx.NativeChannelId,
+    ctx.MessageThreadId != null && ctx.From
+      ? `${ctx.From}:topic:${ctx.MessageThreadId}`
+      : undefined,
+  ];
+  const expanded = new Set<string>();
+  for (const candidate of candidates) {
+    const normalized = normalizeOptionalString(candidate == null ? undefined : String(candidate));
+    if (!normalized) {
+      continue;
+    }
+    expanded.add(normalized);
+    const telegramChat = /^telegram:([^:]+)(?::topic:.+)?$/.exec(normalized)?.[1];
+    if (telegramChat) {
+      expanded.add(telegramChat);
+    }
+  }
+  return [...expanded];
 }
 
 export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
   }
-  if (params.command.commandBodyNormalized !== "/stop") {
+  const commandBody = params.command.commandBodyNormalized;
+  if (commandBody !== "/stop" && commandBody !== "/cancel") {
     return null;
   }
-  const unauthorizedStop = rejectUnauthorizedCommand(params, "/stop");
+  const isTelegramReplyScopedStop =
+    params.ctx.Provider === "telegram" || params.ctx.Surface === "telegram";
+  const replyToId = normalizeOptionalString(params.ctx.ReplyToId);
+  if (isTelegramReplyScopedStop && !replyToId) {
+    return {
+      shouldContinue: false,
+      reply: { text: "Reply to a message with /stop or /cancel to stop work for that message." },
+    };
+  }
+  const unauthorizedStop = rejectUnauthorizedCommand(params, commandBody);
   if (unauthorizedStop) {
     return unauthorizedStop;
   }
+  const messageWorkTarget =
+    isTelegramReplyScopedStop && replyToId
+      ? resolveSessionMessageWorkTarget({
+          sessionStore: params.sessionStore,
+          channel: "telegram",
+          toCandidates: telegramWorkTargetCandidates(params.ctx),
+          messageId: replyToId,
+        })
+      : undefined;
+  if (isTelegramReplyScopedStop && replyToId && !messageWorkTarget) {
+    return {
+      shouldContinue: false,
+      reply: { text: "No active work was found for the replied-to message." },
+    };
+  }
   const abortTarget = resolveAbortTarget({
-    ctx: params.ctx,
+    ctx: messageWorkTarget
+      ? { ...params.ctx, CommandTargetSessionKey: messageWorkTarget.sessionKey }
+      : params.ctx,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
@@ -140,7 +200,17 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const aborted = await applyAbortTarget(
+    buildAbortTargetApplyParams(params, abortTarget, {
+      requireActive: Boolean(messageWorkTarget),
+    }),
+  );
+  if (messageWorkTarget && !aborted) {
+    return {
+      shouldContinue: false,
+      reply: { text: "No active work is still running for the replied-to message." },
+    };
+  }
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(
