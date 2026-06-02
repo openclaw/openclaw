@@ -89,7 +89,7 @@ export type RealtimeVoiceAgentControlResult = {
   active: boolean;
   queued?: boolean;
   aborted?: boolean;
-  target?: "embedded_run" | "reply_run";
+  target?: "embedded_run" | "reply_run" | "user_input";
   reason?: string;
   message: string;
   speak: boolean;

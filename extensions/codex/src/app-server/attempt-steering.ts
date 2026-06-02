@@ -12,7 +12,7 @@ export function createCodexSteeringQueue(params: {
   client: CodexAppServerClient;
   threadId: string;
   turnId: string;
-  answerPendingUserInput: (text: string) => boolean;
+  answerPendingUserInput: (text: string) => CodexSteeringUserInputAnswerResult;
   signal: AbortSignal;
 }) {
   type PendingSteerText = {
@@ -75,8 +75,12 @@ export function createCodexSteeringQueue(params: {
 
   return {
     async queue(text: string, options?: CodexSteeringQueueOptions) {
-      if (params.answerPendingUserInput(text)) {
-        return;
+      const answer = params.answerPendingUserInput(text);
+      if (answer.handled) {
+        return {
+          kind: "answered_user_input" as const,
+          message: answer.message,
+        };
       }
       return await new Promise<void>((resolve, reject) => {
         batchedTexts.push({ text, resolve, reject });
@@ -105,6 +109,15 @@ export function createCodexSteeringQueue(params: {
     },
   };
 }
+
+export type CodexSteeringUserInputAnswerResult =
+  | {
+      handled: true;
+      message: string;
+    }
+  | {
+      handled: false;
+    };
 
 export function normalizeCodexSteerDebounceMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0

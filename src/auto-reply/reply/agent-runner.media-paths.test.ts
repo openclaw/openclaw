@@ -434,6 +434,28 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
+  it("returns a visible acknowledgement when steering answers pending user input", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "user_input",
+      gatewayHealth: "live",
+      message: "Sent answer to Codex.",
+    }));
+
+    const result = await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(result).toEqual({ text: "Sent answer to Codex." });
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
   it("queues active prompts in followup mode without steering", async () => {
     await runReplyAgent(
       makeRunReplyAgentParams({

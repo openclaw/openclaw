@@ -2167,7 +2167,7 @@ export async function runCodexAppServerAttempt(
     threadId: thread.threadId,
     turnId: activeTurnId,
     answerPendingUserInput: (text) =>
-      userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+      userInputBridgeRef.current?.handleQueuedMessage(text) ?? { handled: false },
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;

@@ -3966,6 +3966,56 @@ describe("codex command", () => {
     expect(prompt).not.toContain("<proposed_plan>");
   });
 
+  it("approves a Codex plan in the existing context with the stored plan text", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const reply = buildCodexPlanDecisionReply({
+      text: "<proposed_plan>Run the focused tests.</proposed_plan>",
+      scope: {
+        sessionFile,
+        threadId: "thread-plan",
+        channel: "test",
+        senderId: "user-1",
+      },
+    });
+    const approveButton = readInteractiveButtons(reply).find((button) =>
+      button.value.includes(":approve"),
+    );
+    const token = approveButton?.value.split(":").at(-2) ?? "";
+    const setCodexConversationPlanMode = vi.fn(async () => "Plan mode disabled.");
+    const runCodexBoundConversationPrompt = vi.fn(async () => ({
+      reply: { text: "implemented" },
+    }));
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      threadId: "thread-plan",
+      sessionFile,
+      cwd: "/repo",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    }));
+
+    await expect(
+      handleCodexCommand(createContext(`plan approve ${token}`, sessionFile), {
+        deps: createDeps({
+          readCodexAppServerBinding,
+          runCodexBoundConversationPrompt,
+          setCodexConversationPlanMode,
+        }),
+      }),
+    ).resolves.toEqual({ text: "implemented" });
+
+    expect(setCodexConversationPlanMode).toHaveBeenCalledWith({
+      sessionFile,
+      mode: "default",
+      pluginConfig: undefined,
+    });
+    const runParams = mockArg(runCodexBoundConversationPrompt, 0, 0) as { prompt?: string };
+    const prompt = runParams.prompt ?? "";
+    expect(prompt).toContain("existing Codex thread/context");
+    expect(prompt).toContain("Run the focused tests.");
+    expect(prompt).not.toContain("<proposed_plan>");
+  });
+
   it("notifies plan callback consumption before clean-context execution starts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const reply = buildCodexPlanDecisionReply({

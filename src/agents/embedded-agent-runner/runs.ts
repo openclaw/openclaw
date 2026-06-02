@@ -35,6 +35,7 @@ import {
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
+  type EmbeddedAgentQueueMessageResult,
   type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
@@ -47,6 +48,7 @@ export {
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
+  type EmbeddedAgentQueueMessageResult,
   type EmbeddedRunModelSwitchRequest,
 } from "./run-state.js";
 
@@ -62,8 +64,9 @@ export type EmbeddedAgentQueueMessageOutcome =
   | {
       queued: true;
       sessionId: string;
-      target: "embedded_run" | "reply_run";
+      target: "embedded_run" | "reply_run" | "user_input";
       gatewayHealth: "live";
+      message?: string;
       deliveredAtMs?: number;
       enqueuedAtMs?: number;
     }
@@ -344,9 +347,20 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   }
   try {
     const enqueuedAtMs = Date.now();
-    await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
+    const result = await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
     logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+    if (isEmbeddedAgentUserInputQueueResult(result)) {
+      return {
+        queued: true,
+        sessionId,
+        target: "user_input",
+        gatewayHealth: "live",
+        message: result.message,
+        ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
+        enqueuedAtMs,
+      };
+    }
     return {
       queued: true,
       sessionId,
@@ -360,6 +374,12 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
     return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
   }
+}
+
+function isEmbeddedAgentUserInputQueueResult(
+  result: EmbeddedAgentQueueMessageResult | void,
+): result is Extract<EmbeddedAgentQueueMessageResult, { kind: "answered_user_input" }> {
+  return result?.kind === "answered_user_input";
 }
 
 function prepareEmbeddedAgentQueueMessage(

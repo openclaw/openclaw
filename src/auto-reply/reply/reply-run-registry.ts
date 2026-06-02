@@ -17,7 +17,7 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
-  queueMessage?: (text: string) => Promise<void>;
+  queueMessage?: (text: string) => Promise<unknown>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.

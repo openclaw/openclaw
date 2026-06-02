@@ -2,10 +2,12 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-re
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
+type DiscordComponentEditFn = typeof import("./send.components.js").editDiscordComponentMessage;
 type DiscordSharedInteractiveModule = typeof import("./shared-interactive.js");
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
 let discordComponentSendPromise: Promise<DiscordComponentSendFn> | undefined;
+let discordComponentEditPromise: Promise<DiscordComponentEditFn> | undefined;
 let discordSharedInteractivePromise: Promise<DiscordSharedInteractiveModule> | undefined;
 
 export async function sendDiscordComponentMessageLazy(
@@ -16,6 +18,17 @@ export async function sendDiscordComponentMessageLazy(
   );
   return await (
     await discordComponentSendPromise
+  )(...args);
+}
+
+export async function editDiscordComponentMessageLazy(
+  ...args: Parameters<DiscordComponentEditFn>
+): ReturnType<DiscordComponentEditFn> {
+  discordComponentEditPromise ??= import("./send.components.js").then(
+    (module) => module.editDiscordComponentMessage,
+  );
+  return await (
+    await discordComponentEditPromise
   )(...args);
 }
 

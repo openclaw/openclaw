@@ -5,18 +5,26 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
+import type { DiscordComponentMessageSpec } from "./components.js";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
-import { buildDiscordPresentationPayload } from "./outbound-components.js";
+import {
+  buildDiscordPresentationPayload,
+  editDiscordComponentMessageLazy,
+  resolveDiscordComponentSpec,
+} from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
@@ -33,12 +41,143 @@ const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =
   /<\s*(?:system-reminder|previous_response)\b[^>]*\/\s*>/gi;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE =
   /<\s*\/?\s*(?:system-reminder|previous_response)\b[^>]*>/gi;
+const CODEX_CONTROL_DELIVERY_RESOLVERS_KEY = Symbol.for("openclaw.codex.controlDeliveryResolvers");
+
+type CodexControlDeliveryResolver = () => Promise<void> | void;
+
+function getCodexControlDeliveryResolvers(): Map<string, CodexControlDeliveryResolver> {
+  return resolveGlobalMap<string, CodexControlDeliveryResolver>(
+    CODEX_CONTROL_DELIVERY_RESOLVERS_KEY,
+  );
+}
 
 function stripDiscordInternalRuntimeScaffolding(text: string): string {
   return text
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
+}
+
+function readCodexUserInputControlToken(payload: ReplyPayload): string | undefined {
+  const codexData = payload.channelData?.codex;
+  if (!codexData || typeof codexData !== "object" || Array.isArray(codexData)) {
+    return undefined;
+  }
+  const token = (codexData as { userInputControlToken?: unknown }).userInputControlToken;
+  return typeof token === "string" && token.trim() ? token : undefined;
+}
+
+function disablePresentationControls(presentation: MessagePresentation): MessagePresentation {
+  return {
+    ...presentation,
+    blocks: presentation.blocks.map((block) => {
+      if (block.type === "buttons") {
+        return {
+          ...block,
+          buttons: block.buttons.map((button) => ({ ...button, disabled: true })),
+        };
+      }
+      if (block.type === "select") {
+        return {
+          ...block,
+          options: block.options.map((option) => ({ ...option })),
+        };
+      }
+      return block;
+    }),
+  };
+}
+
+function disableCodexUserInputControlPayload(payload: ReplyPayload): ReplyPayload {
+  const discordData = payload.channelData?.discord;
+  const presentationComponents =
+    discordData && typeof discordData === "object" && !Array.isArray(discordData)
+      ? (discordData as { presentationComponents?: DiscordComponentMessageSpec })
+          .presentationComponents
+      : undefined;
+  if (presentationComponents) {
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        discord: {
+          ...(discordData as Record<string, unknown>),
+          presentationComponents: disableDiscordComponentControls(presentationComponents),
+        },
+      },
+    };
+  }
+  if (payload.presentation) {
+    return {
+      ...payload,
+      presentation: disablePresentationControls(payload.presentation),
+    };
+  }
+  return payload;
+}
+
+function disableDiscordComponentControls(
+  spec: DiscordComponentMessageSpec,
+): DiscordComponentMessageSpec {
+  return {
+    ...spec,
+    blocks: spec.blocks?.map((block) => {
+      if (block.type === "actions") {
+        return {
+          ...block,
+          buttons: block.buttons?.map((button) => ({ ...button, disabled: true })),
+        };
+      }
+      if (block.type === "section" && block.accessory?.type === "button") {
+        return {
+          ...block,
+          accessory: {
+            ...block.accessory,
+            button: { ...block.accessory.button, disabled: true },
+          },
+        };
+      }
+      return block;
+    }),
+  };
+}
+
+function registerCodexUserInputControlDelivery(params: {
+  cfg: OpenClawConfig;
+  target: { to: string; accountId?: string; threadId?: string | number | null };
+  payload: ReplyPayload;
+  results: readonly { messageId?: string }[];
+}): void {
+  const token = readCodexUserInputControlToken(params.payload);
+  const messageId = params.results.find((result) => result.messageId)?.messageId;
+  if (!token || !messageId) {
+    return;
+  }
+  getCodexControlDeliveryResolvers().set(token, async () => {
+    const disabledPayload = disableCodexUserInputControlPayload(params.payload);
+    const renderedPayload = disabledPayload.presentation
+      ? ((await buildDiscordPresentationPayload({
+          payload: disabledPayload,
+          presentation: disabledPayload.presentation,
+        })) ?? disabledPayload)
+      : disabledPayload;
+    const spec = await resolveDiscordComponentSpec(renderedPayload);
+    if (!spec) {
+      return;
+    }
+    await editDiscordComponentMessageLazy(
+      resolveDiscordOutboundTarget({
+        to: params.target.to,
+        threadId: params.target.threadId,
+      }),
+      messageId,
+      spec,
+      {
+        cfg: params.cfg,
+        accountId: params.target.accountId,
+      },
+    );
+  });
 }
 
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
@@ -308,11 +447,21 @@ export const discordOutbound: ChannelOutboundAdapter = {
           }),
       }),
   }),
-  afterDeliverPayload: async ({ target, payload }) => {
+  afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
       to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
+    });
+    registerCodexUserInputControlDelivery({
+      cfg,
+      target: {
+        to: target.to,
+        ...(target.accountId ? { accountId: target.accountId } : {}),
+        ...(target.threadId !== undefined ? { threadId: target.threadId } : {}),
+      },
+      payload,
+      results,
     });
     const threadId = normalizeOptionalStringifiedId(target.threadId);
     if (!threadId) {

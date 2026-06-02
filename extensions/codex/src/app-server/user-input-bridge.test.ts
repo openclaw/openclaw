@@ -1,10 +1,13 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   answerCodexUserInputCallback,
   resetCodexConversationChatControlsForTests,
 } from "../conversation-chat-controls.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+
+const CODEX_CONTROL_DELIVERY_RESOLVERS_KEY = Symbol.for("openclaw.codex.controlDeliveryResolvers");
 
 function createParams(): EmbeddedRunAttemptParams {
   return {
@@ -41,6 +44,20 @@ function expectFirstBlockReplyValues(params: EmbeddedRunAttemptParams): string[]
     (entry): entry is { buttons: Array<{ value?: string }> } => entry.type === "buttons",
   );
   return block?.buttons.map((button) => button.value ?? "") ?? [];
+}
+
+function expectFirstBlockReplyControlToken(params: EmbeddedRunAttemptParams): string {
+  const onBlockReply = params.onBlockReply;
+  if (onBlockReply === undefined) {
+    throw new Error("Expected onBlockReply callback");
+  }
+  const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
+  const token = (payload?.channelData?.codex as { userInputControlToken?: string } | undefined)
+    ?.userInputControlToken;
+  if (!token) {
+    throw new Error("Expected Codex user-input control token");
+  }
+  return token;
 }
 
 describe("Codex app-server user input bridge", () => {
@@ -139,13 +156,60 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(bridge.handleQueuedMessage("repo: openclaw\nscope: Tests")).toBe(true);
+    expect(bridge.handleQueuedMessage("repo: openclaw\nscope: Tests")).toEqual({
+      handled: true,
+      message: "Sent answer to Codex.",
+    });
 
     await expect(response).resolves.toEqual({
       answers: {
         repo: { answers: ["openclaw"] },
         scope: { answers: ["Tests"] },
       },
+    });
+  });
+
+  it("resolves delivered controls when queued text answers pending user input", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const response = bridge.handleRequest({
+      id: "input-delivery",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: true,
+            isSecret: false,
+            options: [{ label: "Plan only", description: "No execution" }],
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
+    const token = expectFirstBlockReplyControlToken(params);
+    const resolver = vi.fn();
+    resolveGlobalMap<string, () => void>(CODEX_CONTROL_DELIVERY_RESOLVERS_KEY).set(token, resolver);
+    await Promise.resolve();
+
+    expect(bridge.handleQueuedMessage("custom answer")).toEqual({
+      handled: true,
+      message: "Sent answer to Codex.",
+    });
+    await vi.waitFor(() => expect(resolver).toHaveBeenCalledTimes(1));
+    expect(
+      resolveGlobalMap<string, () => void>(CODEX_CONTROL_DELIVERY_RESOLVERS_KEY).has(token),
+    ).toBe(false);
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: ["custom answer"] } },
     });
   });
 
@@ -177,7 +241,10 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(bridge.handleQueuedMessage("banana")).toBe(true);
+    expect(bridge.handleQueuedMessage("banana")).toEqual({
+      handled: true,
+      message: "Sent answer to Codex.",
+    });
 
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: [] } },
@@ -222,7 +289,10 @@ describe("Codex app-server user input bridge", () => {
     expect(text).not.toContain("[trusted](https://evil)");
     expect(text).not.toContain("@here");
 
-    expect(bridge.handleQueuedMessage("1")).toBe(true);
+    expect(bridge.handleQueuedMessage("1")).toEqual({
+      handled: true,
+      message: "Sent answer to Codex.",
+    });
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Fast <@U123>"] } },
     });
@@ -262,7 +332,7 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await expect(response).resolves.toEqual({ answers: {} });
-    expect(bridge.handleQueuedMessage("too late")).toBe(false);
+    expect(bridge.handleQueuedMessage("too late")).toEqual({ handled: false });
   });
 
   it("resolves malformed empty question prompts without waiting for chat input", async () => {
@@ -285,6 +355,6 @@ describe("Codex app-server user input bridge", () => {
       }),
     ).resolves.toEqual({ answers: {} });
     expect(params.onBlockReply).not.toHaveBeenCalled();
-    expect(bridge.handleQueuedMessage("late answer")).toBe(false);
+    expect(bridge.handleQueuedMessage("late answer")).toEqual({ handled: false });
   });
 });

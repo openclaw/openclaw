@@ -6,6 +6,7 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type DiscordOutboundHoisted = {
   sendMessageDiscordMock: AsyncUnknownMock;
   sendDiscordComponentMessageMock: AsyncUnknownMock;
+  editDiscordComponentMessageMock: AsyncUnknownMock;
   sendPollDiscordMock: AsyncUnknownMock;
   sendWebhookMessageDiscordMock: AsyncUnknownMock;
   sendVoiceMessageDiscordMock: AsyncUnknownMock;
@@ -27,6 +28,7 @@ function invokeMock<TArgs extends unknown[], TResult>(
 export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   const sendMessageDiscordMock = vi.fn();
   const sendDiscordComponentMessageMock = vi.fn();
+  const editDiscordComponentMessageMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
   const sendWebhookMessageDiscordMock = vi.fn();
   const sendVoiceMessageDiscordMock = vi.fn();
@@ -34,6 +36,7 @@ export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   return {
     sendMessageDiscordMock,
     sendDiscordComponentMessageMock,
+    editDiscordComponentMessageMock,
     sendPollDiscordMock,
     sendWebhookMessageDiscordMock,
     sendVoiceMessageDiscordMock,
@@ -93,6 +96,13 @@ async function createDiscordSendComponentsModuleMock(
         Parameters<DiscordSendComponentsModule["sendDiscordComponentMessage"]>,
         ReturnType<DiscordSendComponentsModule["sendDiscordComponentMessage"]>
       >(hoisted.sendDiscordComponentMessageMock, ...args),
+    editDiscordComponentMessage: (
+      ...args: Parameters<DiscordSendComponentsModule["editDiscordComponentMessage"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordSendComponentsModule["editDiscordComponentMessage"]>,
+        ReturnType<DiscordSendComponentsModule["editDiscordComponentMessage"]>
+      >(hoisted.editDiscordComponentMessageMock, ...args),
   };
 }
 
@@ -135,6 +145,9 @@ export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutbound
   vi.spyOn(sendComponentsModule, "sendDiscordComponentMessage").mockImplementation(
     mockedSendComponentsModule.sendDiscordComponentMessage,
   );
+  vi.spyOn(sendComponentsModule, "editDiscordComponentMessage").mockImplementation(
+    mockedSendComponentsModule.editDiscordComponentMessage,
+  );
 
   const threadBindingsModule = await import("./monitor/thread-bindings.js");
   const mockedThreadBindingsModule = await createDiscordThreadBindingsModuleMock(
@@ -152,6 +165,10 @@ export function resetDiscordOutboundMocks(hoisted: DiscordOutboundHoisted) {
     channelId: "ch-1",
   });
   hoisted.sendDiscordComponentMessageMock.mockReset().mockResolvedValue({
+    messageId: "component-1",
+    channelId: "ch-1",
+  });
+  hoisted.editDiscordComponentMessageMock.mockReset().mockResolvedValue({
     messageId: "component-1",
     channelId: "ch-1",
   });

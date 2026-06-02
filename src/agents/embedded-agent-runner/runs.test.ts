@@ -256,6 +256,30 @@ describe("embedded-agent runner run registry", () => {
     );
   });
 
+  it("surfaces answered user input as a distinct async queue target", async () => {
+    setActiveEmbeddedRun("session-user-input", {
+      ...createRunHandle(),
+      queueMessage: async () => ({
+        kind: "answered_user_input",
+        message: "Sent answer to Codex.",
+      }),
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-user-input",
+      "custom typed answer",
+    );
+
+    expect(outcome).toEqual({
+      queued: true,
+      sessionId: "session-user-input",
+      target: "user_input",
+      gatewayHealth: "live",
+      message: "Sent answer to Codex.",
+      enqueuedAtMs: expect.any(Number),
+    });
+  });
+
   it("rejects transcript-commit waits for active handles without support", async () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-no-transcript-wait", {

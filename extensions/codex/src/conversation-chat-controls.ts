@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -14,6 +15,9 @@ const PROPOSED_PLAN_RE = /<proposed_plan>[\s\S]*?<\/proposed_plan>/i;
 const CODEX_INTERACTIVE_NAMESPACE = "codex";
 const CODEX_USER_INPUT_CALLBACK_PREFIX = "input:";
 const CODEX_PLAN_DECISION_CALLBACK_PREFIX = "plan:";
+const CODEX_CONTROL_DELIVERY_RESOLVERS_KEY = Symbol.for("openclaw.codex.controlDeliveryResolvers");
+
+type CodexControlDeliveryResolver = () => Promise<void> | void;
 
 type ControlScope = {
   sessionFile: string;
@@ -41,6 +45,12 @@ type PendingUserInput = ControlScope & {
 const pendingPlanDecisions = new Map<string, PendingPlanDecision>();
 const pendingUserInputs = new Map<string, PendingUserInput>();
 
+function getControlDeliveryResolvers(): Map<string, CodexControlDeliveryResolver> {
+  return resolveGlobalMap<string, CodexControlDeliveryResolver>(
+    CODEX_CONTROL_DELIVERY_RESOLVERS_KEY,
+  );
+}
+
 export type CodexPlanDecisionResult =
   | { ok: true; sessionFile: string; threadId: string; planText: string }
   | { ok: false; message: string };
@@ -58,6 +68,7 @@ export type CodexUserInputFreeformResult =
 export function resetCodexConversationChatControlsForTests(): void {
   pendingPlanDecisions.clear();
   pendingUserInputs.clear();
+  getControlDeliveryResolvers().clear();
 }
 
 export function hasCodexProposedPlan(text: string): boolean {
@@ -164,6 +175,11 @@ export function createCodexUserInputPromptControl(params: {
     payload: {
       text: formatUserInputPrompt(params.questions),
       ...(presentation ? { presentation } : {}),
+      channelData: {
+        codex: {
+          userInputControlToken: token,
+        },
+      },
     },
   };
 }
@@ -254,12 +270,30 @@ export function answerCodexUserInputFreeform(params: {
   }
   pendingUserInputs.delete(pending.token);
   pending.resolveText(answerText);
+  void resolveCodexControlDelivery(pending.token).catch(() => undefined);
   return { matched: true, consumed: true, message: "Sent answer to Codex." };
 }
 
 export function cancelCodexUserInput(params: { token: string; now?: number }): boolean {
   pruneExpiredControls(params.now);
-  return pendingUserInputs.delete(params.token);
+  const deleted = pendingUserInputs.delete(params.token);
+  if (deleted) {
+    getControlDeliveryResolvers().delete(params.token);
+  }
+  return deleted;
+}
+
+export function resolveCodexUserInputControlDelivery(params: {
+  token: string;
+  now?: number;
+}): boolean {
+  pruneExpiredControls(params.now);
+  const deleted = pendingUserInputs.delete(params.token);
+  if (!deleted) {
+    return false;
+  }
+  void resolveCodexControlDelivery(params.token).catch(() => undefined);
+  return true;
 }
 
 export function buildCodexUserInputCallbackValue(params: {
@@ -370,6 +404,7 @@ function consumeCodexUserInput(params: {
   }
   pendingUserInputs.delete(params.token);
   pending.resolveText(params.answerText);
+  void resolveCodexControlDelivery(params.token).catch(() => undefined);
   return { consumed: true, message: "Sent answer to Codex." };
 }
 
@@ -455,6 +490,7 @@ function pruneExpired<T extends { createdAt: number }>(entries: Map<string, T>, 
   for (const [token, entry] of entries) {
     if (now - entry.createdAt >= CODEX_PENDING_CONTROL_TTL_MS) {
       entries.delete(token);
+      getControlDeliveryResolvers().delete(token);
     }
   }
 }
@@ -468,9 +504,20 @@ function trimOldest<T extends { createdAt: number }>(entries: Map<string, T>): v
       return;
     }
     entries.delete(oldest);
+    getControlDeliveryResolvers().delete(oldest);
   }
 }
 
 function createToken(): string {
   return crypto.randomBytes(9).toString("base64url");
+}
+
+async function resolveCodexControlDelivery(token: string): Promise<void> {
+  const resolvers = getControlDeliveryResolvers();
+  const resolver = resolvers.get(token);
+  if (!resolver) {
+    return;
+  }
+  resolvers.delete(token);
+  await resolver();
 }

@@ -1147,13 +1147,14 @@ async function handleConversationPlanDecisionWithStatus(
     sessionFile: decision.sessionFile,
     workspaceDir: binding?.cwd || deps.resolveCodexDefaultWorkspaceDir(pluginConfig),
   });
+  const prompt = buildCurrentContextPlanApprovalPrompt(decision.planText);
   return {
     consumed: true,
     reply: (
       await deps.runCodexBoundConversationPrompt({
         data,
-        prompt: "Approved. Execute the proposed plan now.",
-        event: buildCommandInboundEvent(ctx, "Approved. Execute the proposed plan now."),
+        prompt,
+        event: buildCommandInboundEvent(ctx, prompt),
         ctx: buildCommandInboundContext(ctx),
         pluginConfig,
       })
@@ -1197,6 +1198,15 @@ async function approveConversationPlanWithCleanContext(
       pluginConfig,
     })
   ).reply;
+}
+
+function buildCurrentContextPlanApprovalPrompt(planText: string): string {
+  return [
+    "The user approved the plan below. Execute it now in this existing Codex thread/context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.",
+    "",
+    planText.trim() ||
+      "The approved plan was empty; continue from the user's latest approved intent.",
+  ].join("\n");
 }
 
 function buildCleanContextPlanApprovalPrompt(planText: string): string {

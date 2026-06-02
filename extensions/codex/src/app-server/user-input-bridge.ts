@@ -2,7 +2,10 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createCodexUserInputPrompt } from "../conversation-chat-controls.js";
+import {
+  createCodexUserInputPromptControl,
+  resolveCodexUserInputControlDelivery,
+} from "../conversation-chat-controls.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -23,6 +26,7 @@ type PendingUserInput = {
   turnId: string;
   itemId: string;
   questions: UserInputQuestion[];
+  controlToken?: string;
   resolve: (value: JsonValue) => void;
   cleanup: () => void;
 };
@@ -32,10 +36,19 @@ type CodexUserInputBridge = {
     id: number | string;
     params?: JsonValue;
   }) => Promise<JsonValue | undefined>;
-  handleQueuedMessage: (text: string) => boolean;
+  handleQueuedMessage: (text: string) => CodexQueuedUserInputAnswerResult;
   handleNotification: (notification: CodexServerNotification) => void;
   cancelPending: () => void;
 };
+
+export type CodexQueuedUserInputAnswerResult =
+  | {
+      handled: true;
+      message: string;
+    }
+  | {
+      handled: false;
+    };
 
 export function createCodexUserInputBridge(params: {
   paramsForRun: EmbeddedRunAttemptParams;
@@ -92,18 +105,27 @@ export function createCodexUserInputBridge(params: {
           requestParams.questions,
           params.threadId,
           (text) => resolvePending(buildUserInputResponse(requestParams.questions, text)),
-        ).catch((error) => {
-          embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
-        });
+        )
+          .then((token) => {
+            if (pending?.requestId === request.id && token) {
+              pending.controlToken = token;
+            }
+          })
+          .catch((error) => {
+            embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
+          });
       });
     },
     handleQueuedMessage(text) {
       const current = pending;
       if (!current) {
-        return false;
+        return { handled: false };
       }
       resolvePending(buildUserInputResponse(current.questions, text));
-      return true;
+      if (current.controlToken) {
+        resolveCodexUserInputControlDelivery({ token: current.controlToken });
+      }
+      return { handled: true, message: "Sent answer to Codex." };
     },
     handleNotification(notification) {
       if (notification.method !== "serverRequest/resolved" || !pending) {
@@ -196,27 +218,27 @@ async function deliverUserInputPrompt(
   questions: UserInputQuestion[],
   threadId: string,
   resolveText: (text: string) => void,
-): Promise<void> {
+): Promise<string | undefined> {
   if (params.onBlockReply) {
-    await params.onBlockReply(
-      createCodexUserInputPrompt({
-        questions,
-        resolveText,
-        scope: {
-          sessionFile: params.sessionFile,
-          threadId,
-          channel: params.messageChannel ?? params.messageProvider,
-          senderId: params.senderId ?? undefined,
-          accountId: params.agentAccountId,
-          sessionKey: params.sessionKey,
-          messageThreadId: params.messageThreadId ?? params.currentThreadTs,
-        },
-      }),
-    );
-    return;
+    const { token, payload } = createCodexUserInputPromptControl({
+      questions,
+      resolveText,
+      scope: {
+        sessionFile: params.sessionFile,
+        threadId,
+        channel: params.messageChannel ?? params.messageProvider,
+        senderId: params.senderId ?? undefined,
+        accountId: params.agentAccountId,
+        sessionKey: params.sessionKey,
+        messageThreadId: params.messageThreadId ?? params.currentThreadTs,
+      },
+    });
+    await params.onBlockReply(payload);
+    return token;
   }
   const text = formatUserInputPrompt(questions);
   await params.onPartialReply?.({ text });
+  return undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

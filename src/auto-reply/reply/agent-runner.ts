@@ -1245,6 +1245,9 @@ export async function runReplyAgent(params: {
     if (steerOutcome.queued) {
       await touchActiveSessionEntry();
       typing.cleanup();
+      if (steerOutcome.target === "user_input") {
+        return { text: steerOutcome.message ?? "Sent answer to Codex." };
+      }
       return undefined;
     }
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);

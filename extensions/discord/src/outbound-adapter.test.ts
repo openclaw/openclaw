@@ -14,6 +14,9 @@ await installDiscordOutboundModuleSpies(hoisted);
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 let beginDiscordInboundEventDeliveryCorrelation: typeof import("./inbound-event-delivery.js").beginDiscordInboundEventDeliveryCorrelation;
+let answerCodexUserInputFreeform: typeof import("../../codex/src/conversation-chat-controls.js").answerCodexUserInputFreeform;
+let createCodexUserInputPromptControl: typeof import("../../codex/src/conversation-chat-controls.js").createCodexUserInputPromptControl;
+let resetCodexConversationChatControlsForTests: typeof import("../../codex/src/conversation-chat-controls.js").resetCodexConversationChatControlsForTests;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -42,6 +45,11 @@ beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
   ({ beginDiscordInboundEventDeliveryCorrelation } = await import("./inbound-event-delivery.js"));
+  ({
+    answerCodexUserInputFreeform,
+    createCodexUserInputPromptControl,
+    resetCodexConversationChatControlsForTests,
+  } = await import("../../codex/src/conversation-chat-controls.js"));
 });
 
 describe("normalizeDiscordOutboundTarget", () => {
@@ -87,6 +95,7 @@ describe("normalizeDiscordOutboundTarget", () => {
 describe("discordOutbound", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+    resetCodexConversationChatControlsForTests();
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
@@ -851,5 +860,96 @@ describe("discordOutbound", () => {
     expect(
       mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).accountId,
     ).toBe("default");
+  });
+
+  it("disables delivered Codex user-input controls after a typed answer consumes them", async () => {
+    const { payload } = createCodexUserInputPromptControl({
+      scope: {
+        sessionFile: "/tmp/session.jsonl",
+        threadId: "thread-1",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "agent:main:session-1",
+        messageThreadId: "thread-1",
+      },
+      questions: [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Which path?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "Plan only", description: "Do not implement yet" }],
+        },
+      ],
+      resolveText: vi.fn(),
+    });
+
+    if (!payload.presentation) {
+      throw new Error("expected Codex prompt presentation");
+    }
+    const renderedWithPresentation =
+      (await discordOutbound.renderPresentation?.({
+        payload,
+        presentation: payload.presentation,
+        ctx: {
+          cfg: {},
+          to: "channel:parent-1",
+          text: payload.text ?? "",
+          payload,
+        } as never,
+      })) ?? payload;
+    const { presentation: _presentation, ...renderedPayload } = renderedWithPresentation;
+
+    expect(renderedPayload.channelData?.discord).toEqual(
+      expect.objectContaining({
+        presentationComponents: expect.any(Object),
+      }),
+    );
+
+    await discordOutbound.afterDeliverPayload?.({
+      cfg: {},
+      target: {
+        channel: "discord",
+        to: "channel:parent-1",
+        accountId: "default",
+        threadId: "thread-1",
+      },
+      payload: renderedPayload,
+      results: [{ channel: "discord", messageId: "component-1" }],
+    });
+
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "custom answer",
+        ctx: {
+          channel: "discord",
+          senderId: "user-1",
+          accountId: "default",
+          sessionKey: "agent:main:session-1",
+          messageThreadId: "thread-1",
+        },
+        sessionFile: "/tmp/session.jsonl",
+      }),
+    ).toMatchObject({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await vi.waitFor(() => expect(hoisted.editDiscordComponentMessageMock).toHaveBeenCalled());
+    expect(hoisted.editDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "channel:thread-1",
+      "component-1",
+      expect.objectContaining({
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            buttons: [
+              expect.objectContaining({
+                label: "Plan only",
+                disabled: true,
+              }),
+            ],
+          }),
+        ]),
+      }),
+      expect.objectContaining({ accountId: "default" }),
+    );
   });
 });
