@@ -13,7 +13,7 @@ import {
   removeStoredChatComposerQueueItem,
 } from "./chat/composer-persistence.ts";
 import {
-  handleChatDraftChange,
+  handleChatDraftChange as applyChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,
   recordNonTranscriptInputHistory,
@@ -113,6 +113,7 @@ export type ChatHost = ChatInputHistoryState & {
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
+  lastSubmittedDraftClear?: { sessionKey: string; text: string } | null;
   assistantAgentId?: string | null;
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
@@ -180,13 +181,24 @@ export function createChatSessionsLoadOverrides(
   }
   return overrides;
 }
-export {
-  handleChatDraftChange,
-  handleChatInputHistoryKey,
-  navigateChatInputHistory,
-  resetChatInputHistoryNavigation,
-};
+export { handleChatInputHistoryKey, navigateChatInputHistory, resetChatInputHistoryNavigation };
 export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
+
+export function handleChatDraftChange(host: ChatHost, next: string) {
+  const staleClear = host.lastSubmittedDraftClear;
+  if (
+    staleClear &&
+    host.sessionKey === staleClear.sessionKey &&
+    host.chatMessage === "" &&
+    next === staleClear.text
+  ) {
+    host.lastSubmittedDraftClear = null;
+    resetChatInputHistoryNavigation(host);
+    return;
+  }
+  host.lastSubmittedDraftClear = null;
+  applyChatDraftChange(host, next);
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -1140,6 +1152,7 @@ function clearSubmittedComposerState(
   const clearedAttachments = clearedDraft;
   if (clearedDraft) {
     host.chatMessage = "";
+    host.lastSubmittedDraftClear = { sessionKey: host.sessionKey, text: submittedDraft };
   }
   if (clearedAttachments) {
     host.chatAttachments = [];

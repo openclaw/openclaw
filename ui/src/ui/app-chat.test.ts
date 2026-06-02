@@ -41,6 +41,7 @@ vi.mock("./chat/slash-command-executor.ts", async (importOriginal) => {
 });
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let handleChatDraftChange: typeof import("./app-chat.ts").handleChatDraftChange;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
 let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
@@ -55,6 +56,7 @@ let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryRecon
 async function loadChatHelpers(): Promise<void> {
   ({
     handleSendChat,
+    handleChatDraftChange,
     steerQueuedChatMessage,
     navigateChatInputHistory,
     handleAbortChat,
@@ -1580,6 +1582,31 @@ describe("handleSendChat", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("do not send on rollback");
+  });
+
+  it("ignores a stale draft change replaying the submitted text after send clears the composer", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send once",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatMessage).toBe("");
+
+    handleChatDraftChange(host, "send once");
+
+    expect(host.chatMessage).toBe("");
+
+    sent.resolve({ runId: "run-1", status: "started" });
+    await send;
   });
 
   it("does not restore canceled attachments onto new draft text after model update failure", async () => {
