@@ -82,6 +82,99 @@ describe("runtime tool input schema projection", () => {
     ).toEqual([]);
   });
 
+  it("projects nullable and literal unions to OpenAPI-friendly provider schemas", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          agentId: {
+            anyOf: [{ type: "string" }, { type: "null" }],
+            description: "Agent id, or null to clear",
+          },
+          toolsAllow: {
+            anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+            description: "Allowed tools, or null to clear",
+          },
+          mode: {
+            anyOf: [
+              { type: "string", const: "announce" },
+              { type: "string", const: "webhook" },
+              { type: "null" },
+            ],
+          },
+          singleLiteral: {
+            anyOf: [{ type: "string", const: "last" }, { type: "null" }],
+          },
+          flexibleId: {
+            anyOf: [{ type: "string", const: "last" }, { type: "string" }, { type: "null" }],
+          },
+          threadId: {
+            anyOf: [{ type: "string" }, { type: "number" }, { type: "null" }],
+            description: "Thread/topic id",
+          },
+        },
+      }).schema,
+    ).toEqual({
+      type: "object",
+      properties: {
+        agentId: {
+          type: "string",
+          description: "Agent id, or null to clear",
+        },
+        toolsAllow: {
+          type: "array",
+          items: { type: "string" },
+          description: "Allowed tools, or null to clear",
+        },
+        mode: {
+          type: "string",
+          enum: ["announce", "webhook"],
+        },
+        singleLiteral: {
+          type: "string",
+          enum: ["last"],
+        },
+        flexibleId: {
+          anyOf: [{ type: "string", const: "last" }, { type: "string" }],
+        },
+        threadId: {
+          anyOf: [{ type: "string" }, { type: "number" }],
+          description: "Thread/topic id",
+        },
+      },
+    });
+  });
+
+  it("reports dynamic JSON Schema keywords before provider projection", () => {
+    const hiddenByProjection = {
+      name: "fuzzplugin_dynamic_ref_union",
+      parameters: {
+        type: "object",
+        anyOf: [{ $dynamicRef: "#target" }, { type: "string" }],
+        properties: {},
+      },
+    };
+
+    expect(projectRuntimeToolInputSchema(hiddenByProjection.parameters)).toEqual({
+      schema: {
+        type: "object",
+        anyOf: [{ $dynamicRef: "#target" }, { type: "string" }],
+        properties: {},
+      },
+      violations: ["parameters.anyOf[0].$dynamicRef"],
+    });
+    expect(filterRuntimeCompatibleTools([hiddenByProjection])).toEqual({
+      tools: [],
+      diagnostics: [
+        {
+          toolName: "fuzzplugin_dynamic_ref_union",
+          toolIndex: 0,
+          violations: ["fuzzplugin_dynamic_ref_union.parameters.anyOf[0].$dynamicRef"],
+        },
+      ],
+    });
+  });
+
   it("filters unsupported schemas without dropping healthy tools", () => {
     const healthy = {
       name: "healthy",

@@ -1,3 +1,4 @@
+import { validateToolArguments, type Tool } from "openclaw/plugin-sdk/llm";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
@@ -31,6 +32,11 @@ describe("CronToolSchema", () => {
   const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
   }) as unknown as Record<string, unknown>;
+  const cronTool = {
+    name: "cron",
+    description: "Manage scheduled jobs",
+    parameters: CronToolSchema,
+  } satisfies Tool;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -248,13 +254,48 @@ describe("CronToolSchema", () => {
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
   });
 
+  it("raw validation preserves null clear sentinels before provider projection", () => {
+    const validated = validateToolArguments(cronTool, {
+      type: "toolCall",
+      id: "call-1",
+      name: "cron",
+      arguments: {
+        action: "update",
+        id: "job-1",
+        patch: {
+          agentId: null,
+          sessionKey: null,
+          payload: {
+            kind: "agentTurn",
+            message: "refresh status",
+            toolsAllow: null,
+          },
+        },
+      },
+    }) as {
+      patch: {
+        agentId: unknown;
+        sessionKey: unknown;
+        payload: { toolsAllow: unknown };
+      };
+    };
+
+    expect(validated.patch.agentId).toBeNull();
+    expect(validated.patch.sessionKey).toBeNull();
+    expect(validated.patch.payload.toolsAllow).toBeNull();
+  });
+
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
   // serialized provider-facing cron tool schema.
-  it("serialized provider schema contains no type-array or not/const keywords", () => {
+  it("serialized provider schema contains no OpenAPI 3.0 incompatible null keywords", () => {
     const json = JSON.stringify(providerSchemaRecord);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
+    // null-type composition is also rejected by strict OpenAPI 3.0 tool adapters.
+    expect(json).not.toMatch(/"type"\s*:\s*"null"/);
     // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
+    // "const" is not part of the OpenAPI 3.0 schema subset.
+    expect(json).not.toMatch(/"const"\s*:/);
   });
 });

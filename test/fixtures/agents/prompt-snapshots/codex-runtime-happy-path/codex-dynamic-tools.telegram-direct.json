@@ -183,15 +183,8 @@
           "additionalProperties": true,
           "properties": {
             "agentId": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent id, or null to keep it unset"
+              "description": "Agent id, or null to keep it unset",
+              "type": "string"
             },
             "deleteAfterRun": {
               "description": "Delete after first run",
@@ -223,16 +216,8 @@
                       "type": "string"
                     },
                     "mode": {
-                      "anyOf": [
-                        {
-                          "const": "announce",
-                          "type": "string"
-                        },
-                        {
-                          "const": "webhook",
-                          "type": "string"
-                        }
-                      ]
+                      "enum": ["announce", "webhook"],
+                      "type": "string"
                     },
                     "to": {
                       "description": "Failure delivery target",
@@ -401,15 +386,8 @@
               "type": "object"
             },
             "sessionKey": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Explicit session key, or null to clear it"
+              "description": "Explicit session key, or null to clear it",
+              "type": "string"
             },
             "sessionTarget": {
               "description": "main | isolated | current | session:<id>",
@@ -434,15 +412,8 @@
           "additionalProperties": true,
           "properties": {
             "agentId": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent id, or null to clear it"
+              "description": "Agent id, or null to clear it",
+              "type": "string"
             },
             "deleteAfterRun": {
               "type": "boolean"
@@ -451,91 +422,38 @@
               "additionalProperties": true,
               "properties": {
                 "accountId": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Delivery account, or null to clear"
+                  "description": "Delivery account, or null to clear",
+                  "type": "string"
                 },
                 "bestEffort": {
                   "type": "boolean"
                 },
                 "channel": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Delivery channel, or null to clear"
+                  "description": "Delivery channel, or null to clear",
+                  "type": "string"
                 },
                 "failureDestination": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": true,
-                      "properties": {
-                        "accountId": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery account, or null to clear"
-                        },
-                        "channel": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery channel, or null to clear"
-                        },
-                        "mode": {
-                          "anyOf": [
-                            {
-                              "const": "announce",
-                              "type": "string"
-                            },
-                            {
-                              "const": "webhook",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "to": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ],
-                          "description": "Failure delivery target, or null to clear"
-                        }
-                      },
-                      "type": "object"
+                  "additionalProperties": true,
+                  "description": "Failure destination, or null to clear",
+                  "properties": {
+                    "accountId": {
+                      "description": "Failure delivery account, or null to clear",
+                      "type": "string"
                     },
-                    {
-                      "type": "null"
+                    "channel": {
+                      "description": "Failure delivery channel, or null to clear",
+                      "type": "string"
+                    },
+                    "mode": {
+                      "enum": ["announce", "webhook"],
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "Failure delivery target, or null to clear",
+                      "type": "string"
                     }
-                  ],
-                  "description": "Failure destination, or null to clear"
+                  },
+                  "type": "object"
                 },
                 "mode": {
                   "description": "Delivery mode",
@@ -549,23 +467,13 @@
                     },
                     {
                       "type": "number"
-                    },
-                    {
-                      "type": "null"
                     }
                   ],
                   "description": "Thread/topic id"
                 },
                 "to": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Delivery target, or null to clear"
+                  "description": "Delivery target, or null to clear",
+                  "type": "string"
                 }
               },
               "type": "object"
@@ -658,18 +566,11 @@
                   "type": "number"
                 },
                 "toolsAllow": {
-                  "anyOf": [
-                    {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "description": "Allowed tool ids, or null to clear"
+                  "description": "Allowed tool ids, or null to clear",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               },
               "type": "object"
@@ -713,15 +614,8 @@
               "type": "object"
             },
             "sessionKey": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Explicit session key, or null to clear it"
+              "description": "Explicit session key, or null to clear it",
+              "type": "string"
             },
             "sessionTarget": {
               "description": "Session target",

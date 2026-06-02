@@ -24,6 +24,11 @@ export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" 
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 
+type SerializedToolInputSchema = {
+  readonly schema: RuntimeToolInputSchemaJson;
+  readonly violations: readonly string[];
+};
+
 type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters">> =
   | {
       readonly ok: true;
@@ -108,7 +113,7 @@ function isJsonObject(value: RuntimeToolInputSchemaJson): value is {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {
+function serializeToolInputSchema(value: unknown, path: string): SerializedToolInputSchema {
   let text: string | undefined;
   try {
     text = JSON.stringify(value);
@@ -135,6 +140,85 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
     schema: parsed,
     violations: [],
   };
+}
+
+function isNullSchema(schema: RuntimeToolInputSchemaJson): boolean {
+  return isJsonObject(schema) && schema.type === "null";
+}
+
+function isStringConstSchema(
+  schema: RuntimeToolInputSchemaJson,
+): schema is { type: "string"; const: string } {
+  return isJsonObject(schema) && schema.type === "string" && typeof schema.const === "string";
+}
+
+function mergeCompositionWrapper(
+  wrapper: { [key: string]: RuntimeToolInputSchemaJson },
+  replacement: { [key: string]: RuntimeToolInputSchemaJson },
+  keyword: "anyOf" | "oneOf",
+): { [key: string]: RuntimeToolInputSchemaJson } {
+  const { [keyword]: _composition, ...metadata } = wrapper;
+  return {
+    ...replacement,
+    ...metadata,
+  };
+}
+
+function normalizeSchemaComposition(
+  schema: { [key: string]: RuntimeToolInputSchemaJson },
+  keyword: "anyOf" | "oneOf",
+): { [key: string]: RuntimeToolInputSchemaJson } | undefined {
+  const variants = schema[keyword];
+  if (!Array.isArray(variants)) {
+    return undefined;
+  }
+  const hasNullVariant = variants.some(isNullSchema);
+  const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
+  if (nonNullVariants.length === 0) {
+    return undefined;
+  }
+  if (nonNullVariants.every(isStringConstSchema)) {
+    return mergeCompositionWrapper(
+      schema,
+      {
+        type: "string",
+        enum: nonNullVariants.map((variant) => variant.const),
+      },
+      keyword,
+    );
+  }
+  if (hasNullVariant && nonNullVariants.length === 1 && isJsonObject(nonNullVariants[0])) {
+    return mergeCompositionWrapper(schema, nonNullVariants[0], keyword);
+  }
+  if (hasNullVariant) {
+    return mergeCompositionWrapper(
+      schema,
+      {
+        [keyword]: nonNullVariants,
+      },
+      keyword,
+    );
+  }
+  return undefined;
+}
+
+function normalizeProviderToolInputSchema(
+  schema: RuntimeToolInputSchemaJson,
+): RuntimeToolInputSchemaJson {
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeProviderToolInputSchema);
+  }
+  if (!isJsonObject(schema)) {
+    return schema;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(schema).map(([key, value]) => [key, normalizeProviderToolInputSchema(value)]),
+  );
+  return (
+    normalizeSchemaComposition(normalized, "anyOf") ??
+    normalizeSchemaComposition(normalized, "oneOf") ??
+    normalized
+  );
 }
 
 function findDynamicSchemaKeywordViolations(
@@ -185,16 +269,16 @@ export function projectRuntimeToolInputSchema(
   schema: unknown,
   path = "parameters",
 ): RuntimeToolInputSchemaProjection {
-  const projection = serializeToolInputSchema(schema, path);
-  const violations = [...projection.violations];
-  if (!isJsonObject(projection.schema)) {
+  const serialized = serializeToolInputSchema(schema, path);
+  const violations = [...serialized.violations];
+  if (!isJsonObject(serialized.schema)) {
     violations.push(`${path} must be a JSON object schema`);
-  } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
+  } else if (serialized.schema.type !== undefined && serialized.schema.type !== "object") {
     violations.push(`${path}.type must be "object"`);
   }
-  violations.push(...findDynamicSchemaKeywordViolations(projection.schema, path));
+  violations.push(...findDynamicSchemaKeywordViolations(serialized.schema, path));
   return {
-    schema: projection.schema,
+    schema: normalizeProviderToolInputSchema(serialized.schema),
     violations,
   };
 }
