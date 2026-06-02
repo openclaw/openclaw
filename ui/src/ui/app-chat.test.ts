@@ -421,7 +421,7 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
-  it("records chat history timing when a reload resets active stream state", async () => {
+  it("records chat history timing when a reload keeps active stream state visible", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
         return Promise.resolve({
@@ -440,20 +440,13 @@ describe("refreshChat", () => {
 
     await refreshChat(host, { awaitHistory: true, scheduleScroll: false });
 
-    expect(host.chatStream).toBeNull();
+    expect(host.chatStream).toBe("partial");
     expect(eventPayloads(host, "control-ui.chat.history")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           phase: "start",
           sessionKey: "main",
           previousRunId: "run-main",
-        }),
-        expect.objectContaining({
-          phase: "stream-reset",
-          sessionKey: "main",
-          previousRunId: "run-main",
-          activeRunId: "run-main",
-          visibleMessageCount: 1,
         }),
         expect.objectContaining({
           phase: "applied",
