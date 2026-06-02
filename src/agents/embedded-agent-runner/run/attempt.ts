@@ -4535,6 +4535,7 @@ export async function runEmbeddedAttempt(
             messagesSnapshot,
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
+            isHeartbeat: params.bootstrapContextRunKind === "heartbeat" || undefined,
             runtimeContext: afterTurnRuntimeContext,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
