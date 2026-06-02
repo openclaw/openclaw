@@ -20,6 +20,11 @@ import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
+import {
+  isManagedOutgoingImageSource,
+  resetManagedOutgoingImageBlobUrlCacheForTest,
+  resolveManagedOutgoingImageBlobUrl,
+} from "./managed-outgoing-images.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
@@ -100,12 +105,7 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
     clearTimeout(timer);
   }
   assistantAttachmentRefreshTimers.clear();
-  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
-    URL.revokeObjectURL(blobUrl);
-  }
-  managedImageBlobUrlCache.clear();
-  managedImageBlobUrlResolvedCache.clear();
-  managedImageBlobUrlMissCache.clear();
+  resetManagedOutgoingImageBlobUrlCacheForTest();
 }
 
 export function getAssistantAttachmentAvailabilityRenderVersion(): number {
@@ -151,11 +151,6 @@ type RenderableImageBlock = ImageBlock & {
 };
 
 type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
-
-const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
-const managedImageBlobUrlResolvedCache = new Map<string, string>();
-const managedImageBlobUrlMissCache = new Map<string, number>();
-const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -1116,94 +1111,6 @@ function buildAssistantAttachmentUrl(
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
 
-function isManagedOutgoingImageSource(source: string): boolean {
-  const trimmed = source.trim();
-  if (trimmed.startsWith("/api/chat/media/outgoing/")) {
-    return true;
-  }
-  try {
-    const parsed = new URL(trimmed, window.location.origin);
-    return (
-      parsed.origin === window.location.origin &&
-      parsed.pathname.startsWith("/api/chat/media/outgoing/")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function resolveManagedOutgoingImageRequesterSessionKey(source: string): string | null {
-  try {
-    const parsed = new URL(source, window.location.origin);
-    const parts = parsed.pathname.split("/");
-    const encodedSessionKey = parts[5];
-    return encodedSessionKey ? decodeURIComponent(encodedSessionKey) : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): string {
-  if (!source.startsWith("/")) {
-    return source;
-  }
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return `${normalizedBasePath}${source}`;
-}
-
-async function resolveManagedOutgoingImageBlobUrl(
-  source: string,
-  opts?: ImageRenderOptions,
-): Promise<string | null> {
-  const authToken = opts?.authToken?.trim() ?? "";
-  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  const cacheKey = `${fetchUrl}::${authToken}`;
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
-  if (missAt && Date.now() - missAt < MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
-    return null;
-  }
-  let pending = managedImageBlobUrlCache.get(cacheKey);
-  if (!pending) {
-    pending = (async () => {
-      const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
-      const headers = new Headers({ Accept: "image/*" });
-      if (authToken) {
-        headers.set("Authorization", `Bearer ${authToken}`);
-      }
-      if (requesterSessionKey) {
-        headers.set("x-openclaw-requester-session-key", requesterSessionKey);
-      }
-      const res = await fetch(fetchUrl, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
-      return blobUrl;
-    })().finally(() => {
-      managedImageBlobUrlCache.delete(cacheKey);
-    });
-    managedImageBlobUrlCache.set(cacheKey, pending);
-  }
-  return pending;
-}
-
 function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
@@ -1500,6 +1407,8 @@ function renderInlineToolCards(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    basePath?: string;
+    assistantAttachmentAuthToken?: string | null;
   },
 ) {
   return html`
@@ -1516,6 +1425,8 @@ function renderInlineToolCards(
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+          basePath: opts.basePath,
+          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
         }),
       )}
     </div>
@@ -1849,6 +1760,10 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
+                              {
+                                basePath: opts.basePath,
+                                authToken: opts.assistantAttachmentAuthToken,
+                              },
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
@@ -1860,6 +1775,8 @@ function renderGroupedMessage(
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                              basePath: opts.basePath,
+                              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
                             })
                         : nothing}
                     </div>

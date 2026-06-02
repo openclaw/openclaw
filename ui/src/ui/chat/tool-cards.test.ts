@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetManagedOutgoingImageBlobUrlCacheForTest } from "./managed-outgoing-images.ts";
 import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
@@ -9,6 +10,11 @@ import {
   renderToolCard,
   renderToolCardSidebar,
 } from "./tool-cards.ts";
+
+afterEach(() => {
+  resetManagedOutgoingImageBlobUrlCacheForTest();
+  vi.unstubAllGlobals();
+});
 
 vi.mock("../icons.ts", () => ({
   icons: {
@@ -674,7 +680,28 @@ describe("tool-cards", () => {
     expect((imgs[1] as HTMLImageElement).src).toBe("data:image/png;base64,iVBORw0KGgo=");
   });
 
-  it("skips managed outgoing image URLs when rendering tool card images", () => {
+  it("fetches managed outgoing image URLs with auth for tool card images", async () => {
+    const managedImageUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full";
+    const objectUrl = "blob:managed-tool-image";
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => objectUrl);
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = init?.headers as Headers;
+      expect(headers.get("Authorization")).toBe("Bearer session-token");
+      expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:main");
+      return {
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -684,18 +711,34 @@ describe("tool-cards", () => {
           outputText: "Exported media",
           images: [
             "https://example.com/public.png",
-            "/api/chat/media/outgoing/uuid-123",
+            managedImageUrl,
             "data:image/gif;base64,R0lGODlh",
           ],
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        {
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+          assistantAttachmentAuthToken: "session-token",
+        },
       ),
       container,
     );
 
-    const imgs = container.querySelectorAll(".chat-tool-card__image");
-    expect(imgs.length).toBe(2);
-    expect((imgs[0] as HTMLImageElement).src).toBe("https://example.com/public.png");
-    expect((imgs[1] as HTMLImageElement).src).toBe("data:image/gif;base64,R0lGODlh");
+    await vi.waitFor(
+      () => {
+        const imgs = container.querySelectorAll<HTMLImageElement>(".chat-tool-card__image");
+        expect([...imgs].map((img) => img.getAttribute("src"))).toEqual([
+          "https://example.com/public.png",
+          objectUrl,
+          "data:image/gif;base64,R0lGODlh",
+        ]);
+      },
+      { interval: 1, timeout: 100 },
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(managedImageUrl);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.credentials).toBe(
+      "same-origin",
+    );
   });
 });
