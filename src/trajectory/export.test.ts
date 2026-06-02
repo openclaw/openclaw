@@ -283,6 +283,7 @@ describe("exportTrajectoryBundle", () => {
       "xoxb-1234567890-abcdefghijkl",
       "ya29.exported-access-token-with-enough-length",
       "ADMIN_PASSWORD=plain-text-password",
+      "sk-top-level-export-secret",
     ];
     const header = {
       type: "session",
@@ -351,6 +352,7 @@ describe("exportTrajectoryBundle", () => {
           seq: 1,
           sourceSeq: 1,
           sessionId: "session-1",
+          apiKey: rawSecrets[5],
           data: {
             systemPrompt: `system includes ${rawSecrets[1]}`,
             tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}` }],
@@ -396,6 +398,7 @@ describe("exportTrajectoryBundle", () => {
           seq: 4,
           sourceSeq: 4,
           sessionId: "session-1",
+          runId: rawSecrets[5],
           data: {
             assistantTexts: [`assistant ${rawSecrets[2]}`],
             finalPromptText: `final ${rawSecrets[3]}`,
@@ -411,6 +414,7 @@ describe("exportTrajectoryBundle", () => {
       outputDir,
       sessionFile,
       sessionId: "session-1",
+      sessionKey: rawSecrets[5],
       workspaceDir: tmpDir,
       runtimeFile,
     });

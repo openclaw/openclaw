@@ -601,15 +601,7 @@ function redactEventForExport(
   event: TrajectoryEvent,
   redaction: TrajectoryExportRedaction,
 ): TrajectoryEvent {
-  return {
-    ...event,
-    workspaceDir: event.workspaceDir
-      ? maybeRedactPathString(event.workspaceDir, redaction)
-      : undefined,
-    data: event.data
-      ? (redactTrajectoryExportValue(event.data, redaction) as Record<string, unknown>)
-      : undefined,
-  };
+  return redactTrajectoryExportValue(event, redaction) as TrajectoryEvent;
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
@@ -1038,14 +1030,18 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
 
   const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
   manifest.contents = contents;
+  const redactedManifest = redactTrajectoryExportValue(
+    manifest,
+    redaction,
+  ) as TrajectoryBundleManifest;
 
   await writeSupportBundleDirectory({
     outputDir: params.outputDir,
-    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
+    files: [jsonSupportBundleFile("manifest.json", redactedManifest), ...files],
   });
 
   return {
-    manifest,
+    manifest: redactedManifest,
     outputDir: params.outputDir,
     events,
     header,
