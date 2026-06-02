@@ -294,27 +294,47 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
-function verifyHardlinkTargetsAgainstArchiveRoot(
-  hardlinkTargets: Array<{ entryPath: string; normalized: string }>,
-  archiveRoot: string,
+function archiveHasHardlinkTarget(
+  linkEntry: string,
+  normalizedTarget: string,
+  entries: Set<string>,
+): boolean {
+  if (entries.has(normalizedTarget)) {
+    return true;
+  }
+  // Archives created before the hardlink dereference fix store the link target
+  // as node-tar's cwd-relative source path (e.g. ".openclaw/state/db"), not the
+  // remapped "<root>/payload/posix/..." entry path. node-tar only dedupes files
+  // under a shared cwd, so the real target is `<ancestor-of-link>/<linkpath>`.
+  // Walk the link entry's ancestor dirs and require an exact entry match rather
+  // than a loose suffix scan, so a dropped target cannot be masked by an
+  // unrelated same-named file elsewhere in the archive.
+  let dir = path.posix.dirname(linkEntry);
+  while (dir && dir !== "." && dir !== "/") {
+    if (entries.has(path.posix.join(dir, normalizedTarget))) {
+      return true;
+    }
+    const parent = path.posix.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return false;
+}
+
+function verifyHardlinkTargetsAgainstArchiveEntries(
+  hardlinkTargets: Array<{ entryPath: string; entryNormalized: string; normalized: string }>,
   entries: Set<string>,
 ): void {
-  const normalizedRoot = normalizeArchiveRoot(archiveRoot);
+  // normalizeArchivePath already rejected absolute paths, backslashes, and ".."
+  // traversal, so each normalized target is a clean relative path that cannot
+  // escape the extraction root. The remaining concern is integrity: the linked
+  // file must actually exist in the archive.
   for (const target of hardlinkTargets) {
-    // Older backup archives may store hardlink linkpath values relative to the
-    // archive root instead of including the root segment. Accept that form only
-    // when it resolves to a real entry inside this archive.
-    const normalizedTarget = isArchivePathWithin(target.normalized, normalizedRoot)
-      ? target.normalized
-      : path.posix.join(normalizedRoot, target.normalized);
-    if (!isArchivePathWithin(normalizedTarget, normalizedRoot)) {
+    if (!archiveHasHardlinkTarget(target.entryNormalized, target.normalized, entries)) {
       throw new Error(
-        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${normalizedTarget}`,
-      );
-    }
-    if (!entries.has(normalizedTarget)) {
-      throw new Error(
-        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${normalizedTarget}`,
+        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${target.normalized}`,
       );
     }
   }
@@ -362,6 +382,7 @@ export async function backupVerifyCommand(
     .filter((entry) => entry.type === "Link" && entry.linkpath)
     .map((entry) => ({
       entryPath: entry.path,
+      entryNormalized: normalizeArchivePath(entry.path, "Archive entry"),
       normalized: normalizeArchivePath(
         entry.linkpath ?? "",
         `Archive hardlink target for ${entry.path}`,
@@ -385,11 +406,7 @@ export async function backupVerifyCommand(
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
-  verifyHardlinkTargetsAgainstArchiveRoot(
-    hardlinkTargets,
-    manifest.archiveRoot,
-    normalizedEntrySet,
-  );
+  verifyHardlinkTargetsAgainstArchiveEntries(hardlinkTargets, normalizedEntrySet);
 
   const result: BackupVerifyResult = {
     ok: true,

@@ -4,7 +4,7 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildBackupArchiveRoot } from "./backup-shared.js";
+import { buildBackupArchivePath, buildBackupArchiveRoot } from "./backup-shared.js";
 import { backupVerifyCommand } from "./backup-verify.js";
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
@@ -386,6 +386,150 @@ describe("backupVerifyCommand", () => {
       await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject({
         ok: true,
       });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts internal hardlink targets stored as pre-remap relative paths", async () => {
+    // Archives created before the hardlink dereference fix store the link
+    // target as the node-tar cwd-relative path (e.g. ".openclaw/state/a.bin"),
+    // not the remapped "<root>/payload/posix/..." entry path. Verify must keep
+    // accepting these as long as the linked file is present in the archive.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-legacy-linkpath-"));
+    const archivePath = path.join(tempDir, "legacy.tar.gz");
+    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/home/gonto/.openclaw/state/a.bin`;
+    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/home/gonto/.openclaw/state/logs/b.bin`;
+    try {
+      const archive = gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: `${JSON.stringify(createBackupManifest(payloadArchivePath), null, 2)}\n`,
+          }),
+          encodeTarEntry({ path: payloadArchivePath, contents: "payload\n" }),
+          encodeTarEntry({
+            path: hardlinkArchivePath,
+            type: "Link",
+            linkpath: ".openclaw/state/a.bin",
+          }),
+          Buffer.alloc(1024),
+        ]),
+      );
+      await fs.writeFile(archivePath, archive);
+
+      const runtime = createBackupVerifyRuntime();
+      const result = await backupVerifyCommand(runtime, { archive: archivePath });
+      expect(result.ok).toBe(true);
+      expect(result.entryCount).toBe(3);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies a real archive containing a deduplicated hardlink", async () => {
+    // Build a genuine archive the way pre-dereference backups did: real
+    // hardlinked files plus an `onWriteEntry` remap into the archive payload
+    // namespace. node-tar records the link target as the cwd-relative source
+    // path, exactly the shape reported in #89257, so this guards the actual
+    // verifier path rather than a hand-encoded approximation.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-real-hardlink-"));
+    const home = path.join(tempDir, "home", "gonto");
+    const stateDir = path.join(home, ".openclaw", "state");
+    const logsDir = path.join(stateDir, "logs");
+    await fs.mkdir(logsDir, { recursive: true });
+    const targetSource = path.join(stateDir, "a.bin");
+    const linkSource = path.join(logsDir, "b.bin");
+    await fs.writeFile(targetSource, "shared backup content\n");
+    await fs.link(targetSource, linkSource);
+
+    const manifestPath = path.join(tempDir, "manifest.json");
+    const targetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, targetSource);
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(createBackupManifest(targetArchivePath), null, 2)}\n`,
+    );
+
+    const archivePath = path.join(tempDir, "backup.tar.gz");
+    try {
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          // cwd ancestry makes node-tar dedupe the hardlink, producing the
+          // cwd-relative linkpath that older backups carried. Reuse the real
+          // archive-path encoder so the fixture mirrors production remapping.
+          cwd: home,
+          onWriteEntry: (entry) => {
+            const absolute = path.resolve(home, entry.path);
+            entry.path =
+              absolute === manifestPath
+                ? `${TEST_ARCHIVE_ROOT}/manifest.json`
+                : buildBackupArchivePath(TEST_ARCHIVE_ROOT, absolute);
+          },
+        },
+        [manifestPath, ".openclaw/state"],
+      );
+
+      // Guard the fixture itself: if dedup ever stops producing a Link entry
+      // with a cwd-relative target, this test would silently stop exercising
+      // the legacy hardlink path instead of failing.
+      const linkTargets: Array<string | undefined> = [];
+      await tar.t({
+        file: archivePath,
+        gzip: true,
+        onentry: (entry) => {
+          if (entry.type === "Link") {
+            linkTargets.push(entry.linkpath);
+          }
+          entry.resume();
+        },
+      });
+      expect(linkTargets).toStrictEqual([".openclaw/state/a.bin"]);
+
+      const runtime = createBackupVerifyRuntime();
+      const result = await backupVerifyCommand(runtime, { archive: archivePath });
+      expect(result.ok).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dropped hardlink target even when an unrelated entry shares its tail", async () => {
+    // Integrity guard: a legacy cwd-relative linkpath must resolve to a target
+    // in the link's own source subtree. A same-named file in a different
+    // directory must not mask a dropped/corrupt target, or verify would report
+    // OK for an archive whose hardlink dangles on restore.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-tail-collision-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const unrelatedArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/home/gonto/old-backup/.openclaw/state/a.bin`;
+    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/home/gonto/.openclaw/state/logs/b.bin`;
+    try {
+      const archive = gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: `${JSON.stringify(createBackupManifest(unrelatedArchivePath), null, 2)}\n`,
+          }),
+          // Unrelated file in a different subtree; the link's real target
+          // (.../.openclaw/state/a.bin next to the link) is absent.
+          encodeTarEntry({ path: unrelatedArchivePath, contents: "payload\n" }),
+          encodeTarEntry({
+            path: hardlinkArchivePath,
+            type: "Link",
+            linkpath: ".openclaw/state/a.bin",
+          }),
+          Buffer.alloc(1024),
+        ]),
+      );
+      await fs.writeFile(archivePath, archive);
+
+      const runtime = createBackupVerifyRuntime();
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /hardlink target is missing from archive entries/i,
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
