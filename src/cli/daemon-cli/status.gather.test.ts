@@ -412,6 +412,8 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.tlsFingerprint).toBeUndefined();
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
     expect(status.rpc?.url).toBe("wss://override.example:18790");
+    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(status.pluginVersionDrift).toBeUndefined();
   });
 
   it("uses fallback network details when interface discovery throws during status inspection", async () => {

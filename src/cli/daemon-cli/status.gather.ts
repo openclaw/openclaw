@@ -650,10 +650,11 @@ export async function gatherDaemonStatus(
   // gateway version reported by the probe handshake, falling back to the
   // invoking CLI VERSION only when no gateway version is available. Reading
   // records with the merged daemon environment inspects the managed service's
-  // profile/state dir, so remote gateways must provide their own diagnostics.
+  // profile/state dir, so remote/explicit URL probes need remote-owned
+  // diagnostics instead.
   // Best-effort: unreadable install records omit this advisory report.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
-  if (daemonCfg.gateway?.mode !== "remote") {
+  if (daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride) {
     try {
       const installRecords = await loadInstalledPluginIndexInstallRecords({
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
