@@ -36,9 +36,10 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
+  listSessionEntries,
   patchSessionEntry,
   resolveSessionStoreEntry,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
@@ -145,6 +146,17 @@ import {
 } from "./model-buttons.js";
 import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
+
+function loadTelegramHandlerSessionEntryProjection(params: {
+  listEntries: typeof listSessionEntries;
+  storePath: string;
+}): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    params
+      .listEntries({ storePath: params.storePath })
+      .map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -592,7 +604,7 @@ export const registerTelegramHandlers = ({
     runtimeCfg?: OpenClawConfig;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
+    sessionEntry: SessionEntry | undefined;
     sessionKey: string;
     model?: string;
   } => {
@@ -634,7 +646,10 @@ export const registerTelegramHandlers = ({
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
+    const store = loadTelegramHandlerSessionEntryProjection({
+      listEntries: telegramDeps.listSessionEntries ?? listSessionEntries,
+      storePath,
+    });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,

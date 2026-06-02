@@ -44,6 +44,7 @@ export {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 export {
+  getSessionEntry,
   loadSessionStore,
   resolveSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";

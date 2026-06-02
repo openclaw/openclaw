@@ -5,11 +5,7 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
 import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
@@ -50,11 +46,7 @@ function resolveMatrixCurrentDmRoomId(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const existing = resolveSessionStoreEntry({
-      store,
-      sessionKey,
-    }).existing;
+    const existing = getSessionEntry({ storePath, sessionKey });
     const currentSession = resolveMatrixStoredSessionMeta(existing);
     if (!currentSession) {
       return undefined;

@@ -37,11 +37,12 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
+  listSessionEntries,
   resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -93,6 +94,12 @@ import {
 } from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import type { TelegramTransport } from "./fetch.js";
+
+function loadTelegramSessionEntryProjection(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -188,7 +195,7 @@ async function resolveTelegramCommandSessionFile(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
+    const store = loadTelegramSessionEntryProjection(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
     const authProfileId = normalizeOptionalString(resolved.existing?.authProfileOverride);
@@ -232,7 +239,7 @@ function resolveTelegramCommandMenuModelContext(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath);
+    const store = loadTelegramSessionEntryProjection(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {

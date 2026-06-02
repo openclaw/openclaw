@@ -18,7 +18,12 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  resolveStorePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -96,6 +101,12 @@ function loadSlashSkillCommandsRuntime() {
   return slashSkillCommandsRuntimePromise;
 }
 
+function loadSlackSessionEntryProjection(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
 function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];
   agentId: string;
@@ -110,8 +121,8 @@ function resolveSlackCommandMenuModelContext(params: {
       agentId: params.agentId,
     });
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[params.sessionKey];
+    const store = loadSlackSessionEntryProjection(storePath);
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return { provider: defaultModel.provider, model: defaultModel.model };
     }
