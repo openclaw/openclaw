@@ -1053,6 +1053,14 @@ function isMatchingVisibleToolMirror(message: unknown, mirror: VisibleToolMirror
   return extractAssistantTextForSilentCheck(record) === mirror.text;
 }
 
+function isMatchingVisibleAssistantText(message: unknown, mirror: VisibleToolMirror): boolean {
+  const record = readRecord(message);
+  return (
+    Boolean(record && isRenderableAssistantDisplayMessage(record)) &&
+    extractAssistantTextForSilentCheck(record) === mirror.text
+  );
+}
+
 function mirrorVisibleToolReplies(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -1110,7 +1118,10 @@ function mirrorVisibleToolReplies(messages: unknown[]): unknown[] {
     const immediateMirror = extractSessionsYieldVisibleMirror(record);
     if (immediateMirror) {
       next.push(message);
-      if (isMatchingVisibleToolMirror(messages[i + 1], immediateMirror)) {
+      if (
+        isMatchingVisibleAssistantText(messages[i - 1], immediateMirror) ||
+        isMatchingVisibleToolMirror(messages[i + 1], immediateMirror)
+      ) {
         continue;
       }
       next.push(buildVisibleToolMirror(immediateMirror));
