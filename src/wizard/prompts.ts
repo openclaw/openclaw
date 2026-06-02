@@ -24,6 +24,7 @@ export type WizardTextParams = {
   initialValue?: string;
   placeholder?: string;
   validate?: (value: string) => string | undefined;
+  signal?: AbortSignal;
   // Render as a masked input. The entered value is never echoed to the
   // terminal — keeps secrets out of scrollback, transcripts, and screenshots.
   sensitive?: boolean;
