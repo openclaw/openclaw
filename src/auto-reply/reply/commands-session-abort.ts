@@ -171,6 +171,9 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   }
   const isTelegramReplyScopedStop =
     params.ctx.Provider === "telegram" || params.ctx.Surface === "telegram";
+  if (commandBody === "/cancel" && !isTelegramReplyScopedStop) {
+    return null;
+  }
   const replyToId = normalizeOptionalString(params.ctx.ReplyToId);
   if (isTelegramReplyScopedStop && !replyToId) {
     return {
@@ -205,12 +208,6 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
-  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-    logVerbose(
-      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-    );
-  }
   const aborted = await applyAbortTarget(
     buildAbortTargetApplyParams(params, abortTarget, {
       requireActive: Boolean(messageWorkTarget),
@@ -221,6 +218,12 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       shouldContinue: false,
       reply: { text: "No active work is still running for the replied-to message." },
     };
+  }
+  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    logVerbose(
+      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+    );
   }
 
   // Trigger internal hook for stop command

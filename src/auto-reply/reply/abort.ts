@@ -30,6 +30,7 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   applyAbortCutoffToSessionEntry,
@@ -72,6 +73,37 @@ const defaultAbortDeps = {
 const abortDeps = {
   ...defaultAbortDeps,
 };
+
+function shouldDeferTelegramSlashAbortToCommandHandler(params: {
+  ctx: FinalizedMsgContext;
+  text: string;
+}): boolean {
+  const { ctx, text } = params;
+  if (ctx.Provider !== "telegram" && ctx.Surface !== "telegram") {
+    return false;
+  }
+  const hasTelegramRoute = [
+    ctx.From,
+    ctx.To,
+    ctx.OriginatingTo,
+    ctx.NativeChannelId,
+    ctx.CommandTargetSessionKey,
+  ].some(
+    (value) =>
+      normalizeOptionalString(value)?.includes(":telegram:") ||
+      normalizeOptionalString(value)?.startsWith("telegram:"),
+  );
+  if (!hasTelegramRoute) {
+    return false;
+  }
+  if (ctx.CommandSource !== "native" && ctx.CommandSource !== "text") {
+    return false;
+  }
+  const normalized = normalizeOptionalLowercaseString(
+    normalizeCommandBody(text, { botUsername: ctx.BotUsername }).trim(),
+  );
+  return normalized === "/stop" || normalized === "/cancel";
+}
 
 export const testing = {
   setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
@@ -317,6 +349,9 @@ export async function tryFastAbortFromMessage(params: {
     : raw;
   const abortRequested = isAbortRequestText(stripped);
   if (!abortRequested) {
+    return { handled: false, aborted: false };
+  }
+  if (shouldDeferTelegramSlashAbortToCommandHandler({ ctx, text: stripped })) {
     return { handled: false, aborted: false };
   }
 

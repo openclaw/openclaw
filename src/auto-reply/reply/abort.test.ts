@@ -137,10 +137,10 @@ describe("abort detection", () => {
         Surface: "telegram",
         From: params.from,
         To: params.to,
+        CommandSource: params.commandSource,
         ...(params.sessionKey ? { SessionKey: params.sessionKey } : {}),
         ...(params.parentSessionKey ? { ParentSessionKey: params.parentSessionKey } : {}),
         ...(params.senderId ? { SenderId: params.senderId } : {}),
-        ...(params.commandSource ? { CommandSource: params.commandSource } : {}),
         ...(params.targetSessionKey ? { CommandTargetSessionKey: params.targetSessionKey } : {}),
         ...(params.messageSid ? { MessageSid: params.messageSid } : {}),
         ...(typeof params.timestamp === "number" ? { Timestamp: params.timestamp } : {}),
@@ -282,11 +282,11 @@ describe("abort detection", () => {
 
   it("isAbortRequestText aligns abort command semantics", () => {
     expect(isAbortRequestText("/stop")).toBe(true);
-    expect(isAbortRequestText("/cancel")).toBe(true);
+    expect(isAbortRequestText("/cancel")).toBe(false);
     expect(isAbortRequestText("/STOP")).toBe(true);
-    expect(isAbortRequestText("/CANCEL")).toBe(true);
+    expect(isAbortRequestText("/CANCEL")).toBe(false);
     expect(isAbortRequestText("/stop!!!")).toBe(true);
-    expect(isAbortRequestText("/cancel!!!")).toBe(true);
+    expect(isAbortRequestText("/cancel!!!")).toBe(false);
     expect(isAbortRequestText("/Stop!!!")).toBe(true);
     expect(isAbortRequestText("stop")).toBe(true);
     expect(isAbortRequestText("Stop")).toBe(true);
@@ -423,10 +423,10 @@ describe("abort detection", () => {
     expect(result.handled).toBe(true);
   });
 
-  it("fast-aborts authorized text slash stop commands before they queue", async () => {
-    const sessionKey = "telegram:123";
-    const sessionId = "session-123";
-    const activeSessionId = "session-active";
+  it("defers Telegram text slash stop commands to the reply-scoped command handler", async () => {
+    const sessionKey = "telegram:reply-scoped-stop";
+    const sessionId = "session-reply-scoped-stop";
+    const activeSessionId = "session-reply-scoped-stop-active";
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
@@ -441,17 +441,45 @@ describe("abort detection", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
-      senderId: "123",
+      from: "telegram:reply-scoped-stop",
+      to: "telegram:reply-scoped-stop",
+      senderId: "reply-scoped-stop",
       commandSource: "text",
     });
 
-    expect(result.handled).toBe(true);
-    expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(sessionKey);
-    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
-    expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-    expectSessionLaneCleared(sessionKey);
+    expect(result).toEqual({ handled: false, aborted: false });
+    expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalledWith(
+      sessionKey,
+    );
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).not.toHaveBeenCalledWith(activeSessionId);
+    expect(getFollowupQueueDepth(sessionKey)).toBe(1);
+    expect(commandQueueMocks.clearCommandLane).not.toHaveBeenCalledWith(`session:${sessionKey}`);
+  });
+
+  it("defers Telegram native slash cancel commands to the reply-scoped command handler", async () => {
+    const sessionKey = "telegram:reply-scoped-cancel";
+    const sessionId = "session-reply-scoped-cancel";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+
+    const result = await tryFastAbortFromMessage({
+      ctx: buildTestCtx({
+        CommandBody: "/cancel",
+        RawBody: "/cancel",
+        CommandAuthorized: true,
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:reply-scoped-cancel",
+        To: "telegram:reply-scoped-cancel",
+        SessionKey: sessionKey,
+        CommandSource: "native",
+      }),
+      cfg,
+    });
+
+    expect(result).toEqual({ handled: false, aborted: false });
+    expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
   });
 
   it("fast-abort clears queued followups and session lane", async () => {
