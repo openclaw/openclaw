@@ -395,6 +395,13 @@ vi.mock("./auth-profiles.js", () => ({
 
 vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: () => state.authProfileStoreMock,
+  saveAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn(
+    async ({ updater }: { updater: (store: typeof state.authProfileStoreMock) => boolean }) => {
+      updater(state.authProfileStoreMock);
+      return state.authProfileStoreMock;
+    },
+  ),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({

@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
     resolveAuthStorePathForDisplay: vi.fn(
       (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
     ),
+    resolveBillingDisableCeilingMs: vi.fn().mockReturnValue(900_000),
     resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider === "openai") {
@@ -179,6 +180,7 @@ vi.mock("../../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
 }));
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
+  resolveBillingDisableCeilingMs: mocks.resolveBillingDisableCeilingMs,
   resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
 }));
 vi.mock("../../agents/auth-health.js", () => ({
