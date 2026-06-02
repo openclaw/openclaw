@@ -22,6 +22,9 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+const FEISHU_MESSAGE_RETRYABLE_ERROR_CODES = new Set([2200, 11232, 429]);
+const FEISHU_MESSAGE_SEND_MAX_ATTEMPTS = 3;
+const FEISHU_MESSAGE_SEND_INITIAL_RETRY_DELAY_MS = 250;
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
 const FEISHU_CARD_TEMPLATES = new Set([
@@ -48,22 +51,65 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
+function getFeishuApiErrorCode(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) {
+    return undefined;
+  }
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "number") {
+    return code;
+  }
+  const response = (err as { response?: { data?: { code?: unknown } } }).response;
+  return typeof response?.data?.code === "number" ? response.data.code : undefined;
+}
+
+function isRetryableFeishuMessageResponse(response: { code?: number }): boolean {
+  return (
+    typeof response.code === "number" && FEISHU_MESSAGE_RETRYABLE_ERROR_CODES.has(response.code)
+  );
+}
+
+function isRetryableFeishuMessageError(err: unknown): boolean {
+  const code = getFeishuApiErrorCode(err);
+  return typeof code === "number" && FEISHU_MESSAGE_RETRYABLE_ERROR_CODES.has(code);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestFeishuMessageWithRetry<T extends { code?: number }>(
+  send: () => Promise<T>,
+): Promise<T> {
+  let delayMs = FEISHU_MESSAGE_SEND_INITIAL_RETRY_DELAY_MS;
+  for (let attempt = 1; attempt <= FEISHU_MESSAGE_SEND_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await send();
+      if (
+        !isRetryableFeishuMessageResponse(response) ||
+        attempt === FEISHU_MESSAGE_SEND_MAX_ATTEMPTS
+      ) {
+        return response;
+      }
+    } catch (err) {
+      if (!isRetryableFeishuMessageError(err) || attempt === FEISHU_MESSAGE_SEND_MAX_ATTEMPTS) {
+        throw err;
+      }
+    }
+    await sleep(delayMs);
+    delayMs *= 2;
+  }
+  return send();
+}
+
 /** Check whether a thrown error indicates a withdrawn/not-found reply target. */
 function isWithdrawnReplyError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) {
     return false;
   }
   // SDK error shape: err.code
-  const code = (err as { code?: number }).code;
+  const code = getFeishuApiErrorCode(err);
   if (typeof code === "number" && WITHDRAWN_REPLY_ERROR_CODES.has(code)) {
-    return true;
-  }
-  // AxiosError shape: err.response.data.code
-  const response = (err as { response?: { data?: { code?: number; msg?: string } } }).response;
-  if (
-    typeof response?.data?.code === "number" &&
-    WITHDRAWN_REPLY_ERROR_CODES.has(response.data.code)
-  ) {
     return true;
   }
   return false;
@@ -122,14 +168,16 @@ async function sendFallbackDirect(
 ): Promise<FeishuSendResult> {
   const response = await requestFeishuApi(
     () =>
-      client.im.message.create({
-        params: { receive_id_type: params.receiveIdType },
-        data: {
-          receive_id: params.receiveId,
-          content: params.content,
-          msg_type: params.msgType,
-        },
-      }),
+      requestFeishuMessageWithRetry(() =>
+        client.im.message.create({
+          params: { receive_id_type: params.receiveIdType },
+          data: {
+            receive_id: params.receiveId,
+            content: params.content,
+            msg_type: params.msgType,
+          },
+        }),
+      ),
     errorPrefix,
     { includeNestedErrorLogId: true },
   );
@@ -168,14 +216,16 @@ async function sendReplyOrFallbackDirect(
 
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
-      data: {
-        content: params.content,
-        msg_type: params.msgType,
-        ...(params.replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    response = await requestFeishuMessageWithRetry(() =>
+      client.im.message.reply({
+        path: { message_id: params.replyToMessageId },
+        data: {
+          content: params.content,
+          msg_type: params.msgType,
+          ...(params.replyInThread ? { reply_in_thread: true } : {}),
+        },
+      }),
+    );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
       throw createFeishuApiError(err, params.replyErrorPrefix, { includeNestedErrorLogId: true });

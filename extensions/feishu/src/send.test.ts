@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildMarkdownCard } from "./send.js";
 
@@ -82,6 +82,10 @@ describe("getMessageFeishu", () => {
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./runtime.js");
     vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   beforeEach(() => {
@@ -170,6 +174,107 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("retries Feishu flow-control create responses before reporting a text send", async () => {
+    vi.useFakeTimers();
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 11232, msg: "flow control" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_retry" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const resultPromise = sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_retry",
+      text: "retry this",
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await resultPromise;
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("om_retry");
+  });
+
+  it("retries thrown Feishu rate-limit reply errors before preserving thread reply metadata", async () => {
+    vi.useFakeTimers();
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce({ response: { data: { code: 429, msg: "too many requests" } } })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_reply_retry" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn(),
+          reply,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const resultPromise = sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_thread",
+      text: "thread retry",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await resultPromise;
+
+    expect(reply).toHaveBeenCalledTimes(2);
+    expect(reply).toHaveBeenLastCalledWith({
+      path: { message_id: "om_parent" },
+      data: {
+        content: JSON.stringify({
+          zh_cn: {
+            content: [[{ tag: "md", text: "thread retry" }]],
+          },
+        }),
+        msg_type: "post",
+        reply_in_thread: true,
+      },
+    });
+    expect(result.messageId).toBe("om_reply_retry");
+  });
+
+  it("does not retry non-flow-control Feishu send failures", async () => {
+    const create = vi.fn().mockResolvedValueOnce({ code: 999, msg: "permission denied" });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        to: "oc_no_retry",
+        text: "do not retry",
+      }),
+    ).rejects.toThrow("Feishu send failed: permission denied");
+
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("extracts text content from interactive card elements", async () => {
