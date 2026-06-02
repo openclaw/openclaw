@@ -377,7 +377,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       delivery ? textField(delivery, "mode") : null,
       delivery ? textField(delivery, "channel") : null,
       delivery ? textField(delivery, "to") : null,
-      delivery && delivery.threadId != null ? String(delivery.threadId) : null,
+      delivery ? textField(delivery, "threadId") : null,
       delivery ? textField(delivery, "accountId") : null,
       delivery && typeof delivery.bestEffort === "boolean" ? (delivery.bestEffort ? 1 : 0) : null,
       completionDestination ? textField(completionDestination, "mode") : null,
