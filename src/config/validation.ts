@@ -894,20 +894,31 @@ function isMemoryWatchEnabled(
 const MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD = 2_000;
 const MEMORY_WATCH_FD_WARNING_SCAN_ENTRY_LIMIT = 20_000;
 
-function hasManyMemoryWatchFiles(params: {
+type MemoryWatchScanContext = {
+  countsByDir: Map<string, number>;
+  remainingEntries: number;
+};
+
+function collectMemoryWatchDirs(params: {
   config: OpenClawConfig;
   defaults: MemorySearchConfig | undefined;
   override: MemorySearchConfig | undefined;
   agentId: string;
-}): boolean {
+}): Set<string> {
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.agentId);
-  const paths = new Set([path.join(workspaceDir, "memory")]);
+  const dirs = new Set<string>();
   const addPath = (rawPath: string | undefined): void => {
     const trimmed = rawPath?.trim();
     if (trimmed) {
-      paths.add(path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceDir, trimmed));
+      dirs.add(path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceDir, trimmed));
     }
   };
+  if (
+    params.config.memory?.backend !== "qmd" ||
+    params.config.memory.qmd?.includeDefaultMemory !== false
+  ) {
+    addPath("memory");
+  }
   for (const rawPath of [
     ...(params.config.memory?.qmd?.paths ?? []).map((entry) => entry.path),
     ...(params.defaults?.extraPaths ?? []),
@@ -920,32 +931,61 @@ function hasManyMemoryWatchFiles(params: {
   if (params.config.memory?.qmd?.sessions?.enabled === true) {
     addPath(params.config.memory.qmd.sessions.exportDir);
   }
+  return dirs;
+}
 
-  let checked = 0;
+function countMemoryWatchDirFiles(dirPath: string, context: MemoryWatchScanContext): number {
+  const cached = context.countsByDir.get(dirPath);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   let markdownFiles = 0;
-  for (const candidatePath of paths) {
-    let dir: fsSync.Dir;
-    try {
-      dir = fsSync.opendirSync(candidatePath, { recursive: true });
-    } catch {
-      continue;
-    }
-    try {
-      let entry: fsSync.Dirent | null;
-      while ((entry = dir.readSync())) {
-        if (++checked > MEMORY_WATCH_FD_WARNING_SCAN_ENTRY_LIMIT) {
-          return false;
-        }
-        if (
-          entry.isFile() &&
-          entry.name.toLowerCase().endsWith(".md") &&
-          ++markdownFiles > MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD
-        ) {
-          return true;
-        }
+  let dir: fsSync.Dir;
+  try {
+    dir = fsSync.opendirSync(dirPath, { recursive: true });
+  } catch {
+    context.countsByDir.set(dirPath, 0);
+    return 0;
+  }
+  try {
+    let entry: fsSync.Dirent | null;
+    while ((entry = dir.readSync())) {
+      if (context.remainingEntries-- <= 0) {
+        break;
       }
-    } finally {
-      dir.closeSync();
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+        markdownFiles += 1;
+      }
+      if (markdownFiles > MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD) {
+        break;
+      }
+    }
+  } finally {
+    dir.closeSync();
+  }
+  context.countsByDir.set(dirPath, markdownFiles);
+  return markdownFiles;
+}
+
+function hasManyMemoryWatchFiles(
+  params: {
+    config: OpenClawConfig;
+    defaults: MemorySearchConfig | undefined;
+    override: MemorySearchConfig | undefined;
+    agentId: string;
+  },
+  context: MemoryWatchScanContext,
+): boolean {
+  let markdownFiles = 0;
+  for (const dirPath of collectMemoryWatchDirs(params)) {
+    markdownFiles += countMemoryWatchDirFiles(dirPath, context);
+    if (markdownFiles > MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD) {
+      return true;
+    }
+    if (context.remainingEntries <= 0) {
+      // Best-effort warning only: cap startup validation work even if this under-warns.
+      return false;
     }
   }
   return false;
@@ -956,6 +996,7 @@ function hasConfiguredMemoryWatchFdPressureSurface(
   defaults: MemorySearchConfig | undefined,
   override: MemorySearchConfig | undefined,
   agentId: string,
+  scanContext: MemoryWatchScanContext,
 ): boolean {
   const hasMemorySearchConfig = Boolean(defaults || override);
   const hasMultipleGatewayAgents = (config.agents?.list?.length ?? 0) > 1;
@@ -976,7 +1017,10 @@ function hasConfiguredMemoryWatchFdPressureSurface(
     hasExtraPaths ||
     hasExtraQmdCollections ||
     hasSessionMemory;
-  return hasFdPressureSurface && hasManyMemoryWatchFiles({ config, defaults, override, agentId });
+  return (
+    hasFdPressureSurface &&
+    hasManyMemoryWatchFiles({ config, defaults, override, agentId }, scanContext)
+  );
 }
 
 function memoryWatchFdPressureWarningMessage(): string {
@@ -988,6 +1032,10 @@ function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValida
     return [];
   }
   const defaults = config.agents?.defaults?.memorySearch;
+  const scanContext: MemoryWatchScanContext = {
+    countsByDir: new Map(),
+    remainingEntries: MEMORY_WATCH_FD_WARNING_SCAN_ENTRY_LIMIT,
+  };
   const warnings: ConfigValidationIssue[] = [];
   if (
     isMemorySearchEnabled(defaults, undefined) &&
@@ -997,6 +1045,7 @@ function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValida
       defaults,
       undefined,
       resolveDefaultAgentId(config),
+      scanContext,
     )
   ) {
     warnings.push({
@@ -1010,7 +1059,7 @@ function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValida
       override &&
       isMemorySearchEnabled(defaults, override) &&
       isMemoryWatchEnabled(defaults, override) &&
-      hasConfiguredMemoryWatchFdPressureSurface(config, defaults, override, agent.id)
+      hasConfiguredMemoryWatchFdPressureSurface(config, defaults, override, agent.id, scanContext)
     ) {
       warnings.push({
         path: `agents.list.${index}.memorySearch.sync.watch`,

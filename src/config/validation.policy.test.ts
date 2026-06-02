@@ -175,6 +175,38 @@ describe("gateway memory watch config warnings", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("does not warn for default QMD memory when includeDefaultMemory is false", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-watch-warning-"));
+    const memoryDir = path.join(root, "memory");
+    try {
+      fs.mkdirSync(memoryDir, { recursive: true });
+      for (let i = 0; i < 2_001; i += 1) {
+        fs.writeFileSync(path.join(memoryDir, `${i}.md`), "");
+      }
+      const result = validateConfigObjectWithPlugins(
+        {
+          gateway: { mode: "local" },
+          memory: { backend: "qmd", qmd: { includeDefaultMemory: false } },
+          agents: {
+            defaults: {
+              workspace: root,
+            },
+          },
+        },
+        { pluginValidation: "skip" },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.warnings).not.toContainEqual(
+        expect.objectContaining({
+          path: "agents.defaults.memorySearch.sync.watch",
+        }),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
