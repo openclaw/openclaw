@@ -1341,12 +1341,6 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = appendVisibleStreamStateMessages(
-        state.chatMessages,
-        state,
-        [finalMessage],
-        { includeCurrent: false },
-      );
       state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state);
