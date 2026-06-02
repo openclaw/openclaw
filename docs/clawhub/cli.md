@@ -3,7 +3,7 @@ summary: "ClawHub CLI entry points for discovering, installing, publishing, and 
 read_when:
   - You want to use ClawHub from the command line
   - You want to install ClawHub skills or plugins through OpenClaw
-  - You want to publish or rescan ClawHub packages
+  - You want to publish ClawHub packages
 title: "ClawHub CLI"
 ---
 
@@ -14,7 +14,7 @@ OpenClaw has two command-line entry points for ClawHub:
 - `openclaw skills` and `openclaw plugins` install and manage ClawHub packages
   inside OpenClaw.
 - The standalone `clawhub` CLI handles publisher workflows such as login,
-  publish, transfer, sync, and rescan.
+  publish, transfer, and sync.
 
 ## Discover and install
 
@@ -55,20 +55,18 @@ clawhub package publish your-org/your-plugin
 clawhub package publish your-org/your-plugin@v1.0.0
 ```
 
-For skills, install the publishing helper skill and follow its current command
-shape:
+Publish skill folders with `clawhub skill publish`:
 
 ```bash
-openclaw skills install clawhub-publish
-clawhub publish
+clawhub skill publish ./skills/review-helper
+clawhub skill publish ./skills/review-helper --version 1.0.0
 ```
 
-When ClawHub scan state or ownership needs maintenance, use the relevant
-standalone command:
+When local skill scan state or package ownership needs maintenance, use the
+relevant standalone command:
 
 ```bash
 clawhub sync --all
-clawhub skill rescan <slug>
 clawhub package transfer @old-owner/package --to new-owner
 ```
 
