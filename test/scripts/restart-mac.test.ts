@@ -91,10 +91,10 @@ describe("scripts/restart-mac.sh", () => {
     );
 
     expect(chooseBlock).toContain('fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"');
-    expect(chooseBlock.indexOf('${ROOT_DIR}/dist/OpenClaw.app')).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf('/Applications/OpenClaw.app')).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf('${ROOT_DIR}/dist/OpenClaw.app')).toBeLessThan(
-      chooseBlock.indexOf('/Applications/OpenClaw.app'),
+    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeGreaterThan(-1);
+    expect(chooseBlock.indexOf("/Applications/OpenClaw.app")).toBeGreaterThan(-1);
+    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeLessThan(
+      chooseBlock.indexOf("/Applications/OpenClaw.app"),
     );
   });
 });

@@ -105,7 +105,10 @@ title: "Thinking levels"
 - Levels: `on|off|stream`.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
-- `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning.
+- `stream`: streams reasoning while the reply is generating. Channels with a streaming surface (Telegram, Mattermost) update an in-place preview/draft bubble, then send the final answer without reasoning.
+  - WebSocket / webchat / Control UI / ACP / `chat.send`-originated runs (cron auto-reply, heartbeats, plain WS) receive `agent.stream === "thinking"` events on the agent event bus with `data.text` (cumulative) and `data.delta` (incremental). The directive no longer requires a channel-side `onReasoningStream` callback.
+  - `thinkingLevel: "off"` still hard-disables the broadcast: `streamReasoning` is only enabled when both `reasoningMode === "stream"` and `canShowReasoning` (i.e. `thinkingLevel !== "off"`) are true, so opting out of thinking blocks the live thinking stream as well.
+  - `silentExpected` runs (e.g. heartbeat probes that should stay quiet) still suppress the broadcast.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).

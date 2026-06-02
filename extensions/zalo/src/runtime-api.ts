@@ -45,16 +45,10 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "./runtime-support.js";
-export {
-  buildTokenChannelStatusSummary,
-  PAIRING_APPROVED_MESSAGE,
-} from "./runtime-support.js";
+export { buildTokenChannelStatusSummary, PAIRING_APPROVED_MESSAGE } from "./runtime-support.js";
 export { buildBaseAccountStatusSnapshot } from "./runtime-support.js";
 export { chunkTextForOutbound } from "./runtime-support.js";
-export {
-  formatAllowFromLowercase,
-  isNormalizedSenderAllowed,
-} from "./runtime-support.js";
+export { formatAllowFromLowercase, isNormalizedSenderAllowed } from "./runtime-support.js";
 export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
