@@ -295,6 +295,179 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     }
     expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
   });
+
+  it("dedupes byte-identical replayed messages so suffix replay does not clone user entries", () => {
+    const sessionManager = SessionManager.inMemory();
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "anchor", timestamp: 1 }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: createTextContent("x".repeat(8_000)),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({ role: "user", content: "duplicate user message", timestamp: 3 }),
+      asAppendMessage({ role: "user", content: "duplicate user message", timestamp: 3 }),
+      asAppendMessage({ role: "assistant", content: createTextContent("tail"), timestamp: 4 }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[1],
+          message: createToolResultReplacement("read", "[externalized file_123]", 2),
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const duplicateCount = getBranchMessages(sessionManager).filter(
+      (message) => message.role === "user" && message.content === "duplicate user message",
+    ).length;
+    expect(duplicateCount).toBe(1);
+  });
+
+  it("keeps distinct compactions with identical summaries but different kept boundaries", () => {
+    const sessionManager = SessionManager.inMemory();
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: createTextContent("x".repeat(8_000)),
+        isError: false,
+        timestamp: 1,
+      }),
+      asAppendMessage({ role: "assistant", content: createTextContent("kept one"), timestamp: 2 }),
+      asAppendMessage({ role: "assistant", content: createTextContent("kept two"), timestamp: 3 }),
+    ]);
+    const keptOneId = entryIds[1];
+    const keptTwoId = entryIds[2];
+    // Two compactions sharing summary/tokens/details/fromHook but pointing at
+    // different kept boundaries must not collapse during replay.
+    sessionManager.appendCompaction("summary", keptOneId, 100);
+    sessionManager.appendCompaction("summary", keptTwoId, 100);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[0],
+          message: createToolResultReplacement("read", "[externalized file_123]", 1),
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const compactions = sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(compactions).toHaveLength(2);
+    const keptBoundaries = new Set(
+      compactions.map((entry) => (entry.type === "compaction" ? entry.firstKeptEntryId : null)),
+    );
+    expect(keptBoundaries.size).toBe(2);
+  });
+
+  it("preserves legitimate repeated user messages that differ only by timestamp", () => {
+    const sessionManager = SessionManager.inMemory();
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "anchor", timestamp: 1 }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: createTextContent("x".repeat(8_000)),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({ role: "user", content: "same question", timestamp: 3 }),
+      asAppendMessage({ role: "user", content: "same question", timestamp: 4 }),
+      asAppendMessage({ role: "assistant", content: createTextContent("tail"), timestamp: 5 }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[1],
+          message: createToolResultReplacement("read", "[externalized file_123]", 2),
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    // Two genuine repeats (distinct timestamps) must both survive — only the
+    // byte-identical recovery clone is collapsed.
+    const repeated = getBranchMessages(sessionManager).filter(
+      (message) => message.role === "user" && message.content === "same question",
+    );
+    expect(repeated).toHaveLength(2);
+  });
+
+  it("preserves byte-identical repeated assistant and tool-result entries during replay", () => {
+    const sessionManager = SessionManager.inMemory();
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "anchor", timestamp: 1 }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: createTextContent("x".repeat(8_000)),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({ role: "assistant", content: createTextContent("repeat"), timestamp: 3 }),
+      asAppendMessage({ role: "assistant", content: createTextContent("repeat"), timestamp: 3 }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: createTextContent("same output"),
+        isError: false,
+        timestamp: 4,
+      }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: createTextContent("same output"),
+        isError: false,
+        timestamp: 4,
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[1],
+          message: createToolResultReplacement("read", "[externalized file_123]", 2),
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branchMessages = getBranchMessages(sessionManager);
+    const assistantRepeats = branchMessages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "text" && part.text === "repeat"),
+    );
+    const toolRepeats = branchMessages.filter(
+      (message) =>
+        message.role === "toolResult" &&
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "text" && part.text === "same output"),
+    );
+    // Identical assistant/tool payloads can be legitimate history; never deduped.
+    expect(assistantRepeats).toHaveLength(2);
+    expect(toolRepeats).toHaveLength(2);
+  });
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
