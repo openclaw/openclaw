@@ -9,6 +9,7 @@ export type ResolveNativeCommandSessionTargetsParams = {
   lowercaseSessionKey?: boolean;
 };
 
+/** Resolve the session key pair used to execute native commands in bound or ad hoc sessions. */
 export function resolveNativeCommandSessionTargets(
   params: ResolveNativeCommandSessionTargetsParams,
 ) {

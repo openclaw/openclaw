@@ -12,12 +12,24 @@ export function sortWebSearchProviders(
   return sortPluginProviders(providers);
 }
 
+/**
+ * Sorts search providers for automatic provider selection.
+ *
+ * Search selection follows shared web-provider priority rules: explicit manifest
+ * `autoDetectOrder` first, then deterministic provider/plugin id ordering.
+ */
 export function sortWebSearchProvidersForAutoDetect(
   providers: PluginWebSearchProviderEntry[],
 ): PluginWebSearchProviderEntry[] {
   return sortPluginProvidersForAutoDetect(providers);
 }
 
+/**
+ * Resolves config values used while discovering bundled web-search providers.
+ *
+ * The returned config includes compat auto-enablement for bundled search
+ * plugins, keeping runtime/setup callers free of plugin-id-specific defaults.
+ */
 export function resolveBundledWebSearchResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;

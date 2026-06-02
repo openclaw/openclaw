@@ -19,12 +19,14 @@ import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
 
+/** Controls where a channel is visible before or after it is configured. */
 export type ChannelExposure = {
   configured?: boolean;
   setup?: boolean;
   docs?: boolean;
 };
 
+/** Source of an outbound target so adapters can distinguish user intent from runtime routing. */
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
@@ -141,6 +143,7 @@ export type ChannelStatusIssue = {
   fix?: string;
 };
 
+/** Coarse account state shown by status, setup, and lifecycle surfaces. */
 export type ChannelAccountState =
   | "linked"
   | "not linked"
@@ -149,11 +152,13 @@ export type ChannelAccountState =
   | "enabled"
   | "disabled";
 
+/** Runtime checks needed by heartbeat/status code without bootstrapping a full plugin runtime. */
 export type ChannelHeartbeatDeps = {
   webAuthExists?: () => Promise<boolean>;
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
+/** Doctor migration work a plugin wants core to preview or apply for legacy local state. */
 export type ChannelLegacyStateMigrationPlan =
   | {
       kind: "copy" | "move";
@@ -284,6 +289,7 @@ export type ChannelLogSink = {
   debug?: (msg: string) => void;
 };
 
+/** Normalized group request context passed to plugin policy hooks. */
 export type ChannelGroupContext = {
   cfg: OpenClawConfig;
   groupId?: string | null;
@@ -309,6 +315,7 @@ export type ChannelGroupContext = {
 export type PreferredAudioFileFormat = "caf";
 
 export type ChannelTtsVoiceDeliveryCapabilities = {
+  /** Whether the channel accepts normal files or a platform-native voice-note surface. */
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
@@ -351,12 +358,14 @@ export type ChannelSecurityDmPolicy = {
   normalizeEntry?: (raw: string) => string;
 };
 
+/** Resolved account plus config passed to security policy adapters. */
 export type ChannelSecurityContext<ResolvedAccount = unknown> = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   account: ResolvedAccount;
 };
 
+/** Provider mention cleanup hooks used before prompt construction and reply handling. */
 export type ChannelMentionAdapter = {
   stripRegexes?: (params: {
     ctx: MsgContext;
@@ -376,6 +385,7 @@ export type ChannelMentionAdapter = {
   }) => string;
 };
 
+/** Streaming defaults for transports that need host-side block coalescing. */
 export type ChannelStreamingAdapter = {
   blockStreamingCoalesceDefaults?: {
     minChars: number;
@@ -387,6 +397,7 @@ export type ChannelStreamingAdapter = {
 // their side and cast at the boundary.
 export type ChannelStructuredComponents = unknown[];
 
+/** Builds provider presentation for messages forwarded between channel contexts. */
 export type ChannelCrossContextPresentationFactory = (params: {
   originLabel: string;
   message: string;
@@ -394,11 +405,13 @@ export type ChannelCrossContextPresentationFactory = (params: {
   accountId?: string | null;
 }) => MessagePresentation;
 
+/** Transport-native reply/thread ids after channel-specific routing rules run. */
 export type ChannelReplyTransport = {
   replyToId?: string | null;
   threadId?: string | number | null;
 };
 
+/** Binding identity for commands scoped to the current or child conversation. */
 export type ChannelFocusedBindingContext = {
   conversationId: string;
   parentConversationId?: string;
@@ -406,6 +419,7 @@ export type ChannelFocusedBindingContext = {
   labelNoun: string;
 };
 
+/** Canonical outbound route tying a target to session identity and transport peer ids. */
 export type ChannelOutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -419,6 +433,7 @@ export type ChannelOutboundSessionRoute = {
   threadId?: string | number;
 };
 
+/** Threading and conversation hooks for providers whose reply model is not a simple id pair. */
 export type ChannelThreadingAdapter = {
   resolveReplyToMode?: (params: {
     cfg: OpenClawConfig;
@@ -665,6 +680,7 @@ export type ChannelMessagingAdapter = {
   }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
+/** Prompt-time channel guidance layered into agent instructions and message tool help. */
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   messageToolCapabilities?: (params: {
@@ -683,8 +699,10 @@ export type ChannelAgentPromptAdapter = {
   }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
+/** Directory result kind used by target resolution and UI search. */
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
 
+/** Provider directory entry returned by user/group/channel lookup adapters. */
 export type ChannelDirectoryEntry = {
   kind: ChannelDirectoryEntryKind;
   id: string;

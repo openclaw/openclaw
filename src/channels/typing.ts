@@ -13,7 +13,9 @@ export type TypingCallbacks = {
 };
 
 export type CreateTypingCallbacksParams = {
+  /** Sends or refreshes the platform typing indicator. */
   start: () => Promise<void>;
+  /** Clears the platform typing indicator when the reply finishes or is abandoned. */
   stop?: () => Promise<void>;
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
@@ -95,6 +97,8 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     keepaliveLoop.stop();
     clearTtlTimer();
     const startPromise = fireStart();
+    // Do not block the reply on the platform typing call; arm keepalive only
+    // after the first start succeeds and the breaker remains open.
     void startPromise.then(() => {
       if (closed || startGuard.isTripped()) {
         return;
@@ -112,6 +116,8 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (!stop || stopSent) {
       return;
     }
+    // Idle and cleanup can both fire for one reply lifecycle; only send one
+    // platform stop so adapters do not double-close typing sessions.
     stopSent = true;
     void stop().catch((err: unknown) => (params.onStopError ?? params.onStartError)(err));
   };

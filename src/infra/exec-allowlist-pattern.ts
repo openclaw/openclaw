@@ -82,12 +82,18 @@ function compileGlobRegex(pattern: string): RegExp {
 
   const compiled = new RegExp(regex, process.platform === "win32" ? "i" : "");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
+    // The pattern set is operator-controlled and tiny in practice; clearing
+    // avoids unbounded growth without making each match allocate a new regex.
     globRegexCache.clear();
   }
   globRegexCache.set(cacheKey, compiled);
   return compiled;
 }
 
+/**
+ * Matches executable allowlist globs against normalized filesystem targets.
+ * Handles home expansion, platform case rules, realpath checks, and dot-segment escapes.
+ */
 export function matchesExecAllowlistPattern(pattern: string, target: string): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {

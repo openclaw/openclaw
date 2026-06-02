@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 
+/** Candidate class that matched an allowlist entry. */
 export type AllowlistMatchSource =
   | "wildcard"
   | "id"
@@ -15,23 +16,32 @@ export type AllowlistMatchSource =
   | "slug"
   | "localpart";
 
+/** Allowlist decision plus optional match metadata for diagnostics. */
 export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
+  /** Whether the candidate was allowed. */
   allowed: boolean;
+  /** Config entry or wildcard that matched. */
   matchKey?: string;
+  /** Candidate source that matched the config entry. */
   matchSource?: TSource;
 };
 
+/** Precompiled allowlist for repeated candidate checks. */
 export type CompiledAllowlist = {
+  /** Normalized allowlist entries. */
   set: ReadonlySet<string>;
+  /** Whether the wildcard entry allows every candidate. */
   wildcard: boolean;
 };
 
+/** Formats match metadata for compact logs and tests. */
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
 ): string {
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
+/** Compiles already-normalized allowlist entries into a lookup set. */
 export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
   const set = new Set(entries.filter(Boolean));
   return {
@@ -48,6 +58,7 @@ function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): Compil
   );
 }
 
+/** Checks candidates in order, returning the first exact allowlist match. */
 export function resolveAllowlistCandidates<TSource extends string>(params: {
   compiledAllowlist: CompiledAllowlist;
   candidates: Array<{ value?: string; source: TSource }>;
@@ -67,6 +78,7 @@ export function resolveAllowlistCandidates<TSource extends string>(params: {
   return { allowed: false };
 }
 
+/** Resolves an allowlist decision with wildcard taking precedence over candidate checks. */
 export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
   compiledAllowlist: CompiledAllowlist;
   candidates: Array<{ value?: string; source: TSource }>;
@@ -80,6 +92,7 @@ export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
   return resolveAllowlistCandidates(params);
 }
 
+/** Compiles an allowlist and resolves it against ordered candidate values. */
 export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
   allowList: ReadonlyArray<string>;
   candidates: Array<{ value?: string; source: TSource }>;
@@ -90,12 +103,14 @@ export function resolveAllowlistMatchByCandidates<TSource extends string>(params
   });
 }
 
+/** Resolves the common id/name allowlist shape used by channel sender checks. */
 export function resolveAllowlistMatchSimple(params: {
   allowFrom: ReadonlyArray<string | number>;
   senderId: string;
   senderName?: string | null;
   allowNameMatching?: boolean;
 }): AllowlistMatch<"wildcard" | "id" | "name"> {
+  // Compile from the current array contents so in-place config edits are visible immediately.
   const allowFrom = compileSimpleAllowlist(params.allowFrom);
 
   if (allowFrom.set.size === 0) {
@@ -111,6 +126,7 @@ export function resolveAllowlistMatchSimple(params: {
     compiledAllowlist: allowFrom,
     candidates: [
       { value: senderId, source: "id" },
+      // Name matching is opt-in because display names can be mutable or ambiguous.
       ...(params.allowNameMatching === true && senderName
         ? ([{ value: senderName, source: "name" as const }] satisfies Array<{
             value?: string;

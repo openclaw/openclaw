@@ -85,6 +85,7 @@ export type AgentHarnessCompletionDelivery = Awaited<
 
 const AGENT_HARNESS_COMPLETION_SOURCE_TOOL = "agent_harness_task";
 
+/** Creates a requester-scoped task runtime for embedded agent harness workers. */
 export function createAgentHarnessTaskRuntime(
   params: AgentHarnessTaskRuntimeScopeParams,
 ): AgentHarnessTaskRuntime {
@@ -98,6 +99,8 @@ export function createAgentHarnessTaskRuntime(
     taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
   ): TaskRecord | null => {
     assertRunId(taskParams.runId);
+    // Harness task records inherit the requester session as both requester and
+    // owner so downstream task APIs cannot expose them to another session.
     return createRunningTaskRun({
       ...taskParams,
       runtime,
@@ -153,6 +156,7 @@ export function createAgentHarnessTaskRuntime(
   };
 }
 
+/** Delivers a harness child completion back to its requester via announcement routing. */
 export async function deliverAgentHarnessTaskCompletion(params: {
   scope: AgentHarnessTaskRuntimeScope;
   childSessionKey: string;
@@ -180,6 +184,8 @@ export async function deliverAgentHarnessTaskCompletion(params: {
     const { entry } = loadRequesterSessionEntry(requesterSessionKey);
     directOrigin = resolveAnnounceOrigin(entry, scope.requesterOrigin);
   }
+  // For channel requesters, resolve the child completion origin before direct
+  // delivery so the visible reply goes to the same conversation/thread.
   const completionDirectOrigin =
     requesterIsSubagent || !directOrigin
       ? directOrigin
@@ -240,6 +246,7 @@ function mapHarnessCompletionStatus(
   return "error";
 }
 
+/** True when a completion delivery reached durable requester-visible storage. */
 export function isDurableAgentHarnessCompletionDelivery(
   delivery: AgentHarnessCompletionDelivery,
 ): boolean {
@@ -266,6 +273,8 @@ function assertScopedRunId(runId: string, runIdPrefix: string | undefined): void
   if (!normalized) {
     throw new Error("Agent harness task runtime requires runId");
   }
+  // Prefix scoping prevents one harness runtime from finalizing or listing
+  // another harness worker that shares the same requester session.
   if (runIdPrefix && !normalized.startsWith(runIdPrefix)) {
     throw new Error("Agent harness task runId is outside the configured scope");
   }

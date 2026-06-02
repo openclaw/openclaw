@@ -9,10 +9,12 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { buildMigrationContext } from "./context.js";
 import type { MigrateCommonOptions } from "./types.js";
 
+/** Resolves a migration provider from the standalone registry and reports available ids on miss. */
 export function resolveMigrationProvider(
   providerId: string,
   config = getRuntimeConfig(),
 ): MigrationProviderPlugin {
+  // CLI migration can run before normal plugin startup, so load registry entries explicitly here.
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
   const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
   if (!provider) {
@@ -26,6 +28,7 @@ export function resolveMigrationProvider(
   return provider;
 }
 
+/** Converts common CLI flags into provider-specific migration options. */
 export function buildMigrationProviderOptions(
   opts: MigrateCommonOptions,
   providerId = opts.provider,
@@ -40,6 +43,7 @@ export function buildMigrationProviderOptions(
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
+/** Creates a provider migration plan after validating provider-specific CLI flags. */
 export async function createMigrationPlan(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string },

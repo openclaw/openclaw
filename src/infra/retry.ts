@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-co
 import { sleep } from "../utils.js";
 import { generateSecureFraction } from "./secure-random.js";
 
+/** Tunable retry envelope used by generic retry runners. */
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -10,6 +11,7 @@ export type RetryConfig = {
   jitter?: number;
 };
 
+/** Metadata emitted before a scheduled retry attempt. */
 export type RetryInfo = {
   attempt: number;
   maxAttempts: number;
@@ -18,6 +20,7 @@ export type RetryInfo = {
   label?: string;
 };
 
+/** Full retry behavior, including predicates, Retry-After hints, and telemetry. */
 export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
@@ -42,11 +45,13 @@ const clampNumber = (value: unknown, fallback: number, min?: number, max?: numbe
   return Math.min(Math.max(next, floor), ceiling);
 };
 
+/** Resolves retry attempts, preserving at least one execution. */
 function resolveAttemptCount(value: unknown, fallback: number): number {
   const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(1, Math.round(candidate));
 }
 
+/** Resolves retry delays through Node-safe timer bounds. */
 function resolveRetryDelayMs(value: number): number {
   if (value === Number.POSITIVE_INFINITY) {
     return MAX_TIMER_TIMEOUT_MS;
@@ -54,6 +59,7 @@ function resolveRetryDelayMs(value: number): number {
   return resolveTimerTimeoutMs(value, 0, 0);
 }
 
+/** Merges retry defaults and overrides into a bounded concrete config. */
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
@@ -75,6 +81,7 @@ export function resolveRetryConfig(
 
 type JitterMode = "symmetric" | "positive";
 
+/** Applies secure jitter while preserving the selected lower-bound contract. */
 function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmetric"): number {
   if (jitter <= 0) {
     return delayMs;
@@ -97,6 +104,7 @@ function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmet
   return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
 }
 
+/** Runs an async operation with exponential backoff, predicates, jitter, and Retry-After hints. */
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,
@@ -194,6 +202,7 @@ export async function retryAsync<T>(
   throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
 }
 
+/** Converts non-Error throws to Error objects without discarding object metadata. */
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;

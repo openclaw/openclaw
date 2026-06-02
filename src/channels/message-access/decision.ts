@@ -275,6 +275,7 @@ export function decideChannelIngress(
           commandGate: commandGate({ state, policy: { ...policy, command: undefined } }),
         })
       : null;
+  // Pre-sender activation cannot depend on command auth, so command facts are deliberately absent.
   if (activationBeforeSender) {
     gates.push(activationBeforeSender);
     if (activationBeforeSender.effect === "skip") {

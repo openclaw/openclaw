@@ -38,9 +38,13 @@ function escapeInvisibles(text: string, options?: { preserveLineBreaks?: boolean
   );
 }
 
+/** Sanitized approval text plus the size-limit status needed by richer approval UIs. */
 export type SanitizedExecApprovalDisplayText = {
+  /** Sanitized text safe to render in approval UIs. */
   text: string;
+  /** True when output hit the display cap after redaction. */
   truncated: boolean;
+  /** True when input exceeded the hard sanitizer cap and was fully suppressed. */
   oversized: boolean;
 };
 
@@ -180,16 +184,34 @@ function sanitizeExecApprovalDisplayTextInternal(
   return truncateForDisplay(out);
 }
 
+/**
+ * Sanitizes command text for compact approval display.
+ *
+ * Callers receive display-safe text with secrets redacted, invisible spoofing characters escaped,
+ * and command-sized output bounded before it is rendered in approval prompts.
+ */
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
   return sanitizeExecApprovalDisplayTextInternal(commandText).text;
 }
 
+/**
+ * Sanitizes command text and reports whether display limits changed the output.
+ *
+ * Use this when the approval UI needs to show a truncation or oversize affordance separately from
+ * the sanitized text itself.
+ */
 export function sanitizeExecApprovalDisplayTextWithStatus(
   commandText: string,
 ): SanitizedExecApprovalDisplayText {
   return sanitizeExecApprovalDisplayTextInternal(commandText);
 }
 
+/**
+ * Sanitizes warning prose while preserving readable line structure.
+ *
+ * Approval warnings are user-facing prose rather than shell snippets, so line breaks stay visible
+ * as actual newlines while other invisible spoofing characters are still escaped.
+ */
 export function sanitizeExecApprovalWarningText(warningText: string): string {
   return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
     preserveLineBreaks: true,
@@ -209,6 +231,12 @@ function normalizePreview(commandText: string, commandPreview?: string | null): 
   return preview;
 }
 
+/**
+ * Resolves the sanitized command text and optional preview shown for an exec approval.
+ *
+ * Node-hosted requests can fall back to `systemRunPlan` text, while sandbox/gateway approvals only
+ * display explicit command fields from the approval payload.
+ */
 export function resolveExecApprovalCommandDisplay(request: ExecApprovalRequestPayload): {
   commandText: string;
   commandPreview: string | null;

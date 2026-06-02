@@ -8,6 +8,7 @@ export type FormatDurationCompactOptions = {
   spaced?: boolean;
 };
 
+/** Decimal-second output for millisecond durations, returning "unknown" for non-finite input. */
 export function formatDurationSeconds(
   ms: number,
   options: FormatDurationSecondsOptions = {},

@@ -26,6 +26,7 @@ function isObjectLike(value: unknown): value is object {
   return (typeof value === "object" || typeof value === "function") && value !== null;
 }
 
+/** Reads only own data properties so diagnostic extraction never invokes getters. */
 function readOwnDataProperty(value: unknown, key: string): unknown {
   if (!isObjectLike(value)) {
     return undefined;
@@ -38,6 +39,7 @@ function readOwnDataProperty(value: unknown, key: string): unknown {
   }
 }
 
+/** Finds metadata through wrapper error/cause links while avoiding cycles. */
 function findDiagnosticErrorProperty<T>(
   err: unknown,
   reader: (candidate: unknown) => T | undefined,
@@ -57,6 +59,7 @@ function findDiagnosticErrorProperty<T>(
   );
 }
 
+/** Accepts only real HTTP status integers, not provider-specific string codes. */
 function isHttpStatusCode(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -66,6 +69,7 @@ function isHttpStatusCode(value: unknown): value is number {
   );
 }
 
+/** Normalizes provider request ids only when they fit the bounded safe alphabet. */
 function normalizeProviderRequestId(value: unknown): string | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -82,6 +86,7 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Hashes request identifiers before diagnostics expose them outside the raw error. */
 function hashDiagnosticIdentifier(value: string): string {
   return `sha256:${crypto
     .createHash("sha256")
@@ -90,6 +95,7 @@ function hashDiagnosticIdentifier(value: string): string {
     .slice(0, REQUEST_ID_HASH_PREFIX_LEN)}`;
 }
 
+/** Reads provider request ids from known own-property names. */
 function readDirectProviderRequestId(err: unknown): string | undefined {
   for (const key of PROVIDER_REQUEST_ID_KEYS) {
     const normalized = normalizeProviderRequestId(readOwnDataProperty(err, key));
@@ -100,6 +106,7 @@ function readDirectProviderRequestId(err: unknown): string | undefined {
   return undefined;
 }
 
+/** Reads an own message data property, allowing string throws as direct messages. */
 function readDirectMessage(err: unknown): string | undefined {
   if (typeof err === "string") {
     return err;
@@ -108,11 +115,13 @@ function readDirectMessage(err: unknown): string | undefined {
   return typeof message === "string" ? message : undefined;
 }
 
+/** Reads an own string error code without touching inherited/provider getters. */
 function readDirectCode(err: unknown): string | undefined {
   const code = readOwnDataProperty(err, "code");
   return typeof code === "string" ? code : undefined;
 }
 
+/** Extracts bounded request ids from common provider message formats. */
 function extractProviderRequestIdFromText(text: string | undefined): string | undefined {
   if (!text) {
     return undefined;
@@ -126,6 +135,7 @@ function extractProviderRequestIdFromText(text: string | undefined): string | un
   return undefined;
 }
 
+/** Returns a low-cardinality error category without trusting mutable Error.name. */
 export function diagnosticErrorCategory(err: unknown): string {
   try {
     if (err instanceof TypeError) {
@@ -158,6 +168,7 @@ export function diagnosticErrorCategory(err: unknown): string {
   return typeof err;
 }
 
+/** Extracts a safe HTTP status code from direct status/statusCode fields. */
 export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   const status = readOwnDataProperty(err, "status");
   if (isHttpStatusCode(status)) {
@@ -170,6 +181,7 @@ export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   return undefined;
 }
 
+/** Classifies transport failures into low-cardinality diagnostic buckets. */
 export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailureKind | undefined {
   const code = findDiagnosticErrorProperty(err, readDirectCode)?.trim().toUpperCase();
   switch (code) {
@@ -211,6 +223,7 @@ export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailure
   return undefined;
 }
 
+/** Returns a hashed provider request id from properties or sanitized message text. */
 export function diagnosticProviderRequestIdHash(err: unknown): string | undefined {
   const fromProperty = findDiagnosticErrorProperty(err, readDirectProviderRequestId);
   if (fromProperty) {

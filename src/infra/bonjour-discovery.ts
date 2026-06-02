@@ -8,6 +8,7 @@ import { parseStrictInteger } from "./parse-finite-number.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
+/** Raw Bonjour/Avahi/DNS-SD advertisement for a gateway before endpoint validation. */
 export type GatewayBonjourBeacon = {
   instanceName: string;
   domain?: string;
@@ -26,6 +27,7 @@ export type GatewayBonjourBeacon = {
   txt?: Record<string, string>;
 };
 
+/** Validated websocket endpoint derived from a gateway discovery beacon. */
 export type GatewayDiscoveryResolvedEndpoint = {
   host: string;
   port: number;
@@ -35,6 +37,7 @@ export type GatewayDiscoveryResolvedEndpoint = {
   wsUrl: string;
 };
 
+/** Resolves a beacon into a connectable gateway endpoint when host and port are valid. */
 export function resolveGatewayDiscoveryEndpoint(
   beacon: GatewayBonjourBeacon,
 ): GatewayDiscoveryResolvedEndpoint | null {
@@ -61,14 +64,17 @@ export function resolveGatewayDiscoveryEndpoint(
   };
 }
 
+/** Extracts the validated host from a discovery beacon for legacy host-only callers. */
 export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
   return resolveGatewayDiscoveryEndpoint(beacon)?.host ?? null;
 }
 
+/** Extracts the validated port from a discovery beacon for legacy port-only callers. */
 export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
   return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
 }
 
+/** Options for cross-platform gateway discovery probes. */
 export type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];
@@ -586,6 +592,7 @@ async function discoverViaAvahi(
   return parseAvahiBrowse(browse.stdout).map((beacon) => Object.assign({}, beacon, { domain }));
 }
 
+/** Discovers gateway beacons via dns-sd on macOS, Avahi on Linux, and tailnet DNS fallback. */
 export async function discoverGatewayBeacons(
   opts: GatewayBonjourDiscoverOpts = {},
 ): Promise<GatewayBonjourBeacon[]> {

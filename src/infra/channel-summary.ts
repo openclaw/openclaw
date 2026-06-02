@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
+/** Controls how channel status summaries are rendered for CLI/status callers. */
 export type ChannelSummaryOptions = {
   colorize?: boolean;
   includeAllowFrom?: boolean;
@@ -119,6 +120,7 @@ const buildAccountDetails = (params: {
   return details;
 };
 
+/** Builds human-readable per-channel status lines from configured channel plugins. */
 export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,

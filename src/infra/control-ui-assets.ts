@@ -8,15 +8,18 @@ import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./op
 
 const CONTROL_UI_DIST_PATH_SEGMENTS = ["dist", "control-ui", "index.html"] as const;
 
+/** Builds the expected dist/control-ui/index.html path for a package root. */
 export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
 }
 
+/** Health probe result for packaged Control UI dist assets. */
 export type ControlUiDistIndexHealth = {
   indexPath: string | null;
   exists: boolean;
 };
 
+/** Resolves the Control UI dist index path and checks whether it exists. */
 export async function resolveControlUiDistIndexHealth(
   opts: {
     root?: string;
@@ -36,6 +39,7 @@ export async function resolveControlUiDistIndexHealth(
   };
 }
 
+/** Finds a source checkout root from a CLI entrypoint when UI build files are present. */
 export function resolveControlUiRepoRoot(
   argv1: string | undefined = process.argv[1],
 ): string | null {
@@ -70,6 +74,7 @@ export function resolveControlUiRepoRoot(
   return null;
 }
 
+/** Resolves the packaged Control UI index from dist entrypoints, package roots, or fallbacks. */
 export async function resolveControlUiDistIndexPath(
   argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
 ): Promise<string | null> {
@@ -139,6 +144,7 @@ export async function resolveControlUiDistIndexPath(
   return null;
 }
 
+/** Inputs used to locate Control UI assets across dev, package, and app layouts. */
 export type ControlUiRootResolveOptions = {
   argv1?: string;
   moduleUrl?: string;
@@ -169,6 +175,7 @@ function addCandidate(candidates: Set<string>, value: string | null) {
   candidates.add(path.resolve(value));
 }
 
+/** Accepts a Control UI override only when it points at an index.html file or containing dir. */
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
   const resolved = path.resolve(rootOverride);
   try {
@@ -186,6 +193,7 @@ export function resolveControlUiRootOverrideSync(rootOverride: string): string |
   return null;
 }
 
+/** Resolves the directory containing Control UI assets for bundled and source layouts. */
 export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
   const candidates = new Set<string>();
   const argv1 = opts.argv1 ?? process.argv[1];
@@ -251,6 +259,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
   return null;
 }
 
+/** Verifies a Control UI root came from the package root, not an arbitrary fallback path. */
 export function isPackageProvenControlUiRootSync(
   root: string,
   opts: ControlUiRootResolveOptions = {},
@@ -269,6 +278,7 @@ export function isPackageProvenControlUiRootSync(
   return pathsMatchByRealpathOrResolve(root, packageDistRoot);
 }
 
+/** Result of checking or building Control UI assets before serving them. */
 export type EnsureControlUiAssetsResult = {
   ok: boolean;
   built: boolean;
@@ -287,6 +297,7 @@ function summarizeCommandOutput(text: string): string | undefined {
   return last.length > 240 ? `${last.slice(0, 239)}…` : last;
 }
 
+/** Ensures local Control UI assets exist, building from a source checkout when possible. */
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { timeoutMs?: number },

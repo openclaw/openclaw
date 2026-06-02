@@ -8,6 +8,7 @@ type ManagerLookupResult<T> = {
   error?: string;
 };
 
+/** Run a command with a lazily acquired manager and always close it after use. */
 export async function withManager<T>(params: {
   getManager: () => Promise<ManagerLookupResult<T>>;
   onMissing: (error?: string) => void;
@@ -31,6 +32,7 @@ export async function withManager<T>(params: {
   }
 }
 
+/** Run a CLI action, routing uncaught errors through the runtime or a caller hook. */
 export async function runCommandWithRuntime(
   runtime: { error: (message: string) => void; exit: (code: number) => void },
   action: () => Promise<void>,
@@ -49,6 +51,7 @@ export async function runCommandWithRuntime(
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Commander option values are typed by the caller.
+/** Resolve an option from a command or its ancestors, preserving Commander option typing. */
 export function resolveOptionFromCommand<T>(
   command: Command | undefined,
   key: string,

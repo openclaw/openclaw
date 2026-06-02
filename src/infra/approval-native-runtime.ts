@@ -29,11 +29,21 @@ type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 export type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
 
 type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
+  /** Pending entries returned by successful channel deliveries. */
   entries: TPendingEntry[];
+  /** Resolved plan used for this request, including origin notice metadata. */
   deliveryPlan: ChannelApprovalNativeDeliveryPlan;
+  /** Planned targets that actually produced pending entries after dedupe and errors. */
   deliveredTargets: ChannelApprovalNativePlannedTarget[];
 };
 
+/**
+ * Deliver one approval request through a resolved native plan and collect pending entries.
+ *
+ * Target preparation may collapse multiple planned targets onto one dedupe key; only the first
+ * successful delivery for a key is retained, and per-target failures are reported without stopping
+ * delivery to other targets.
+ */
 export async function deliverApprovalRequestViaChannelNativePlan<
   TPreparedTarget,
   TPendingEntry,
@@ -94,6 +104,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
         continue;
       }
       if (deliveredKeys.has(preparedTarget.dedupeKey)) {
+        // Channel prep may converge multiple planned targets onto the same real DM/chat.
         params.onDuplicateSkipped?.({
           plannedTarget,
           preparedTarget,
@@ -121,6 +132,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
         entry,
       });
     } catch (error) {
+      // A single broken target should not block other approvers from receiving the request.
       params.onDeliveryError?.({
         error,
         plannedTarget,
@@ -140,6 +152,7 @@ function defaultResolveApprovalKind(request: ApprovalRequest): ChannelApprovalKi
   return request.id.startsWith("plugin:") ? "plugin" : "exec";
 }
 
+/** Adapter shape for channel native approval runtimes built on the shared gateway runtime. */
 type ChannelNativeApprovalRuntimeAdapter<
   TPendingEntry,
   TPreparedTarget,
@@ -170,6 +183,13 @@ type ChannelNativeApprovalRuntimeAdapter<
     onStopped?: () => Promise<void> | void;
   };
 
+/**
+ * Create a channel-native approval runtime with route reporting and shared gateway handling.
+ *
+ * The returned runtime uses the shared exec/plugin gateway lifecycle while this wrapper resolves
+ * native delivery plans, passes pending content through channel hooks, and reports delivery results
+ * so origin-chat fallback notices can be finalized.
+ */
 export function createChannelNativeApprovalRuntime<
   TPendingEntry,
   TPreparedTarget,
@@ -224,6 +244,7 @@ export function createChannelNativeApprovalRuntime<
       try {
         shouldHandle = adapter.shouldHandle(request);
       } catch (error) {
+        // A throwing shouldHandle still counts as this runtime not delivering the request.
         void routeReporter.reportSkipped({
           approvalKind,
           request,
@@ -233,6 +254,7 @@ export function createChannelNativeApprovalRuntime<
       if (shouldHandle) {
         return shouldHandle;
       }
+      // Report skipped requests so route notices are not held open waiting for this runtime.
       void routeReporter.reportSkipped({
         approvalKind,
         request,
@@ -320,6 +342,8 @@ export function createChannelNativeApprovalRuntime<
         deliveredTargets = deliveryResult.deliveredTargets;
         return deliveryResult.entries;
       } finally {
+        // Always report the attempted delivery plan, even if build/send hooks throw, so origin
+        // fallback notices can still finalize.
         await routeReporter.reportDelivery({
           approvalKind,
           request,

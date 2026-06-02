@@ -9,19 +9,31 @@ import {
   resolveExecutablePathCandidate,
 } from "./executable-path.js";
 
+/** Resolved identity for one executable token used by execution or policy checks. */
 export type ExecutableResolution = {
+  /** Executable token exactly as provided by the command or argv. */
   rawExecutable: string;
+  /** PATH/cwd-resolved executable path when resolution succeeds. */
   resolvedPath?: string;
+  /** Filesystem-real path used for trust checks when available. */
   resolvedRealPath?: string;
+  /** Basename used for command-name allowlist matching. */
   executableName: string;
 };
 
+/** Command target resolution split into runtime execution and approval policy views. */
 export type CommandResolution = {
+  /** Runtime executable target after transparent wrapper unwrapping. */
   execution: ExecutableResolution;
+  /** Policy target that approval checks should trust or block. */
   policy: ExecutableResolution;
+  /** Runtime argv after transparent wrappers have been removed. */
   effectiveArgv?: string[];
+  /** Wrapper names encountered while deriving execution and policy targets. */
   wrapperChain?: string[];
+  /** True when wrapper analysis deliberately keeps the wrapper as the policy boundary. */
   policyBlocked?: boolean;
+  /** Wrapper name that caused policy blocking. */
   blockedWrapper?: string;
 };
 
@@ -122,6 +134,7 @@ function buildCommandResolution(params: {
   });
 }
 
+/** Resolves a shell command string by inspecting its first executable token only. */
 export function resolveCommandResolution(
   command: string,
   cwd?: string,
@@ -141,6 +154,7 @@ export function resolveCommandResolution(
   });
 }
 
+/** Resolves argv into separate execution and policy targets after wrapper analysis. */
 export function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
@@ -185,6 +199,7 @@ function resolveExecutableCandidatePathFromResolution(
   });
 }
 
+/** Returns the strongest filesystem path available for trust comparisons. */
 export function resolveExecutableTrustPath(
   resolution: ExecutableResolution | null | undefined,
   cwd?: string,
@@ -197,6 +212,7 @@ export function resolveExecutableTrustPath(
   return tryResolveRealpath(candidatePath) ?? candidatePath;
 }
 
+/** Selects the runtime execution target from either resolution shape. */
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
@@ -206,6 +222,7 @@ export function resolveExecutionTargetResolution(
   return isCommandResolution(resolution) ? resolution.execution : resolution;
 }
 
+/** Selects the policy target from either resolution shape. */
 export function resolvePolicyTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
@@ -215,6 +232,7 @@ export function resolvePolicyTargetResolution(
   return isCommandResolution(resolution) ? resolution.policy : resolution;
 }
 
+/** Returns a path candidate for the runtime execution target. */
 export function resolveExecutionTargetCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -225,6 +243,7 @@ export function resolveExecutionTargetCandidatePath(
   );
 }
 
+/** Returns the trust path for the runtime execution target. */
 export function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -235,6 +254,7 @@ export function resolveExecutionTargetTrustPath(
   );
 }
 
+/** Returns a path candidate for the approval policy target. */
 export function resolvePolicyTargetCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -245,6 +265,7 @@ export function resolvePolicyTargetCandidatePath(
   );
 }
 
+/** Returns the trust path for the approval policy target. */
 export function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -255,6 +276,7 @@ export function resolvePolicyTargetTrustPath(
   );
 }
 
+/** Returns the candidate path shown in approval/audit contexts. */
 export function resolveApprovalAuditCandidatePath(
   resolution: CommandResolution | null,
   cwd?: string,
@@ -262,6 +284,7 @@ export function resolveApprovalAuditCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
+/** Returns the trust path used by approval/audit contexts. */
 export function resolveApprovalAuditTrustPath(
   resolution: CommandResolution | null,
   cwd?: string,
@@ -269,7 +292,11 @@ export function resolveApprovalAuditTrustPath(
   return resolvePolicyTargetTrustPath(resolution, cwd);
 }
 
-/** @deprecated Use resolveExecutionTargetCandidatePath. */
+/**
+ * Returns the legacy execution-target candidate path used by older allowlist callers.
+ *
+ * @deprecated Use resolveExecutionTargetCandidatePath.
+ */
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -277,6 +304,7 @@ export function resolveAllowlistCandidatePath(
   return resolveExecutionTargetCandidatePath(resolution, cwd);
 }
 
+/** Returns the candidate path used by policy allowlist checks. */
 export function resolvePolicyAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -379,6 +407,7 @@ function matchesExecutableBasenamePattern(
   return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
 }
 
+/** Matches an executable resolution plus optional argv against approval allowlist entries. */
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: ExecutableResolution | null,
@@ -428,6 +457,7 @@ export function matchAllowlist(
   return pathOnlyMatch;
 }
 
+/** Normalized classification for a single argv token used by option scanners. */
 export type ExecArgvToken =
   | {
       kind: "empty";

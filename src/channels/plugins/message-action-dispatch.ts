@@ -12,6 +12,7 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
   );
 }
 
+/** Dispatches a channel message action through the owning plugin after trust checks. */
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
 ): Promise<AgentToolResult<unknown> | null> {

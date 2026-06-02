@@ -4,6 +4,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 
 const LEGACY_INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
 
+/** Path-resolution options shared by installed-plugin index readers, writers, and migrations. */
 export type InstalledPluginIndexStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
@@ -16,6 +17,7 @@ function resolveStoreEnv(options: InstalledPluginIndexStoreOptions): NodeJS.Proc
     : (options.env ?? process.env);
 }
 
+/** Resolves the current SQLite-backed installed-plugin index path. */
 export function resolveInstalledPluginIndexStorePath(
   options: InstalledPluginIndexStoreOptions = {},
 ): string {
@@ -25,6 +27,7 @@ export function resolveInstalledPluginIndexStorePath(
   return resolveOpenClawStateSqlitePath(resolveStoreEnv(options));
 }
 
+/** Resolves the legacy JSON installed-plugin index path used by migrations and recovery. */
 export function resolveLegacyInstalledPluginIndexStorePath(
   options: InstalledPluginIndexStoreOptions = {},
 ): string {

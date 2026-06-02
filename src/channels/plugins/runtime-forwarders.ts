@@ -31,6 +31,10 @@ async function resolveForwardedMethod<Runtime, Fn>(params: {
   throw new Error(params.unavailableMessage ?? "Runtime method is unavailable");
 }
 
+/**
+ * Builds directory adapter methods that resolve the live channel runtime at
+ * call time, keeping startup light while preserving directory adapter shape.
+ */
 export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
   getRuntime: () => MaybePromise<Runtime>;
   self?: (runtime: Runtime) => ChannelDirectoryAdapter["self"] | null | undefined;
@@ -82,6 +86,10 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
   return adapter;
 }
 
+/**
+ * Builds outbound adapter delegates that forward each send/render method to the
+ * current runtime instance and fail with per-method unavailable messages.
+ */
 export function createRuntimeOutboundDelegates<Runtime>(params: {
   getRuntime: () => MaybePromise<Runtime>;
   renderPresentation?: {

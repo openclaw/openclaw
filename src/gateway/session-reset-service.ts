@@ -116,23 +116,37 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
+/** Archive transcript files for a session lifecycle reset/delete and return archived paths. */
 export function archiveSessionTranscriptsForSession(params: {
+  /** Session id whose generated transcript candidates should be archived. */
   sessionId: string | undefined;
+  /** Store path anchoring agent-local transcript candidates. */
   storePath: string;
+  /** Optional persisted/custom transcript path from the session entry. */
   sessionFile?: string;
+  /** Agent scope used for modern per-agent transcript paths. */
   agentId?: string;
+  /** Lifecycle reason written into archive suffixes. */
   reason: "reset" | "deleted";
+  /** Per-file archive failure callback owned by the caller. */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
 }
 
+/** Archive transcript files and preserve source-to-archive path pairs for hook payloads. */
 export function archiveSessionTranscriptsForSessionDetailed(params: {
+  /** Session id whose generated transcript candidates should be archived. */
   sessionId: string | undefined;
+  /** Store path anchoring agent-local transcript candidates. */
   storePath: string;
+  /** Optional persisted/custom transcript path from the session entry. */
   sessionFile?: string;
+  /** Agent scope used for modern per-agent transcript paths. */
   agentId?: string;
+  /** Lifecycle reason written into archive suffixes. */
   reason: "reset" | "deleted";
+  /** Per-file archive failure callback owned by the caller. */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   if (!params.sessionId) {
@@ -148,13 +162,21 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   });
 }
 
+/** Emit the Gateway session_end plugin hook for a finalized session. */
 export function emitGatewaySessionEndPluginHook(params: {
+  /** Config snapshot used by plugin hook payload builders. */
   cfg: OpenClawConfig;
+  /** Canonical key for the session being finalized. */
   sessionKey: string;
+  /** Session id being finalized; blank values suppress hook emission. */
   sessionId?: string;
+  /** Session store path used to resolve stable transcript locations. */
   storePath: string;
+  /** Optional persisted/custom transcript path from the session entry. */
   sessionFile?: string;
+  /** Agent scope used for per-agent transcript path resolution. */
   agentId?: string;
+  /** Lifecycle reason delivered to session_end plugin hooks. */
   reason:
     | "new"
     | "reset"
@@ -165,8 +187,11 @@ export function emitGatewaySessionEndPluginHook(params: {
     | "shutdown"
     | "restart"
     | "unknown";
+  /** Archive results from the same lifecycle operation, preferred over live files. */
   archivedTranscripts?: ArchivedSessionTranscript[];
+  /** Replacement session id for reset/new lifecycle transitions. */
   nextSessionId?: string;
+  /** Replacement session key for reset/new lifecycle transitions. */
   nextSessionKey?: string;
 }): void {
   if (!params.sessionId) {
@@ -202,13 +227,21 @@ export function emitGatewaySessionEndPluginHook(params: {
   });
 }
 
+/** Emit the Gateway session_start plugin hook and register shutdown finalization state. */
 export function emitGatewaySessionStartPluginHook(params: {
+  /** Config snapshot used by plugin hook payload builders. */
   cfg: OpenClawConfig;
+  /** Canonical key for the started session. */
   sessionKey: string;
+  /** Session id that started; blank values suppress hook emission. */
   sessionId?: string;
+  /** Previous session id when this start resumes or replaces an earlier session. */
   resumedFrom?: string;
+  /** Session store path required for shutdown finalization tracking. */
   storePath?: string;
+  /** Optional persisted/custom transcript path from the session entry. */
   sessionFile?: string;
+  /** Agent scope used for per-agent transcript path resolution. */
   agentId?: string;
 }): void {
   if (!params.sessionId) {
@@ -248,7 +281,9 @@ export function emitGatewaySessionStartPluginHook(params: {
 const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
 
 export type DrainActiveSessionsForShutdownResult = {
+  /** Session ids whose shutdown session_end emission was started. */
   emittedSessionIds: string[];
+  /** Whether the bounded aggregate wait expired before all plugin handlers settled. */
   timedOut: boolean;
 };
 
@@ -263,7 +298,9 @@ export type DrainActiveSessionsForShutdownResult = {
  * before this drain runs, so they will not be double-fired here.
  */
 export async function drainActiveSessionsForShutdown(params: {
+  /** Shutdown reason delivered to session_end plugin hooks. */
   reason: "shutdown" | "restart";
+  /** Total wall-clock budget for waiting on all started session_end handlers. */
   totalTimeoutMs?: number;
 }): Promise<DrainActiveSessionsForShutdownResult> {
   const tracked = listActiveSessionsForShutdown();

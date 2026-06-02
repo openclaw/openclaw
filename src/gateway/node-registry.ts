@@ -10,9 +10,13 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type NodeSession = {
+  /** Stable node id from the connected device/client identity. */
   nodeId: string;
+  /** Gateway WebSocket connection id currently owning this node. */
   connId: string;
+  /** Live WebSocket client wrapper for outbound node events. */
   client: GatewayWsClient;
+  /** Client id reported during connect, distinct from device node id. */
   clientId?: string;
   clientMode?: string;
   displayName?: string;
@@ -83,10 +87,12 @@ const WEBSOCKET_OPEN_READY_STATE = 1;
 const SLOW_CONSUMER_CLOSE_CODE = 1008;
 
 export type SerializedEventPayload = {
+  /** Pre-serialized JSON object fragment for zero-copy node event sends. */
   readonly json: string;
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
 };
 
+/** Serialize an event payload once for reuse across raw node sends. */
 export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
   if (payload === undefined) {
     return null;
@@ -162,6 +168,7 @@ export class NodeRegistry {
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
+  /** Register or replace a connected node session from its Gateway connect payload. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
@@ -219,6 +226,7 @@ export class NodeRegistry {
     return session;
   }
 
+  /** Remove a connection-owned node session and fail pending invokes for that connection. */
   unregister(connId: string): string | null {
     const nodeId = this.nodesByConn.get(connId);
     if (!nodeId) {
@@ -245,14 +253,17 @@ export class NodeRegistry {
     return unregistersCurrentNode ? nodeId : null;
   }
 
+  /** Return the current connected node sessions. */
   listConnected(): NodeSession[] {
     return [...this.nodesById.values()];
   }
 
+  /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
   }
 
+  /** Probe a connected node socket with ping/pong when the socket supports it. */
   async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
     const node = this.nodesById.get(nodeId);
     if (!node) {
@@ -340,10 +351,12 @@ export class NodeRegistry {
     });
   }
 
+  /** Update effective commands while preserving the node-declared command boundary. */
   updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {
     return this.updateSurface(nodeId, { commands });
   }
 
+  /** Update effective node caps/commands/permissions within the node-declared surface. */
   updateSurface(
     nodeId: string,
     surface: {
@@ -400,6 +413,7 @@ export class NodeRegistry {
     return node;
   }
 
+  /** Invoke a command on a connected node and wait for the matching result. */
   async invoke(params: {
     nodeId: string;
     command: string;
@@ -467,6 +481,7 @@ export class NodeRegistry {
     });
   }
 
+  /** Authorize a system.run event emitted by a node for a pending approved invoke. */
   authorizeSystemRunEvent(params: {
     nodeId: string;
     connId?: string;
@@ -488,6 +503,8 @@ export class NodeRegistry {
         sessionKey: params.sessionKey,
       });
       if (!match && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
+        // Older macOS nodes emitted system.run lifecycle events before runId
+        // was mandatory; only allow the fallback when a single event matches.
         match = this.matchSingleAuthorizedSystemRunEvent({
           nodeId: params.nodeId,
           connId,
@@ -615,6 +632,7 @@ export class NodeRegistry {
     return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
   }
 
+  /** Resolve a pending node invoke result from the owning node connection. */
   handleInvokeResult(params: {
     id: string;
     nodeId: string;
@@ -649,6 +667,7 @@ export class NodeRegistry {
     return true;
   }
 
+  /** Send a JSON-serialized event payload to a connected node. */
   sendEvent(nodeId: string, event: string, payload?: unknown): boolean {
     const node = this.nodesById.get(nodeId);
     if (!node) {
@@ -657,6 +676,7 @@ export class NodeRegistry {
     return this.sendEventToSession(node, event, payload);
   }
 
+  /** Send an event using a pre-serialized payload fragment. */
   sendEventRaw(
     nodeId: string,
     event: string,

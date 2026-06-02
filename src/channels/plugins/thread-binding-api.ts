@@ -47,6 +47,7 @@ function normalizeThreadBindingPlacement(value: unknown): ThreadBindingPlacement
   return normalized === "current" || normalized === "child" ? normalized : undefined;
 }
 
+/** Loads the bundled channel's default placement hint for top-level thread bindings. */
 export function resolveBundledChannelThreadBindingDefaultPlacement(
   channelId: string,
 ): ThreadBindingPlacement | undefined {
@@ -55,6 +56,7 @@ export function resolveBundledChannelThreadBindingDefaultPlacement(
   );
 }
 
+/** Resolves the channel-specific inbound conversation ref from the narrow thread-binding artifact. */
 export function resolveBundledChannelThreadBindingInboundConversation(
   params: ThreadBindingInboundConversationParams & { channelId: string },
 ): ThreadBindingConversationRef | null | undefined {

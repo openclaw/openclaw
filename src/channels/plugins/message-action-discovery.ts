@@ -43,10 +43,12 @@ type ChannelMessageToolMediaSourceParamKeyInput = ChannelMessageActionDiscoveryP
 
 const loggedMessageActionErrors = new Set<string>();
 
+/** Normalizes channel ids for message-action discovery, preserving unknown raw ids. */
 export function resolveMessageActionDiscoveryChannelId(raw?: string | null): string | undefined {
   return normalizeAnyChannelId(raw) ?? normalizeOptionalString(raw);
 }
 
+/** Builds the context object passed to channel message-tool discovery adapters. */
 export function createMessageActionDiscoveryContext(
   params: ChannelMessageActionDiscoveryInput,
 ): ChannelMessageActionDiscoveryContext {
@@ -144,6 +146,7 @@ function normalizeMessageToolMediaSourceParams(
   );
 }
 
+/** Resolves the current channel's message-tool discovery adapter from loaded, bundled, or registry state. */
 export function resolveCurrentChannelMessageToolDiscoveryAdapter(channel?: string | null): {
   pluginId: string;
   actions: ChannelMessageToolDiscoveryAdapter;
@@ -176,6 +179,7 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(channel?: strin
   };
 }
 
+/** Safely resolves message actions, capabilities, schema, and media params for one plugin. */
 export function resolveMessageActionDiscoveryForPlugin(params: {
   pluginId: string;
   actions?: ChannelMessageToolDiscoveryAdapter;
@@ -217,6 +221,7 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
   };
 }
 
+/** Lists all known message actions, including built-ins and plugin-declared actions. */
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
@@ -232,6 +237,7 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
+/** Lists actions safe for cross-channel use after removing current-channel-only schema actions. */
 export function listCrossChannelSchemaSupportedMessageActions(
   params: ChannelMessageActionDiscoveryParams & {
     channel?: string;
@@ -258,6 +264,7 @@ export function listCrossChannelSchemaSupportedMessageActions(
       continue;
     }
     if (!Object.hasOwn(contribution, "actions")) {
+      // Unscoped current-channel schema may depend on ambient channel context, so be conservative.
       return [];
     }
     const actions = contribution.actions;
@@ -274,6 +281,7 @@ export function listCrossChannelSchemaSupportedMessageActions(
   return resolved.actions.filter((action) => !schemaBlockedActions.has(action));
 }
 
+/** Lists all message capabilities declared by loaded channel plugins. */
 export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
@@ -289,6 +297,7 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
   return Array.from(capabilities);
 }
 
+/** Lists message capabilities for one normalized channel. */
 export function listChannelMessageCapabilitiesForChannel(
   params: ChannelMessageActionDiscoveryParams,
 ): ChannelMessageCapability[] {
@@ -320,6 +329,7 @@ function mergeToolSchemaProperties(
   }
 }
 
+/** Resolves merged message-tool schema properties visible for the current channel context. */
 export function resolveChannelMessageToolSchemaProperties(
   params: ChannelMessageActionDiscoveryParams,
 ): Record<string, TSchema> {
@@ -369,6 +379,7 @@ export function resolveChannelMessageToolSchemaProperties(
   return properties;
 }
 
+/** Resolves media-source parameter names for a channel/action pair. */
 export function resolveChannelMessageToolMediaSourceParamKeys(
   params: ChannelMessageToolMediaSourceParamKeyInput,
 ): string[] {
@@ -386,6 +397,7 @@ export function resolveChannelMessageToolMediaSourceParamKeys(
   return uniqueStrings(described.mediaSourceParams);
 }
 
+/** Returns whether any loaded channel advertises the requested message capability. */
 export function channelSupportsMessageCapability(
   cfg: OpenClawConfig,
   capability: ChannelMessageCapability,
@@ -393,6 +405,7 @@ export function channelSupportsMessageCapability(
   return listChannelMessageCapabilities(cfg).includes(capability);
 }
 
+/** Returns whether one channel advertises the requested message capability. */
 export function channelSupportsMessageCapabilityForChannel(
   params: ChannelMessageActionDiscoveryParams,
   capability: ChannelMessageCapability,

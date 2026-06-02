@@ -12,6 +12,11 @@ type NodePairingAutoApproveClientIpSource =
   | "loopback-trusted-proxy"
   | "none";
 
+/**
+ * Classify the client IP source before applying auto-approval CIDR policy.
+ * Loopback proxy traffic is tracked separately because local dev proxies can
+ * supply forwarded headers but should not make a remote address trustworthy.
+ */
 export function resolveNodePairingClientIpSource(params: {
   reportedClientIp?: string;
   hasProxyHeaders: boolean;
@@ -27,6 +32,11 @@ export function resolveNodePairingClientIpSource(params: {
   return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
 }
 
+/**
+ * Decide whether a first-time node pairing can skip operator review based on
+ * trusted CIDRs. The gate intentionally excludes reconnect upgrades, browser
+ * clients, scoped clients, and loopback-proxy-derived addresses.
+ */
 export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
   existingPairedDevice: boolean;
   role: string;

@@ -11,10 +11,16 @@ export type JsonRpcRequest = {
   params?: Record<string, unknown>;
 };
 
+/**
+ * Build a JSON-RPC success response for MCP loopback clients. Missing request
+ * ids normalize to null so notifications and malformed callers get a stable
+ * response shape at this HTTP boundary.
+ */
 export function jsonRpcResult(id: JsonRpcId, result: unknown) {
   return { jsonrpc: "2.0" as const, id: id ?? null, result };
 }
 
+/** Build a JSON-RPC error response for MCP loopback clients. */
 export function jsonRpcError(id: JsonRpcId, code: number, message: string) {
   return { jsonrpc: "2.0" as const, id: id ?? null, error: { code, message } };
 }

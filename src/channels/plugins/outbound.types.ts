@@ -13,6 +13,7 @@ import type {
   ChannelPollResult,
 } from "./types.core.js";
 
+/** Runtime context passed to direct outbound text/media delivery methods. */
 export type ChannelOutboundContext = {
   cfg: OpenClawConfig;
   to: string;
@@ -37,10 +38,12 @@ export type ChannelOutboundContext = {
   gatewayClientScopes?: readonly string[];
 };
 
+/** Outbound context for adapters that receive the original reply payload. */
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
 };
 
+/** Channel-native support and limits for portable interactive presentations. */
 export type ChannelPresentationCapabilities = {
   /** Whether the channel accepts structured presentation payloads at all. */
   supported?: boolean;
@@ -93,6 +96,7 @@ export type ChannelPresentationCapabilities = {
   };
 };
 
+/** Delivery features the channel can make durable after a send succeeds. */
 export type ChannelDeliveryCapabilities = {
   pin?: boolean;
   durableFinal?: {
@@ -112,6 +116,7 @@ export type ChannelDeliveryCapabilities = {
   };
 };
 
+/** Hint describing why an outbound payload is being delivered. */
 export type ChannelOutboundPayloadHint =
   | {
       kind: "approval-pending";
@@ -127,20 +132,24 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
+/** Outbound context used by formatted text/media delivery paths. */
 export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
+/** Context passed to channel-specific text chunkers. */
 export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
+/** Parameters for adapters that normalize reply payloads before delivery. */
 export type ChannelOutboundNormalizePayloadParams = {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   accountId?: string | null;
 };
 
+/** Channel outbound adapter contract used by direct, gateway, and hybrid delivery. */
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;

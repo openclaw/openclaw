@@ -19,11 +19,13 @@ function getScopeRegistry(): ScopeRegistry {
   return globalState[scopeRegistryKey];
 }
 
+/** Host-issued scope that lets plugin SDK task APIs inherit requester ownership. */
 export type AgentHarnessTaskRuntimeScope = {
   readonly requesterSessionKey: string;
   readonly requesterOrigin?: DeliveryContext;
 };
 
+/** Creates a host-issued task runtime scope for the embedded agent harness. */
 export function createAgentHarnessTaskRuntimeScope(params: {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
@@ -37,10 +39,13 @@ export function createAgentHarnessTaskRuntimeScope(params: {
     requesterSessionKey,
     ...(requesterOrigin ? { requesterOrigin } : {}),
   };
+  // Track object identity in a WeakSet so plugin code cannot forge a valid
+  // scope by constructing an object with the same fields.
   getScopeRegistry().hostIssuedScopes.add(scope);
   return scope;
 }
 
+/** Verifies that a task runtime scope came from the trusted host factory. */
 export function assertAgentHarnessTaskRuntimeScope(
   scope: AgentHarnessTaskRuntimeScope,
 ): AgentHarnessTaskRuntimeScope {

@@ -1,9 +1,12 @@
+/** Promise-backed loader that caches the in-flight/resolved load until cleared. */
 export type LazyPromiseLoader<T> = {
   load(): Promise<T>;
   clear(): void;
 };
 
+/** Lazy loader behavior controls for retrying or caching failed loads. */
 export type LazyPromiseLoaderOptions = {
+  /** When true, rejected loads remain cached instead of being evicted for retry. */
   cacheRejections?: boolean;
 };
 

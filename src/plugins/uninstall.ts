@@ -19,6 +19,7 @@ import {
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
+/** Flags describing which config/install surfaces an uninstall operation will remove. */
 export type UninstallActions = {
   entry: boolean;
   install: boolean;
@@ -31,6 +32,7 @@ export type UninstallActions = {
   directory: boolean;
 };
 
+/** Human labels for uninstall action previews and summaries. */
 export const UNINSTALL_ACTION_LABELS = {
   entry: "config entry",
   install: "install record",
@@ -55,6 +57,7 @@ const UNINSTALL_ACTION_ORDER = [
   "directory",
 ] as const satisfies ReadonlyArray<keyof UninstallActions>;
 
+/** Creates a full uninstall action set with every action defaulting to false. */
 export function createEmptyUninstallActions(
   overrides: Partial<UninstallActions> = {},
 ): UninstallActions {
@@ -77,6 +80,7 @@ function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"
   return actions;
 }
 
+/** Formats enabled uninstall action flags in stable preview order. */
 export function formatUninstallActionLabels(actions: UninstallActions): string[] {
   return UNINSTALL_ACTION_ORDER.flatMap((key) =>
     actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
@@ -87,11 +91,13 @@ function hasUninstallAction(actions: Omit<UninstallActions, "directory">): boole
   return Object.values(actions).some(Boolean);
 }
 
+/** Formats the uninstall preview when a selected plugin slot will reset to its default. */
 export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngine"): string {
   const actionKey = slotKey === "memory" ? "memorySlot" : "contextEngineSlot";
   return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
 }
 
+/** Result of a completed plugin uninstall operation. */
 export type UninstallPluginResult =
   | {
       ok: true;
@@ -102,6 +108,7 @@ export type UninstallPluginResult =
     }
   | { ok: false; error: string };
 
+/** Directory removal target plus optional package-manager cleanup metadata. */
 export type PluginUninstallDirectoryRemoval = {
   target: string;
   cleanup?:
@@ -116,6 +123,7 @@ export type PluginUninstallDirectoryRemoval = {
       };
 };
 
+/** Dry-run style uninstall plan before filesystem/config mutations are committed. */
 export type PluginUninstallPlanResult =
   | {
       ok: true;
@@ -126,6 +134,7 @@ export type PluginUninstallPlanResult =
     }
   | { ok: false; error: string };
 
+/** Resolves the managed directory that may be deleted for an installed plugin. */
 export function resolveUninstallDirectoryTarget(params: {
   pluginId: string;
   hasInstall: boolean;

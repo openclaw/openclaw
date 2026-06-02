@@ -45,9 +45,13 @@ export function isConfigPathTruthyWithDefaults(
 }
 
 export type RuntimeRequires = {
+  /** Binaries that must all resolve locally or on an optional remote target. */
   bins?: string[];
+  /** Binary alternatives where one local or remote match satisfies the group. */
   anyBins?: string[];
+  /** Environment variable names that must pass the caller's presence check. */
   env?: string[];
+  /** Config paths that must evaluate truthy under the caller's config rules. */
   config?: string[];
 };
 

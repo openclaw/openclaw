@@ -22,6 +22,7 @@ function loadBundledChannelGatewayAuthApi(channelId: string): GatewayAuthBypassA
   }
 }
 
+/** Loads bundled channel-declared gateway auth bypass paths from its public artifact. */
 export function resolveBundledChannelGatewayAuthBypassPaths(params: {
   channelId: string;
   cfg: OpenClawConfig;

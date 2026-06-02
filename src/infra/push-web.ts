@@ -3,8 +3,6 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
-// --- Types ---
-
 type WebPushSubscription = {
   subscriptionId: string;
   endpoint: string;
@@ -30,8 +28,6 @@ type WebPushSendResult = {
   error?: string;
 };
 
-// --- Constants ---
-
 const WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
 const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
 const MAX_ENDPOINT_LENGTH = 2048;
@@ -51,8 +47,6 @@ async function loadWebPushRuntime(): Promise<WebPushRuntime> {
   );
   return await webPushRuntimePromise;
 }
-
-// --- Helpers ---
 
 function resolveWebPushStatePath(baseDir?: string): string {
   const root = baseDir ?? resolveStateDir();
@@ -84,8 +78,6 @@ function isValidKey(key: string): boolean {
   return typeof key === "string" && key.length > 0 && key.length <= MAX_KEY_LENGTH;
 }
 
-// --- State persistence ---
-
 async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
   const filePath = resolveWebPushStatePath(baseDir);
   const state = await tryReadJson<WebPushRegistrationState>(filePath);
@@ -97,8 +89,11 @@ async function persistState(state: WebPushRegistrationState, baseDir?: string): 
   await writeJson(filePath, state, { trailingNewline: true });
 }
 
-// --- VAPID keys ---
-
+/**
+ * Resolve the VAPID identity used for web push sends. Operator-provided env
+ * keys win for multi-Gateway stability; otherwise a generated keypair is
+ * persisted once under the state dir.
+ */
 export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> {
   // Env vars take precedence — allows operators to share a stable VAPID
   // identity across multiple gateway instances.
@@ -150,14 +145,17 @@ function resolveVapidPrivateKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
 }
 
-// --- Subscription CRUD ---
-
 type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   baseDir?: string;
 };
 
+/**
+ * Register or update a browser push subscription keyed by endpoint hash. The
+ * endpoint is not used as a JSON object key directly so persisted state avoids
+ * long URL keys while still deduping browser re-registrations.
+ */
 export async function registerWebPushSubscription(
   params: RegisterWebPushParams,
 ): Promise<WebPushSubscription> {
@@ -190,6 +188,7 @@ export async function registerWebPushSubscription(
   });
 }
 
+/** Load a persisted web push subscription by stable subscription id. */
 export async function loadWebPushSubscription(
   subscriptionId: string,
   baseDir?: string,
@@ -203,11 +202,13 @@ export async function loadWebPushSubscription(
   return null;
 }
 
+/** List all persisted web push subscriptions for broadcast fan-out. */
 export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
 }
 
+/** Remove a web push subscription by stable subscription id. */
 export async function clearWebPushSubscription(
   subscriptionId: string,
   baseDir?: string,
@@ -225,6 +226,7 @@ export async function clearWebPushSubscription(
   });
 }
 
+/** Remove a web push subscription by endpoint for push-service expiry cleanup. */
 export async function clearWebPushSubscriptionByEndpoint(
   endpoint: string,
   baseDir?: string,
@@ -241,8 +243,6 @@ export async function clearWebPushSubscriptionByEndpoint(
   });
 }
 
-// --- Sending ---
-
 type WebPushPayload = {
   title: string;
   body?: string;
@@ -254,6 +254,7 @@ function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
 }
 
+/** Send one notification, resolving and applying VAPID details for that send. */
 export async function sendWebPushNotification(
   subscription: WebPushSubscription,
   payload: WebPushPayload,
@@ -304,6 +305,10 @@ async function sendPreparedWebPushNotification(
   }
 }
 
+/**
+ * Broadcast a notification to all subscriptions, sharing one VAPID setup and
+ * pruning expired push-service endpoints after the send attempt.
+ */
 export async function broadcastWebPush(
   payload: WebPushPayload,
   baseDir?: string,

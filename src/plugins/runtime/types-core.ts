@@ -59,16 +59,23 @@ type RuntimeReplaceConfigFileParams = {
   writeOptions?: RuntimeWriteConfigOptions;
 };
 export type PluginRuntimeThinkingPolicyRequest = {
+  /** Provider id used to resolve model-specific thinking support. */
   provider?: string | null;
+  /** Model id or ref used to resolve supported thinking levels. */
   model?: string | null;
+  /** Optional catalog snapshot; omitted means use runtime model catalog state. */
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
 };
 export type PluginRuntimeThinkingPolicyLevel = {
+  /** Stable thinking-level id accepted by model/runtime config. */
   id: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Human-readable label for UI or status output. */
   label: string;
 };
 export type PluginRuntimeThinkingPolicy = {
+  /** Thinking levels supported by the selected provider/model pair. */
   levels: PluginRuntimeThinkingPolicyLevel[];
+  /** Runtime default level, when the provider/model exposes one. */
   defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;
 };
 
@@ -81,40 +88,59 @@ export type RuntimeLogger = {
 };
 
 export type RunHeartbeatOnceOptions = {
+  /** Operator-facing reason logged with the immediate heartbeat run. */
   reason?: string;
+  /** Agent id whose session/activity state should be considered. */
   agentId?: string;
+  /** Session key to route heartbeat delivery around. */
   sessionKey?: string;
   /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
   heartbeat?: { target?: string };
 };
 
 export type LlmCompleteMessage = {
+  /** Chat role passed to the completion provider. */
   role: "system" | "user" | "assistant";
+  /** Message text sent to the model. */
   content: string;
 };
 
 export type LlmCompleteCaller = {
+  /** Runtime caller family used for audit output and guardrails. */
   kind: "plugin" | "context-engine" | "host" | "unknown";
+  /** Optional caller id, usually a plugin id. */
   id?: string;
+  /** Optional display name for audit/debug output. */
   name?: string;
 };
 
 export type LlmCompleteUsage = {
+  /** Provider-reported prompt/input tokens, when available. */
   inputTokens?: number;
+  /** Provider-reported completion/output tokens, when available. */
   outputTokens?: number;
+  /** Prompt-cache read tokens, when the provider reports them. */
   cacheReadTokens?: number;
+  /** Prompt-cache write tokens, when the provider reports them. */
   cacheWriteTokens?: number;
+  /** Total billable/provider tokens, when available. */
   totalTokens?: number;
+  /** Estimated request cost in USD, when pricing metadata is available. */
   costUsd?: number;
 };
 
 export type LlmCompleteParams = {
+  /** Conversation messages sent to the completion model. */
   messages: LlmCompleteMessage[];
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
+  /** Maximum output token budget for the completion. */
   maxTokens?: number;
+  /** Sampling temperature passed through to the provider when supported. */
   temperature?: number;
+  /** Additional system prompt prepended by the runtime completion helper. */
   systemPrompt?: string;
+  /** Abort signal for cancelling the completion request. */
   signal?: AbortSignal;
   /** Human-readable reason for audit/debug output. */
   purpose?: string;
@@ -123,14 +149,22 @@ export type LlmCompleteParams = {
 };
 
 export type LlmCompleteResult = {
+  /** Text content returned by the completion model. */
   text: string;
+  /** Provider selected for the completion. */
   provider: string;
+  /** Model id selected after defaults and overrides resolve. */
   model: string;
+  /** Agent id whose model/auth context was used. */
   agentId: string;
+  /** Token and cost accounting normalized from provider usage metadata. */
   usage: LlmCompleteUsage;
   audit: {
+    /** Caller identity recorded for logs and guardrails. */
     caller: LlmCompleteCaller;
+    /** Purpose supplied by the caller, if any. */
     purpose?: string;
+    /** Active session key when completion was session-bound. */
     sessionKey?: string;
   };
 };

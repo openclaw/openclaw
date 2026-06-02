@@ -22,12 +22,14 @@ export function normalizeSecretInput(value: unknown): string {
   for (const char of collapsed) {
     const codePoint = char.codePointAt(0);
     if (typeof codePoint === "number" && codePoint <= 0xff) {
+      // Headers and many provider SDKs require ByteString-compatible secrets.
       latin1Only += char;
     }
   }
   return latin1Only.trim();
 }
 
+/** Normalize a secret input and collapse empty results to undefined for config merging. */
 export function normalizeOptionalSecretInput(value: unknown): string | undefined {
   const normalized = normalizeSecretInput(value);
   return normalized ? normalized : undefined;

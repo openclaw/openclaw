@@ -4,9 +4,13 @@ import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js"
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type OptionalChannelSetupParams = {
+  /** Channel id used by setup discovery and wizard status output. */
   channel: string;
+  /** Human-readable plugin label shown in install guidance. */
   label: string;
+  /** Optional package spec to show instead of the generic plugin label. */
   npmSpec?: string;
+  /** Public docs path appended to docs.openclaw.ai when install guidance should link out. */
   docsPath?: string;
 };
 
@@ -24,6 +28,8 @@ export function createOptionalChannelSetupAdapter(
 ): ChannelSetupAdapter {
   const message = buildOptionalChannelSetupMessage(params);
   return {
+    // Optional plugins cannot mutate config from core; the adapter only preserves account routing
+    // and returns the install message until the real plugin-owned setup adapter is present.
     resolveAccountId: ({ accountId }) => accountId ?? DEFAULT_ACCOUNT_ID,
     applyAccountConfig: () => {
       throw new Error(message);
@@ -49,6 +55,8 @@ export function createOptionalChannelSetupWizard(
       resolveSelectionHint: () => message,
     },
     credentials: [],
+    // Discovery can list this wizard, but finalization must fail loudly so core never pretends an
+    // uninstalled optional plugin has completed setup.
     finalize: async () => {
       throw new Error(message);
     },

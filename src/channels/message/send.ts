@@ -30,11 +30,15 @@ export type DurableMessageBatchSendParams = Omit<
   DeliverOutboundPayloadsParams,
   "abortSignal" | "onDeliveryIntent" | "payloads" | "queuePolicy"
 > & {
+  /** Reply payloads to render and send as one logical durable batch. */
   payloads: ReplyPayload[];
+  /** Retry attempt number surfaced through the send context. */
   attempt?: number;
+  /** Preferred cancellation signal for durable delivery. */
   signal?: AbortSignal;
   /** @deprecated Use `signal`. */
   abortSignal?: AbortSignal;
+  /** Receipt from a previous preview/send attempt, when retrying. */
   previousReceipt?: MessageReceipt;
 };
 
@@ -46,13 +50,17 @@ export type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
 
 export type DurableMessagePayloadDeliveryOutcome =
   | {
+      /** Payload index within the rendered batch. */
       index: number;
       status: "sent";
+      /** Raw platform results produced for this payload. */
       results: OutboundDeliveryResult[];
     }
   | {
+      /** Payload index within the rendered batch. */
       index: number;
       status: "suppressed";
+      /** Why no visible platform message was sent. */
       reason: DurableMessageSuppressionReason;
       hookEffect?: {
         cancelReason?: string;
@@ -60,10 +68,13 @@ export type DurableMessagePayloadDeliveryOutcome =
       };
     }
   | {
+      /** Payload index within the rendered batch. */
       index: number;
       status: "failed";
       error: unknown;
+      /** True when the platform may already have accepted a prior payload. */
       sentBeforeError: boolean;
+      /** Phase where delivery failed or became ambiguous. */
       stage: DurableMessageFailureStage;
     };
 
@@ -131,6 +142,7 @@ function toDurablePayloadOutcomes(
 
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
+  /** Live preview state carried across render/send/edit/commit hooks. */
   preview?: LiveMessageState<ReplyPayload>;
   onPreviewUpdate?: (
     rendered: RenderedMessageBatch<ReplyPayload>,
@@ -326,6 +338,7 @@ export async function withDurableMessageSendContext<T>(
     const result = await run(ctx);
     return result;
   } catch (error: unknown) {
+    // Cleanup failures are logged inside ctx.fail so callers still observe the original send error.
     await ctx.fail(error);
     throw error;
   }

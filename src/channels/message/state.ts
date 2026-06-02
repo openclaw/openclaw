@@ -10,10 +10,15 @@ export type DurableMessageSendState =
 
 /** Recovery record for one durable outbound message intent. */
 export type DurableMessageStateRecord = {
+  /** Replayable outbound intent captured before or during platform send. */
   intent: DurableMessageSendIntent;
+  /** Current recovery classification for this durable send. */
   state: DurableMessageSendState;
+  /** Platform receipt when the send is known to have completed. */
   receipt?: MessageReceipt;
+  /** Last state transition time in milliseconds. */
   updatedAt: number;
+  /** Human-readable failure summary for operator-visible status. */
   errorMessage?: string;
 };
 

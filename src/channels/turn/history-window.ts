@@ -11,7 +11,9 @@ type MaybePromise<T> = T | Promise<T>;
 
 /** Windowed channel history facade used by turn adapters to record and render recent context. */
 export type ChannelHistoryWindow<T extends HistoryEntry = HistoryEntry> = {
+  /** Append a text history entry and return the bounded window. */
   record: (params: { historyKey: string; entry?: T | null; limit: number }) => T[];
+  /** Append a history entry that may resolve media lazily before recording. */
   recordWithMedia: (params: {
     historyKey: string;
     entry?: T | null;
@@ -24,6 +26,7 @@ export type ChannelHistoryWindow<T extends HistoryEntry = HistoryEntry> = {
     messageId?: string;
     shouldRecord?: () => boolean;
   }) => Promise<T[]>;
+  /** Render pending history around the current inbound message. */
   buildPendingContext: (params: {
     historyKey: string;
     limit: number;
@@ -31,10 +34,12 @@ export type ChannelHistoryWindow<T extends HistoryEntry = HistoryEntry> = {
     formatEntry: (entry: T) => string;
     lineBreak?: string;
   }) => string;
+  /** Return the bounded inbound history payload for agent context. */
   buildInboundHistory: (params: {
     historyKey: string;
     limit: number;
   }) => HistoryEntry[] | undefined;
+  /** Trim or clear the caller-owned history window for one key. */
   clear: (params: { historyKey: string; limit: number }) => void;
 };
 
@@ -68,6 +73,8 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         historyKey: contextParams.historyKey,
         limit: contextParams.limit,
         currentMessage: contextParams.currentMessage,
+        // The shared renderer is HistoryEntry-based; this facade keeps adapter-specific entry
+        // subtypes local while handing the renderer the common fields it actually consumes.
         formatEntry: contextParams.formatEntry as (entry: HistoryEntry) => string,
         lineBreak: contextParams.lineBreak,
       }),

@@ -48,6 +48,7 @@ function resolveProviderMentionPatternsPolicy(
   return isMentionPatternsPolicyConfig(policy) ? policy : undefined;
 }
 
+/** Resolve provider-scoped mention-pattern gating, with deny entries winning over allow entries. */
 export function resolveMentionPatternPolicy(
   params: ResolveMentionPatternPolicyParams,
 ): ResolvedMentionPatternPolicy {

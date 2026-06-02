@@ -1,7 +1,9 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
+/** Prefix used in allow-from entries that delegate membership to an access group. */
 export const ACCESS_GROUP_ALLOW_FROM_PREFIX = "accessGroup:";
 
+/** Parses an access-group allow-from entry and returns the referenced group name. */
 export function parseAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
   if (!trimmed.startsWith(ACCESS_GROUP_ALLOW_FROM_PREFIX)) {
@@ -11,11 +13,14 @@ export function parseAccessGroupAllowFromEntry(entry: string): string | null {
   return name.length > 0 ? name : null;
 }
 
+/** Merges configured and pairing-store DM allowlists according to the active DM policy. */
 export function mergeDmAllowFromSources(params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: Array<string | number>;
   dmPolicy?: string;
 }): string[] {
+  // Explicit allowlist/open policy owns the effective list; pairing-store entries only supplement
+  // pairing/default policies so old approved users do not override a stricter configured list.
   const storeEntries =
     params.dmPolicy === "allowlist" || params.dmPolicy === "open"
       ? []
@@ -23,6 +28,7 @@ export function mergeDmAllowFromSources(params: {
   return normalizeStringEntries([...(params.allowFrom ?? []), ...storeEntries]);
 }
 
+/** Resolves group allow-from entries with optional fallback to the generic allowFrom list. */
 export function resolveGroupAllowFromSources(params: {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
@@ -40,6 +46,7 @@ export function resolveGroupAllowFromSources(params: {
   return normalizeStringEntries(scoped);
 }
 
+/** Returns the first defined value without treating null/false/empty string as missing. */
 export function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
     if (value !== undefined) {
@@ -49,6 +56,7 @@ export function firstDefined<T>(...values: Array<T | undefined>) {
   return undefined;
 }
 
+/** Checks a normalized sender id against a compiled allowlist summary. */
 export function isSenderIdAllowed(
   allow: { entries: string[]; hasWildcard: boolean; hasEntries: boolean },
   senderId: string | undefined,

@@ -15,6 +15,7 @@ async function canExecute(path: string): Promise<boolean> {
   }
 }
 
+/** Resolve an executable lsof path asynchronously, falling back to PATH lookup. */
 export async function resolveLsofCommand(): Promise<string> {
   for (const candidate of LSOF_CANDIDATES) {
     if (await canExecute(candidate)) {
@@ -24,6 +25,7 @@ export async function resolveLsofCommand(): Promise<string> {
   return "lsof";
 }
 
+/** Resolve an executable lsof path synchronously for restart/cleanup paths. */
 export function resolveLsofCommandSync(): string {
   for (const candidate of LSOF_CANDIDATES) {
     try {

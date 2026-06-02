@@ -2,6 +2,7 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
+/** Logical event stream used by agent runtime subscribers and gateway listeners. */
 export type AgentEventStream =
   | "lifecycle"
   | "tool"
@@ -16,8 +17,11 @@ export type AgentEventStream =
   | "thinking"
   | (string & {});
 
+/** Lifecycle phase for one streamed agent item. */
 export type AgentItemEventPhase = "start" | "update" | "end";
+/** Status rendered for an agent item in progress surfaces. */
 export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
+/** Kind of item represented by an item-stream event. */
 export type AgentItemEventKind =
   | "tool"
   | "command"
@@ -26,6 +30,7 @@ export type AgentItemEventKind =
   | "analysis"
   | (string & {});
 
+/** Payload for item progress events emitted by tools, commands, and patches. */
 export type AgentItemEventData = {
   itemId: string;
   phase: AgentItemEventPhase;
@@ -46,6 +51,7 @@ export type AgentItemEventData = {
   approvalSlug?: string;
 };
 
+/** Payload for plan updates displayed during an agent run. */
 export type AgentPlanEventData = {
   phase: "update";
   title: string;
@@ -54,10 +60,14 @@ export type AgentPlanEventData = {
   source?: string;
 };
 
+/** Lifecycle phase for approval request events. */
 export type AgentApprovalEventPhase = "requested" | "resolved";
+/** Resolution status for approval request events. */
 export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
+/** Approval domain represented in the approval event stream. */
 export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
 
+/** Payload for exec/plugin approval request and resolution events. */
 export type AgentApprovalEventData = {
   phase: AgentApprovalEventPhase;
   kind: AgentApprovalEventKind;
@@ -74,6 +84,7 @@ export type AgentApprovalEventData = {
   message?: string;
 };
 
+/** Payload for streaming command output associated with an agent item. */
 export type AgentCommandOutputEventData = {
   itemId: string;
   phase: "delta" | "end";
@@ -87,6 +98,7 @@ export type AgentCommandOutputEventData = {
   cwd?: string;
 };
 
+/** Payload summarizing files changed by a patch-producing agent item. */
 export type AgentPatchSummaryEventData = {
   itemId: string;
   phase: "end";
@@ -99,6 +111,7 @@ export type AgentPatchSummaryEventData = {
   summary: string;
 };
 
+/** Fully stamped event delivered to process-local agent event listeners. */
 export type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -115,6 +128,7 @@ export type AgentEventPayload = {
   agentId?: string;
 };
 
+/** Per-run metadata used to enrich and route emitted agent events. */
 export type AgentRunContext = {
   sessionKey?: string;
   /** Owning run's sessionId; stamped onto lifecycle events (see AgentEventPayload.sessionId). */
@@ -145,6 +159,7 @@ function getAgentEventState(): AgentEventState {
   }));
 }
 
+/** Registers or updates the routing context for an active agent run. */
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
     return;
@@ -181,10 +196,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
 }
 
+/** Returns the current routing context for an agent run, if registered. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
 }
 
+/** Clears routing context and sequence state for a completed agent run. */
 export function clearAgentRunContext(runId: string) {
   const state = getAgentEventState();
   state.runContextById.delete(runId);
@@ -213,11 +230,13 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
   return swept;
 }
 
+/** Clears only run contexts and sequence state for tests. */
 export function resetAgentRunContextForTest() {
   getAgentEventState().runContextById.clear();
   getAgentEventState().seqByRun.clear();
 }
 
+/** Emits an agent event after stamping sequence, timestamp, and run context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const state = getAgentEventState();
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
@@ -251,6 +270,7 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   notifyListeners(state.listeners, enriched);
 }
 
+/** Emits an item-stream event for an agent run. */
 export function emitAgentItemEvent(params: {
   runId: string;
   data: AgentItemEventData;
@@ -264,6 +284,7 @@ export function emitAgentItemEvent(params: {
   });
 }
 
+/** Emits a plan update event for an agent run. */
 export function emitAgentPlanEvent(params: {
   runId: string;
   data: AgentPlanEventData;
@@ -277,6 +298,7 @@ export function emitAgentPlanEvent(params: {
   });
 }
 
+/** Emits an approval request or resolution event for an agent run. */
 export function emitAgentApprovalEvent(params: {
   runId: string;
   data: AgentApprovalEventData;
@@ -290,6 +312,7 @@ export function emitAgentApprovalEvent(params: {
   });
 }
 
+/** Emits a command-output event for an agent run. */
 export function emitAgentCommandOutputEvent(params: {
   runId: string;
   data: AgentCommandOutputEventData;
@@ -303,6 +326,7 @@ export function emitAgentCommandOutputEvent(params: {
   });
 }
 
+/** Emits a patch summary event for an agent run. */
 export function emitAgentPatchSummaryEvent(params: {
   runId: string;
   data: AgentPatchSummaryEventData;
@@ -316,11 +340,13 @@ export function emitAgentPatchSummaryEvent(params: {
   });
 }
 
+/** Subscribes to process-local agent events and returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   const state = getAgentEventState();
   return registerListener(state.listeners, listener);
 }
 
+/** Clears all agent event listeners, run contexts, and sequence state for tests. */
 export function resetAgentEventsForTest() {
   const state = getAgentEventState();
   state.seqByRun.clear();

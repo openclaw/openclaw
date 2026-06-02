@@ -13,6 +13,10 @@ function stripRequiredChannelMeta(meta?: Partial<ChannelMeta> | null) {
   return rest;
 }
 
+/**
+ * Produces a complete channel meta object from plugin-provided and manifest
+ * metadata, preserving optional fields while recalculating required labels.
+ */
 export function normalizeChannelMeta<TId extends string>(params: {
   id: TId;
   meta?: Partial<ChannelMeta> | null;
@@ -38,6 +42,8 @@ export function normalizeChannelMeta<TId extends string>(params: {
     normalizeOptionalString(next?.blurb) ?? normalizeOptionalString(existing?.blurb) ?? "";
 
   return {
+    // Required fields are rebuilt below so partial plugin metadata cannot leave
+    // stale manifest labels/docs attached to a different channel id.
     ...stripRequiredChannelMeta(existing),
     ...stripRequiredChannelMeta(next),
     id: params.id,

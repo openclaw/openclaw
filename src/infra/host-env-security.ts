@@ -57,17 +57,23 @@ function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   );
 }
 
+/** Sanitized child-process environment plus diagnostics for rejected request overrides. */
 type HostExecEnvSanitizationResult = {
   env: Record<string, string>;
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
 };
 
+/** Rejection details for callers that need validation without building a child env. */
 type HostExecEnvOverrideDiagnostics = {
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
 };
 
+/**
+ * Normalize an environment variable key before policy checks. `portable` mode is
+ * intentionally stricter for shell-wrapper forwarding and daemon config files.
+ */
 export function normalizeEnvVarKey(
   rawKey: string,
   options?: { portable?: boolean },
@@ -82,6 +88,11 @@ export function normalizeEnvVarKey(
   return key;
 }
 
+/**
+ * Normalize a request-supplied override key. Windows compatibility allows
+ * function-style keys that can appear in inherited environments but rejects
+ * other shell syntax before it reaches command execution.
+ */
 export function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
@@ -93,6 +104,10 @@ export function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
   return null;
 }
 
+/**
+ * True for host variables that are unsafe to pass through by default because
+ * they can alter shells, interpreters, compilers, loaders, or repo tooling.
+ */
 export function isDangerousHostEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
@@ -105,6 +120,11 @@ export function isDangerousHostEnvVarName(rawKey: string): boolean {
   return HOST_DANGEROUS_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
+/**
+ * True for inherited variables that must be stripped before OpenClaw launches a
+ * host command. This is narrower than override blocking so normal proxy/CA env
+ * can still flow from the operator's shell when already present.
+ */
 export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
@@ -117,6 +137,10 @@ export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
   return HOST_DANGEROUS_INHERITED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
+/**
+ * True for variables that agents, plugins, or config are not allowed to inject
+ * as request-scoped overrides, even when an inherited host value may be allowed.
+ */
 export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
@@ -180,8 +204,8 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
-    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
-    // request-scoped PATH overrides from agents/gateways.
+    // PATH is part of command resolution and safe-bin checks; request-scoped
+    // overrides would move the executable boundary after approval.
     if (blockPathOverrides && upper === "PATH") {
       rejectedBlocked.push(upper);
       continue;
@@ -200,6 +224,11 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   };
 }
 
+/**
+ * Build the environment used for host command execution by stripping dangerous
+ * inherited values, applying safe request overrides, and marking the child as an
+ * OpenClaw-managed exec process.
+ */
 export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
@@ -232,6 +261,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   };
 }
 
+/** Validate request override keys without merging them into the inherited env. */
 export function inspectHostExecEnvOverrides(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -243,6 +273,7 @@ export function inspectHostExecEnvOverrides(params?: {
   };
 }
 
+/** Convenience wrapper for callers that only need the sanitized child env. */
 export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
@@ -251,6 +282,11 @@ export function sanitizeHostExecEnv(params?: {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
 }
 
+/**
+ * Filter system-run env overrides for execution surfaces. Shell-wrapper mode
+ * only forwards presentation variables, because wrappers evaluate shell startup
+ * paths before the final command runs.
+ */
 export function sanitizeSystemRunEnvOverrides(params?: {
   overrides?: Record<string, string> | null;
   shellWrapper?: boolean;

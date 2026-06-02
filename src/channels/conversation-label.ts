@@ -24,6 +24,7 @@ function shouldAppendId(id: string): boolean {
   return false;
 }
 
+/** Resolves a concise conversation label for session lists, logs, and route summaries. */
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {
@@ -69,5 +70,7 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   if (base.startsWith("#") || base.startsWith("@")) {
     return base;
   }
+  // Numeric and address-like ids disambiguate generic group labels, but avoid appending them to
+  // explicit handles/channels or labels that already carry an id.
   return `${base} id:${id}`;
 }

@@ -49,6 +49,7 @@ import type {
 /** Full capability contract for a native channel plugin. */
 type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
 
+/** Gateway method a plugin exposes plus the operator scope needed to invoke it. */
 export type ChannelGatewayMethodDescriptor = {
   name: string;
   scope?: OperatorScope;
@@ -59,16 +60,21 @@ export type ChannelGatewayMethodDescriptor = {
 // callback parameters contravariant and rejects concrete plugin implementations.
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
+  /** Stable channel id used in config, session keys, gateway methods, and plugin lookup. */
   id: ChannelId;
+  /** User-facing identity and catalog metadata for setup, docs, and pickers. */
   meta: ChannelMeta;
+  /** Static transport capabilities used before plugin runtime startup. */
   capabilities: ChannelCapabilities;
   defaults?: {
     queue?: {
       debounceMs?: number;
     };
   };
+  /** Config path prefixes that should trigger runtime reloads after writes. */
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   setupWizard?: ChannelPluginSetupWizard;
+  /** Required config/account adapter; most higher-level channel behavior starts here. */
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -80,6 +86,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
   gatewayMethodDescriptors?: ChannelGatewayMethodDescriptor[];
+  /** Gateway adapter for plugin-owned node methods after scope checks pass. */
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;

@@ -24,6 +24,7 @@ import {
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
 
+/** Aggregate outcome from one pending-delivery recovery drain. */
 export type RecoverySummary = {
   recovered: number;
   failed: number;
@@ -31,6 +32,7 @@ export type RecoverySummary = {
   deferredBackoff: number;
 };
 
+/** Replay callback used by recovery to resend one queued delivery entry. */
 export type DeliverFn = (
   params: {
     cfg: OpenClawConfig;
@@ -42,17 +44,20 @@ export type DeliverFn = (
     },
 ) => Promise<unknown>;
 
+/** Minimal logger contract used by recovery without binding to a concrete logger. */
 export interface RecoveryLogger {
   info(msg: string): void;
   warn(msg: string): void;
   error(msg: string): void;
 }
 
+/** Caller decision for whether a queued entry belongs to an active drain pass. */
 export interface PendingDeliveryDrainDecision {
   match: boolean;
   bypassBackoff?: boolean;
 }
 
+/** Process-local claim result used to avoid double-draining the same entry. */
 export type ActiveDeliveryClaimResult<T> =
   | { status: "claimed"; value: T }
   | { status: "claimed-by-other-owner" };
@@ -122,6 +127,7 @@ function releaseRecoveryEntry(entryId: string): void {
   entriesInProgress.delete(entryId);
 }
 
+/** Runs a recovery task only when this process can claim the queue entry. */
 export async function withActiveDeliveryClaim<T>(
   entryId: string,
   fn: () => Promise<T>,
@@ -335,7 +341,7 @@ async function deferRemainingEntriesForBudget(
   );
 }
 
-/** Compute the backoff delay in ms for a given retry count. */
+/** Computes the retry backoff delay in milliseconds for a given retry count. */
 export function computeBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
     return 0;
@@ -343,6 +349,7 @@ export function computeBackoffMs(retryCount: number): number {
   return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
 }
 
+/** Checks whether a queued entry has waited long enough for the next retry. */
 export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
@@ -369,6 +376,7 @@ export function isEntryEligibleForRecoveryRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
+/** Classifies delivery errors that should move directly to failed storage. */
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }

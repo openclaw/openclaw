@@ -61,6 +61,7 @@ function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
   };
 }
 
+/** Format the single-line or wrapped CLI banner headline with version, commit, and tagline. */
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
@@ -129,6 +130,7 @@ function formatCliBannerArtLines(options: BannerOptions): string[] {
   return [...LOBSTER_ASCII_BODY, centerText(title, width), " "];
 }
 
+/** Format the decorative OpenClaw ASCII banner, colorizing when rich TTY output is enabled. */
 export function formatCliBannerArt(options: BannerOptions = {}): string {
   const rich = options.richTty ?? isRich();
   const lines = formatCliBannerArtLines(options);
@@ -169,6 +171,7 @@ export function formatCliBannerArt(options: BannerOptions = {}): string {
   return colored.join("\n");
 }
 
+/** Emit the CLI banner once for interactive non-JSON, non-version invocations. */
 export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (bannerEmitted) {
     return;
@@ -189,6 +192,7 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
   bannerEmitted = true;
 }
 
+/** Return whether this process already emitted the CLI banner. */
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }

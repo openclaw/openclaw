@@ -7,38 +7,56 @@ import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 type PersistentDedupeData = Record<string, number>;
 
 export type PersistentDedupeOptions = {
+  /** Milliseconds a key remains recent; zero disables expiry. */
   ttlMs: number;
+  /** Maximum in-memory recent-key entries kept per process. */
   memoryMaxSize: number;
+  /** Maximum persisted entries retained per namespace file after pruning. */
   fileMaxEntries: number;
+  /** Resolve a namespace to its JSON persistence file. */
   resolveFilePath: (namespace: string) => string;
   lockOptions?: Partial<FileLockOptions>;
+  /** Process-level disk failure hook used when per-call overrides are absent. */
   onDiskError?: (error: unknown) => void;
 };
 
 export type PersistentDedupeCheckOptions = {
+  /** Logical partition for the key; blank values collapse to the shared global namespace. */
   namespace?: string;
+  /** Test/runtime clock override used for TTL checks and recorded timestamps. */
   now?: number;
+  /** Per-call disk failure hook, overriding the process-level option. */
   onDiskError?: (error: unknown) => void;
 };
 
 export type PersistentDedupe = {
+  /** Return true only when the key was not recent and is now recorded. */
   checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Check recency without recording a new timestamp. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Load recent persisted entries for one namespace into the in-memory cache. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
   clearMemory: () => void;
   memorySize: () => number;
 };
 
 export type ClaimableDedupeClaimResult =
+  /** Caller owns the key until commit or release. */
   | { kind: "claimed" }
+  /** Key was already committed within the TTL window. */
   | { kind: "duplicate" }
+  /** Another caller owns the key; pending resolves/rejects with that caller's commit/release. */
   | { kind: "inflight"; pending: Promise<boolean> };
 
 export type ClaimableDedupeOptions =
   | {
+      /** Milliseconds a committed key remains recent; zero disables expiry. */
       ttlMs: number;
+      /** Maximum in-memory recent-key entries kept per process. */
       memoryMaxSize: number;
+      /** Resolve a namespace to its JSON persistence file. */
       resolveFilePath: (namespace: string) => string;
+      /** Maximum persisted entries retained per namespace file after pruning. */
       fileMaxEntries: number;
       lockOptions?: Partial<FileLockOptions>;
       onDiskError?: (error: unknown) => void;
@@ -53,11 +71,14 @@ export type ClaimableDedupeOptions =
     };
 
 export type ClaimableDedupe = {
+  /** Reserve a key before work starts so concurrent callers can wait instead of duplicating work. */
   claim: (
     key: string,
     options?: PersistentDedupeCheckOptions,
   ) => Promise<ClaimableDedupeClaimResult>;
+  /** Record a successful claim and resolve any in-flight waiters. */
   commit: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Drop a claim without recording it and reject any in-flight waiters. */
   release: (
     key: string,
     options?: {
@@ -414,6 +435,8 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     const scopedKey = resolveScopedKey(namespace, trimmed);
     const claimValue = inflight.get(scopedKey);
     try {
+      // Waiters must learn whether this claim actually recorded the key; persistent backends can
+      // still report false if another process committed first.
       const recorded = persistent
         ? await persistent.checkAndRecord(trimmed, dedupeOptions)
         : !memory.check(scopedKey, dedupeOptions?.now);

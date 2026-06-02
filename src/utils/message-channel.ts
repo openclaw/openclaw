@@ -40,24 +40,29 @@ type GatewayClientInfoLike = {
   id?: string | null;
 };
 
+/** Return whether client info identifies the CLI transport mode. */
 export function isGatewayCliClient(client?: GatewayClientInfoLike | null): boolean {
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
+/** Return whether client info belongs to an operator-facing UI client. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
   return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI || clientId === GATEWAY_CLIENT_NAMES.TUI;
 }
 
+/** Return whether client info belongs to the browser control UI specifically. */
 export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
   return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI;
 }
 
+/** Return whether a raw channel id resolves to OpenClaw's internal webchat channel. */
 export function isInternalMessageChannel(raw?: string | null): raw is InternalMessageChannel {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
 
+/** Return whether client info identifies webchat by mode or legacy client id. */
 export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean {
   const mode = normalizeGatewayClientMode(client?.mode);
   if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
@@ -66,6 +71,7 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
+/** Resolve whether a channel can safely receive Markdown-formatted content. */
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   const channel = normalizeMessageChannel(raw);
   if (!channel) {

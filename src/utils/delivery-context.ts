@@ -40,6 +40,7 @@ function normalizeConversationTargetParams(params: ConversationTargetParams): {
   return { channel, conversationId, parentConversationId };
 }
 
+/** Format a provider conversation id into the channel's deliverable `to` target. */
 export function formatConversationTarget(params: ConversationTargetParams): string | undefined {
   const { channel, conversationId, parentConversationId } =
     normalizeConversationTargetParams(params);
@@ -58,6 +59,7 @@ export function formatConversationTarget(params: ConversationTargetParams): stri
   return `channel:${conversationId}`;
 }
 
+/** Resolve channel-specific delivery target metadata from conversation identifiers. */
 export function resolveConversationDeliveryTarget(params: {
   channel?: string;
   conversationId?: string | number;

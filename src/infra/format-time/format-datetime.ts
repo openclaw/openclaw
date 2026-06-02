@@ -1,11 +1,4 @@
 /**
- * Centralized date/time formatting utilities.
- *
- * All formatters are timezone-aware, using Intl.DateTimeFormat.
- * Consolidates duplicated formatUtcTimestamp / formatZonedTimestamp / resolveExplicitTimezone
- * that previously lived in envelope.ts and session-updates.ts.
- */
-/**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */
 export function resolveTimezone(value: string): string | undefined {

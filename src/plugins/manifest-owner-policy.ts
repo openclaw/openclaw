@@ -16,10 +16,17 @@ export type ManifestOwnerBasePolicyBlockReason =
   | "plugin-disabled"
   | "not-in-allowlist";
 
+/** Returns true for manifest owners shipped inside the OpenClaw distribution. */
 export function isBundledManifestOwner(plugin: Pick<PluginManifestRecord, "origin">): boolean {
   return plugin.origin === "bundled";
 }
 
+/**
+ * Checks for an explicit operator trust signal for a manifest owner.
+ *
+ * Allowlist entries and per-plugin `enabled: true` both count as explicit trust;
+ * default enablement alone does not, because it can be platform-derived.
+ */
 export function hasExplicitManifestOwnerTrust(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
@@ -30,6 +37,7 @@ export function hasExplicitManifestOwnerTrust(params: {
   );
 }
 
+/** Returns whether a manifest owner passes global plugin allow/deny policy. */
 export function passesManifestOwnerBasePolicy(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
@@ -39,6 +47,13 @@ export function passesManifestOwnerBasePolicy(params: {
   return resolveManifestOwnerBasePolicyBlock(params) === null;
 }
 
+/**
+ * Resolves the first global policy reason blocking a manifest owner.
+ *
+ * The bypass flags are for owner-derived surfaces that already performed a
+ * narrower trust check; callers should keep the default strict behavior unless
+ * they can name that upstream policy.
+ */
 export function resolveManifestOwnerBasePolicyBlock(params: {
   plugin: Pick<PluginManifestRecord, "id">;
   normalizedConfig: NormalizedPluginsConfig;
@@ -67,6 +82,12 @@ export function resolveManifestOwnerBasePolicyBlock(params: {
   return null;
 }
 
+/**
+ * Evaluates final activation for a manifest owner plugin.
+ *
+ * This is the platform-aware activation check used by non-plugin subsystems that
+ * need to honor default enablement and root config without loading plugin code.
+ */
 export function isActivatedManifestOwner(params: {
   plugin: OwnerPlugin;
   normalizedConfig: NormalizedPluginsConfig;

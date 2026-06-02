@@ -9,6 +9,7 @@ import {
   resolveStatefulBindingTargetBySessionKey,
 } from "./stateful-target-drivers.js";
 
+/** Ensures the configured binding target driver is loaded and ready for routing. */
 export async function ensureConfiguredBindingTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
@@ -34,6 +35,7 @@ export async function ensureConfiguredBindingTargetReady(params: {
   });
 }
 
+/** Resets a stateful binding target in place when the owning driver supports it. */
 export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -63,6 +65,7 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   });
 }
 
+/** Ensures the configured binding target has an active routed session. */
 export async function ensureConfiguredBindingTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;

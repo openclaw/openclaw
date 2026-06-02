@@ -81,6 +81,7 @@ export function createMessageReceiptFromOutboundResults(params: {
   const platformMessageIds: string[] = [];
   for (const result of params.results) {
     if (hasNestedReceiptData(result.receipt)) {
+      // Keep adapter-supplied id order before adding part ids; downstream edit/delete uses the first id.
       appendUnique(platformMessageIds, result.receipt.primaryPlatformMessageId);
       for (const platformMessageId of result.receipt.platformMessageIds) {
         appendUnique(platformMessageIds, platformMessageId);

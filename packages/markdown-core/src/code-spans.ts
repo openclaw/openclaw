@@ -1,7 +1,10 @@
 import { scanFenceSpans, type FenceScanState, type FenceSpan } from "./fences.js";
 
+/** Incremental inline-code scanner state carried between streamed chunks. */
 export type InlineCodeState = {
+  /** True when a previous chunk opened a backtick run that has not closed yet. */
   open: boolean;
+  /** Backtick run length required to close the current inline-code span. */
   ticks: number;
 };
 
@@ -21,7 +24,7 @@ type CodeSpanIndex = {
   isInside: (index: number) => boolean;
 };
 
-/** Builds a lookup for fenced and inline code spans while preserving scanner state. */
+/** Builds a zero-based code-region lookup for fenced and inline spans, plus next scanner state. */
 export function buildCodeSpanIndex(
   text: string,
   inlineState?: InlineCodeState,
@@ -59,6 +62,7 @@ function parseInlineCodeSpans(
   while (i < text.length) {
     const fence = findFenceSpanAtInclusive(fenceSpans, i);
     if (fence) {
+      // Fenced code owns its full range; inline backticks inside it must not change state.
       i = fence.end;
       continue;
     }
@@ -91,6 +95,7 @@ function parseInlineCodeSpans(
   }
 
   if (open) {
+    // Treat an unfinished span as code through chunk end so partial tags stay protected.
     spans.push([openStart, text.length]);
   }
 

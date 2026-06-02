@@ -291,6 +291,9 @@ function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): numbe
   if (decoded.value === value && decoded.sourceOffsets.length === value.length + 1) {
     return decoded.sourceOffsets;
   }
+  // Dynamic or partially decoded words still need stable highlight offsets.
+  // Fall back to the literal body range rather than exposing parser byte
+  // indexes that can drift after quote or ANSI-C escape decoding.
   const prefixLength = valuePrefixLength(node);
   return Array.from({ length: value.length + 1 }, (_, index) => prefixLength + index);
 }
@@ -840,6 +843,8 @@ function payloadBaseFromArgument(argument: CommandArgument, payload: string): Sp
     startIndex: argument.span.startIndex + rawPayloadOffset,
     startPosition: advancePosition(argument.span.startPosition, prefix),
     mapOffset(offset) {
+      // Nested parser offsets are relative to the decoded shell payload, so
+      // remap them through decodedSourceOffsets before returning source spans.
       const rawOffset = argument.decodedSourceOffsets[payloadOffset + offset];
       const mappedRawOffset = rawOffset ?? rawPayloadOffset + offset;
       return {
@@ -1121,6 +1126,7 @@ async function walk(
   }
 }
 
+/** Parses shell text into command steps, structural shapes, risks, and source spans. */
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {

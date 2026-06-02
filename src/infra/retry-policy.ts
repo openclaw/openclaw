@@ -2,8 +2,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
+/** Runs an async operation through a resolved retry policy. */
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
+/** Default retry envelope for idempotent channel API calls. */
 export const CHANNEL_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 400,
@@ -15,6 +17,7 @@ const CHANNEL_API_RETRY_RE =
   /429|421|timeout|connect|reset|closed|unavailable|temporarily|misdirected request/i;
 const log = createSubsystemLogger("retry-policy");
 
+/** Combines custom predicates with the channel transient-error fallback unless strict. */
 function resolveChannelApiShouldRetry(params: {
   shouldRetry?: (err: unknown) => boolean;
   strictShouldRetry?: boolean;
@@ -29,6 +32,7 @@ function resolveChannelApiShouldRetry(params: {
     params.shouldRetry?.(err) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
 }
 
+/** Reads Telegram/grammY-style retry_after seconds from common nested error shapes. */
 function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -51,6 +55,7 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
+/** Creates a retry runner for explicit rate-limit predicates and optional Retry-After hints. */
 export function createRateLimitRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
@@ -82,6 +87,7 @@ export function createRateLimitRetryRunner(params: {
     });
 }
 
+/** Creates a retry runner for channel APIs, with opt-out fallback matching for sends. */
 export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;

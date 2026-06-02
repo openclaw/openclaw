@@ -1,8 +1,3 @@
-// Shared provider catalog helpers for provider plugins.
-//
-// Keep provider-owned exports out of this subpath so plugin loaders can import it
-// without recursing through provider-specific facades.
-
 import { createHash } from "node:crypto";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type {
@@ -11,14 +6,14 @@ import type {
   ModelCatalogTieredCost,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -29,6 +24,7 @@ export {
   findCatalogTemplate,
 } from "../plugins/provider-catalog.js";
 
+/** Configured model entry projected into provider catalog results. */
 export type ConfiguredProviderCatalogEntry = {
   id: string;
   name: string;
@@ -49,9 +45,12 @@ function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
+/** Cache one live catalog load by stable key parts and share the in-flight promise across callers. */
 export async function getCachedLiveCatalogValue<T>(params: {
+  /** JSON-serializable identity for provider/account/base-url inputs that affect the live catalog. */
   keyParts: readonly unknown[];
   load: () => Promise<T>;
+  /** Cache duration in milliseconds; non-finite or negative values disable writes through coercion. */
   ttlMs?: number;
   now?: () => number;
 }): Promise<T> {
@@ -155,6 +154,7 @@ function buildManifestCatalogModel(
   };
 }
 
+/** Convert a plugin manifest modelCatalog provider block into runtime model provider config. */
 export function buildManifestModelProviderConfig(params: {
   providerId: string;
   catalog: unknown;
@@ -217,6 +217,7 @@ function resolveConfiguredProviderModels(
   return Array.isArray(providerConfig.models) ? providerConfig.models : [];
 }
 
+/** Read user-configured provider models as catalog entries, preserving custom published ids. */
 export function readConfiguredProviderCatalogEntries(params: {
   config?: OpenClawConfig;
   providerId: string;
@@ -277,6 +278,7 @@ function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderC
   return changed ? { ...provider, models } : provider;
 }
 
+/** Return whether this provider/base URL can report usage while streaming OpenAI-compatible output. */
 export function supportsNativeStreamingUsageCompat(params: {
   providerId: string;
   baseUrl: string | undefined;
@@ -290,6 +292,7 @@ export function supportsNativeStreamingUsageCompat(params: {
   }).supportsNativeStreamingUsageCompat;
 }
 
+/** Mark compatible provider models as streaming-usage capable unless they already opted in/out. */
 export function applyProviderNativeStreamingUsageCompat(params: {
   providerId: string;
   providerConfig: ModelProviderConfig;

@@ -5,8 +5,15 @@ import type {
 } from "./approval-handler-runtime-types.js";
 import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
+/** Runtime context capability key used to publish channel-native approval clients. */
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 
+/**
+ * Wraps a channel native runtime in a lazy loader while keeping availability checks eager.
+ *
+ * Availability hooks stay on the lightweight wrapper so startup and request filtering do not import
+ * channel runtime code until a presentation/transport/interaction hook actually needs it.
+ */
 export function createLazyChannelApprovalNativeRuntimeAdapter<
   TPendingPayload = unknown,
   TPreparedTarget = unknown,
@@ -126,7 +133,7 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
     },
     observe: {
       // Observe hooks are fire-and-forget at call sites. Reuse the already
-      // loaded runtime instead of introducing unawaited lazy-load promises.
+      // loaded runtime instead of introducing unawaited lazy-load promises or side-effect imports.
       onDeliveryError: (runtimeParams) => loadedRuntime?.observe?.onDeliveryError?.(runtimeParams),
       onDuplicateSkipped: (runtimeParams) =>
         loadedRuntime?.observe?.onDuplicateSkipped?.(runtimeParams),

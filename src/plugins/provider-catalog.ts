@@ -23,6 +23,8 @@ export function findCatalogTemplate(params: {
   providerId: string;
   templateIds: readonly string[];
 }) {
+  // Template ids are tried in caller priority order while provider ids are
+  // normalized so catalog augmentation survives provider alias casing changes.
   return params.templateIds
     .map((templateId) =>
       params.entries.find(
@@ -34,6 +36,12 @@ export function findCatalogTemplate(params: {
     .find((entry) => entry !== undefined);
 }
 
+/**
+ * Builds a single-provider catalog entry from the configured provider API key.
+ *
+ * Returns null when credentials are absent so provider catalogs can be composed
+ * without treating an unauthenticated provider as a hard failure.
+ */
 export async function buildSingleProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
@@ -54,6 +62,8 @@ export async function buildSingleProviderApiKeyCatalog(params: {
       : undefined;
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
 
+  // Explicit base URLs are opt-in because most provider catalogs should stay on
+  // their manifest defaults; local OpenAI-compatible providers need the override.
   return {
     provider: {
       ...(await params.buildProvider()),
@@ -63,6 +73,12 @@ export async function buildSingleProviderApiKeyCatalog(params: {
   };
 }
 
+/**
+ * Builds a paired-provider catalog where multiple provider configs share one key.
+ *
+ * Providers that cannot be cloned with the API key are skipped so one malformed
+ * provider config does not drop the whole paired catalog.
+ */
 export async function buildPairedProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;

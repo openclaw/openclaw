@@ -42,20 +42,32 @@ type Awaitable<T> = T | Promise<T>;
 type SupportSnapshotReader = () => Awaitable<unknown>;
 
 export type DiagnosticSupportExportOptions = {
+  /** Target zip path or directory; omitted writes under stateDir/logs/support. */
   outputPath?: string;
+  /** Base directory for resolving relative outputPath values. */
   cwd?: string;
+  /** Environment used for config/state discovery and path redaction. */
   env?: NodeJS.ProcessEnv;
+  /** Override state dir for tests or nonstandard installs. */
   stateDir?: string;
+  /** Timestamp source for deterministic artifact names/manifests. */
   now?: Date;
+  /** Maximum number of configured log-tail records to inspect. */
   logLimit?: number;
+  /** Maximum configured log-tail bytes to inspect. */
   logMaxBytes?: number;
+  /** Stability bundle path, "latest"/undefined for newest, or false to skip. */
   stabilityBundle?: string | false;
+  /** Injectable log-tail reader for tests and alternate log sources. */
   readLogTail?: typeof readConfiguredLogTail;
+  /** Optional gateway status snapshot reader; skipped when absent. */
   readStatusSnapshot?: SupportSnapshotReader;
+  /** Optional gateway health snapshot reader; skipped when absent. */
   readHealthSnapshot?: SupportSnapshotReader;
 };
 
 export type DiagnosticSupportExportManifest = {
+  /** Manifest schema version for support bundle readers. */
   version: typeof DIAGNOSTIC_SUPPORT_EXPORT_VERSION;
   generatedAt: string;
   openclawVersion: string;
@@ -74,13 +86,18 @@ export type DiagnosticSupportExportManifest = {
 export type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
 
 export type DiagnosticSupportExportArtifact = {
+  /** Privacy manifest included as manifest.json in the generated zip. */
   manifest: DiagnosticSupportExportManifest;
+  /** In-memory files ready to write into the support zip. */
   files: DiagnosticSupportExportFile[];
 };
 
 export type WriteDiagnosticSupportExportResult = {
+  /** Final zip path. */
   path: string;
+  /** Bytes written by the zip writer. */
   bytes: number;
+  /** Manifest for the written artifact. */
   manifest: DiagnosticSupportExportManifest;
 };
 
@@ -290,6 +307,8 @@ function sanitizeConfigShape(
 }
 
 function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
+  // Run config-specific redaction first to collapse known secret-ref shapes,
+  // then apply support redaction to private ids and prompt-like fields.
   return sanitizeSupportConfigValue(redactConfigObject(parsed), redaction);
 }
 
@@ -430,6 +449,8 @@ function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext)
     lineCount: tail.lines.length,
     truncated: tail.truncated,
     reset: tail.reset,
+    // Store sanitized summaries only; raw log text is intentionally never added
+    // to the support bundle.
     lines: tail.lines.map((line) => sanitizeSupportLogRecord(line, options)),
   };
 }
@@ -669,6 +690,7 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
+/** Builds the sanitized diagnostic support bundle in memory without writing the zip. */
 export async function buildDiagnosticSupportExport(
   options: DiagnosticSupportExportOptions = {},
 ): Promise<DiagnosticSupportExportArtifact> {
@@ -733,6 +755,8 @@ export async function buildDiagnosticSupportExport(
       logTail.lines.map((line) => JSON.stringify(line)),
     ),
   ];
+  // Optional live snapshots are included as separate sanitized files so callers
+  // can omit them without changing the required core bundle shape.
   for (const snapshot of [statusSnapshot, healthSnapshot]) {
     if (snapshot.file) {
       files.push(snapshot.file);
@@ -784,6 +808,7 @@ export async function buildDiagnosticSupportExport(
   };
 }
 
+/** Builds and writes the sanitized diagnostic support zip, returning its manifest. */
 export async function writeDiagnosticSupportExport(
   options: DiagnosticSupportExportOptions = {},
 ): Promise<WriteDiagnosticSupportExportResult> {

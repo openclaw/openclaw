@@ -13,6 +13,8 @@ type FetchWithAbortSignalMarker = typeof fetch & {
   [wrapFetchWithAbortSignalMarker]?: true;
 };
 
+// Node/undici requires `duplex: "half"` for streaming request bodies, while
+// browser fetch ignores it. Add it only when a body exists to preserve GET shape.
 function withDuplex(
   init: RequestInit | undefined,
   input: RequestInfo | URL,
@@ -34,6 +36,11 @@ function withDuplex(
     : ({ duplex: "half" as const } as RequestInitWithDuplex);
 }
 
+/**
+ * Wrap a fetch implementation so SDK/plugin callers can pass foreign
+ * AbortSignal-like objects while preserving native signals, undici duplex
+ * requirements, normalized headers, and `preconnect`.
+ */
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
   if ((fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]) {
     return fetchImpl;
@@ -54,6 +61,8 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     if (typeof signal.addEventListener !== "function") {
       return fetchImpl(input, patchedInit);
     }
+    // Some runtime boundaries hand us signal-like objects from another realm.
+    // Relay them through a native controller so undici accepts the request.
     const controller = new AbortController();
     const onAbort = bindAbortRelay(controller);
     let listenerAttached = false;
@@ -86,6 +95,8 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
 
   const wrappedFetch = Object.assign(wrapped, fetchImpl) as FetchWithPreconnect;
   const fetchWithPreconnect = fetchImpl as FetchWithPreconnect;
+  // Preserve React/undici-style preconnect helpers for SDK callers that receive
+  // this wrapped fetch instead of the original implementation.
   wrappedFetch.preconnect =
     typeof fetchWithPreconnect.preconnect === "function"
       ? fetchWithPreconnect.preconnect.bind(fetchWithPreconnect)
@@ -101,6 +112,7 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   return wrappedFetch;
 }
 
+/** Resolve an explicit or global fetch implementation and apply OpenClaw compatibility wrapping. */
 export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
   const resolved = fetchImpl ?? globalThis.fetch;
   if (!resolved) {

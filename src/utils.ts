@@ -92,6 +92,7 @@ export function sliceUtf16Safe(input: string, start: number, end?: number): stri
   if (from > 0 && from < len) {
     const codeUnit = input.charCodeAt(from);
     if (isLowSurrogate(codeUnit) && isHighSurrogate(input.charCodeAt(from - 1))) {
+      // Starting on a low surrogate would leak a broken code point; skip the pair.
       from += 1;
     }
   }
@@ -99,6 +100,7 @@ export function sliceUtf16Safe(input: string, start: number, end?: number): stri
   if (to > 0 && to < len) {
     const codeUnit = input.charCodeAt(to - 1);
     if (isHighSurrogate(codeUnit) && isLowSurrogate(input.charCodeAt(to))) {
+      // Ending after a high surrogate would leave its partner behind; drop the pair.
       to -= 1;
     }
   }
@@ -132,6 +134,7 @@ export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
+  // State dir wins over config file path because it owns every runtime artifact.
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
@@ -164,6 +167,7 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   }
   const explicitHome = process.env.OPENCLAW_HOME?.trim();
   if (explicitHome) {
+    // Preserve the explicit operator-controlled root in diagnostics instead of `~`.
     return { home, prefix: "$OPENCLAW_HOME" };
   }
   return { home, prefix: "~" };
@@ -210,7 +214,7 @@ export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
-// Configuration root; can be overridden via OPENCLAW_STATE_DIR.
+/** Import-time configuration root for legacy callers; prefer resolveConfigDir for testable code. */
 export const CONFIG_DIR = resolveConfigDir();
 /**
  * Check if a file or directory exists at the given path.

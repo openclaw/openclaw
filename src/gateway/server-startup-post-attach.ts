@@ -89,12 +89,15 @@ const loadGatewayRestartSentinelModule = async () => {
 };
 
 export type GatewayPostReadySidecarHandle = {
+  /** Stop the sidecar and release any background timers/resources. */
   stop: () => Awaitable<void>;
 };
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
 export function stopPostReadySidecarsAfterCloseStarted(params: {
+  /** Sidecars that have just been created or reported. */
   postReadySidecars: readonly GatewayPostReadySidecarHandle[];
+  /** Whether Gateway close/shutdown had already started. */
   closeStarted: boolean;
 }): void {
   if (!params.closeStarted) {

@@ -12,6 +12,7 @@ const hasJsonFlag = (argv: readonly string[]) =>
 const hasVersionFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V");
 
+/** Resolve invocation facts and startup policy for command execution. */
 export function resolveCliExecutionStartupContext(params: {
   argv: string[];
   jsonOutputMode: boolean;
@@ -33,6 +34,7 @@ export function resolveCliExecutionStartupContext(params: {
   };
 }
 
+/** Apply early presentation side effects such as stderr log routing and banner emission. */
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
   routeLogsToStderrOnSuppress?: boolean;
@@ -57,6 +59,7 @@ export async function applyCliExecutionStartupPresentation(params: {
   emitCliBanner(params.version);
 }
 
+/** Run startup bootstrap using the already resolved execution policy. */
 export async function ensureCliExecutionBootstrap(params: {
   runtime: RuntimeEnv;
   commandPath: string[];

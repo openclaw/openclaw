@@ -24,6 +24,7 @@ import type {
 import type { ConfiguredBindingConsumer } from "./configured-binding-consumers.js";
 import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.js";
 
+/** Resolves ACP runtime defaults from the owner agent when it uses the ACP runtime. */
 function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgentId: string }): {
   acpAgentId?: string;
   mode?: string;
@@ -45,6 +46,7 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
   };
 }
 
+/** Resolves cwd for configured ACP bindings from explicit or default agent workspace config. */
 function resolveConfiguredBindingWorkspaceCwd(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -64,6 +66,7 @@ function resolveConfiguredBindingWorkspaceCwd(params: {
   return undefined;
 }
 
+/** Builds the normalized ACP binding spec that backs records and session keys. */
 function buildConfiguredAcpSpec(params: {
   channel: string;
   accountId: string;
@@ -89,6 +92,7 @@ function buildConfiguredAcpSpec(params: {
   };
 }
 
+/** Builds a target factory for ACP binding config, merging runtime defaults with overrides. */
 function buildAcpTargetFactory(params: {
   cfg: OpenClawConfig;
   binding: ConfiguredBindingRuleConfig;
@@ -144,6 +148,7 @@ function buildAcpTargetFactory(params: {
   };
 }
 
+/** Configured-binding consumer for ACP targets. */
 export const acpConfiguredBindingConsumer: ConfiguredBindingConsumer = {
   id: "acp",
   supports: (binding) => binding.type === "acp",

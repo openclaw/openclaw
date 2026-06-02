@@ -14,10 +14,15 @@ type GatewayAuthSecretInputPath = Extract<
 >;
 
 type GatewayAuthSecretRefResolutionParams = {
+  /** Config snapshot that may contain local auth secret refs. */
   cfg: OpenClawConfig;
+  /** Env snapshot used when resolving env-backed secret refs. */
   env: NodeJS.ProcessEnv;
+  /** Effective Gateway auth mode, if already resolved by the caller. */
   mode?: GatewayAuthConfig["mode"];
+  /** True when a concrete password candidate already exists. */
   hasPasswordCandidate: boolean;
+  /** True when a concrete token candidate already exists. */
   hasTokenCandidate: boolean;
 };
 
@@ -173,6 +178,8 @@ export async function materializeGatewayAuthSecretRefs(
     env: params.env,
     mode: params.mode,
     hasPasswordCandidate: params.hasPasswordCandidate,
+    // If token materialization succeeded, the password side should not also
+    // resolve under implicit mode; only one auth default should become active.
     hasTokenCandidate:
       params.hasTokenCandidate ||
       hasConfiguredGatewayAuthSecretInput(cfgWithToken, "gateway.auth.token"),

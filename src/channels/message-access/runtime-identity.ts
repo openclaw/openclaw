@@ -95,6 +95,7 @@ function adapterEntry(params: {
   };
 }
 
+/** Creates the normalization/matching adapter used by the ingress decision engine. */
 export function createIdentityAdapter(
   identity: ChannelIngressIdentityDescriptor,
 ): ChannelIngressAdapter {
@@ -144,6 +145,7 @@ export function createIdentityAdapter(
       const matchedEntryIds = entries
         .filter((entry) => {
           const fallback = entry.value === "*" || subjectKeys.has(identityMatchKey(entry));
+          // Custom identity hooks may widen or narrow matches; undefined preserves default matching.
           return identity.matchEntry?.({ subject, entry, context }) ?? fallback;
         })
         .map((entry) => entry.opaqueEntryId);
@@ -155,6 +157,7 @@ export function createIdentityAdapter(
   };
 }
 
+/** Converts raw channel sender ids into redaction-aware subject identifiers. */
 export function createIdentitySubject(
   identity: ChannelIngressIdentityDescriptor,
   input: ChannelIngressIdentitySubjectInput,

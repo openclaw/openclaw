@@ -4,14 +4,20 @@ import type { GatewayRequestContext, GatewayClient } from "./server-methods/type
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
 
 type GatewayRequestContextClient = GatewayClient & {
+  /** WebSocket close hook used by request-context device/auth invalidation helpers. */
   socket: { close: (code: number, reason: string) => void };
+  /** True when this connection authenticated with shared Gateway credentials. */
   usesSharedGatewayAuth?: boolean;
+  /** Marks clients whose future RPCs should be rejected even if the socket is still draining. */
   invalidated?: boolean;
+  /** Machine-readable invalidation reason surfaced by dispatch checks. */
   invalidatedReason?: string;
 };
 
+/** Host-owned state and callbacks captured by Gateway method handlers. */
 export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
+  /** Mutable runtime state wrapper; cron is read through getters for hot reload. */
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
@@ -31,7 +37,9 @@ export type GatewayRequestContextParams = {
   nodeUnsubscribe: GatewayRequestContext["nodeUnsubscribe"];
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
+  /** Live Gateway clients used for approval routing, device invalidation, and auth rotation. */
   clients: Set<GatewayRequestContextClient>;
+  /** Apply shared-auth generation policy after config writes that may rotate auth. */
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
@@ -65,9 +73,11 @@ export type GatewayRequestContextParams = {
   wizardRunner: GatewayRequestContext["wizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
+  /** Methods registered but temporarily unavailable until sidecar startup completes. */
   unavailableGatewayMethods: ReadonlySet<string>;
 };
 
+/** Build the shared Gateway request context captured by JSON-RPC method handlers. */
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {

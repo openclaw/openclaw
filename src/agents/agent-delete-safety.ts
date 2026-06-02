@@ -28,6 +28,11 @@ function workspacePathsOverlap(left: string, right: string): boolean {
   );
 }
 
+/**
+ * Find other configured agents whose workspaces overlap the target deletion
+ * workspace. Deletion callers use this to avoid removing shared parent/child
+ * directories that still belong to another agent.
+ */
 export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,
   agentId: string,

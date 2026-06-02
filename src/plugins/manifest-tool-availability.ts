@@ -13,6 +13,8 @@ type ToolMetadata = NonNullable<PluginManifestRecord["toolMetadata"]>[string];
 export type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
 export type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
 
+// Manifest paths are dotted config paths owned by plugin metadata, not arbitrary
+// object traversal from runtime callers. Empty paths intentionally mean "root".
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {
     return root;
@@ -47,6 +49,8 @@ function readEffectiveConfigs(params: {
   }
   const overlay = readPath(root, params.overlayPath);
   const baseConfig = isRecord(overlay) ? { ...root, ...overlay } : root;
+  // Some provider configs store per-account overrides in a map. Evaluate each
+  // merged entry so one configured account can make the manifest tool available.
   if (params.overlayMapPath?.trim()) {
     const overlayMap = readPath(baseConfig, params.overlayMapPath);
     if (!isRecord(overlayMap)) {
@@ -67,6 +71,8 @@ function hasConfiguredSecretRefInConfigPath(params: {
   ref: SecretRef;
 }): boolean {
   const providerConfig = params.config?.secrets?.providers?.[params.ref.provider];
+  // Non-env secret providers are available when the configured provider source
+  // matches; the secret value is intentionally not read during tool filtering.
   if (params.ref.source !== "env") {
     return Boolean(providerConfig && providerConfig.source === params.ref.source);
   }
@@ -108,6 +114,13 @@ function hasConfiguredValue(params: {
   return params.value !== undefined && params.value !== null;
 }
 
+/**
+ * Checks whether one manifest config signal is satisfied by the current config.
+ *
+ * Signals can evaluate a base config, a merged overlay, or every entry in an
+ * overlay map. Availability passes when any effective config satisfies the
+ * mode and required-value constraints.
+ */
 export function manifestConfigSignalPasses(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -183,6 +196,12 @@ function normalizeBaseUrlForManifestGuard(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
+/**
+ * Applies a manifest auth-signal base URL allowlist for provider-compatible tools.
+ *
+ * This keeps alias-compatible auth from exposing a tool against an unsupported
+ * provider endpoint while still honoring the provider's manifest default URL.
+ */
 export function manifestProviderBaseUrlGuardPasses(params: {
   config?: OpenClawConfig;
   guard: ManifestAuthAvailabilitySignal["providerBaseUrl"];
@@ -205,6 +224,12 @@ export function manifestProviderBaseUrlGuardPasses(params: {
   );
 }
 
+/**
+ * Returns setup env vars that can prove auth availability for one provider.
+ *
+ * New manifests use `setup.providers`; `providerAuthEnvVars` remains the legacy
+ * fallback for bundled/plugin manifests that have not moved their setup metadata.
+ */
 export function manifestPluginSetupProviderEnvVars(
   plugin: PluginManifestRecord,
   providerId: string,
@@ -216,6 +241,7 @@ export function manifestPluginSetupProviderEnvVars(
   return plugin.providerAuthEnvVars?.[providerId] ?? [];
 }
 
+/** Returns true when any named manifest env var is present and non-blank. */
 export function hasNonEmptyManifestEnvCandidate(
   env: NodeJS.ProcessEnv,
   envVars: readonly string[],
@@ -230,6 +256,8 @@ function listToolAuthSignals(metadata: ToolMetadata): ManifestAuthAvailabilitySi
   if (metadata.authSignals?.length) {
     return metadata.authSignals;
   }
+  // Older manifests listed auth providers and aliases separately. Convert them
+  // into modern auth signals so callers get one availability path.
   return [...(metadata.authProviders ?? []), ...(metadata.aliases ?? [])].map((provider) => ({
     provider,
   }));
@@ -281,6 +309,13 @@ function toolMetadataPasses(params: {
   return false;
 }
 
+/**
+ * Determines whether any requested tool is available from manifest metadata.
+ *
+ * Missing metadata is treated as available so incomplete manifests do not hide
+ * tools by default; metadata becomes restrictive only when a tool opts into
+ * config or auth availability signals.
+ */
 export function hasManifestToolAvailability(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];

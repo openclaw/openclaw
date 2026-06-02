@@ -10,6 +10,7 @@ export function createChannelDeliveryResultFromReceipt(params: {
   visibleReplySent?: boolean;
   deliveryIntent?: ChannelDeliveryIntent;
 }): ChannelDeliveryResult {
+  // Keep legacy messageIds for callers not yet receipt-aware while receipt remains canonical.
   const messageIds = listMessageReceiptPlatformIds(params.receipt);
   return {
     ...(messageIds.length > 0 ? { messageIds } : {}),

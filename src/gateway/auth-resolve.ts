@@ -19,25 +19,37 @@ export type ResolvedGatewayAuthModeSource =
 
 /** Fully resolved Gateway auth policy before startup validates required secrets. */
 export type ResolvedGatewayAuth = {
+  /** Effective Gateway auth mode after overrides, config, and credential inference. */
   mode: ResolvedGatewayAuthMode;
+  /** Input source that selected `mode`, useful for diagnostics. */
   modeSource?: ResolvedGatewayAuthModeSource;
+  /** Effective bearer token when token auth is active or available. */
   token?: string;
+  /** Effective password when password auth is active or available. */
   password?: string;
+  /** Whether Tailscale Serve may satisfy the network auth boundary. */
   allowTailscale: boolean;
+  /** Trusted proxy policy when proxy-auth mode is configured. */
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
 /** Shared-secret auth shape exposed to Gateway clients that support a single bearer secret. */
 export type EffectiveSharedGatewayAuth = {
+  /** Shared-secret mode clients should use. */
   mode: "token" | "password";
+  /** Shared secret value, if already resolved. */
   secret: string | undefined;
 };
 
 /** Resolve Gateway auth mode, credentials, trusted-proxy policy, and Tailscale allowance. */
 export function resolveGatewayAuth(params: {
+  /** Persisted Gateway auth config. */
   authConfig?: GatewayAuthConfig | null;
+  /** Sparse runtime override layered over persisted config. */
   authOverride?: GatewayAuthConfig | null;
+  /** Env snapshot used for fallback token/password resolution. */
   env?: NodeJS.ProcessEnv;
+  /** Tailscale exposure mode used to infer allowTailscale defaults. */
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
   const baseAuthConfig = params.authConfig ?? {};

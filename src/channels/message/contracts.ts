@@ -21,7 +21,9 @@ export type DurableFinalCapabilityProofMap = Partial<
 >;
 
 export type DurableFinalCapabilityProofResult = {
+  /** Capability checked in canonical capability order. */
   capability: DurableFinalDeliveryCapability;
+  /** Whether the capability was declared and proved by the adapter test. */
   status: "verified" | "not_declared";
 };
 
@@ -44,20 +46,27 @@ export type ChannelMessageReceiveAckPolicyProofMap = Partial<
 >;
 
 export type LivePreviewFinalizerCapabilityProofResult = {
+  /** Finalizer capability checked in canonical capability order. */
   capability: LivePreviewFinalizerCapability;
+  /** Whether the capability was declared and proved by the adapter test. */
   status: "verified" | "not_declared";
 };
 
 export type ChannelMessageLiveCapabilityProofResult = {
+  /** Live-message capability checked in canonical capability order. */
   capability: ChannelMessageLiveCapability;
+  /** Whether the capability was declared and proved by the adapter test. */
   status: "verified" | "not_declared";
 };
 
 export type ChannelMessageReceiveAckPolicyProofResult = {
+  /** Receive acknowledgement policy checked in canonical policy order. */
   policy: ChannelMessageReceiveAckPolicy;
+  /** Whether the policy was declared and proved by the adapter test. */
   status: "verified" | "not_declared";
 };
 
+/** List declared durable-final capabilities in canonical order. */
 export function listDeclaredDurableFinalCapabilities(
   capabilities: DurableFinalDeliveryRequirementMap | undefined,
 ): DurableFinalDeliveryCapability[] {
@@ -66,6 +75,7 @@ export function listDeclaredDurableFinalCapabilities(
   );
 }
 
+/** List declared live-preview finalizer capabilities in canonical order. */
 export function listDeclaredLivePreviewFinalizerCapabilities(
   capabilities: LivePreviewFinalizerCapabilityMap | undefined,
 ): LivePreviewFinalizerCapability[] {
@@ -74,12 +84,14 @@ export function listDeclaredLivePreviewFinalizerCapabilities(
   );
 }
 
+/** List declared live-message capabilities in canonical order. */
 export function listDeclaredChannelMessageLiveCapabilities(
   capabilities: Partial<Record<ChannelMessageLiveCapability, boolean>> | undefined,
 ): ChannelMessageLiveCapability[] {
   return channelMessageLiveCapabilities.filter((capability) => capabilities?.[capability] === true);
 }
 
+/** List receive acknowledgement policies, falling back from supported policies to the default. */
 export function listDeclaredReceiveAckPolicies(
   receive: ChannelMessageAdapterShape["receive"] | undefined,
 ): ChannelMessageReceiveAckPolicy[] {
@@ -91,6 +103,7 @@ export function listDeclaredReceiveAckPolicies(
   return channelMessageReceiveAckPolicies.filter((policy) => declared.includes(policy));
 }
 
+/** Run one proof for every declared durable-final capability and fail on missing proofs. */
 export async function verifyDurableFinalCapabilityProofs(params: {
   adapterName: string;
   capabilities?: DurableFinalDeliveryRequirementMap;
@@ -114,6 +127,7 @@ export async function verifyDurableFinalCapabilityProofs(params: {
   return results;
 }
 
+/** Run one proof for every declared live-preview finalizer capability. */
 export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
   adapterName: string;
   capabilities?: LivePreviewFinalizerCapabilityMap;
@@ -137,6 +151,7 @@ export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
   return results;
 }
 
+/** Run one proof for every declared live-message capability. */
 export async function verifyChannelMessageLiveCapabilityProofs(params: {
   adapterName: string;
   capabilities?: Partial<Record<ChannelMessageLiveCapability, boolean>>;
@@ -160,6 +175,7 @@ export async function verifyChannelMessageLiveCapabilityProofs(params: {
   return results;
 }
 
+/** Run one proof for every declared receive acknowledgement policy. */
 export async function verifyChannelMessageReceiveAckPolicyProofs(params: {
   adapterName: string;
   receive?: ChannelMessageAdapterShape["receive"];
@@ -184,6 +200,7 @@ export async function verifyChannelMessageReceiveAckPolicyProofs(params: {
   return results;
 }
 
+/** Verify durable-final capabilities declared on a full channel message adapter. */
 export async function verifyChannelMessageAdapterCapabilityProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "durableFinal">;
@@ -196,6 +213,7 @@ export async function verifyChannelMessageAdapterCapabilityProofs(params: {
   });
 }
 
+/** Verify receive acknowledgement policies declared on a full channel message adapter. */
 export async function verifyChannelMessageReceiveAckPolicyAdapterProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "receive">;
@@ -208,6 +226,7 @@ export async function verifyChannelMessageReceiveAckPolicyAdapterProofs(params: 
   });
 }
 
+/** Verify live-preview finalizer capabilities declared on a full channel message adapter. */
 export async function verifyChannelMessageLiveFinalizerProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "live">;
@@ -220,6 +239,7 @@ export async function verifyChannelMessageLiveFinalizerProofs(params: {
   });
 }
 
+/** Verify live-message capabilities declared on a full channel message adapter. */
 export async function verifyChannelMessageLiveCapabilityAdapterProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "live">;

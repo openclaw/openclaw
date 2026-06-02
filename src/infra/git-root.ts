@@ -34,6 +34,7 @@ function hasGitMarker(repoRoot: string): boolean {
   }
 }
 
+/** Find the nearest ancestor that has a .git marker directory or file. */
 export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}): string | null {
   // A `.git` file counts as a repo marker even if it is not a valid gitdir pointer.
   return walkUpFrom(startDir, opts, (repoRoot) => (hasGitMarker(repoRoot) ? repoRoot : null));
@@ -60,6 +61,7 @@ function resolveGitDirFromMarker(repoRoot: string): string | null {
   }
 }
 
+/** Resolve the HEAD file path for the nearest ancestor with a valid git dir marker. */
 export function resolveGitHeadPath(
   startDir: string,
   opts: { maxDepth?: number } = {},

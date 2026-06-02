@@ -21,17 +21,29 @@ import {
 } from "./secret-input-paths.js";
 
 type GatewayCredentialSecretInputOptions = {
+  /** Config snapshot that may contain plaintext values, env refs, or secret refs. */
   config: OpenClawConfig;
+  /** CLI/API supplied credentials; non-empty values bypass config/env resolution. */
   explicitAuth?: ExplicitGatewayAuth;
+  /** Gateway URL override used by remote credential precedence. */
   urlOverride?: string;
+  /** Source of the URL override so env-vs-CLI precedence remains explicit. */
   urlOverrideSource?: "cli" | "env";
+  /** Env snapshot for resolving env-backed secret refs and gateway env defaults. */
   env?: NodeJS.ProcessEnv;
+  /** Force local/remote credential mode instead of deriving from config. */
   modeOverride?: GatewayCredentialMode;
+  /** Local token precedence policy shared with plain credential resolution. */
   localTokenPrecedence?: GatewayCredentialPrecedence;
+  /** Local password precedence policy shared with plain credential resolution. */
   localPasswordPrecedence?: GatewayCredentialPrecedence;
+  /** Remote token precedence policy shared with plain credential resolution. */
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
+  /** Remote password precedence policy shared with plain credential resolution. */
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
+  /** Remote token fallback behavior when preferred sources are absent. */
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
+  /** Remote password fallback behavior when preferred sources are absent. */
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
@@ -150,6 +162,9 @@ function canGatewaySecretInputPathWin(params: {
   }
   const sentinel = `__OPENCLAW_GATEWAY_SECRET_REF_PROBE_${params.path.replaceAll(".", "_")}__`;
   const probeConfig = structuredClone(params.config);
+  // Clear every secret ref first, then inject one sentinel at a time. This lets
+  // the normal credential resolver answer whether a path can win without
+  // fetching any real secret values or leaking lower-priority refs into the probe.
   for (const candidatePath of ALL_GATEWAY_SECRET_INPUT_PATHS) {
     if (!hasConfiguredGatewaySecretRef(probeConfig, candidatePath)) {
       continue;

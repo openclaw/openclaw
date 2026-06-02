@@ -38,12 +38,18 @@ export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): s
 
 /** Consumes one write budget unit and reports retry state for gateway error responses. */
 export function consumeControlPlaneWriteBudget(params: {
+  /** Gateway client whose device/IP identity selects the write-budget bucket. */
   client: GatewayClient | null;
+  /** Testable clock override; production callers omit this. */
   nowMs?: number;
 }): {
+  /** True when the caller may perform the control-plane write. */
   allowed: boolean;
+  /** Delay before retry when the write budget is exhausted. */
   retryAfterMs: number;
+  /** Remaining writes in the current window after this attempt. */
   remaining: number;
+  /** Bucket key used for diagnostics and tests. */
   key: string;
 } {
   const nowMs = params.nowMs ?? Date.now();
@@ -113,9 +119,11 @@ export function pruneStaleControlPlaneBuckets(nowMs = Date.now()): number {
 }
 
 export const testing = {
+  /** Return live bucket count for memory-cap regression tests. */
   getControlPlaneRateLimitBucketCount() {
     return controlPlaneBuckets.size;
   },
+  /** Clear module-local rate-limit buckets between tests. */
   resetControlPlaneRateLimitState() {
     controlPlaneBuckets.clear();
   },

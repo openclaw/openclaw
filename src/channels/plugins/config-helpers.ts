@@ -13,6 +13,7 @@ function isConfiguredSecretValue(value: unknown): boolean {
   return Boolean(value);
 }
 
+/** Writes an account enabled flag into a channel config section. */
 export function setAccountEnabledInConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
@@ -25,6 +26,7 @@ export function setAccountEnabledInConfigSection(params: {
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
   const hasAccounts = Boolean(base?.accounts);
   if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
+    // Single-account legacy sections store default enabled state at the channel root.
     return {
       ...params.cfg,
       channels: {
@@ -57,6 +59,7 @@ export function setAccountEnabledInConfigSection(params: {
   } as OpenClawConfig;
 }
 
+/** Removes an account config entry or the whole single-account section when empty. */
 export function deleteAccountFromConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
@@ -119,6 +122,7 @@ export function deleteAccountFromConfigSection(params: {
   return nextCfg;
 }
 
+/** Deletes selected fields from one account entry and reports whether configured values existed. */
 export function clearAccountEntryFields<TAccountEntry extends object>(params: {
   accounts?: Record<string, TAccountEntry>;
   accountId: string;

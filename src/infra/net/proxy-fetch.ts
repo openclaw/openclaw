@@ -25,6 +25,7 @@ function isFormDataLike(value: unknown): value is FormData {
 type UndiciFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 type UndiciFormDataInstance = InstanceType<UndiciFormDataCtor>;
 
+/** Append one entry while preserving browser/File names when the value has one. */
 function appendFormDataEntry(
   target: UndiciFormDataInstance,
   key: string,
@@ -42,6 +43,10 @@ function appendFormDataEntry(
   target.append(key, value);
 }
 
+/**
+ * Normalize init for undici-backed proxy fetches. Cross-runtime FormData bodies
+ * are rebuilt so undici owns the multipart boundary and can stream correctly.
+ */
 function normalizeInitForUndici(
   init: RequestInit | undefined,
   UndiciFormData: UndiciFormDataCtor,
@@ -69,8 +74,9 @@ function normalizeInitForUndici(
 }
 
 /**
- * Create a fetch function that routes requests through the given HTTP proxy.
- * Uses undici's ProxyAgent under the hood.
+ * Create a fetch function that routes requests through the given explicit HTTP
+ * proxy. The ProxyAgent is lazy and shared across calls so callers can create
+ * wrappers cheaply while still preserving managed-proxy TLS options.
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const {
@@ -86,7 +92,8 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
     return agent;
   };
   // undici's fetch is runtime-compatible with global fetch but the types diverge
-  // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
+  // on stream/body internals. Single cast at the dispatcher boundary keeps the
+  // rest type-safe.
   const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
     undiciFetch(input as string | URL, {
       ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
@@ -112,10 +119,9 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
 }
 
 /**
- * Resolve a proxy-aware fetch from standard environment variables.
- * Respects NO_PROXY / no_proxy exclusions via undici's EnvHttpProxyAgent.
- * Returns undefined when no proxy is configured.
- * Gracefully returns undefined if the proxy URL is malformed.
+ * Resolve a proxy-aware fetch from standard proxy environment variables.
+ * `EnvHttpProxyAgent` owns NO_PROXY matching and protocol fallback; failures
+ * return undefined so callers can fall back to direct fetch.
  */
 export function resolveProxyFetchFromEnv(
   env: NodeJS.ProcessEnv = process.env,

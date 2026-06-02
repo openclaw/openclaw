@@ -1,12 +1,15 @@
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
+/** Opening/closing marker pair used when rendering one Markdown style span. */
 export type RenderStyleMarker = {
   open: string | ((span: MarkdownStyleSpan) => string);
   close: string;
 };
 
+/** Optional marker overrides keyed by Markdown style. */
 export type RenderStyleMap = Partial<Record<MarkdownStyle, RenderStyleMarker>>;
 
+/** Rendered link wrapper coordinates and markers returned by link builders. */
 export type RenderLink = {
   start: number;
   end: number;
@@ -14,6 +17,7 @@ export type RenderLink = {
   close: string;
 };
 
+/** Rendering hooks for escaping text, styles, and optional link wrappers. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   escapeText: (text: string) => string;
@@ -46,6 +50,7 @@ function sortStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   });
 }
 
+/** Renders Markdown IR by applying caller-provided style/link markers. */
 export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions): string {
   const text = ir.text ?? "";
   if (!text) {
@@ -104,7 +109,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   }
 
   const points = [...boundaries].toSorted((a, b) => a - b);
-  // Unified stack for both styles and links, tracking close string and end position
+  // Links and styles share one stack so overlapping spans close in one LIFO order.
   const stack: { close: string; end: number }[] = [];
   type OpeningItem =
     | { end: number; open: string; close: string; kind: "link"; index: number }
@@ -121,7 +126,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   for (let i = 0; i < points.length; i += 1) {
     const pos = points[i];
 
-    // Close ALL elements (styles and links) in LIFO order at this position
+    // Close every element ending here before opening new same-position spans.
     while (stack.length && stack[stack.length - 1]?.end === pos) {
       const item = stack.pop();
       if (item) {

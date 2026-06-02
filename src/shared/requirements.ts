@@ -1,24 +1,36 @@
 export type Requirements = {
+  /** Binaries that must all exist locally or on the selected remote target. */
   bins: string[];
+  /** Binary alternatives where any one available entry satisfies the group. */
   anyBins: string[];
+  /** Environment variables that must pass the caller's satisfaction check. */
   env: string[];
+  /** Config paths that must pass the caller's satisfaction check. */
   config: string[];
+  /** Node platform ids accepted locally or by the selected remote target. */
   os: string[];
 };
 
 export type RequirementConfigCheck = {
+  /** Original config path declared by metadata. */
   path: string;
+  /** Caller-evaluated status for the config path. */
   satisfied: boolean;
 };
 
 export type RequirementsMetadata = {
+  /** Runtime resources declared by skill/hook/frontmatter metadata. */
   requires?: Partial<Pick<Requirements, "bins" | "anyBins" | "env" | "config">>;
+  /** Platform allowlist declared by metadata. */
   os?: string[];
 };
 
 export type RequirementRemote = {
+  /** Remote binary lookup for all-binary requirements. */
   hasBin?: (bin: string) => boolean;
+  /** Remote binary lookup for any-binary requirement groups. */
   hasAnyBin?: (bins: string[]) => boolean;
+  /** Remote platform ids that can satisfy OS requirements. */
   platforms?: string[];
 };
 

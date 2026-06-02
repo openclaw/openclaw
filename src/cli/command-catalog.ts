@@ -1,15 +1,19 @@
 import { hasFlag } from "./argv.js";
 
+/** Plugin loading mode for a CLI command path, optionally decided from argv/output mode. */
 export type CliCommandPluginLoadPolicy =
   | "never"
   | "always"
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
 type CliRouteConfigGuardPolicy = "never" | "always" | "when-suppressed";
+/** Plugin registry scope made available while executing a CLI command. */
 export type CliPluginRegistryScope = "all" | "channels" | "configured-channels";
+/** Registry visibility policy attached to a command catalog entry. */
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
+/** Whether a routed command should use the default network proxy behavior or bypass it. */
 export type CliNetworkProxyPolicy = "default" | "bypass";
 type CliNetworkProxyPolicyResolver =
   | CliNetworkProxyPolicy
@@ -30,6 +34,7 @@ type CliRoutedCommandId =
   | "channels-status"
   | "plugins-list";
 
+/** Fully resolved startup/routing policy for one CLI command path. */
 export type CliCommandPathPolicy = {
   bypassConfigGuard: boolean;
   routeConfigGuard: CliRouteConfigGuardPolicy;
@@ -40,6 +45,7 @@ export type CliCommandPathPolicy = {
   networkProxy: CliNetworkProxyPolicyResolver;
 };
 
+/** Catalog row matching a command path prefix to policy overrides and optional route id. */
 export type CliCommandCatalogEntry = {
   commandPath: readonly string[];
   exact?: boolean;
@@ -50,6 +56,7 @@ export type CliCommandCatalogEntry = {
   };
 };
 
+/** Central command policy catalog used before commands and plugins are fully registered. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["crestodian"],

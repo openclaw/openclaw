@@ -6,6 +6,7 @@ import {
   resolveCommandSecretRefsViaGateway,
 } from "./command-secret-gateway.js";
 
+/** Resolve command-scoped secret refs and return both raw resolved and auto-enabled configs. */
 export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawConfig>(params: {
   config: TConfig;
   commandName: string;

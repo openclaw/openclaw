@@ -16,8 +16,12 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
+
+/** Transcript archive path produced for one session transcript source file. */
 export type ArchivedSessionTranscript = {
+  /** Canonical source file path before rename. */
   sourcePath: string;
+  /** Path after appending the archive reason and timestamp suffix. */
   archivedPath: string;
 };
 
@@ -69,6 +73,7 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
+/** Return all transcript file paths that may belong to a session across current and legacy layouts. */
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -94,6 +99,8 @@ export function resolveSessionTranscriptCandidates(
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
     if (sessionFile && sessionFileState === "stale") {
+      // Stale generated filenames are fallback candidates only; prefer the
+      // canonical sessionId path so resets/deletes do not revive old forks.
       pushCandidate(() =>
         resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
@@ -125,6 +132,7 @@ export function resolveSessionTranscriptCandidates(
   return uniqueStrings(candidates);
 }
 
+/** Rename one transcript file with an archive suffix and publish the file mutation event. */
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
@@ -142,11 +150,17 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   return archived;
 }
 
+/** Archive every existing transcript candidate for a session and return archived paths. */
 export function archiveSessionTranscripts(opts: {
+  /** Session id used for generated transcript path candidates. */
   sessionId: string;
+  /** Store path that anchors agent-local transcript files, when known. */
   storePath: string | undefined;
+  /** Optional persisted/custom transcript file path from the session entry. */
   sessionFile?: string;
+  /** Agent id used to resolve modern per-agent transcript locations. */
   agentId?: string;
+  /** Archive suffix reason written into the renamed file. */
   reason: "reset" | "deleted";
   /**
    * When true, only archive files resolved under the session store directory.
@@ -158,11 +172,17 @@ export function archiveSessionTranscripts(opts: {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
 
+/** Archive session transcript candidates and keep the source-to-archive path mapping. */
 export function archiveSessionTranscriptsDetailed(opts: {
+  /** Session id used for generated transcript path candidates. */
   sessionId: string;
+  /** Store path that anchors agent-local transcript files, when known. */
   storePath: string | undefined;
+  /** Optional persisted/custom transcript file path from the session entry. */
   sessionFile?: string;
+  /** Agent id used to resolve modern per-agent transcript locations. */
   agentId?: string;
+  /** Archive suffix reason written into the renamed file. */
   reason: "reset" | "deleted";
   /**
    * When true, only archive files resolved under the session store directory.
@@ -208,11 +228,17 @@ export function archiveSessionTranscriptsDetailed(opts: {
   return archived;
 }
 
+/** Pick the stable transcript path to report after a session ends or archives its files. */
 export function resolveStableSessionEndTranscript(params: {
+  /** Session id used for generated transcript path candidates. */
   sessionId: string;
+  /** Store path that anchors agent-local transcript files, when known. */
   storePath: string | undefined;
+  /** Optional persisted/custom transcript file path from the session entry. */
   sessionFile?: string;
+  /** Agent id used to resolve modern per-agent transcript locations. */
   agentId?: string;
+  /** Archive results from the same operation, preferred over live files. */
   archivedTranscripts?: ArchivedSessionTranscript[];
 }): { sessionFile?: string; transcriptArchived?: boolean } {
   const archivedTranscripts = params.archivedTranscripts ?? [];
@@ -247,10 +273,15 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
+/** Remove old archived transcript files from the provided directories. */
 export async function cleanupArchivedSessionTranscripts(opts: {
+  /** Directories to scan for archive-suffixed transcript files. */
   directories: string[];
+  /** Minimum archive age before deletion. */
   olderThanMs: number;
+  /** Archive reason suffix to match; defaults to deleted archives. */
   reason?: ArchiveFileReason;
+  /** Test/maintenance clock override. */
   nowMs?: number;
 }): Promise<{ removed: number; scanned: number }> {
   if (!Number.isFinite(opts.olderThanMs) || opts.olderThanMs < 0) {

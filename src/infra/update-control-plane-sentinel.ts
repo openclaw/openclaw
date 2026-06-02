@@ -20,11 +20,13 @@ const CONTROL_PLANE_UPDATE_PENDING_REASONS = new Set<string>([
   CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
 ]);
 
+/** Versioned sidecar file passed through managed-service update handoff. */
 export type ControlPlaneUpdateSentinelMetaFile = {
   version: 1;
   meta: UpdateRestartSentinelMeta;
 };
 
+/** Convert an update result into the restart-health pending sentinel state. */
 export function buildControlPlaneUpdateRestartHealthPendingResult(
   result: UpdateRunResult,
 ): UpdateRunResult {
@@ -40,6 +42,7 @@ export function buildControlPlaneUpdateRestartHealthPendingResult(
   };
 }
 
+/** Return whether an update sentinel is still waiting for managed-service restart health. */
 export function isPendingControlPlaneUpdateRestartSentinel(
   payload: RestartSentinelPayload,
 ): boolean {
@@ -78,6 +81,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
           ...(accountId ? { accountId } : {}),
         }
       : undefined;
+  // Persisted sidecar metadata is trusted only after per-field string trimming.
   return {
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
@@ -89,6 +93,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   };
 }
 
+/** Read and validate managed-service update metadata from the handoff sidecar path. */
 export async function readControlPlaneUpdateSentinelMeta(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<UpdateRestartSentinelMeta | null> {
@@ -108,6 +113,7 @@ export async function readControlPlaneUpdateSentinelMeta(
   }
 }
 
+/** Write the update restart sentinel used after managed-service handoff starts. */
 export async function writeControlPlaneUpdateRestartSentinel(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
@@ -120,6 +126,7 @@ export async function writeControlPlaneUpdateRestartSentinel(params: {
   );
 }
 
+/** Mark the current control-plane update sentinel failed and return the updated payload. */
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
 ): Promise<RestartSentinelPayload | null> {

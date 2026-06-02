@@ -6,12 +6,17 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 type AllowlistConfigPaths = {
+  /** Candidate locations read before edit, ordered from canonical to legacy fallbacks. */
   readPaths: string[][];
+  /** Canonical path that receives writes after normalization and dedupe. */
   writePath: string[];
+  /** Legacy paths removed after a successful canonical write. */
   cleanupPaths?: string[][];
 };
 
+/** Labeled allowlist entries shown as account/group-specific overrides. */
 export type AllowlistGroupOverride = { label: string; entries: string[] };
+/** Best-effort display-name lookup result for configured allowlist entries. */
 export type AllowlistNameResolution = Array<{
   input: string;
   resolved: boolean;
@@ -47,6 +52,7 @@ export function resolveDmGroupAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? DM_ALLOWLIST_CONFIG_PATHS : GROUP_ALLOWLIST_CONFIG_PATHS;
 }
 
+/** Resolve legacy DM paths only for channels that historically accepted dm.allowFrom. */
 export function resolveLegacyDmAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? LEGACY_DM_ALLOWLIST_CONFIG_PATHS : null;
 }
@@ -166,6 +172,7 @@ function resolveAccountScopedWriteTarget(
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
   if (isBlockedObjectKey(normalizedAccountId)) {
+    // Never materialize prototype-polluting account keys; fall back to the channel-level section.
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -175,6 +182,7 @@ function resolveAccountScopedWriteTarget(
   const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
   const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
   if (!useAccount) {
+    // Keep default-account channels compact until an accounts map already exists.
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -302,6 +310,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     for (const entry of existing) {
       const normalized = params.normalize([entry]);
       if (normalized.some((value) => shouldMatch(value))) {
+        // Remove by normalized value so display casing/format changes do not leave stale aliases.
         changed = true;
         continue;
       }
@@ -317,6 +326,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
       setNestedValue(resolvedTarget.target, params.paths.writePath, next);
     }
     for (const path of params.paths.cleanupPaths ?? []) {
+      // Successful canonical writes retire legacy mirrors to keep future reads single-sourced.
       deleteNestedValue(resolvedTarget.target, path);
     }
   }

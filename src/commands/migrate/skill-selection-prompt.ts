@@ -24,6 +24,7 @@ type MigrationSkillSelectionOption = {
   disabled?: boolean;
 };
 
+/** Options for the migration multi-select prompt, including bulk-toggle reconciliation inputs. */
 export type MigrationSkillSelectionPromptOptions = {
   message: string;
   options: MigrationSkillSelectionOption[];
@@ -72,6 +73,7 @@ function formatOption(
   return withHint;
 }
 
+/** Prompts for migration item ids while preserving OpenClaw-specific bulk selection shortcuts. */
 export function promptMigrationSkillSelectionValues(
   opts: MigrationSkillSelectionPromptOptions,
 ): Promise<string[] | symbol | undefined> {
@@ -174,6 +176,7 @@ export function promptMigrationSkillSelectionValues(
     },
   });
   let lastSelectedValues = [...(prompt.value ?? [])];
+  // Tracks an item the user just deselected with Space so Enter on the same row does not re-add it.
   let lastSpaceDeselectedValue: string | undefined;
 
   prompt.on("cursor", (key) => {

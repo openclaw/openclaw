@@ -56,6 +56,7 @@ function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
 }
 
+/** Normalizes configured safe-bin names into lowercase executable identifiers. */
 export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
   if (!Array.isArray(entries)) {
     return new Set();
@@ -66,6 +67,7 @@ export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
   return new Set(normalized);
 }
 
+/** Resolves configured safeBins, using built-in defaults only when omitted. */
 export function resolveSafeBins(entries?: readonly string[] | null): Set<string> {
   if (entries === undefined) {
     return normalizeSafeBins(DEFAULT_SAFE_BINS);
@@ -73,6 +75,7 @@ export function resolveSafeBins(entries?: readonly string[] | null): Set<string>
   return normalizeSafeBins(entries ?? []);
 }
 
+/** Checks whether a segment is satisfied by a trusted stdin-only safe-bin profile. */
 export function isSafeBinUsage(params: {
   argv: string[];
   resolution: ExecutableResolution | null;
@@ -125,13 +128,19 @@ function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
 
+/** Result of checking already-parsed exec segments against every configured trust source. */
 export type ExecAllowlistEvaluation = {
+  /** True when every command segment is approved by an allow mechanism. */
   allowlistSatisfied: boolean;
+  /** Concrete allowlist entries that matched executable/policy targets. */
   allowlistMatches: ExecAllowlistEntry[];
+  /** Per-segment allowlist entry; null when another mechanism satisfied it. */
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  /** Per-segment reason that satisfied execution, aligned with analysis segments. */
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+/** Per-segment trust source used to explain why a command segment did not need approval. */
 export type ExecSegmentSatisfiedBy =
   | "allowlist"
   | "safeBins"
@@ -139,8 +148,11 @@ export type ExecSegmentSatisfiedBy =
   | "safeBuiltins"
   | "skills"
   | null;
+/** Trusted skill-provided executable that can satisfy a matching command segment. */
 export type SkillBinTrustEntry = {
+  /** Command name exposed by a trusted skill bin. */
   name: string;
+  /** Resolved executable path for the trusted skill bin. */
   resolvedPath: string;
 };
 type ExecAllowlistContext = {
@@ -667,6 +679,7 @@ function resolveAnalysisSegmentGroups(analysis: ExecCommandAnalysis): ExecComman
   return [analysis.segments];
 }
 
+/** Evaluates parsed exec-analysis segments against allowlist, safe-bin, and skill trust. */
 export function evaluateExecAllowlist(
   params: {
     analysis: ExecCommandAnalysis;
@@ -716,12 +729,19 @@ export function evaluateExecAllowlist(
   };
 }
 
+/** Shell command analysis plus allowlist evaluation metadata used by approval policy. */
 export type ExecAllowlistAnalysis = {
+  /** True when command parsing/analysis succeeded. */
   analysisOk: boolean;
+  /** True when all analyzed segments are allowed. */
   allowlistSatisfied: boolean;
+  /** Allowlist entries that matched analyzed segments. */
   allowlistMatches: ExecAllowlistEntry[];
+  /** Parsed command segments inspected by allowlist evaluation. */
   segments: ExecCommandSegment[];
+  /** Per-segment matching allowlist entry, if any. */
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  /** Per-segment satisfaction source aligned with segments. */
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
@@ -901,8 +921,11 @@ function isDirectShellPositionalCarrierInvocation(command: string): boolean {
   ).test(trimmed);
 }
 
+/** Persistable allow-always pattern derived from an approved command segment. */
 export type AllowAlwaysPattern = {
+  /** Executable trust path or basename pattern to persist. */
   pattern: string;
+  /** Optional argv regex pattern scoped to the executable. */
   argPattern?: string;
 };
 
@@ -1114,6 +1137,7 @@ export function resolveAllowAlwaysPatternEntries(params: {
   return patterns;
 }
 
+/** Returns only persisted executable patterns for legacy allow-always callers. */
 export function resolveAllowAlwaysPatterns(params: {
   segments: ExecCommandSegment[];
   cwd?: string;

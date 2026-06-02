@@ -31,6 +31,7 @@ type ChannelPackageStateMetadata = {
   };
 };
 
+/** Manifest metadata keys that can declare lightweight package-state probes. */
 export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
@@ -107,6 +108,8 @@ function listBuiltBundledPackageStateModules(params: {
     return [];
   }
   const locations: ChannelPackageStateModuleLocation[] = [];
+  // Prefer built bundled artifacts when source metadata points at the repo tree;
+  // they match packaged runtime resolution and avoid source-loader drift.
   for (const rootDir of [
     path.join(sourceRoot.packageRoot, "dist", "extensions", sourceRoot.dirName),
     path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
@@ -185,6 +188,8 @@ function resolveChannelPackageStateChecker(params: {
   }
 
   if (metadata.env) {
+    // Env-only probes are declarative: all required keys must be present, and
+    // at least one optional key must be present when `anyOf` is provided.
     return ({ env }) => {
       const allOf = metadata.env?.allOf ?? [];
       const anyOf = metadata.env?.anyOf ?? [];
@@ -228,6 +233,10 @@ function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string 
   return normalizeOptionalString(entry.channel.id);
 }
 
+/**
+ * Lists bundled channel ids that declare a package-state probe in metadata.
+ * Used by setup/status code before loading full bundled channel modules.
+ */
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
   discovery?: PluginDiscoveryResult,
@@ -238,6 +247,10 @@ export function listBundledChannelIdsForPackageState(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Evaluates a bundled channel package-state probe from manifest metadata.
+ * Module-backed probes are loaded lazily; env-backed probes stay declarative.
+ */
 export function hasBundledChannelPackageState(params: {
   metadataKey: ChannelPackageStateMetadataKey;
   channelId: string;

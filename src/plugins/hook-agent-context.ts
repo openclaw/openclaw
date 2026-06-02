@@ -27,6 +27,8 @@ function stripConversationPrefix(
   if (!suffix) {
     return text;
   }
+  // Hook consumers expect the concrete conversation/channel id, not transport prefixes like
+  // `dm:` or provider-qualified ids copied from routing metadata.
   if (
     TARGET_PREFIXES.has(prefix) ||
     providers.some((provider) => prefix === normalizeKey(provider))
@@ -36,6 +38,7 @@ function stripConversationPrefix(
   return text;
 }
 
+/** Resolves the channel id exposed to plugin agent hooks from session and routing metadata. */
 export function resolveAgentHookChannelId(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -46,6 +49,8 @@ export function resolveAgentHookChannelId(params: {
   const provider = normalizeOptionalString(params.messageProvider);
   const messageChannel = normalizeOptionalString(params.messageChannel);
   const parsed = parseRawSessionConversationRef(params.sessionKey);
+  // Session keys are the most precise source: they already encode the raw conversation id
+  // that follow-up turns should expose to plugins.
   if (parsed?.rawId) {
     return parsed.rawId;
   }
@@ -68,6 +73,7 @@ export function resolveAgentHookChannelId(params: {
   return messageChannel ?? provider;
 }
 
+/** Builds the channel-related fields shared by plugin hook agent contexts. */
 export function buildAgentHookContextChannelFields(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;

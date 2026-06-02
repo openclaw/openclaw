@@ -4,6 +4,11 @@ type SystemRunApprovalGuardError = {
   details: Record<string, unknown>;
 };
 
+/**
+ * Build a stable `node.invoke` guard failure for rejected `system.run` approval
+ * overrides. Callers inspect `details.code`, so new denial reasons should be
+ * explicit instead of folding into the human message.
+ */
 export function systemRunApprovalGuardError(params: {
   code: string;
   message: string;
@@ -20,6 +25,10 @@ export function systemRunApprovalGuardError(params: {
   };
 }
 
+/**
+ * Return the canonical response for an approval id that exists but has not
+ * produced a reusable decision for this forwarded call.
+ */
 export function systemRunApprovalRequired(runId: string): SystemRunApprovalGuardError {
   return systemRunApprovalGuardError({
     code: "APPROVAL_REQUIRED",

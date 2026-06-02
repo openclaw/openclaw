@@ -387,6 +387,8 @@ export async function dispatchAssembledChannelTurn(
                   ? await params.delivery.durable(preparedPayload, info)
                   : params.delivery.durable;
               if (durableOptions) {
+                // Durable delivery handles only final payloads on channels that satisfy required
+                // capabilities; otherwise this branch deliberately falls through to legacy deliver.
                 const durable = await deliverInboundReplyWithMessageSendContext({
                   cfg: params.cfg,
                   channel: params.channel,
@@ -459,6 +461,8 @@ async function runPreparedChannelTurnCore<
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
+    // Bot-loop drops still close the pending group-history window so a
+    // suppressed echo cannot be replayed as stale context on the next turn.
     clearPendingHistoryAfterTurn(params.history);
     return botLoopDrop;
   }
@@ -690,6 +694,8 @@ export async function runChannelTurn<
       admission.kind === "observeOnly"
         ? {
             ...resolved,
+            // Observe-only turns record/session-finalize normally but suppress
+            // platform sends even if older assembled adapters expose delivery.
             delivery: createNoopChannelEventDeliveryAdapter(),
             admission,
             log: params.log,
@@ -711,6 +717,8 @@ export async function runChannelTurn<
       routeSessionKey: resolved.routeSessionKey,
     };
     try {
+      // Finalize receives a failed result before the dispatch error escapes so
+      // adapters can release per-turn resources without masking the root cause.
       await params.adapter.onFinalize?.(failedResult);
     } catch {
       // Preserve the original dispatch error.

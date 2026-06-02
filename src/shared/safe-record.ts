@@ -1,3 +1,4 @@
+/** Safely identify non-array object values, tolerating hostile/proxy objects that throw. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   try {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -6,6 +7,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   }
 }
 
+/** Read one property from a record-like value without letting accessor/proxy failures escape. */
 export function readRecordValue(value: unknown, key: string): unknown {
   if (!isRecord(value)) {
     return undefined;
@@ -17,6 +19,7 @@ export function readRecordValue(value: unknown, key: string): unknown {
   }
 }
 
+/** Copy array entries while skipping indices that throw during access. */
 export function copyArrayEntries(value: unknown): unknown[] {
   let isArray: boolean;
   try {
@@ -47,6 +50,7 @@ export function copyArrayEntries(value: unknown): unknown[] {
   return entries;
 }
 
+/** Copy own string-key entries whose values are record-like, ignoring unsafe reads. */
 export function copyRecordEntries<T>(value: unknown): Array<[string, T]> {
   if (!isRecord(value)) {
     return [];

@@ -4,6 +4,7 @@ import {
 } from "../infra/fetch-headers.js";
 
 export type ScopeTokenProvider = {
+  /** Return an access token authorized for the exact scope being retried. */
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -11,15 +12,26 @@ function isAuthFailureStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
-/** Retry a fetch with bearer tokens from the provided scopes when the unauthenticated attempt fails. */
+/**
+ * Retry a fetch with bearer tokens from the provided scopes when the unauthenticated attempt fails.
+ *
+ * The original unauthenticated response stays authoritative if no scoped retry succeeds, which lets
+ * callers preserve the server's real status/body instead of surfacing token-provider failures.
+ */
 export async function fetchWithBearerAuthScopeFallback(params: {
+  /** Absolute URL fetched first without auth and then, on eligible failures, with scoped bearer auth. */
   url: string;
+  /** Ordered fallback scopes; the first successful scoped fetch wins. */
   scopes: readonly string[];
   tokenProvider?: ScopeTokenProvider;
   fetchFn?: typeof fetch;
+  /** Base init reused for both unauthenticated and authenticated attempts after header normalization. */
   requestInit?: RequestInit;
+  /** Reject non-HTTPS URLs before the first network call when bearer-token transport must be TLS-only. */
   requireHttps?: boolean;
+  /** Host/path guard for callers that only want bearer auth attached to trusted URLs. */
   shouldAttachAuth?: (url: string) => boolean;
+  /** Retry classifier; defaults to 401/403 auth failures. */
   shouldRetry?: (response: Response) => boolean;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;

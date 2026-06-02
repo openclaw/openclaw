@@ -50,6 +50,7 @@ import type {
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
 function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
+  // CLI filters apply before preview/apply so prompts and conflict checks see the same plan shape.
   return applyMigrationPluginSelection(
     applyMigrationSkillSelection(plan, opts.skills),
     opts.plugins,
@@ -124,6 +125,7 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
     includeSecrets: false,
     suppressPlanLog: true,
   });
+  // Ask only after a secret-free scan proves the source actually has credential candidates.
   if (!hasAuthCredentialCandidate(initialPlan)) {
     if (!opts.suppressPlanLog) {
       log.message(formatMigrationPreview(initialPlan).join("\n"));
@@ -334,6 +336,7 @@ function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
   runtime.log("No Codex skills or native Codex plugins selected for migration.");
 }
 
+/** Lists installed migration providers for CLI text or JSON output. */
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const cfg = getRuntimeConfig();
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
@@ -363,6 +366,7 @@ export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boo
   );
 }
 
+/** Builds and prints a migration plan without applying filesystem/config changes. */
 export async function migratePlanCommand(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions,
@@ -387,6 +391,7 @@ export async function migratePlanCommand(
   return plan;
 }
 
+/** Applies a migration with required non-interactive safety gates and optional preflight plan reuse. */
 export async function migrateApplyCommand(
   runtime: RuntimeEnv,
   opts: MigrateApplyOptions & { yes: true },
@@ -410,6 +415,7 @@ export async function migrateApplyCommand(
     throw new Error("--no-backup requires --force because it skips the automatic rollback copy.");
   }
   if (!opts.yes && !process.stdin.isTTY) {
+    // Non-interactive apply must be explicit because migrations can copy secrets and overwrite files.
     throw new Error(
       `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand("openclaw migrate plan --provider <provider>")}.`,
     );
@@ -422,6 +428,7 @@ export async function migrateApplyCommand(
       json: opts.json,
     });
     if (opts.json) {
+      // Interactive JSON mode returns the pre-apply plan; applying needs explicit --yes.
       return plan;
     }
     const selectedPlan = await promptCodexMigrationSelections(runtime, plan, opts);
@@ -458,6 +465,7 @@ export async function migrateApplyCommand(
   });
 }
 
+/** Default migrate command: list providers, preview, dry-run, or apply depending on flags. */
 export async function migrateDefaultCommand(
   runtime: RuntimeEnv,
   opts: MigrateDefaultOptions,
@@ -503,6 +511,7 @@ export async function migrateDefaultCommand(
     return plan;
   }
   if (opts.json && !opts.yes) {
+    // Preserve machine-readable dry-preview behavior unless the caller opted into apply with --yes.
     return plan;
   }
   if (!opts.yes) {

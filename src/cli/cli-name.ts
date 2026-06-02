@@ -5,6 +5,7 @@ const DEFAULT_CLI_NAME = "openclaw";
 const KNOWN_CLI_NAMES = new Set([DEFAULT_CLI_NAME]);
 const CLI_PREFIX_RE = /^(?:((?:pnpm|npm|bunx|npx)\s+))?(openclaw)\b/;
 
+/** Resolve the user-facing CLI binary name from argv, falling back to `openclaw`. */
 export function resolveCliName(argv: string[] = process.argv): string {
   const argv1 = argv[1];
   if (!argv1) {
@@ -17,6 +18,7 @@ export function resolveCliName(argv: string[] = process.argv): string {
   return DEFAULT_CLI_NAME;
 }
 
+/** Replace a leading OpenClaw command prefix with the active CLI binary name. */
 export function replaceCliName(command: string, cliName = resolveCliName()): string {
   if (!command.trim()) {
     return command;

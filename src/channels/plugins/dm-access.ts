@@ -3,11 +3,13 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 export type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
+/** Normalized DM access settings read from channel or account config. */
 export type ChannelDmAccess = {
   dmPolicy?: ChannelDmPolicy;
   allowFrom?: Array<string | number>;
 };
 
+/** Mutable config record shape used by DM access migrations. */
 export type DmAccessRecord = Record<string, unknown>;
 
 type DmFieldKind = "policy" | "allowFrom";
@@ -22,6 +24,7 @@ export type CompatMutationResult = {
   changed: boolean;
 };
 
+/** Normalizes user/config DM policy strings to the supported policy set. */
 export function normalizeChannelDmPolicy(value: string | undefined): ChannelDmPolicy | undefined {
   return value === "pairing" || value === "allowlist" || value === "open" || value === "disabled"
     ? value
@@ -42,6 +45,8 @@ function cloneDm(entry: DmAccessRecord): DmAccessRecord | null {
 function resolveDmFieldPaths(mode: ChannelDmAllowFromMode, kind: DmFieldKind): DmFieldPaths {
   const topKey = kind === "policy" ? "dmPolicy" : "allowFrom";
   const nestedKey = kind === "policy" ? "policy" : "allowFrom";
+  // Some channels still store DM config under `dm.*`; keep canonical and legacy
+  // paths paired so readers and migrations make the same top/nested decision.
   if (mode === "nestedOnly") {
     return {
       canonicalPath: ["dm", nestedKey],
@@ -122,6 +127,10 @@ function readCanonicalOrLegacy(
   return readPath(entry, paths.canonicalPath) ?? readPath(entry, paths.legacyPath);
 }
 
+/**
+ * Resolves the effective DM policy from account config, parent config, then an
+ * optional default while honoring the channel's top/nested storage mode.
+ */
 export function resolveChannelDmPolicy(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -136,6 +145,10 @@ export function resolveChannelDmPolicy(params: {
   return typeof value === "string" ? normalizeChannelDmPolicy(value) : undefined;
 }
 
+/**
+ * Resolves the effective DM allowlist from account or parent config, accepting
+ * both canonical and legacy storage paths for the selected mode.
+ */
 export function resolveChannelDmAllowFrom(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -148,6 +161,7 @@ export function resolveChannelDmAllowFrom(params: {
   return Array.isArray(value) ? (value as Array<string | number>) : undefined;
 }
 
+/** Resolves DM policy and allowlist together for runtime authorization. */
 export function resolveChannelDmAccess(params: {
   account?: DmAccessRecord | null;
   parent?: DmAccessRecord | null;
@@ -160,6 +174,10 @@ export function resolveChannelDmAccess(params: {
   };
 }
 
+/**
+ * Writes an allowlist to the canonical DM path and removes the legacy path when
+ * present, recording user-facing doctor/setup change notes.
+ */
 export function setCanonicalDmAllowFrom(params: {
   entry: DmAccessRecord;
   mode: ChannelDmAllowFromMode;
@@ -178,6 +196,10 @@ export function setCanonicalDmAllowFrom(params: {
   params.changes?.push(`- ${formatPath(params.pathPrefix, paths.canonicalPath)}: ${params.reason}`);
 }
 
+/**
+ * Migrates legacy `dm.policy` / `dm.allowFrom` aliases to canonical fields and
+ * returns a cloned entry when any compatibility cleanup was needed.
+ */
 export function normalizeLegacyDmAliases(params: {
   entry: DmAccessRecord;
   pathPrefix: string;
@@ -294,6 +316,8 @@ export function ensureOpenDmPolicyAllowFromWildcard(params: {
       ? (legacyAllowFrom as Array<string | number>)
       : undefined;
 
+  // `dmPolicy="open"` is represented by a wildcard allowlist in the canonical
+  // path so downstream allowlist-only checks do not need a second policy branch.
   if (hasWildcard(sourceAllowFrom)) {
     if (canonicalAllowFrom === undefined && sourceAllowFrom) {
       setCanonicalDmAllowFrom({

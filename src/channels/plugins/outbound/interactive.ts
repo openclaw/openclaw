@@ -6,6 +6,8 @@ export {
 } from "./presentation-limits.js";
 
 /**
+ * Reduces legacy interactive reply blocks in authored order.
+ *
  * @deprecated Use MessagePresentation helpers for new rendering paths.
  */
 export function reduceInteractiveReply<TState>(

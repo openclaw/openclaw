@@ -34,12 +34,20 @@ type NodeDeclaredSurface = {
 
 type NodeApprovedSurface = NodeDeclaredSurface;
 
-/** Node-declared pairing surface before approval. */
+/**
+ * Node-declared pairing surface before approval. This is the untrusted surface
+ * captured from a connecting node and later intersected with operator-approved
+ * capabilities, commands, and permissions.
+ */
 export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
 };
 
-/** Pending node pairing request awaiting operator approval. */
+/**
+ * Pending node pairing request awaiting operator approval. `requestId` is the
+ * operator-facing handle; `nodeId` remains the stable device identity used to
+ * supersede stale requests for the same node.
+ */
 export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   silent?: boolean;
@@ -49,7 +57,11 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
 /** Pending request summary returned when a new approval surface supersedes older requests. */
 export type NodePairingSupersededRequest = Pick<NodePairingPendingRequest, "requestId" | "nodeId">;
 
-/** Result for creating or refreshing a pending node pairing request. */
+/**
+ * Result for creating or refreshing a pending node pairing request. `created`
+ * distinguishes a new approval prompt from a metadata refresh of an existing
+ * request, and `superseded` identifies older approval surfaces to dismiss.
+ */
 export type RequestNodePairingResult = {
   status: "pending";
   request: NodePairingPendingRequest;
@@ -61,7 +73,11 @@ type NodePairingPendingEntry = NodePairingPendingRequest & {
   requiredApproveScopes: NodeApprovalScope[];
 };
 
-/** Approved node record with its pairing token and persisted capability surface. */
+/**
+ * Approved node record with its pairing token and persisted capability surface.
+ * Runtime reconnects must treat this surface as the maximum grant until a later
+ * pairing upgrade is approved.
+ */
 export type NodePairingPairedNode = NodeApprovedSurface & {
   token: string;
   bins?: string[];
@@ -85,6 +101,8 @@ type NodePairingStateFile = {
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
 
+// Pairing state is split across pending/paired files, so all mutations share one
+// process lock to keep request superseding and token replacement atomic.
 const withLock = createAsyncLock();
 
 function buildPendingNodePairingRequest(params: {
@@ -227,6 +245,11 @@ function newToken() {
   return generatePairingToken();
 }
 
+/**
+ * List pending and paired node records after pruning expired pending requests.
+ * Pending requests are newest-first for operator review; paired nodes are sorted
+ * by latest approval so recently changed trust surfaces appear first.
+ */
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById)
@@ -238,7 +261,7 @@ export async function listNodePairing(baseDir?: string): Promise<NodePairingList
   return { pending, paired };
 }
 
-/** Return one paired node by normalized node id. */
+/** Return one paired node by normalized node id after pending-request pruning. */
 export async function getPairedNode(
   nodeId: string,
   baseDir?: string,
@@ -247,7 +270,11 @@ export async function getPairedNode(
   return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
 }
 
-/** Create or refresh a pending node pairing request for operator approval. */
+/**
+ * Create or refresh a pending node pairing request for operator approval. A
+ * reconnect with the same approval surface refreshes metadata in place; a new
+ * command/capability/permission surface supersedes older pending requests.
+ */
 export async function requestNodePairing(
   req: NodePairingRequestInput,
   baseDir?: string,
@@ -285,7 +312,11 @@ export async function requestNodePairing(
   });
 }
 
-/** Approve a pending node request when caller scopes cover the requested command surface. */
+/**
+ * Approve a pending node request when caller scopes cover the requested command
+ * surface. Approval replaces any existing token for the node while preserving
+ * the original creation timestamp for audit continuity.
+ */
 export async function approveNodePairing(
   requestId: string,
   options: { callerScopes?: readonly string[] },
@@ -336,7 +367,7 @@ export async function approveNodePairing(
   });
 }
 
-/** Reject a pending node pairing request. */
+/** Reject a pending node pairing request without changing paired-node records. */
 export async function rejectNodePairing(
   requestId: string,
   baseDir?: string,
@@ -373,7 +404,11 @@ export async function removePairedNode(
   });
 }
 
-/** Verify a paired node token and return the approved node record on success. */
+/**
+ * Verify a paired node token and return the approved node record on success.
+ * Token comparison stays in the pairing-token helper so timing and length edge
+ * cases have one implementation.
+ */
 export async function verifyNodeToken(
   nodeId: string,
   token: string,
@@ -388,7 +423,10 @@ export async function verifyNodeToken(
   return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
 }
 
-/** Update non-auth metadata for a paired node heartbeat/status refresh. */
+/**
+ * Update non-auth metadata for a paired node heartbeat/status refresh. Token,
+ * node id, creation time, and approval time are intentionally immutable here.
+ */
 export async function updatePairedNodeMetadata(
   nodeId: string,
   patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,

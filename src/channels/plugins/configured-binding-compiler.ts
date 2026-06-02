@@ -17,6 +17,7 @@ import type {
 // Configured bindings are channel-owned rules compiled from config, separate
 // from runtime plugin-owned conversation bindings.
 
+/** Compiled configured binding rules grouped by channel for route-time lookup. */
 export type CompiledConfiguredBindingRegistry = {
   rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;
 };
@@ -126,11 +127,15 @@ function compileConfiguredBindingRegistry(params: {
   for (const binding of listConfiguredBindings(params.cfg)) {
     const bindingConversationId = resolveBindingConversationId(binding);
     if (!bindingConversationId) {
+      // A configured binding without a peer id cannot be matched to inbound
+      // conversations, so keep it out of the route-time registry.
       continue;
     }
 
     const resolvedChannel = resolveConfiguredBindingAdapter(binding.match.channel);
     if (!resolvedChannel) {
+      // Unknown channels or channels without binding adapters are ignored here;
+      // doctor/config validation owns user-facing warnings for bad config.
       continue;
     }
 
@@ -140,6 +145,8 @@ function compileConfiguredBindingRegistry(params: {
       conversationId: bindingConversationId,
     });
     if (!target) {
+      // Providers may reject conversation ids that are valid config strings but
+      // not valid native conversation targets for that channel.
       continue;
     }
 
@@ -152,6 +159,8 @@ function compileConfiguredBindingRegistry(params: {
       provider: resolvedChannel.provider,
     });
     if (!rule) {
+      // Consumers own binding-type support. Unsupported types should not create
+      // partial registry entries that could win matching later.
       continue;
     }
     pushCompiledRule(rulesByChannel, rule);
@@ -162,18 +171,21 @@ function compileConfiguredBindingRegistry(params: {
   };
 }
 
+/** Compiles configured binding rules from current config and loaded channel plugins. */
 export function resolveCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
   return compileConfiguredBindingRegistry({ cfg });
 }
 
+/** Compiles configured bindings for startup diagnostics without caching the result. */
 export function primeCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
   return compileConfiguredBindingRegistry({ cfg });
 }
 
+/** Counts compiled binding rules and channels for diagnostics. */
 export function countCompiledBindingRegistry(registry: CompiledConfiguredBindingRegistry): {
   bindingCount: number;
   channelCount: number;

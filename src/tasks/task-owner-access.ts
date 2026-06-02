@@ -11,12 +11,15 @@ import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
+  // Runtime task APIs expose only session-scoped work owned by the caller;
+  // system tasks stay internal even when child/run ids are known.
   return (
     task.scopeKind === "session" &&
     normalizeOptionalString(task.ownerKey) === normalizeOptionalString(callerOwnerKey)
   );
 }
 
+/** Reads a task by id only when it is visible to the caller's owner key. */
 export function getTaskByIdForOwner(params: {
   taskId: string;
   callerOwnerKey: string;
@@ -25,6 +28,7 @@ export function getTaskByIdForOwner(params: {
   return task && canOwnerAccessTask(task, params.callerOwnerKey) ? task : undefined;
 }
 
+/** Finds a task by runtime run id while preserving owner scoping. */
 export function findTaskByRunIdForOwner(params: {
   runId: string;
   callerOwnerKey: string;
@@ -74,6 +78,7 @@ export function cancelTaskByIdForOwner(params: {
   });
 }
 
+/** Lists tasks related to a parent or child session that the caller owns. */
 export function listTasksForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
@@ -83,6 +88,7 @@ export function listTasksForRelatedSessionKeyForOwner(params: {
   );
 }
 
+/** Builds a status snapshot from only the caller-visible related-session tasks. */
 export function buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
@@ -95,6 +101,7 @@ export function buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params: {
   );
 }
 
+/** Returns the newest caller-visible task related to a session key. */
 export function findLatestTaskForRelatedSessionKeyForOwner(params: {
   relatedSessionKey: string;
   callerOwnerKey: string;
@@ -102,6 +109,7 @@ export function findLatestTaskForRelatedSessionKeyForOwner(params: {
   return listTasksForRelatedSessionKeyForOwner(params)[0];
 }
 
+/** Resolves id, run id, related-session, or registry tokens through owner gates. */
 export function resolveTaskForLookupTokenForOwner(params: {
   token: string;
   callerOwnerKey: string;

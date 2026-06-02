@@ -90,6 +90,7 @@ import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
+/** Gateway connection details used when message actions execute out-of-process. */
 export type MessageActionRunnerGateway = {
   url?: string;
   token?: string;
@@ -108,6 +109,7 @@ function loadMessageActionGatewayRuntime() {
   return messageActionGatewayRuntimePromise;
 }
 
+/** Full execution context for one channel message tool action. */
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
@@ -132,6 +134,7 @@ export type RunMessageActionParams = {
   abortSignal?: AbortSignal;
 };
 
+/** Discriminated result returned by local, gateway, plugin, and dry-run action paths. */
 export type MessageActionRunResult =
   | {
       kind: "send";
@@ -181,6 +184,7 @@ export type MessageActionRunResult =
       dryRun: boolean;
     };
 
+/** Extracts the plugin tool result from action variants that carry one. */
 export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
@@ -1421,6 +1425,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   };
 }
 
+/** Runs one normalized message action through policy, target, media, and plugin dispatch. */
 export async function runMessageAction(
   input: RunMessageActionParams,
 ): Promise<MessageActionRunResult> {

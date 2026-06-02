@@ -24,6 +24,7 @@ export {
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
 
+/** Read and parse JSON, wrapping non-fs-safe failures with file-path context. */
 export async function readJson<T>(filePath: string): Promise<T> {
   try {
     return await readJsonImpl<T>(filePath);
@@ -32,10 +33,12 @@ export async function readJson<T>(filePath: string): Promise<T> {
   }
 }
 
+/** Strict JSON reader alias for call sites that want missing or invalid files to throw. */
 export async function readJsonFileStrict<T>(filePath: string): Promise<T> {
   return readJson<T>(filePath);
 }
 
+/** Read JSON when present; missing files return null, malformed files still throw. */
 export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   try {
     return await readJsonIfExistsImpl<T>(filePath);
@@ -47,6 +50,7 @@ export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** Durable optional JSON read used by stores where corrupt files must surface. */
 export async function readDurableJsonFile<T>(filePath: string): Promise<T | null> {
   return readJsonIfExists<T>(filePath);
 }
@@ -65,6 +69,7 @@ export async function tryReadJson<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** Backwards-compatible soft JSON reader: missing, invalid, or racing files return null. */
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   return tryReadJson<T>(filePath);
 }
@@ -85,6 +90,7 @@ export type WriteTextAtomicOptions = {
   tempPrefix?: string;
 };
 
+/** Atomically replace text files with secure defaults and optional durability fsyncs. */
 export async function writeTextAtomic(
   filePath: string,
   content: string,

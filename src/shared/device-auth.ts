@@ -1,15 +1,22 @@
 /** Stored bearer token metadata for one authorized device role. */
 export type DeviceAuthEntry = {
+  /** Opaque bearer token persisted for this role. */
   token: string;
+  /** Normalized role key, such as `node` or `operator`. */
   role: string;
+  /** Canonical sorted scopes, including implied operator scopes. */
   scopes: string[];
+  /** Wall-clock update time used for diagnostics and token freshness display. */
   updatedAtMs: number;
 };
 
 /** Versioned on-disk device-auth cache for a gateway device identity. */
 export type DeviceAuthStore = {
+  /** Store schema version; incompatible versions are ignored instead of migrated here. */
   version: 1;
+  /** Gateway device id this token cache is bound to. */
   deviceId: string;
+  /** Role-keyed token entries for the bound gateway device id. */
   tokens: Record<string, DeviceAuthEntry>;
 };
 

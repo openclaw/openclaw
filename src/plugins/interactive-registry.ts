@@ -13,11 +13,13 @@ import {
 } from "./interactive-state.js";
 import type { PluginInteractiveHandlerRegistration } from "./types.js";
 
+/** Result returned when a plugin registers an interactive callback namespace. */
 export type InteractiveRegistrationResult = {
   ok: boolean;
   error?: string;
 };
 
+/** Resolves a channel/data pair to a registered interactive handler and decoded payload. */
 export function resolvePluginInteractiveNamespaceMatch(
   channel: string,
   data: string,
@@ -29,6 +31,7 @@ export function resolvePluginInteractiveNamespaceMatch(
   });
 }
 
+/** Registers one plugin-owned interactive namespace for a channel. */
 export function registerPluginInteractiveHandler(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
@@ -48,6 +51,8 @@ export function registerPluginInteractiveHandler(
       error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
     };
   }
+  // Registry keys are channel + normalized namespace, so different plugins cannot silently
+  // claim the same callback prefix for the same transport.
   interactiveHandlers.set(key, {
     ...registration,
     namespace,
@@ -59,14 +64,17 @@ export function registerPluginInteractiveHandler(
   return { ok: true };
 }
 
+/** Clears active interactive handlers and registration bookkeeping. */
 export function clearPluginInteractiveHandlers(): void {
   clearPluginInteractiveHandlersState();
 }
 
+/** Clears registration bookkeeping while leaving active handler state untouched. */
 export function clearPluginInteractiveHandlerRegistrations(): void {
   clearPluginInteractiveHandlerRegistrationsState();
 }
 
+/** Removes all interactive handlers owned by one plugin. */
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const [key, value] of interactiveHandlers.entries()) {
@@ -76,10 +84,12 @@ export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void 
   }
 }
 
+/** Lists the current interactive handler registrations for loader snapshotting. */
 export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
   return Array.from(getPluginInteractiveHandlersState().values());
 }
 
+/** Restores interactive handlers from a loader snapshot, skipping invalid empty namespaces. */
 export function restorePluginInteractiveHandlers(
   registrations: readonly RegisteredInteractiveHandler[],
 ): void {

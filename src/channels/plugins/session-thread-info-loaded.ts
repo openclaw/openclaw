@@ -22,6 +22,8 @@ function resolveLoadedSessionConversationThreadInfo(
   if (!rawId) {
     return null;
   }
+  // Loaded channel plugins can reinterpret provider-specific conversation ids
+  // before the generic `sessionKey:threadId` parser runs.
   const messaging = getLoadedChannelPluginForRead(raw.channel)?.messaging;
   const resolved = messaging?.resolveSessionConversation?.({
     kind: raw.kind,
@@ -38,6 +40,10 @@ function resolveLoadedSessionConversationThreadInfo(
   };
 }
 
+/**
+ * Resolves thread info from a session key, giving loaded channel plugins first
+ * chance to normalize provider-specific conversation references.
+ */
 export function resolveLoadedSessionThreadInfo(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {

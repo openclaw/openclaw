@@ -11,6 +11,7 @@ function parseOptionFlags(flags: string): { long?: string; short?: string } {
   return { long, short };
 }
 
+/** Build one Fish completion line for a subcommand candidate. */
 export function buildFishSubcommandCompletionLine(params: {
   rootCmd: string;
   condition: string;
@@ -21,6 +22,7 @@ export function buildFishSubcommandCompletionLine(params: {
   return `complete -c ${params.rootCmd} -n "${params.condition}" -a "${params.name}" -d '${desc}'\n`;
 }
 
+/** Build one Fish completion line for an option flag declaration. */
 export function buildFishOptionCompletionLine(params: {
   rootCmd: string;
   condition: string;

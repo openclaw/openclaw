@@ -463,6 +463,7 @@ function projectRouteAccess(params: {
   const senderBlock = params.ingress.graph.gates.find(
     (entry) => entry.phase === "sender" && entry.effect === "block-dispatch",
   );
+  // Route sender replacement moves the route's user-facing reason onto the sender gate.
   if (routeSenderReplacement && senderBlock) {
     return {
       allowed: false,
@@ -615,6 +616,7 @@ export async function resolveChannelMessageIngress(
   const rawGroupAllowFrom = normalizeStringEntries(params.groupAllowFrom ?? []);
   const normalizeEffective = (entries: readonly (string | number)[], context: "dm" | "group") =>
     normalizeEffectiveEntries({ adapter, accountId: params.accountId, entries, context });
+  // Keep raw allowlists for redacted state/graph evidence while normalized copies drive matching.
   const [normalizedAllowFrom, normalizedStoreAllowFrom, normalizedGroupAllowFrom] =
     await Promise.all([
       normalizeEffective(rawAllowFrom, "dm"),

@@ -89,14 +89,20 @@ export function isAllowedParsedChatSender(params: {
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
+  // Keep SDK callers on the same parser contract as core channel plugins.
   return isAllowedParsedChatSenderShared(params);
 }
 
 export type BasicAllowlistResolutionEntry = {
+  /** Original user-provided allowlist entry. */
   input: string;
+  /** True when the entry resolved to a stable platform id. */
   resolved: boolean;
+  /** Stable platform id returned by the resolver. */
   id?: string;
+  /** Human-readable name paired with the resolved id. */
   name?: string;
+  /** Optional resolver note shown in summaries or setup output. */
   note?: string;
 };
 

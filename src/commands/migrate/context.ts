@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+/** Creates a provider logger that keeps JSON-mode stdout clean for machine-readable output. */
 export function createMigrationLogger(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const info = opts.json ? runtime.error : runtime.log;
   return {
@@ -20,6 +21,7 @@ export function createMigrationLogger(runtime: RuntimeEnv, opts: { json?: boolea
   };
 }
 
+/** Builds the timestamped directory used for migration reports and per-item backups. */
 export function buildMigrationReportDir(
   providerId: string,
   stateDir: string,
@@ -29,6 +31,7 @@ export function buildMigrationReportDir(
   return path.join(stateDir, "migration", providerId, stamp);
 }
 
+/** Builds the runtime context shared by migration plan and apply providers. */
 export function buildMigrationContext(params: {
   source?: string;
   includeSecrets?: boolean;

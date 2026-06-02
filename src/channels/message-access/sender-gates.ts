@@ -34,6 +34,7 @@ function senderGate(params: {
   };
 }
 
+/** Evaluates direct-message sender policy against configured and pairing-store allowlists. */
 export function senderGateForDirect(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -70,6 +71,7 @@ export function senderGateForDirect(params: {
     return block("dm_policy_disabled");
   }
   if (params.policy.dmPolicy === "open") {
+    // Open DMs still require an explicit wildcard or match; they skip pairing-store fallback only.
     if (dm.hasWildcard) {
       return allow("dm_policy_open");
     }
@@ -103,6 +105,7 @@ export function senderGateForDirect(params: {
   return block(reasonCode);
 }
 
+/** Evaluates group/channel sender policy after route sender overrides are applied. */
 export function senderGateForGroup(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -146,6 +149,7 @@ export function senderGateForGroup(params: {
   return block(allowlistFailureReason(group) ?? "group_policy_not_allowlisted");
 }
 
+/** Converts sender blocks into ignored gates for event modes that authorize elsewhere. */
 export function applyEventAuthModeToSenderGate(params: {
   state: ChannelIngressState;
   senderGate: AccessGraphGate;

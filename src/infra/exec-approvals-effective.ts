@@ -46,22 +46,31 @@ type ExecPolicyFieldSummary<TValue extends ExecSecurity | ExecAsk> = {
 };
 
 export type ExecPolicyScopeSnapshot = {
+  /** Human-facing scope label such as tools.exec or agent:<id>. */
   scopeLabel: string;
+  /** Config path that supplied this scope's requested policy. */
   configPath: string;
   agentId?: string;
+  /** Requested execution host and where that request came from. */
   host: ExecPolicyHostSummary;
   mode: {
+    /** Mode requested by config before host policy tightening. */
     requested: ExecMode;
     requestedSource: string;
+    /** Mode after host approvals file constraints are applied. */
     effective: ExecMode;
     note: string;
   };
+  /** Requested, host, and effective security level for this scope. */
   security: ExecPolicyFieldSummary<ExecSecurity>;
+  /** Requested, host, and effective prompting policy for this scope. */
   ask: ExecPolicyFieldSummary<ExecAsk>;
+  /** Security fallback used when ask policy needs a host-side default. */
   askFallback: {
     effective: ExecSecurity;
     source: string;
   };
+  /** Approval decisions available after effective ask policy is resolved. */
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
@@ -285,6 +294,7 @@ function resolveAskNote(params: {
   return "more aggressive ask wins";
 }
 
+/** Builds effective exec policy snapshots for global and agent-specific scopes. */
 export function collectExecPolicyScopeSnapshots(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
@@ -326,6 +336,7 @@ export function collectExecPolicyScopeSnapshots(params: {
   return snapshots;
 }
 
+/** Resolves a scope summary without the decision list used by approval UIs. */
 export function resolveExecPolicyScopeSummary(params: {
   approvals: ExecApprovalsFile;
   scopeExecConfig?: ExecPolicyConfig | undefined;
@@ -340,6 +351,7 @@ export function resolveExecPolicyScopeSummary(params: {
   return summary;
 }
 
+/** Resolves one scope's requested config policy against the host approvals file. */
 export function resolveExecPolicyScopeSnapshot(params: {
   approvals: ExecApprovalsFile;
   scopeExecConfig?: ExecPolicyConfig | undefined;

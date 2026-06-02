@@ -1,25 +1,35 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type CustomCommandInput = {
+  /** User-provided command name, with or without the channel prefix. */
   command?: string | null;
+  /** User-facing command description shown by the owning channel. */
   description?: string | null;
 };
 
 export type CustomCommandIssue = {
+  /** Original command array position for schema/error path reporting. */
   index: number;
+  /** Field that owns the validation issue at the original array position. */
   field: "command" | "description";
+  /** Complete user-facing validation message with channel-specific wording. */
   message: string;
 };
 
 export type CustomCommandConfig = {
+  /** Channel or integration name used in validation messages. */
   label: string;
+  /** Normalized command-name contract enforced after slash and case cleanup. */
   pattern: RegExp;
+  /** Human-readable pattern rule appended to invalid-name messages. */
   patternDescription: string;
+  /** Display prefix used in validation messages. Defaults to slash commands. */
   prefix?: string;
 };
 
 const DEFAULT_PREFIX = "/";
 
+/** Normalizes slash-style custom command names for validation and storage. */
 export function normalizeSlashCommandName(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -29,10 +39,14 @@ export function normalizeSlashCommandName(value: string): string {
   return normalizeLowercaseStringOrEmpty(withoutSlash).replace(/-/g, "_");
 }
 
+/** Normalizes a custom command description without changing user text content. */
 export function normalizeCommandDescription(value: string): string {
   return value.trim();
 }
 
+/**
+ * Validates custom command entries and returns only normalized accepted commands.
+ */
 export function resolveCustomCommands(params: {
   commands?: CustomCommandInput[] | null;
   reservedCommands?: Set<string>;
@@ -98,6 +112,8 @@ export function resolveCustomCommands(params: {
       continue;
     }
     if (checkDuplicates) {
+      // Only accepted commands enter the duplicate set; invalid earlier entries
+      // do not block fixes later in the list.
       seen.add(normalized);
     }
     resolved.push({ command: normalized, description });

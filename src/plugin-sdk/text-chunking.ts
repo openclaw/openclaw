@@ -5,6 +5,8 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
   return chunkTextByBreakResolver(text, limit, (window) => {
     const lastNewline = window.lastIndexOf("\n");
     const lastSpace = window.lastIndexOf(" ");
+    // Preserve paragraph boundaries before word boundaries; the shared chunker
+    // falls back to the hard limit when neither break appears in the window.
     return lastNewline > 0 ? lastNewline : lastSpace;
   });
 }

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelId } from "./types.public.js";
 
+/** Creates a channel-owned conversation binding manager when the plugin exposes one. */
 export async function createChannelConversationBindingManager(params: {
   channelId: ChannelId;
   cfg: OpenClawConfig;
@@ -17,6 +18,7 @@ export async function createChannelConversationBindingManager(params: {
   });
 }
 
+/** Updates idle timeout metadata for runtime conversation bindings targeting a session key. */
 export function setChannelConversationBindingIdleTimeoutBySessionKey(params: {
   channelId: ChannelId;
   targetSessionKey: string;
@@ -40,6 +42,7 @@ export function setChannelConversationBindingIdleTimeoutBySessionKey(params: {
   });
 }
 
+/** Updates max-age metadata for runtime conversation bindings targeting a session key. */
 export function setChannelConversationBindingMaxAgeBySessionKey(params: {
   channelId: ChannelId;
   targetSessionKey: string;

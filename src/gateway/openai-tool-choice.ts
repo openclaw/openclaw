@@ -1,21 +1,26 @@
-// Shared OpenAI-compatible `tool_choice` contract for the Chat Completions
-// (`/v1/chat/completions`) and Responses (`/v1/responses`) HTTP endpoints. Both
-// accept `required` and pinned-function choices for caller-supplied client tools.
-// The agent runtime cannot force every upstream provider, so the HTTP boundary
-// narrows exposed tools, nudges the model, then rejects turns without a matching
-// structured client-tool call. Keeping this here keeps the endpoints aligned.
-
+/**
+ * Shared OpenAI-compatible `tool_choice` constraint for Chat Completions and
+ * Responses. The HTTP boundary uses this narrow shape so both endpoints enforce
+ * caller-supplied client-tool requirements the same way.
+ */
 export type ToolChoiceConstraint = { type: "required" } | { type: "function"; name: string };
 
+/**
+ * Produces the system-prompt nudge paired with endpoint-level validation.
+ * Providers may ignore the prompt, so callers must still validate the returned
+ * structured client-tool calls before emitting a response.
+ */
 export function toolChoiceConstraintPrompt(constraint: ToolChoiceConstraint): string {
   return constraint.type === "function"
     ? `You must call the ${constraint.name} tool before responding.`
     : "You must call one of the available tools before responding.";
 }
 
-// True when no constraint is active, or the agent produced a structured tool
-// call that honors it: any call for `required`, a name match for a pinned
-// function. Callers reject the turn when this returns false.
+/**
+ * Returns true when no constraint is active, or when the agent produced a
+ * structured tool call that honors it. `required` accepts any call; pinned
+ * functions require a name match so callers can reject non-compliant turns.
+ */
 export function isToolChoiceConstraintSatisfied(params: {
   constraint: ToolChoiceConstraint | undefined;
   pendingToolCalls: ReadonlyArray<{ name: string }> | undefined;
@@ -33,6 +38,10 @@ export function isToolChoiceConstraintSatisfied(params: {
   return pendingToolCalls.some((call) => call.name === constraint.name);
 }
 
+/**
+ * Builds the shared OpenAI-compatible error text used after prompt steering and
+ * tool narrowing fail to produce a matching structured client-tool call.
+ */
 export function resolveUnsatisfiedToolChoiceMessage(constraint: ToolChoiceConstraint): string {
   return constraint.type === "function"
     ? `tool_choice required a ${constraint.name} tool call, but the agent did not produce one`

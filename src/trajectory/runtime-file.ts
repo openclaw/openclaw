@@ -10,6 +10,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Confirms a candidate runtime file is a regular file and not a swapped symlink. */
 export async function isRegularNonSymlinkFile(filePath: string): Promise<boolean> {
   try {
     const linkStat = await fsp.lstat(filePath);
@@ -23,6 +24,7 @@ export async function isRegularNonSymlinkFile(filePath: string): Promise<boolean
   }
 }
 
+/** Reads a session pointer only when its runtime target still looks session-owned. */
 async function readRuntimePointerFile(
   sessionFile: string,
   sessionId: string,
@@ -57,6 +59,7 @@ async function readRuntimePointerFile(
   }
 }
 
+/** Resolves the best existing runtime sidecar for export, preferring explicit input. */
 export async function resolveTrajectoryRuntimeFile(params: {
   runtimeFile?: string;
   sessionFile: string;

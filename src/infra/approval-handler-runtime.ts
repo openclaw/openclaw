@@ -86,6 +86,7 @@ type WrappedPendingContent = {
   payload: unknown;
 };
 
+/** Consume tracked entries for finalization, falling back to runtime-provided entries after restart. */
 function consumeActiveWrappedEntries(
   activeEntries: Map<string, ActiveApprovalEntries>,
   requestId: string,
@@ -96,6 +97,7 @@ function consumeActiveWrappedEntries(
   return entries;
 }
 
+/** Run finalization for each entry without letting one channel cleanup failure abort the rest. */
 async function finalizeWrappedEntries(params: {
   entries: WrappedPendingEntry[];
   phase: "resolved" | "expired";
@@ -115,6 +117,7 @@ async function finalizeWrappedEntries(params: {
   }
 }
 
+/** Unbind all still-active pending entries during handler stop. */
 async function unbindWrappedEntries(params: {
   entries: WrappedPendingEntry[];
   request: ApprovalRequest;
@@ -147,6 +150,7 @@ async function unbindWrappedEntries(params: {
   }
 }
 
+/** Apply the channel-specific resolved/expired action to one delivered native entry. */
 async function applyApprovalFinalAction(params: {
   nativeRuntime: ChannelApprovalNativeRuntimeAdapter;
   baseContext: ChannelApprovalCapabilityHandlerContext;
@@ -176,11 +180,17 @@ async function applyApprovalFinalAction(params: {
         entry: params.wrapped.entry,
         phase: params.phase,
       });
-
+    // Clearing actions is the full final state; fall through to leave without more transport.
     case "leave":
   }
 }
 
+/**
+ * Normalizes a strongly typed channel runtime spec into the shared native runtime adapter shape.
+ *
+ * Channel plugins keep their concrete view/payload/entry types at authoring time; the shared
+ * runtime consumes the erased adapter shape so one gateway runtime can drive all channel clients.
+ */
 export function createChannelApprovalNativeRuntimeAdapter<
   TPendingPayload,
   TPreparedTarget,
@@ -365,14 +375,18 @@ export type ChannelApprovalHandlerAdapter<
   TRequest extends ApprovalRequest = ApprovalRequest,
   TResolved extends ApprovalResolved = ApprovalResolved,
 > = {
+  /** Runtime identity, config, event selection, and request ownership hooks. */
   runtime: ChannelApprovalHandlerRuntimeSpec<TRequest>;
+  /** Builds the channel-specific pending payload before target preparation/delivery. */
   content: ChannelApprovalHandlerContentSpec<TPendingContent, TRequest>;
+  /** Prepares native targets and delivers pending approval entries. */
   transport: ChannelApprovalHandlerTransportSpec<
     TPendingEntry,
     TPreparedTarget,
     TPendingContent,
     TRequest
   >;
+  /** Finalizes delivered entries and handles delivery lifecycle callbacks. */
   lifecycle: ChannelApprovalHandlerLifecycleSpec<
     TPendingEntry,
     TPreparedTarget,
@@ -382,6 +396,12 @@ export type ChannelApprovalHandlerAdapter<
   >;
 };
 
+/**
+ * Creates a shared approval handler from already-normalized channel runtime pieces.
+ *
+ * This is the low-level composition path used after a channel has already split runtime identity,
+ * pending-content construction, delivery, and lifecycle cleanup into separate adapters.
+ */
 export function createChannelApprovalHandler<
   TPendingEntry,
   TPreparedTarget,
@@ -429,6 +449,7 @@ export function createChannelApprovalHandler<
   });
 }
 
+/** Build a channel approval handler from a plugin approval capability. */
 export async function createChannelApprovalHandlerFromCapability(params: {
   capability?: Pick<ChannelApprovalCapability, "native" | "nativeRuntime"> | null;
   label: string;
@@ -545,6 +566,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         });
         if (stopped) {
           if (binding !== undefined && binding !== null) {
+            // Stop won the race after binding; use the binding-specific cleanup contract.
             await nativeRuntime.interactions?.unbindPending?.({
               ...baseContext,
               entry,

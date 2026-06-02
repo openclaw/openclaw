@@ -50,7 +50,11 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   };
 }
 
-/** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
+/**
+ * Create a read-only registry for gateway method lookup, listing, and policy
+ * metadata. Names are normalized once up front and duplicates are rejected so
+ * dispatch, advertisement, and authorization all see the same descriptor.
+ */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
 ): GatewayMethodRegistry {
@@ -78,11 +82,19 @@ export function createGatewayMethodRegistry(
   };
 }
 
-/** Converts a plain handler map into scoped descriptors owned by one gateway surface. */
+/**
+ * Convert a plain handler map into scoped descriptors owned by one gateway
+ * surface. Every handler must receive either a per-method or default scope so
+ * helper-created methods cannot bypass authorization metadata.
+ */
 export function createGatewayMethodDescriptorsFromHandlers(params: {
+  /** Handler map keyed by raw gateway method name. */
   handlers: Record<string, GatewayMethodHandler>;
+  /** Shared owner metadata attached to every generated descriptor. */
   owner: GatewayMethodOwner;
+  /** Fallback scope used when `scopes` has no method-specific entry. */
   defaultScope?: OperatorScope;
+  /** Per-method scope overrides for methods that need narrower or broader auth. */
   scopes?: Partial<Record<string, OperatorScope>>;
 }): GatewayMethodDescriptorInput[] {
   return Object.entries(params.handlers).map(([name, handler]) => {
@@ -100,11 +112,19 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
   });
 }
 
-/** Creates a plugin-owned method descriptor with plugin namespace scope normalization. */
+/**
+ * Create a plugin-owned method descriptor with plugin namespace scope
+ * normalization. Protected gateway namespaces may upgrade the requested scope
+ * before the descriptor reaches the registry.
+ */
 export function createPluginGatewayMethodDescriptor(params: {
+  /** Owning plugin id attached to the descriptor owner metadata. */
   pluginId: string;
+  /** Raw gateway method name before descriptor normalization. */
   name: string;
+  /** Handler invoked when this plugin method is dispatched. */
   handler: GatewayMethodHandler;
+  /** Requested operator scope; protected method namespaces may be upgraded. */
   scope?: OperatorScope;
 }): GatewayMethodDescriptorInput {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
@@ -116,7 +136,11 @@ export function createPluginGatewayMethodDescriptor(params: {
   };
 }
 
-/** Resolves plugin method descriptors, including the legacy handler-only registry shape. */
+/**
+ * Resolve plugin method descriptors, including the legacy handler-only registry
+ * shape. Handler-only plugins default to admin scope until they can provide
+ * explicit descriptor metadata.
+ */
 export function createPluginGatewayMethodDescriptors(
   registry: Pick<PluginRegistry, "gatewayHandlers"> &
     Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,

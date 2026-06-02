@@ -49,6 +49,7 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
   return explicitHome;
 }
 
+/** Resolves OpenClaw's effective home directory, honoring OPENCLAW_HOME before OS homes. */
 export function resolveEffectiveHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -57,6 +58,7 @@ export function resolveEffectiveHomeDir(
   return raw ? path.resolve(raw) : undefined;
 }
 
+/** Resolves the operating-system home directory without applying OPENCLAW_HOME. */
 export function resolveOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -64,6 +66,7 @@ export function resolveOsHomeDir(
   const raw = resolveRawOsHomeDir(env, homedir);
   return raw ? path.resolve(raw) : undefined;
 }
+/** Resolves the effective OpenClaw home directory, falling back to cwd when unavailable. */
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -71,6 +74,7 @@ export function resolveRequiredHomeDir(
   return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
 }
 
+/** Resolves the OS home directory, falling back to cwd when unavailable. */
 export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -78,6 +82,7 @@ export function resolveRequiredOsHomeDir(
   return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
 }
 
+/** Expands a leading `~` using the effective OpenClaw home while leaving other paths untouched. */
 export function expandHomePrefix(
   input: string,
   opts?: {
@@ -98,6 +103,7 @@ export function expandHomePrefix(
   return input.replace(/^~(?=$|[\\/])/, home);
 }
 
+/** Resolves a path after expanding `~` against the effective OpenClaw home. */
 export function resolveHomeRelativePath(
   input: string,
   opts?: {
@@ -120,6 +126,7 @@ export function resolveHomeRelativePath(
   return path.resolve(trimmed);
 }
 
+/** Back-compat wrapper for resolving user-entered paths against the effective home. */
 export function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -128,6 +135,7 @@ export function resolveUserPath(
   return resolveHomeRelativePath(input, { env, homedir });
 }
 
+/** Resolves a path after expanding `~` against the OS home only. */
 export function resolveOsHomeRelativePath(
   input: string,
   opts?: {

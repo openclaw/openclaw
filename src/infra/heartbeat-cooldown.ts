@@ -1,31 +1,24 @@
-// Centralized cooldown decision for heartbeat wakes.
-//
-// Background: a heartbeat run can be triggered by many wake sources — the
-// scheduler's interval tick, a manual user request, a backgrounded `process.start`
-// exit, a cron tick, an ACP spawn stream event, etc. Different sources used to
-// take different code paths through the dispatcher, and historically the
-// `nextDueMs` cooldown gate was only enforced on the `interval` branch. That let
-// event-driven wakes (especially `exec-event`) fire heartbeat runs back-to-back
-// when a heartbeat agent's tools triggered more wakes (#17797 → #75436).
-//
-// This module owns the single decision: "given this wake, should we run now or
-// defer it?" Both the targeted and broadcast dispatch branches must call
-// `shouldDeferWake` so the gate can never be forgotten on one path.
-
 import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.js";
 
-// Default minimum spacing between heartbeat runs for the same agent, regardless
-// of configured `every`. Even when `nextDueMs` is enforced, two wakes arriving
-// within milliseconds can race the schedule update; this floor prevents that.
+/**
+ * Default minimum spacing between heartbeat runs for the same agent, regardless
+ * of configured `every`. This protects the race where a second wake arrives
+ * before `advanceAgentSchedule` has written the next due timestamp.
+ */
 export const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
 
-// Flood guard: if more than this many wakes for the same agent fall within the
-// flood window, the dispatcher logs a warning and forces the wake to defer to
-// the next scheduled tick. Tuned so a normal heartbeat that legitimately uses
-// `manual` retry doesn't trip it but a feedback loop does.
+/**
+ * Window used to detect heartbeat feedback loops from repeated event-driven
+ * wakes such as exec exits, cron handoffs, or ACP spawn stream updates.
+ */
 export const DEFAULT_FLOOD_WINDOW_MS = 60_000;
+/**
+ * Number of recent run starts allowed in the flood window before non-manual
+ * wakes are forced to wait for the next scheduled tick.
+ */
 export const DEFAULT_FLOOD_THRESHOLD = 5;
 
+/** Outcome consumed by targeted and broadcast heartbeat dispatch branches. */
 export type DeferDecision =
   | { defer: false }
   | { defer: true; reason: "not-due" | "min-spacing" | "flood" };
@@ -70,6 +63,10 @@ export type ShouldDeferInput = {
  * `/hooks/wake mode=now`. Event is for external/system notifications such as
  * background exec exits, node notification changes, hook/cron next-heartbeat
  * handoffs, ACP spawn stream updates, and retry wakes.
+ *
+ * Keep targeted and broadcast dispatch branches on this single decision point.
+ * Historically, only interval wakes respected `nextDueMs`, which let exec-event
+ * feedback loops run heartbeat agents back-to-back.
  *
  * Additional gates layered on top of the reason matrix:
  *

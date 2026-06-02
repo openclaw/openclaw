@@ -8,6 +8,7 @@ import type {
   ResolvedIngressAllowlist,
 } from "./types.js";
 
+/** Returns the highest-priority access-group failure reason for one resolved allowlist. */
 export function allowlistFailureReason(
   allowlist: ResolvedIngressAllowlist,
 ): IngressReasonCode | null {
@@ -23,6 +24,7 @@ export function allowlistFailureReason(
   return null;
 }
 
+/** Builds diagnostics that expose counts and opaque ids without raw allowlist values. */
 export function redactedAllowlistDiagnostics(
   allowlist: ResolvedIngressAllowlist,
   reasonCode: IngressReasonCode,
@@ -72,6 +74,7 @@ function mergeResolvedAllowlists(
   };
 }
 
+/** Removes dangerous mutable identifier matches unless policy explicitly enables them. */
 export function applyMutableIdentifierPolicy(
   allowlist: ResolvedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
@@ -109,6 +112,7 @@ export function applyMutableIdentifierPolicy(
   };
 }
 
+/** Resolves the effective group sender allowlist after fallback and route sender policy. */
 export function effectiveGroupSenderAllowlist(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;

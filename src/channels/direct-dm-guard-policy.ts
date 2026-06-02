@@ -1,10 +1,15 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
 export type DirectDmPreCryptoGuardPolicy = {
+  /** Provider message kinds accepted before decrypted content is available. */
   allowedKinds: readonly number[];
+  /** Maximum future timestamp skew accepted before rejecting a message. */
   maxFutureSkewSec: number;
+  /** Maximum encrypted payload bytes accepted before crypto work starts. */
   maxCiphertextBytes: number;
+  /** Maximum decrypted plaintext bytes accepted after crypto succeeds. */
   maxPlaintextBytes: number;
+  /** Per-sender and global limits applied before expensive crypto/decode work. */
   rateLimit: {
     windowMs: number;
     maxPerSenderPerWindow: number;

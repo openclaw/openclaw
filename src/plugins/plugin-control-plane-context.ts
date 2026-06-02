@@ -6,10 +6,13 @@ import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-reg
 import { resolvePluginCacheInputs, type PluginSourceRoots } from "./roots.js";
 
 export type PluginDiscoveryContext = {
+  /** Roots that plugin discovery scans for bundled, global, and workspace plugins. */
   roots: PluginSourceRoots;
+  /** Extra explicit plugin load paths, kept in precedence order. */
   loadPaths: readonly string[];
 };
 
+/** Stable inputs that decide whether plugin control-plane metadata/cache entries are reusable. */
 export type PluginControlPlaneContext = {
   discovery: PluginDiscoveryContext;
   policyFingerprint: string;
@@ -24,6 +27,7 @@ export type ResolvePluginDiscoveryContextParams = {
   loadPaths?: readonly string[];
 };
 
+/** Params used to build the full plugin control-plane cache/fingerprint context. */
 export type ResolvePluginControlPlaneContextParams = ResolvePluginDiscoveryContextParams & {
   activationFingerprint?: string;
   index?: InstalledPluginIndex;
@@ -48,16 +52,19 @@ export function resolvePluginDiscoveryContext(
   });
 }
 
+/** Resolves and fingerprints plugin discovery roots/load paths for cache keys. */
 export function resolvePluginDiscoveryFingerprint(
   params: ResolvePluginDiscoveryContextParams = {},
 ): string {
   return fingerprintPluginDiscoveryContext(resolvePluginDiscoveryContext(params));
 }
 
+/** Fingerprints already-resolved plugin discovery context without re-reading config/env. */
 export function fingerprintPluginDiscoveryContext(context: PluginDiscoveryContext): string {
   return hashJson(context);
 }
 
+/** Resolves the plugin control-plane context from discovery, policy, inventory, and activation inputs. */
 export function resolvePluginControlPlaneContext(
   params: ResolvePluginControlPlaneContextParams = {},
 ): PluginControlPlaneContext {
@@ -74,6 +81,7 @@ export function resolvePluginControlPlaneContext(
   };
 }
 
+/** Resolves and fingerprints the complete plugin control-plane context. */
 export function resolvePluginControlPlaneFingerprint(
   params: ResolvePluginControlPlaneContextParams = {},
 ): string {

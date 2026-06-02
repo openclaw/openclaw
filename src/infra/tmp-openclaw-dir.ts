@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 
+/** Preferred shared OpenClaw temp root on POSIX when ownership and mode checks pass. */
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
 
 type MaybeNodeError = { code?: string };
@@ -13,6 +14,10 @@ type SecureDirStat = {
   uid?: number;
 };
 
+/**
+ * Dependency injection hooks for temp-dir selection. Tests use these to model
+ * permissions and platform behavior without mutating real system temp roots.
+ */
 export type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
   chmodSync?: (path: string, mode: number) => void;
@@ -33,6 +38,11 @@ function isNodeErrorWithCode(err: unknown, code: string): err is MaybeNodeError 
   );
 }
 
+/**
+ * Resolve a writable OpenClaw temp directory with ownership, symlink, and
+ * world-writable checks. POSIX prefers `/tmp/openclaw` when safe; otherwise it
+ * falls back to a user-specific directory under the platform temp root.
+ */
 export function resolvePreferredOpenClawTmpDir(
   options: ResolvePreferredOpenClawTmpDirOptions = {},
 ): string {

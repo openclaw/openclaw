@@ -101,6 +101,11 @@ function buildNodePairingRequestInput(params: {
   };
 }
 
+/**
+ * Reconcile a connecting node's declared surfaces with its approved pairing.
+ * The returned effective surfaces are the only capabilities/commands/permissions
+ * the gateway may expose before an operator accepts any pending upgrade request.
+ */
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
@@ -164,6 +169,8 @@ export async function reconcileNodePairingOnConnect(params: {
     params.pairedNode.permissions,
     declaredPermissions,
   );
+  // Keep already approved surfaces active during a pending upgrade, but never
+  // grant a newly declared surface until the pairing request is accepted.
   const effectiveApprovedDeclaredCaps = intersectApprovalSurfaceList({
     approved: approvedCaps,
     declared: declaredCaps,

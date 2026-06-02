@@ -1,5 +1,3 @@
-// Runtime helpers for migration providers that need filesystem side effects.
-
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +17,7 @@ import {
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
 
+/** Wraps migration config runtime reads so a multi-item apply sees its own prior writes. */
 export function withCachedMigrationConfigRuntime(
   runtime: MigrationProviderContext["runtime"] | undefined,
   fallbackConfig: MigrationProviderContext["config"],
@@ -32,6 +31,7 @@ export function withCachedMigrationConfigRuntime(
   }
   let cachedConfig: MigrationProviderContext["config"] | undefined;
   const current = (): ReturnType<typeof configApi.current> => {
+    // Clone once so preview/apply code cannot mutate the live runtime config snapshot by reference.
     cachedConfig ??= structuredClone(
       (configApi.current() ?? fallbackConfig) as MigrationProviderContext["config"],
     );
@@ -107,6 +107,7 @@ function readArchiveRelativePath(item: MigrationItem): string {
   const detailPath = item.details?.archiveRelativePath;
   const raw = typeof detailPath === "string" && detailPath.trim() ? detailPath : undefined;
   const fallback = item.source ? path.basename(item.source) : item.id;
+  // Archive paths come from migration details, so strip traversal before writing into reportDir.
   const normalized = path
     .normalize(raw ?? fallback)
     .split(path.sep)
@@ -130,6 +131,7 @@ async function resolveUniqueArchivePath(
   return candidate;
 }
 
+/** Archives a migration source into the report directory without following symlink sources. */
 export async function archiveMigrationItem(
   item: MigrationItem,
   reportDir: string,
@@ -150,6 +152,7 @@ export async function archiveMigrationItem(
       recursive: true,
       force: false,
       errorOnExist: true,
+      // Preserve link bytes inside copied directories; top-level symlink sources are rejected above.
       verbatimSymlinks: true,
     });
     return {
@@ -166,6 +169,7 @@ export async function archiveMigrationItem(
   }
 }
 
+/** Copies a migration file/directory item, preserving a report backup before overwrite mode writes. */
 export async function copyMigrationFileItem(
   item: MigrationItem,
   reportDir: string,
@@ -201,6 +205,7 @@ export async function copyMigrationFileItem(
   }
 }
 
+/** Writes redacted JSON and human-readable migration summaries into the report directory. */
 export async function writeMigrationReport(
   result: MigrationApplyResult,
   opts: { title?: string } = {},

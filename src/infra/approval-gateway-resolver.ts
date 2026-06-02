@@ -14,6 +14,12 @@ type ResolveApprovalOverGatewayParams = {
   clientDisplayName?: string;
 };
 
+/**
+ * Resolves an exec or plugin approval through the operator gateway client.
+ *
+ * Plugin-prefixed ids and explicit plugin resolution go straight to plugin.approval.resolve. Other
+ * ids try exec first, with optional plugin fallback only when the gateway reports not-found.
+ */
 export async function resolveApprovalOverGateway(
   params: ResolveApprovalOverGatewayParams,
 ): Promise<void> {
@@ -43,6 +49,8 @@ export async function resolveApprovalOverGateway(
         if (!params.allowPluginFallback || !isApprovalNotFoundError(err)) {
           throw err;
         }
+        // Some callers only have a short approval id; when exec lookup misses, optionally try the
+        // plugin store before surfacing not-found.
         await requestResolve("plugin.approval.resolve");
       }
     },

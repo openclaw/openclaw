@@ -12,6 +12,7 @@ const loadOutboundAdapterFromRegistry = createChannelRegistryLoader<ChannelOutbo
   (entry) => entry.plugin.outbound,
 );
 
+/** Loads the lightweight outbound adapter for a channel without importing full channel setup paths. */
 export async function loadChannelOutboundAdapter(
   id: ChannelId,
 ): Promise<ChannelOutboundAdapter | undefined> {

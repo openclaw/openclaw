@@ -30,6 +30,7 @@ function dedupeAllowlistEntries(entries: string[]): string[] {
   return deduped;
 }
 
+/** Appends resolved ids to an allowlist while preserving first-seen casing/order. */
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
@@ -37,6 +38,7 @@ export function mergeAllowlist(params: {
   return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
 }
 
+/** Builds resolved/unresolved summaries plus id additions from resolver output. */
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
   opts?: { formatResolved?: (entry: T) => string; formatUnresolved?: (entry: T) => string },
@@ -93,6 +95,7 @@ export function canonicalizeAllowlistWithResolvedIds<
   return dedupeAllowlistEntries(canonicalized);
 }
 
+/** Rewrites nested `users` arrays in channel config entries after allowlist resolution. */
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
@@ -110,6 +113,7 @@ export function patchAllowlistUsersInConfigEntries<
     if (!Array.isArray(users) || users.length === 0) {
       continue;
     }
+    // Merge keeps user-facing aliases; canonicalize replaces aliases with stable ids when possible.
     const resolvedUsers =
       params.strategy === "canonicalize"
         ? canonicalizeAllowlistWithResolvedIds({
@@ -131,6 +135,7 @@ export function patchAllowlistUsersInConfigEntries<
   return nextEntries as TEntries;
 }
 
+/** Collects resolvable user aliases from one config entry, excluding wildcard entries. */
 export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entry: unknown): void {
   if (!entry || typeof entry !== "object") {
     return;
@@ -147,6 +152,7 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
   }
 }
 
+/** Logs compact allowlist resolution mapping output when there is anything to report. */
 export function summarizeMapping(
   label: string,
   mapping: string[],

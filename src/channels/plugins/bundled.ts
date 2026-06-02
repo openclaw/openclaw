@@ -187,6 +187,8 @@ function resolveBundledChannelBoundaryRoot(params: {
   ].join("\0");
   const cached = bundledChannelBoundaryRoots.get(cacheKey);
   if (cached) {
+    // Maintain LRU order because local tests can exercise many synthetic
+    // bundled roots while the real process normally has one stable root.
     bundledChannelBoundaryRoots.delete(cacheKey);
     bundledChannelBoundaryRoots.set(cacheKey, cached);
     return cached;
@@ -273,6 +275,8 @@ function loadGeneratedBundledChannelModule(params: {
       boundaryRootDir: boundaryRoot,
     });
   } catch (error) {
+    // Source checkouts and package-local dist builds may import through SDK
+    // aliases that only the cached loader knows how to rewrite.
     const canRetryWithCachedLoader =
       isSourceModulePath(modulePath) ||
       (isPackageLocalBundledDistModulePath({
@@ -409,6 +413,8 @@ function resolveActiveBundledChannelLoadScope(env: NodeJS.ProcessEnv = process.e
   const rootScope = resolveBundledChannelRootScope(env);
   const cachedContext = bundledChannelLoadContextsByRoot.get(rootScope.cacheKey);
   if (cachedContext) {
+    // The active bundled root is part of the runtime identity. Partition lazy
+    // entries by root so tests and overrides cannot reuse another tree's module.
     bundledChannelLoadContextsByRoot.delete(rootScope.cacheKey);
     bundledChannelLoadContextsByRoot.set(rootScope.cacheKey, cachedContext);
     return {
@@ -524,6 +530,10 @@ export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
 }
 
+/**
+ * Returns whether bundled package metadata advertises a setup-only capability
+ * without forcing the setup entrypoint to load.
+ */
 export function hasBundledChannelPackageSetupFeature(
   id: ChannelId,
   feature: BundledChannelPackageSetupFeature,
@@ -549,6 +559,8 @@ function resolveBundledChannelMetadata(
     return undefined;
   }
   for (const metadata of listBundledChannelMetadata(rootScope)) {
+    // Metadata can expose aliases through `manifest.channels`; cache each alias
+    // to the same package so pre-registry callers resolve channel ids uniformly.
     const ids = new Set<ChannelId>([metadata.manifest.id, ...(metadata.manifest.channels ?? [])]);
     for (const metadataId of ids) {
       loadContext.metadataById.set(metadataId, metadata);
@@ -802,6 +814,10 @@ export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
   });
 }
 
+/**
+ * Loads setup entrypoints for every bundled channel that exposes setup-time
+ * plugin surface such as config promotion, migration, or session repair.
+ */
 export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
   return listBundledChannelPluginIdsForRoot(rootScope).flatMap((id) => {
@@ -810,6 +826,11 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
   });
 }
 
+/**
+ * Lists bundled setup plugins that explicitly advertise a setup feature.
+ * Package metadata narrows the scan first; the loaded entrypoint remains the
+ * final contract check before exposing the plugin.
+ */
 export function listBundledChannelSetupPluginsByFeature(
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
   options: { config?: OpenClawConfig } = {},
@@ -827,6 +848,10 @@ export function listBundledChannelSetupPluginsByFeature(
   });
 }
 
+/**
+ * Returns legacy session surfaces from bundled setup entrypoints without
+ * requiring the normal channel registry to be bootstrapped first.
+ */
 export function listBundledChannelLegacySessionSurfaces(
   options: {
     config?: OpenClawConfig;
@@ -849,6 +874,10 @@ export function listBundledChannelLegacySessionSurfaces(
   });
 }
 
+/**
+ * Returns setup-time legacy state migration detectors from bundled channels.
+ * Used by doctor/setup paths before a full channel plugin registry exists.
+ */
 export function listBundledChannelLegacyStateMigrationDetectors(
   options: {
     config?: OpenClawConfig;
@@ -873,6 +902,11 @@ export function listBundledChannelLegacyStateMigrationDetectors(
   });
 }
 
+/**
+ * Checks optional capabilities from a generated bundled channel entrypoint.
+ * This is a fast path for callers that need a feature gate without loading the
+ * full channel plugin implementation.
+ */
 export function hasBundledChannelEntryFeature(
   id: ChannelId,
   feature: keyof NonNullable<BundledChannelEntryRuntimeContract["features"]>,
@@ -882,6 +916,10 @@ export function hasBundledChannelEntryFeature(
   return hasChannelEntryFeature(entry, feature);
 }
 
+/**
+ * Loads only the bundled account inspector, when the channel exposes the
+ * lighter entrypoint method.
+ */
 export function getBundledChannelAccountInspector(
   id: ChannelId,
 ): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
@@ -889,16 +927,28 @@ export function getBundledChannelAccountInspector(
   return getBundledChannelAccountInspectorForRoot(id, rootScope, loadContext);
 }
 
+/**
+ * Loads a bundled channel plugin from the active bundled root and caches both
+ * successful and failed lookups for this process.
+ */
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
   return getBundledChannelPluginForRoot(id, rootScope, loadContext);
 }
 
+/**
+ * Loads only the bundled secrets surface when the generated entrypoint exposes
+ * it, falling back to the full plugin secrets as needed.
+ */
 export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
   return getBundledChannelSecretsForRoot(id, rootScope, loadContext);
 }
 
+/**
+ * Loads the setup-time bundled channel plugin for doctor, setup, and migration
+ * flows. `env` selects the bundled root override for tests and packaged runs.
+ */
 export function getBundledChannelSetupPlugin(
   id: ChannelId,
   env: NodeJS.ProcessEnv = process.env,
@@ -907,6 +957,9 @@ export function getBundledChannelSetupPlugin(
   return getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
 }
 
+/**
+ * Loads setup-time secrets from a bundled setup entrypoint, if available.
+ */
 export function getBundledChannelSetupSecrets(
   id: ChannelId,
   env: NodeJS.ProcessEnv = process.env,
@@ -915,6 +968,9 @@ export function getBundledChannelSetupSecrets(
   return getBundledChannelSetupSecretsForRoot(id, rootScope, loadContext);
 }
 
+/**
+ * Returns a bundled channel plugin or throws with a stable missing-plugin error.
+ */
 export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
   const plugin = getBundledChannelPlugin(id);
   if (!plugin) {
@@ -923,6 +979,11 @@ export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
   return plugin;
 }
 
+/**
+ * Passes process runtime helpers into a generated bundled channel entrypoint.
+ * This is intentionally explicit so bundled modules do not import core runtime
+ * state directly.
+ */
 export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime): void {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
   const setter = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry

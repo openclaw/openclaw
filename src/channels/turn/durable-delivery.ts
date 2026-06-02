@@ -21,8 +21,11 @@ export type DurableInboundReplyDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
   "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
 > & {
+  /** Explicit destination override; null/blank falls back to inbound context targets. */
   to?: string | null;
+  /** Explicit reply target override; null suppresses source-message reply fallback. */
   replyToId?: string | null;
+  /** Precomputed durable requirements when the caller needs stricter capability checks. */
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
@@ -54,6 +57,7 @@ export type DurableInboundReplyDeliveryResult =
   | { status: "failed"; error: unknown; sentBeforeError?: true };
 
 function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): string | undefined {
+  // OriginatingTo preserves the pre-normalized inbound destination when To is rewritten later.
   return (
     normalizeOptionalString(params.to) ??
     normalizeOptionalString(params.ctxPayload.OriginatingTo) ??
@@ -79,6 +83,7 @@ export function resolveDurableInboundReplyToId(
 function resolveDurableInboundReplyThreadId(
   params: DurableInboundReplyDeliveryParams,
 ): string | number | null | undefined {
+  // Presence of the key is meaningful: threadId: null intentionally suppresses context fallback.
   if ("threadId" in params) {
     return params.threadId;
   }
@@ -157,6 +162,8 @@ export async function deliverInboundReplyWithMessageSendContext(
       threadId,
       silent: params.silent,
     });
+  // Unknown-send reconciliation needs a required queue policy so ambiguous platform outcomes can
+  // be replayed or reconciled instead of silently falling back to legacy delivery.
   const durability =
     requiredCapabilities.reconcileUnknownSend === true ? "required" : "best_effort";
 
@@ -227,6 +234,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     visibleReplySent: send.status === "sent",
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
+  // Suppressed durable sends still count as handled so legacy delivery does not duplicate them.
   if (send.status === "suppressed") {
     return { status: "handled_no_send", reason: "no_visible_result", delivery };
   }

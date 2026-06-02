@@ -46,6 +46,7 @@ function resolveMaterializedConfiguredBinding(params: {
   };
 }
 
+/** Compiles configured bindings once and reports their diagnostic counts. */
 export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }): {
   bindingCount: number;
   channelCount: number;
@@ -53,6 +54,7 @@ export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }):
   return countCompiledBindingRegistry(primeCompiledBindingRegistry(params.cfg));
 }
 
+/** Resolves a configured binding record from raw conversation coordinates. */
 export function resolveConfiguredBindingRecord(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -75,6 +77,7 @@ export function resolveConfiguredBindingRecord(params: {
   });
 }
 
+/** Resolves a configured binding record from a canonical conversation ref. */
 export function resolveConfiguredBindingRecordForConversation(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
@@ -86,6 +89,7 @@ export function resolveConfiguredBindingRecordForConversation(params: {
   return resolved.materializedTarget;
 }
 
+/** Resolves the full configured binding match, compiled rule, record, and stateful target. */
 export function resolveConfiguredBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
@@ -102,6 +106,7 @@ export function resolveConfiguredBinding(params: {
   };
 }
 
+/** Resolves a configured binding record by target session key from the compiled registry. */
 export function resolveConfiguredBindingRecordBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

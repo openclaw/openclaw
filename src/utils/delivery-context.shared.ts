@@ -16,6 +16,7 @@ import { normalizeMessageChannel } from "./message-channel-core.js";
 import { isDeliverableMessageChannel } from "./message-channel-normalize.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
+/** Normalize a delivery context into the canonical channel-route target shape. */
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {
     return undefined;
@@ -44,6 +45,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   return normalized;
 }
 
+/** Normalize a plugin SDK channel route into the compact shared route reference. */
 export function normalizeDeliveryChannelRoute(route?: unknown): ChannelRouteRef | undefined {
   if (!route || typeof route !== "object" || Array.isArray(route)) {
     return undefined;
@@ -61,6 +63,7 @@ export function normalizeDeliveryChannelRoute(route?: unknown): ChannelRouteRef 
   });
 }
 
+/** Convert a channel route back to a serializable delivery context. */
 export function deliveryContextFromChannelRoute(
   route?: ChannelRouteRef,
 ): DeliveryContext | undefined {
@@ -73,6 +76,7 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
+/** Convert a delivery context into the route reference used by channel plugins. */
 export function channelRouteFromDeliveryContext(
   context?: DeliveryContext,
 ): ChannelRouteRef | undefined {
@@ -98,6 +102,7 @@ function mergeRouteMetadataWithDeliveryContext(
   });
 }
 
+/** Detect route contexts that are internal session markers, not final delivery targets. */
 function isInternalRouteContext(context?: DeliveryContext): boolean {
   const channel = context?.channel;
   return Boolean(
@@ -150,6 +155,8 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     threadId: source.lastThreadId,
   });
   const deliveryContext = normalizeDeliveryContext(source.deliveryContext);
+  // External final delivery beats legacy internal-route hints, but account/thread
+  // metadata from the internal route may still be needed to resume the session.
   const sessionContext =
     isInternalRouteContext(legacyContext) && hasExternalDeliveryTarget(deliveryContext)
       ? mergeExternalDeliveryContextOverInternalRoute(deliveryContext, legacyContext)
@@ -185,6 +192,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   };
 }
 
+/** Recover the best delivery context from modern route fields plus legacy session fields. */
 export function deliveryContextFromSession(
   entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
@@ -204,6 +212,7 @@ export function deliveryContextFromSession(
   return normalizeSessionDeliveryFields(source).deliveryContext;
 }
 
+/** Merge delivery context fields without mixing target fields from different channels. */
 export function mergeDeliveryContext(
   primary?: DeliveryContext,
   fallback?: DeliveryContext,
@@ -233,6 +242,7 @@ export function mergeDeliveryContext(
   });
 }
 
+/** Stable compact key for dedupe/cache lookups that need a route identity. */
 export function deliveryContextKey(context?: DeliveryContext): string | undefined {
   return channelRouteCompactKey(normalizeDeliveryContext(context));
 }

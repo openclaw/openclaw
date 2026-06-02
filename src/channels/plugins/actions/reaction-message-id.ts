@@ -4,6 +4,7 @@ type ReactionToolContext = {
   currentMessageId?: string | number;
 };
 
+/** Resolves the reaction target message id from explicit args or current tool context. */
 export function resolveReactionMessageId(params: {
   args: Record<string, unknown>;
   toolContext?: ReactionToolContext;

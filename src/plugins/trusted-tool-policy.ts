@@ -24,6 +24,7 @@ export type TrustedToolPolicyDiagnosticEntry = {
   pluginName?: string;
 };
 
+/** Returns whether any bundled plugin registered a trusted tool policy. */
 export function hasTrustedToolPolicies(): boolean {
   return copyTrustedPolicyRegistrations(getActivePluginRegistry()).length > 0;
 }
@@ -128,6 +129,8 @@ function trustedPolicyFailureResult(
 }
 
 export function getTrustedToolPolicyDiagnosticEntries(): TrustedToolPolicyDiagnosticEntry[] {
+  // Preserve unreadable registrations as synthetic entries so diagnostics can
+  // show that a fail-closed policy may still affect tool execution.
   return copyTrustedPolicyRegistrations(getActivePluginRegistry()).map((registration) => {
     const entry: TrustedToolPolicyDiagnosticEntry = {
       id: readTrustedPolicyId(registration),
@@ -181,6 +184,9 @@ export async function runTrustedToolPolicies(
       | undefined;
   },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
+  // Trusted policies run before the regular before-tool-call hook pipeline.
+  // Blocks are terminal; params and approval requirements accumulate so later
+  // policies inspect the latest tool shape before the call proceeds.
   const policies = copyTrustedPolicyRegistrations(getActivePluginRegistry());
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
@@ -189,6 +195,8 @@ export async function runTrustedToolPolicies(
   let resolvedSessionConfig: OpenClawConfig | undefined = options?.config;
   let didResolveSessionConfig = Boolean(options?.config);
   const resolveSessionConfig = (): OpenClawConfig | undefined => {
+    // Session extension reads are rare and config loading can be expensive. Keep
+    // resolution lazy and shared across policies in one tool-call evaluation.
     if (!didResolveSessionConfig) {
       didResolveSessionConfig = true;
       try {
@@ -227,6 +235,9 @@ export async function runTrustedToolPolicies(
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
         const cacheKey = pluginId;
+        // Policy callbacks can read several namespaces. Cache each plugin's
+        // session extension state so probing namespaces does not repeat
+        // config/session-file reads during one tool-call evaluation.
         if (!sessionExtensionStateCache.has(cacheKey)) {
           const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
           sessionExtensionStateCache.set(

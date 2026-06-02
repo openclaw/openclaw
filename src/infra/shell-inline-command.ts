@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** POSIX shell flags that introduce an inline command payload. */
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
 
 function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
@@ -26,6 +27,7 @@ const POWERSHELL_COMMAND_FLAGS = [
 const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
 const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
 
+/** PowerShell command/file switches that make the following token executable input. */
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
   ...POWERSHELL_FILE_FLAGS,
@@ -135,6 +137,7 @@ function isPosixShortOption(token: string, option: string): boolean {
   return hasOption;
 }
 
+/** Returns how many argv tokens a POSIX shell option consumes while scanning for -c. */
 export function advancePosixInlineOptionScan(token: string): number {
   const combinedValueCount = combinedSeparateValueOptionCount(token);
   if (combinedValueCount > 0) {
@@ -150,6 +153,10 @@ function isPowerShellOptionToken(token: string): boolean {
   return token.startsWith("-") || /^\/[A-Za-z][A-Za-z0-9]*$/.test(token);
 }
 
+/**
+ * Finds the inline command payload for shell-like CLIs without evaluating argv.
+ * The returned valueTokenIndex points at the argv token that supplied the payload.
+ */
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
@@ -211,6 +218,7 @@ export function resolveInlineCommandMatch(
   return { command: null, valueTokenIndex: null };
 }
 
+/** Resolves PowerShell inline command switches, including prefix and slash forms. */
 export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   command: string | null;
   valueTokenIndex: number | null;
@@ -223,14 +231,17 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   });
 }
 
+/** Returns true for PowerShell flags whose command payload consumes the rest of argv. */
 export function isPowerShellInlineRestCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
+/** Returns true for PowerShell file-mode flags treated as inline executable input. */
 export function isPowerShellInlineFileCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
+/** Detects interactive startup-file risk before the first POSIX inline command flag. */
 export function hasPosixInteractiveStartupBeforeInlineCommand(
   argv: string[],
   flags: ReadonlySet<string>,
@@ -259,6 +270,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   return false;
 }
 
+/** Detects login startup-file risk before the first POSIX inline command flag. */
 export function hasPosixLoginStartupBeforeInlineCommand(
   argv: string[],
   flags: ReadonlySet<string>,
@@ -287,6 +299,7 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   return false;
 }
 
+/** Detects fish init-command options that run before a later inline command. */
 export function hasFishInitCommandOption(argv: string[]): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
@@ -311,6 +324,7 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
   return false;
 }
 
+/** Detects fish's attached -cCOMMAND form, whose payload cannot be safely rebound. */
 export function hasFishAttachedCommandOption(argv: string[]): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();

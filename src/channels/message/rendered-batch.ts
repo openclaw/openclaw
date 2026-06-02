@@ -16,6 +16,7 @@ function collectMediaUrls(payload: ReplyPayload): string[] {
     .filter((url): url is string => Boolean(url));
 }
 
+/** Builds the replayable content-shape summary for one rendered reply payload. */
 function createRenderedMessageBatchPlanItem(
   payload: ReplyPayload,
   index: number,

@@ -213,6 +213,7 @@ function enforceTranscriptionSessionLimits(connId: string): void {
   }
 }
 
+/** Create a Gateway-owned realtime transcription relay session for one client connection. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
 ): TalkTranscriptionRelaySessionResult {
@@ -379,9 +380,13 @@ function getTranscriptionSession(
   return session;
 }
 
+/** Send one base64 audio frame from a browser client into a transcription relay. */
 export function sendTalkTranscriptionRelayAudio(params: {
+  /** Transcription session id returned by createTalkTranscriptionRelaySession. */
   transcriptionSessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** Base64-encoded g711_ulaw/8000 frame. */
   audioBase64: string;
 }): void {
   if (params.audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
@@ -403,8 +408,11 @@ export function sendTalkTranscriptionRelayAudio(params: {
   });
 }
 
+/** Close a transcription relay session as a completed client stop. */
 export function stopTalkTranscriptionRelaySession(params: {
+  /** Transcription session id returned by createTalkTranscriptionRelaySession. */
   transcriptionSessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
 }): void {
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
@@ -425,9 +433,13 @@ export function stopTalkTranscriptionRelaySession(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Cancel the active transcription turn and close the relay session. */
 export function cancelTalkTranscriptionRelayTurn(params: {
+  /** Transcription session id returned by createTalkTranscriptionRelaySession. */
   transcriptionSessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** Optional cancellation reason delivered to talk events. */
   reason?: string;
 }): void {
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
@@ -446,6 +458,7 @@ export function cancelTalkTranscriptionRelayTurn(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Close and clear all transcription relay sessions for test isolation. */
 export function clearTalkTranscriptionRelaySessionsForTest(): void {
   for (const session of transcriptionSessions.values()) {
     clearTimeout(session.cleanupTimer);

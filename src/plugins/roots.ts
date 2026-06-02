@@ -3,17 +3,23 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
+/** Canonical plugin root directories checked by discovery and source display. */
 export type PluginSourceRoots = {
+  /** Bundled plugin root when bundled plugins are available. */
   stock?: string;
+  /** User-global plugin install root under the OpenClaw config directory. */
   global: string;
+  /** Workspace-local plugin install root when a workspace directory is active. */
   workspace?: string;
 };
 
+/** Inputs that define plugin registry/cache identity for one workspace/environment. */
 export type PluginCacheInputs = {
   roots: PluginSourceRoots;
   loadPaths: string[];
 };
 
+/** Resolves stock, global, and workspace plugin roots from env-aware config paths. */
 export function resolvePluginSourceRoots(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -26,7 +32,7 @@ export function resolvePluginSourceRoots(params: {
   return { stock, global, workspace };
 }
 
-// Shared env-aware key inputs for plugin loader registry reuse.
+/** Resolves env-aware plugin root and load-path inputs for registry reuse. */
 export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: string[];

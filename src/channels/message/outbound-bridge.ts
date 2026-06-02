@@ -19,26 +19,33 @@ const defaultManualReceiveAdapter = {
   supportedAckPolicies: ["manual"],
 } as const satisfies ChannelMessageReceiveAdapterShape;
 
-/** Send result accepted from legacy outbound bridge methods before receipt normalization. */
+/** Legacy send result accepted by outbound bridge methods before receipt normalization. */
 export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
+  /** Already-normalized receipt from adapters that can describe multipart sends themselves. */
   receipt?: MessageReceipt;
+  /** Adapter-level id retained for older callers that do not return a full receipt. */
   messageId?: string;
 };
 
 /** Legacy outbound adapter shape bridged into the channel message adapter contract. */
 export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
+  /** Durable final-send capabilities declared by older outbound implementations. */
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
   };
+  /** Text-only send hook used when the channel exposes a narrow text API. */
   sendText?: (
     ctx: ChannelMessageSendTextContext<TConfig>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
+  /** Media send hook used for file/image/audio sends with optional caption text. */
   sendMedia?: (
     ctx: ChannelMessageSendMediaContext<TConfig>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
+  /** Structured payload hook used by channels that consume rich reply payloads directly. */
   sendPayload?: (
     ctx: ChannelMessageSendPayloadContext<TConfig>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
+  /** Poll send hook used when the platform has a native poll endpoint. */
   sendPoll?: (
     ctx: ChannelMessageSendPollContext<TConfig>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
@@ -46,14 +53,21 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
 
 /** Options for building a message adapter from legacy outbound send functions. */
 export type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
+  /** Stable adapter id surfaced through channel message capability listings. */
   id?: string;
+  /** Legacy outbound implementation to wrap. */
   outbound: ChannelMessageOutboundBridgeAdapter<TConfig>;
+  /** Capability override when wrapper ownership, not legacy outbound, declares guarantees. */
   capabilities?: DurableFinalDeliveryRequirementMap;
+  /** Optional live-preview adapter metadata to preserve on the wrapped shape. */
   live?: ChannelMessageLiveAdapterShape;
+  /** Optional receive adapter metadata; defaults to manual ack ownership for legacy sends. */
   receive?: ChannelMessageReceiveAdapterShape;
 };
 
 function resolveResultMessageId(result: ChannelMessageOutboundBridgeResult): string | undefined {
+  // Prefer explicit and normalized receipt ids before provider-specific ids so follow-up edits
+  // target the same primary platform message that receipt normalization selected.
   return (
     result.messageId ??
     result.receipt?.primaryPlatformMessageId ??
@@ -76,6 +90,8 @@ function toMessageSendResult(
     replyToId?: string | null;
   },
 ): ChannelMessageSendResult {
+  // Poll APIs often return card-like receipts from older senders; normalize the part kind so
+  // durable capability checks and recovery classify the message by the API that sent it.
   const receipt = result.receipt
     ? params.normalizeReceiptKind
       ? {
@@ -102,6 +118,8 @@ function toMessageSendResult(
 function resolvePayloadReceiptKind(
   ctx: ChannelMessageSendPayloadContext<unknown>,
 ): MessageReceiptPartKind {
+  // Structured payload sends can collapse multiple content shapes into one hook; preserve the
+  // most specific durable-recovery kind rather than treating every payload as a generic card.
   if (
     ctx.payload.audioAsVoice &&
     (ctx.mediaUrl || ctx.payload.mediaUrl || ctx.payload.mediaUrls?.length)

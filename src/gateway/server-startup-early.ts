@@ -26,17 +26,26 @@ async function measureStartup<T>(
 
 /** Start plugin discovery and return the Bonjour shutdown callback when discovery is active. */
 export async function startGatewayPluginDiscovery(params: {
+  /** Test mode disables network discovery side effects. */
   minimalTestGateway: boolean;
+  /** Startup config snapshot used for discovery feature flags. */
   cfgAtStart: OpenClawConfig;
+  /** Gateway port advertised through discovery. */
   port: number;
+  /** TLS advertisement metadata for discovered clients. */
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  /** Whether direct Gateway URLs should be advertised. */
   gatewayDirectReachable: boolean;
+  /** Tailscale exposure mode included in discovery metadata. */
   tailscaleMode: GatewayTailscaleMode;
+  /** Discovery logger for Bonjour/runtime messages. */
   logDiscovery: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
   };
+  /** Optional plugin registry supplying plugin-owned discovery services. */
   pluginRegistry?: PluginRegistry;
+  /** Optional startup trace collector. */
   startupTrace?: GatewayStartupTrace;
 }): Promise<(() => Promise<void>) | null> {
   if (params.minimalTestGateway) {
@@ -69,22 +78,33 @@ export async function startGatewayPluginDiscovery(params: {
 
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
+  /** Test mode disables discovery, remote skills, task maintenance, and timers. */
   minimalTestGateway: boolean;
+  /** Startup config snapshot used by early runtimes. */
   cfgAtStart: OpenClawConfig;
+  /** Gateway port used by discovery. */
   port: number;
+  /** TLS advertisement metadata for discovery. */
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  /** Whether direct Gateway URLs should be advertised. */
   gatewayDirectReachable: boolean;
+  /** Tailscale exposure mode used by discovery. */
   tailscaleMode: GatewayTailscaleMode;
+  /** General startup logger. */
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
   };
+  /** Discovery-specific logger. */
   logDiscovery: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
   };
+  /** Node registry exposed to remote skill runtime. */
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
+  /** Optional plugin registry supplying plugin-owned discovery services. */
   pluginRegistry?: PluginRegistry;
+  /** Gateway broadcast function used by delayed maintenance timers. */
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
   getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];

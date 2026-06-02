@@ -270,6 +270,10 @@ function readDotEnvFile(params: {
   return { filePath: params.filePath, entries };
 }
 
+/**
+ * Loads a workspace `.env` file after filtering keys that could redirect runtime,
+ * provider auth, host process, or OpenClaw control-plane behavior.
+ */
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
@@ -294,6 +298,10 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
 
 export { loadGlobalRuntimeDotEnvFiles };
 
+/**
+ * Loads the current workspace `.env` first, then trusted global runtime dotenv
+ * files without overriding variables that were already present.
+ */
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
   const cwdEnvPath = path.join(process.cwd(), ".env");

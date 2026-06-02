@@ -20,6 +20,7 @@ import {
   type SessionDeliveryTarget,
 } from "./targets.js";
 
+/** Resolved outbound delivery route for agent replies and fallback sends. */
 export type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
   resolvedChannel: GatewayMessageChannel;
@@ -29,6 +30,10 @@ export type AgentDeliveryPlan = {
   deliveryTargetMode?: ChannelOutboundTargetMode;
 };
 
+/**
+ * Resolves the agent reply channel and target from explicit args, turn-source
+ * routing, and session delivery state.
+ */
 export function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
   requestedChannel?: string;
@@ -133,6 +138,10 @@ export function resolveAgentDeliveryPlan(params: {
   };
 }
 
+/**
+ * Refines an agent delivery plan through the channel plugin's session-route
+ * resolver when delivery targets can map to a canonical peer/thread.
+ */
 export async function resolveAgentDeliveryPlanWithSessionRoute(
   params: Parameters<typeof resolveAgentDeliveryPlan>[0] & {
     cfg: OpenClawConfig;
@@ -179,6 +188,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
       });
     } catch {
+      // Route lookup failures should not block the already-valid base delivery plan.
       return null;
     }
   })();
@@ -194,6 +204,10 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   };
 }
 
+/**
+ * Optionally validates or resolves the plan target through the channel plugin
+ * before callers hand it to outbound transport.
+ */
 export function resolveAgentOutboundTarget(params: {
   cfg: OpenClawConfig;
   plan: AgentDeliveryPlan;

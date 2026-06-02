@@ -1,7 +1,11 @@
 export type ThreadBindingLifecycleRecord = {
+  /** Timestamp when the thread binding was created or adopted. */
   boundAt: number;
+  /** Timestamp of the latest activity that should reset idle expiration. */
   lastActivityAt: number;
+  /** Optional per-binding idle timeout override; non-positive values disable idle expiry. */
   idleTimeoutMs?: number;
+  /** Optional per-binding absolute lifetime override; non-positive values disable max-age expiry. */
   maxAgeMs?: number;
 };
 

@@ -12,17 +12,24 @@ const PLUGIN_NODE_CAPABILITY_QUERY_PARAM = "oc_cap";
 export const DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS = 10 * 60_000;
 
 export type PluginNodeCapabilitySurface = {
+  /** Plugin-owned surface name that needs a scoped node capability token. */
   surface: string;
+  /** Optional token lifetime override for this surface. */
   ttlMs?: number;
+  /** Optional extra storage scope for multiple capabilities on one surface. */
   scopeKey?: string;
 };
 
 export type PluginNodeCapabilityClient = {
+  /** Surface URL map exposed by a node/plugin client. */
   pluginSurfaceUrls?: Record<string, string>;
+  /** Capability surface definitions advertised by the client. */
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
+  /** Minted capability tokens by normalized storage key. */
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
 };
 
+/** Index capability surfaces by normalized surface, keeping the shortest TTL. */
 export function indexPluginNodeCapabilitySurfaces(
   surfaces: readonly PluginNodeCapabilitySurface[],
 ): Record<string, PluginNodeCapabilitySurface> {
@@ -45,10 +52,15 @@ export function indexPluginNodeCapabilitySurfaces(
 }
 
 export type NormalizedPluginNodeCapabilityUrl = {
+  /** Canonical path after stripping any scoped capability prefix. */
   pathname: string;
+  /** Capability token found in scoped path or query string. */
   capability?: string;
+  /** Rewritten path/search suitable for downstream HTTP handling. */
   rewrittenUrl?: string;
+  /** Whether the URL used the scoped capability path prefix. */
   scopedPath: boolean;
+  /** Whether the scoped capability path was malformed. */
   malformedScopedPath: boolean;
 };
 
@@ -71,10 +83,12 @@ function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurf
   return scopeKey ? `${normalizedSurface}\0${scopeKey}` : normalizedSurface;
 }
 
+/** Resolve a capability surface TTL, falling back to the default. */
 export function resolvePluginNodeCapabilityTtlMs(surface: PluginNodeCapabilitySurface) {
   return asPositiveSafeInteger(surface.ttlMs) ?? DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS;
 }
 
+/** Resolve the expiry timestamp for a capability surface. */
 export function resolvePluginNodeCapabilityExpiresAtMs(
   surface: PluginNodeCapabilitySurface,
   nowMs: number = Date.now(),
@@ -82,10 +96,12 @@ export function resolvePluginNodeCapabilityExpiresAtMs(
   return resolveExpiresAtMsFromDurationMs(resolvePluginNodeCapabilityTtlMs(surface), { nowMs });
 }
 
+/** Mint a random plugin node capability bearer token. */
 export function mintPluginNodeCapabilityToken(): string {
   return randomBytes(18).toString("base64url");
 }
 
+/** Append a scoped capability path segment to a plugin host base URL. */
 export function buildPluginNodeCapabilityScopedHostUrl(
   baseUrl: string,
   capability: string,
@@ -107,6 +123,7 @@ export function buildPluginNodeCapabilityScopedHostUrl(
   }
 }
 
+/** Replace or append a capability token in an existing scoped plugin host URL. */
 export function replacePluginNodeCapabilityInScopedHostUrl(
   scopedUrl: string,
   capability: string,
@@ -140,6 +157,7 @@ export function replacePluginNodeCapabilityInScopedHostUrl(
   }
 }
 
+/** Parse scoped capability URLs and rewrite them to downstream plugin paths. */
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,
 ): NormalizedPluginNodeCapabilityUrl {
@@ -199,6 +217,7 @@ export function normalizePluginNodeCapabilityScopedUrl(
   };
 }
 
+/** Store a minted capability token on a client under the surface storage key. */
 export function setClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
@@ -218,6 +237,7 @@ export function setClientPluginNodeCapability(params: {
   };
 }
 
+/** Mint and install a fresh scoped URL/token for a client's plugin surface. */
 export function refreshClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
@@ -265,6 +285,7 @@ export function refreshClientPluginNodeCapability(params: {
   };
 }
 
+/** Verify a capability token across clients and extend its expiry on success. */
 export function hasAuthorizedPluginNodeCapability(params: {
   clients: Iterable<PluginNodeCapabilityClient>;
   surface: PluginNodeCapabilitySurface;

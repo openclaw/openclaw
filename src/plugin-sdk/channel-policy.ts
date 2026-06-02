@@ -100,7 +100,8 @@ function collectMutableAllowlistWarningLines(
   const exampleLines = hits
     .slice(0, 8)
     .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
-  // Keep doctor output actionable without dumping large allowlists into logs.
+  // Keep doctor output actionable without dumping large allowlists or raw ANSI
+  // sequences into logs.
   const remaining =
     hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
   const flagPaths = uniqueStrings(hits.map((hit) => hit.dangerousFlagPath));
@@ -137,6 +138,8 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
         if (!Array.isArray(candidate.list)) {
           continue;
         }
+        // Only mutable human-readable identifiers are risky here; wildcard and
+        // stable ids are handled by the normal allowlist policy path.
         for (const entry of candidate.list) {
           const text = String(entry).trim();
           if (!text || text === "*" || !params.detector(text)) {
@@ -178,6 +181,8 @@ export function createRestrictSendersChannelSecurity<
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {
+    // One descriptor builds both DM allowlist enforcement and group warning
+    // collection so channel plugins do not drift between runtime and doctor policy.
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedAccount>({
       channelKey: params.channelKey,
       resolvePolicy: params.resolveDmPolicy,

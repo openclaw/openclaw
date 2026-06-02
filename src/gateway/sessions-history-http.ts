@@ -95,14 +95,20 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Serve /sessions/:key/history as JSON or an authorized SSE history stream. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: {
+    /** Resolved Gateway auth policy used for the initial request check. */
     auth: ResolvedGatewayAuth;
+    /** Optional live auth resolver used to reauthorize long-lived SSE streams. */
     getResolvedAuth?: () => ResolvedGatewayAuth;
+    /** Trusted proxy CIDRs/addresses for forwarded auth context. */
     trustedProxies?: string[];
+    /** Whether direct remote address fallback is allowed when proxy headers are absent. */
     allowRealIpFallback?: boolean;
+    /** Optional HTTP auth rate limiter shared with other Gateway endpoints. */
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
@@ -320,6 +326,8 @@ export async function handleSessionHistoryHttpRequest(
       }
       if (update.message !== undefined) {
         if (limit === undefined && cursor === undefined) {
+          // Unpaginated live streams can append one visible message inline.
+          // Paginated/cursor streams must refresh to keep page boundaries stable.
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
             messageId: update.messageId,

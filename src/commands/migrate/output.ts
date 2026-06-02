@@ -15,6 +15,7 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
   if (plan.target) {
     lines.push(`Target: ${plan.target}`);
   }
+  // Config patch items are hidden from terminal summaries but still count in plan status totals.
   const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
   lines.push(
     [
@@ -94,6 +95,7 @@ function formatPlanWarnings(plan: MigrationPlan): string[] {
   return lines;
 }
 
+/** Formats a pre-apply migration plan for terminal preview output. */
 export function formatMigrationPreview(plan: MigrationPlan): string[] {
   return [
     ...formatPlanHeader(plan, "Migration preview:"),
@@ -102,6 +104,7 @@ export function formatMigrationPreview(plan: MigrationPlan): string[] {
   ];
 }
 
+/** Formats an apply result for terminal output, including next steps from the provider. */
 export function formatMigrationResult(plan: MigrationPlan): string[] {
   const lines = [...formatPlanHeader(plan, "Migration plan:"), ...formatPlanItems(plan, "result")];
   if (plan.nextSteps && plan.nextSteps.length > 0) {
@@ -157,6 +160,7 @@ function humanizeReason(reason: string | undefined): string | undefined {
 
 function formatItemMessage(item: MigrationItem, mode: FormatMode): string | undefined {
   if (mode === "preview") {
+    // Preview describes intended work; result mode reports what actually happened.
     if (
       item.status === "conflict" ||
       item.status === "skipped" ||
@@ -228,6 +232,7 @@ function formatMigrationItem(item: MigrationItem, mode: FormatMode): string {
   return `${prefix}${name}${sensitive}${messageSuffix}`;
 }
 
+/** Fails apply before backup/write work when the selected plan still has unresolved conflicts. */
 export function assertConflictFreePlan(plan: MigrationPlan, providerId: string): void {
   if (plan.summary.conflicts > 0) {
     throw new Error(
@@ -236,12 +241,14 @@ export function assertConflictFreePlan(plan: MigrationPlan, providerId: string):
   }
 }
 
+/** Emits either redacted JSON output or human-readable apply output with backup/report paths. */
 export function writeApplyResult(
   runtime: RuntimeEnv,
   opts: MigrateApplyOptions,
   result: MigrationApplyResult,
 ): void {
   if (opts.json) {
+    // JSON mode can be piped into logs, so redact before crossing the runtime output boundary.
     writeRuntimeJson(runtime, redactMigrationPlan(result));
     return;
   }
@@ -256,6 +263,7 @@ export function writeApplyResult(
   }
 }
 
+/** Treats conflicts and errors as command failures after reports/backups have been written. */
 export function assertApplySucceeded(result: MigrationApplyResult): void {
   if (result.summary.errors === 0 && result.summary.conflicts === 0) {
     return;

@@ -7,6 +7,7 @@ type RuntimeStatusFormatInput = {
   details?: string[];
 };
 
+/** Format runtime status plus optional pid/state/details for compact status rows. */
 export function formatRuntimeStatusWithDetails({
   status,
   pid,
@@ -24,6 +25,7 @@ export function formatRuntimeStatusWithDetails({
     normalizeLowercaseStringOrEmpty(normalizedState) !==
       normalizeLowercaseStringOrEmpty(runtimeStatus)
   ) {
+    // Avoid noisy "running (state running)" output while preserving distinct process state.
     fullDetails.push(`state ${normalizedState}`);
   }
   for (const detail of details) {

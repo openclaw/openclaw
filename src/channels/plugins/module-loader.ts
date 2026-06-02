@@ -14,6 +14,7 @@ const SOURCE_MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const jitiLoaders: PluginModuleLoaderCache = new Map();
 let channelPluginModuleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
 
+/** Overrides the source-module loader factory for tests and clears cached loaders. */
 export function setChannelPluginModuleLoaderFactoryForTest(
   factory?: PluginModuleLoaderFactory,
 ): void {
@@ -59,6 +60,8 @@ function loadModule(modulePath: string): unknown {
     return nodeRequire(modulePath);
   } catch (error) {
     if (isSourceModulePath(modulePath)) {
+      // TS source can be loaded natively in test environments; fall back to
+      // the cached source loader when the native hook cannot handle aliases.
       return loadModuleWithJiti(modulePath);
     }
     throw new Error(`failed to load channel plugin module with native require: ${modulePath}`, {
@@ -85,6 +88,7 @@ function resolvePluginModuleCandidates(rootDir: string, specifier: string): stri
   ];
 }
 
+/** Resolves a plugin module specifier by probing supported source and built JS extensions. */
 export function resolveExistingPluginModulePath(rootDir: string, specifier: string): string {
   for (const candidate of resolvePluginModuleCandidates(rootDir, specifier)) {
     if (fs.existsSync(candidate)) {
@@ -94,6 +98,7 @@ export function resolveExistingPluginModulePath(rootDir: string, specifier: stri
   return path.resolve(rootDir, specifier);
 }
 
+/** Opens and loads a channel plugin module after enforcing the plugin root boundary. */
 export function loadChannelPluginModule(params: {
   modulePath: string;
   rootDir: string;

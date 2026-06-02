@@ -28,6 +28,7 @@ type MarkdownToken = {
   level?: number;
 };
 
+/** Style categories tracked as ranges over rendered plaintext. */
 export type MarkdownStyle =
   | "bold"
   | "italic"
@@ -37,19 +38,23 @@ export type MarkdownStyle =
   | "spoiler"
   | "blockquote";
 
+/** Half-open style range in `MarkdownIR.text`; `end` is exclusive. */
 export type MarkdownStyleSpan = {
   start: number;
   end: number;
   style: MarkdownStyle;
+  /** Fence language info for code blocks when markdown-it provided one. */
   language?: string;
 };
 
+/** Half-open link-label range in `MarkdownIR.text` with the original href. */
 export type MarkdownLinkSpan = {
   start: number;
   end: number;
   href: string;
 };
 
+/** Plaintext markdown projection plus style/link ranges into that text. */
 export type MarkdownIR = {
   text: string;
   styles: MarkdownStyleSpan[];
@@ -68,11 +73,13 @@ function createStyleSpan(params: MarkdownStyleSpan): MarkdownStyleSpan {
   return span;
 }
 
+/** Parsed table text after markdown inline rendering has been applied per cell. */
 export type MarkdownTableData = {
   headers: string[];
   rows: string[][];
 };
 
+/** Table metadata collected for block-mode rendering with the placeholder location. */
 export type MarkdownTableMeta = MarkdownTableData & {
   placeholderOffset: number;
 };
@@ -116,10 +123,15 @@ type RenderState = RenderTarget & {
 };
 
 export type MarkdownParseOptions = {
+  /** Enable markdown-it linkify conversion. Default: true. */
   linkify?: boolean;
+  /** Interpret paired `||` text delimiters as spoiler style spans. Default: false. */
   enableSpoilers?: boolean;
+  /** Whether headings should become bold spans or plain text. Default: none. */
   headingStyle?: "none" | "bold";
+  /** Text prefix inserted at each blockquote open before applying blockquote style. */
   blockquotePrefix?: string;
+  /** Enable markdown-it autolinks. Default: true unless explicitly false. */
   autolink?: boolean;
   /** How to render tables (off|bullets|code|block). Default: off. */
   tableMode?: MarkdownTableMode;
@@ -966,6 +978,7 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   return sliced;
 }
 
+/** Slices IR text and rebases overlapping style/link spans into the returned range. */
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
   return {
     text: ir.text.slice(start, end),
@@ -974,10 +987,12 @@ export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): Mar
   };
 }
 
+/** Parses markdown into plaintext plus style/link ranges. */
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
   return markdownToIRWithMeta(markdown, options).ir;
 }
 
+/** Parses markdown into IR and returns table-detection metadata for table-aware callers. */
 export function markdownToIRWithMeta(
   markdown: string,
   options: MarkdownParseOptions = {},
@@ -1040,6 +1055,7 @@ export function markdownToIRWithMeta(
   };
 }
 
+/** Chunks IR text at readable boundaries and rebases style/link spans per chunk. */
 export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
   if (!ir.text) {
     return [];

@@ -6,10 +6,15 @@ type StartupTaskResult =
   | { status: "failed"; reason: string };
 
 export type StartupTask = {
+  /** Human-readable task source used in startup logs. */
   source: string;
+  /** Optional agent id that owns this startup task. */
   agentId?: string;
+  /** Optional session key associated with this startup task. */
   sessionKey?: string;
+  /** Optional workspace directory used by this startup task. */
   workspaceDir?: string;
+  /** Execute the task and report whether it ran, skipped, or failed. */
   run: () => Promise<StartupTaskResult>;
 };
 
@@ -30,8 +35,11 @@ function taskMeta(task: StartupTask, result?: StartupTaskResult): Record<string,
   };
 }
 
+/** Run startup tasks sequentially and log skipped/failed outcomes with task metadata. */
 export async function runStartupTasks(params: {
+  /** Ordered startup tasks to execute. */
   tasks: StartupTask[];
+  /** Logger used for skipped and failed task metadata. */
   log: StartupTaskLogger;
 }): Promise<StartupTaskResult[]> {
   const results: StartupTaskResult[] = [];

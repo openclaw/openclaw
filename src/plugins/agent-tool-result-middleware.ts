@@ -18,6 +18,7 @@ const LEGACY_AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = {
   "codex-app-server": "codex",
 } as const satisfies Record<string, AgentToolResultMiddlewareRuntime>;
 
+/** Normalizes one runtime id, including legacy harness names accepted by older plugins. */
 function normalizeAgentToolResultMiddlewareRuntime(
   runtime: string,
 ): AgentToolResultMiddlewareRuntime | undefined {
@@ -34,6 +35,7 @@ function normalizeAgentToolResultMiddlewareRuntime(
     : undefined;
 }
 
+/** Normalizes middleware runtime options; omitted runtimes mean all supported runtimes. */
 export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
 ): AgentToolResultMiddlewareRuntime[] {
@@ -58,6 +60,7 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
 export const normalizeAgentToolResultMiddlewareHarnesses =
   normalizeAgentToolResultMiddlewareRuntimes;
 
+/** Normalizes runtime ids declared on captured plugin registrations. */
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
 ): AgentToolResultMiddlewareRuntime[] {
@@ -71,6 +74,7 @@ export function normalizeAgentToolResultMiddlewareRuntimeIds(
   return normalized;
 }
 
+/** Lists active plugin middleware handlers registered for one agent runtime. */
 export function listAgentToolResultMiddlewares(
   runtime: AgentToolResultMiddlewareRuntime,
 ): AgentToolResultMiddleware[] {

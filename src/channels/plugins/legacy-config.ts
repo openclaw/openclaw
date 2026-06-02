@@ -70,6 +70,7 @@ function collectRelevantChannelIdsForTouchedPaths(params: {
   return filteredChannelIds.filter((channelId) => touchedChannelIds.has(channelId));
 }
 
+/** Collects channel-owned legacy config rules relevant to the current raw config/touched paths. */
 export function collectChannelLegacyConfigRules(
   raw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
@@ -112,6 +113,8 @@ export function collectChannelLegacyConfigRules(
 
   const seen = new Set<string>();
   return rules.filter((rule) => {
+    // Touched-path filtering runs after all sources load so duplicate rules
+    // from bundled artifacts, bootstrap plugins, and installed plugins collapse consistently.
     if (!shouldIncludeLegacyRuleForTouchedPaths(rule.path, touchedPaths)) {
       return false;
     }

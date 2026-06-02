@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasActiveApprovalNativeRouteRuntime } from "../../infra/approval-native-route-coordinator.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 
+/** Lets a channel suppress the generic local exec-approval prompt when native UI owns it. */
 export function shouldSuppressLocalExecApprovalPrompt(params: {
   channel?: string | null;
   cfg: OpenClawConfig;
@@ -21,6 +22,8 @@ export function shouldSuppressLocalExecApprovalPrompt(params: {
       hint: {
         kind: "approval-pending",
         approvalKind: "exec",
+        // Native route state is host-owned; channels use this as a hint, not
+        // as authorization, when deciding whether to hide duplicate prompts.
         nativeRouteActive: hasActiveApprovalNativeRouteRuntime({
           channel,
           accountId: params.accountId,

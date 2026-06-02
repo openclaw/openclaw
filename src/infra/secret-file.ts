@@ -12,6 +12,7 @@ export {
 } from "@openclaw/fs-safe/secret";
 export { writeSecretFileAtomic as writePrivateSecretFileAtomic } from "@openclaw/fs-safe/secret";
 
+/** Legacy loadSecretFileSync result shape kept for plugin-sdk/core compatibility. */
 export type SecretFileReadResult =
   | {
       ok: true;
@@ -25,7 +26,7 @@ export type SecretFileReadResult =
       error?: unknown;
     };
 
-/** @deprecated Use readSecretFileSync() or tryReadSecretFileSync(). */
+/** @deprecated Use readSecretFileSync() or tryReadSecretFileSync() for throwing/optional reads. */
 export function loadSecretFileSync(
   filePath: string,
   label: string,
@@ -38,6 +39,7 @@ export function loadSecretFileSync(
   }
 
   try {
+    // Preserve the old non-throwing return contract while delegating validation to fs-safe.
     return {
       ok: true,
       secret: readSecretFileSyncImpl(filePath, label, options),

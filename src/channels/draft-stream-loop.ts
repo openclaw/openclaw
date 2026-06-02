@@ -1,18 +1,30 @@
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
+/** Throttled draft streaming loop for preview send/edit updates. */
 export type DraftStreamLoop = {
+  /** Queue the latest draft text and schedule a send/edit when allowed by throttle state. */
   update: (text: string) => void;
+  /** Immediately flush the latest pending text, waiting for any in-flight send first. */
   flush: () => Promise<void>;
+  /** Stop future sends and clear any pending timer/text. */
   stop: () => void;
+  /** Clear pending text without changing throttle or in-flight state. */
   resetPending: () => void;
+  /** Reset throttle timing and cancel the pending timer. */
   resetThrottleWindow: () => void;
+  /** Wait for the current send/edit promise without flushing pending text. */
   waitForInFlight: () => Promise<void>;
 };
 
+/** Creates a throttled stream loop that serializes draft preview send/edit calls. */
 export function createDraftStreamLoop(params: {
+  /** Minimum delay between successful send/edit attempts. */
   throttleMs: number;
+  /** Stop predicate checked before every flush iteration. */
   isStopped: () => boolean;
+  /** Sends or edits the current draft text; false keeps the text pending for retry. */
   sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
+  /** Background flush error sink used to avoid unhandled promise rejections. */
   onBackgroundFlushError?: (err: unknown) => void;
 }): DraftStreamLoop {
   const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
@@ -57,6 +69,8 @@ export function createDraftStreamLoop(params: {
         throw err;
       }
       if (sent === false) {
+        // A false result means the adapter declined this update without throwing; keep it pending
+        // so a later explicit flush can retry the same latest text.
         pendingText = text;
         return;
       }

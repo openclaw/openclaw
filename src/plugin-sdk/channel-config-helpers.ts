@@ -61,6 +61,7 @@ type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
   | "resolveDefaultTo"
 >;
 
+/** Returns whether a channel/account config target currently permits config writes. */
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
@@ -69,6 +70,7 @@ export function resolveChannelConfigWrites(params: {
   return resolveChannelConfigWritesShared(params);
 }
 
+/** Authorizes a config write against origin and target scopes. */
 export function authorizeConfigWrite(params: {
   cfg: OpenClawConfig;
   origin?: ConfigWriteScope;
@@ -78,17 +80,21 @@ export function authorizeConfigWrite(params: {
   return authorizeConfigWriteShared(params);
 }
 
+/** Returns whether an internal channel can bypass channel config write restrictions. */
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
 }): boolean {
   return canBypassConfigWritePolicyShared({
     ...params,
+    // Webchat is the in-process control surface; normalize before comparison so
+    // channel case does not accidentally block internal config writes.
     isInternalMessageChannel: (channel) =>
       normalizeOptionalLowercaseString(channel) === INTERNAL_MESSAGE_CHANNEL,
   });
 }
 
+/** Formats a stable user-facing denial message for rejected config writes. */
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
   fallbackChannelId?: string | null;
@@ -228,6 +234,8 @@ function createNamedAccountConfigBase<
       return params.defaultAccountId(cfg as Config);
     },
     setAccountEnabled({ cfg, accountId, enabled }) {
+      // Mutating helpers canonicalize account ids so case-only differences
+      // update the same config entry that read/authorization paths resolve.
       return params.setAccountEnabled({
         cfg,
         accountId: normalizeAccountId(accountId),
@@ -235,6 +243,8 @@ function createNamedAccountConfigBase<
       }) as Config;
     },
     deleteAccount({ cfg, accountId }) {
+      // Delete follows the same account-id normalization as enable/disable to
+      // avoid leaving duplicate account keys behind.
       return params.deleteAccount({
         cfg,
         accountId: normalizeAccountId(accountId),
@@ -252,6 +262,8 @@ function resolveAccessorAccountWithFallback<
     | undefined,
   fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount,
 ): (params: ChannelConfigAccessorParams<Config>) => AccessorAccount {
+  // Accessor accounts may differ from CRUD accounts when a channel exposes inherited/default
+  // allowlists; fall back to the CRUD resolver only when no accessor resolver was supplied.
   return resolveAccessorAccount ?? fallbackResolveAccessorAccount;
 }
 
@@ -347,6 +359,9 @@ export function createScopedChannelConfigAdapter<
     allowTopLevel?: boolean;
   },
 ): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
+  // Scoped channels store every account under `accounts`; accessor overrides let
+  // channels expose inherited allowlists/default targets without changing CRUD
+  // account resolution.
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createScopedChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -372,6 +387,8 @@ function setTopLevelChannelEnabledInConfigSection<Config extends OpenClawConfig>
   sectionKey: string;
   enabled: boolean;
 }): Config {
+  // Top-level single-account channels keep enabled at the channel section root instead of under an
+  // accounts map, matching the public config shape installers already write.
   const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
   return {
     ...params.cfg,
@@ -392,6 +409,7 @@ function removeTopLevelChannelConfigSection<Config extends OpenClawConfig>(param
   const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
   delete nextChannels[params.sectionKey];
   const nextCfg = { ...params.cfg };
+  // Preserve an absent `channels` object after deleting the last top-level channel section.
   if (Object.keys(nextChannels).length > 0) {
     nextCfg.channels = nextChannels as Config["channels"];
   } else {
@@ -464,6 +482,8 @@ export function createTopLevelChannelConfigBase<
       });
     },
     deleteAccount({ cfg }) {
+      // Top-level channels can either remove the whole section or clear only
+      // credential/account fields when non-account channel settings must remain.
       return params.deleteMode === "clear-fields"
         ? clearTopLevelChannelConfigFields({
             cfg: cfg as Config,
@@ -496,6 +516,8 @@ export function createTopLevelChannelConfigAdapter<
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
+  // Top-level adapters always resolve the root account for accessor methods;
+  // callers may still override the accessor account to project inherited state.
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createTopLevelChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -547,6 +569,8 @@ export function createHybridChannelConfigBase<
     },
     deleteAccount({ cfg, accountId }) {
       if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
+        // Hybrid channels store the default account at the section root; named accounts still live
+        // under the shared accounts map handled by config-helpers.
         if (params.preserveSectionOnDefaultDelete) {
           return clearTopLevelChannelConfigFields({
             cfg,
@@ -581,6 +605,8 @@ export function createHybridChannelConfigAdapter<
     preserveSectionOnDefaultDelete?: boolean;
   },
 ): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
+  // Hybrid adapters preserve the default account at the channel root while
+  // routing named accounts through the shared `accounts` map helpers.
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createHybridChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -635,6 +661,10 @@ export function createScopedDmSecurityResolver<
     account: ResolvedAccount;
   }) => {
     const access = params.resolveAccess?.({ cfg, accountId, account });
+    // Explicit access resolvers win over resolved account fields; channels use
+    // this to project inherited/default DM policy without mutating the account.
+    // The fallback account id keeps approval paths stable when a resolver merges
+    // default-account policy into a requested account.
     return buildAccountScopedDmSecurityPolicy({
       cfg,
       channelKey: params.channelKey,

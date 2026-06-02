@@ -67,17 +67,22 @@ export type DurableInboundReceiveReleaseOptions = {
 
 /** Durable receive journal facade used by channel receive pipelines. */
 export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> = {
+  /** Records a platform event unless a pending/completed duplicate already exists. */
   accept(
     id: string,
     payload: TPayload,
     options?: DurableInboundReceiveAcceptOptions<TMetadata>,
   ): Promise<DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata>>;
+  /** Returns pending records in deterministic receive-time order. */
   pending(): Promise<Array<DurableInboundReceivePendingRecord<TPayload, TMetadata>>>;
+  /** Moves an inbound event from pending to completed duplicate-suppression state. */
   complete(
     id: string,
     options?: DurableInboundReceiveCompleteOptions<TCompletedMetadata>,
   ): Promise<void>;
+  /** Requeues a pending event after a failed dispatch attempt. */
   release(id: string, options?: DurableInboundReceiveReleaseOptions): Promise<boolean>;
+  /** Deletes pending state without creating a completed tombstone. */
   deletePending(id: string): Promise<boolean>;
 };
 
@@ -158,6 +163,8 @@ export function createDurableInboundReceiveJournal<
       return { kind: "pending", duplicate: true, record: pending };
     }
 
+    // A delete/complete race can make the pending lookup miss after registerIfAbsent lost; check
+    // completion before retrying so a completed duplicate never re-enters pending state.
     const completedAfterPendingRace = await options.completedStore.lookup(key);
     if (completedAfterPendingRace) {
       return { kind: "completed", duplicate: true, record: completedAfterPendingRace };
@@ -182,6 +189,8 @@ export function createDurableInboundReceiveJournal<
     const entries = await options.pendingStore.entries();
     const records: Array<DurableInboundReceivePendingRecord<TPayload, TMetadata>> = [];
     for (const entry of entries) {
+      // Tombstones win over stale pending entries; clean them up while reading to keep callers
+      // from dispatching a duplicate event that has already completed.
       if (await options.completedStore.lookup(entry.key)) {
         await options.pendingStore.delete(entry.key);
         continue;

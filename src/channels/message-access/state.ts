@@ -317,6 +317,7 @@ async function resolveIngressAllowlist(params: {
 async function resolveRouteFacts(
   input: ChannelIngressStateInput,
 ): Promise<ResolvedRouteGateFacts[]> {
+  // Deterministic route order keeps the access graph stable across config object iteration.
   const routeFacts = [...(input.routeFacts ?? [])].toSorted(
     (left, right) => left.precedence - right.precedence || left.id.localeCompare(right.id),
   );

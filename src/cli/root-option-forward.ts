@@ -1,5 +1,6 @@
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 
+/** Copy a recognized root-level CLI option and any value token into a forwarded argv list. */
 export function forwardConsumedCliRootOption(
   args: readonly string[],
   index: number,

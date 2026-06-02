@@ -69,6 +69,7 @@ type BuildTrajectoryArtifactsParams = {
   lastToolError?: unknown;
 };
 
+/** Normalizes unordered capability/id lists so trajectory metadata is deterministic. */
 function toSortedUniqueStrings(values: readonly string[] | undefined): string[] | undefined {
   if (!values || values.length === 0) {
     return undefined;
@@ -80,6 +81,7 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Captures the live registry when runtime activation already resolved plugin state. */
 function buildPluginsFromActiveRegistry() {
   const registry = getActivePluginRegistry();
   if (!registry || registry.plugins.length === 0) {
@@ -133,6 +135,7 @@ function buildPluginsFromActiveRegistry() {
   };
 }
 
+/** Falls back to manifest metadata for early failures before the active registry exists. */
 function buildPluginsFromManifest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -170,6 +173,7 @@ function buildPluginsFromManifest(params: {
   };
 }
 
+/** Emits the resolved skill graph when available while redacting local skill paths. */
 function buildSkillsCapture(
   skillsSnapshot: SkillSnapshot | undefined,
   redaction: SupportRedactionContext,
@@ -210,6 +214,7 @@ function buildSkillsCapture(
   };
 }
 
+/** Builds the support-redaction context used by trajectory metadata captures. */
 function buildTrajectorySupportRedaction(env: NodeJS.ProcessEnv): SupportRedactionContext {
   return {
     env,
@@ -217,6 +222,7 @@ function buildTrajectorySupportRedaction(env: NodeJS.ProcessEnv): SupportRedacti
   };
 }
 
+/** Builds the redacted, deterministic run metadata written into trajectory bundles. */
 export function buildTrajectoryRunMetadata(
   params: BuildTrajectoryRunMetadataParams,
 ): Record<string, unknown> {
@@ -300,6 +306,7 @@ export function buildTrajectoryRunMetadata(
   };
 }
 
+/** Captures terminal run artifacts without redaction; callers provide sanitized inputs. */
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {

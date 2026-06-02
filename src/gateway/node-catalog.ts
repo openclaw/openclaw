@@ -169,9 +169,13 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
+/** Build a merged catalog from paired devices, approved nodes, and live node sessions. */
 export function createKnownNodeCatalog(params: {
+  /** Legacy paired-device records that may represent node-capable clients. */
   pairedDevices: readonly PairedDevice[];
+  /** Approved node-pairing records. */
   pairedNodes?: readonly NodePairingPairedNode[];
+  /** Currently connected node sessions. */
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
@@ -209,12 +213,14 @@ export function createKnownNodeCatalog(params: {
   return { entriesById };
 }
 
+/** List known nodes with connected nodes first and deterministic display-name ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.entriesById.values()]
     .map((entry) => entry.effective)
     .toSorted(compareKnownNodes);
 }
 
+/** Return the merged catalog entry for a node id, including source records. */
 export function getKnownNodeEntry(
   catalog: KnownNodeCatalog,
   nodeId: string,
@@ -222,6 +228,7 @@ export function getKnownNodeEntry(
   return catalog.entriesById.get(nodeId) ?? null;
 }
 
+/** Return the effective public node record for a node id. */
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
   return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }

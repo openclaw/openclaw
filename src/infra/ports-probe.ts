@@ -1,5 +1,6 @@
 import net from "node:net";
 
+/** Probe whether a TCP port can be bound with Node's normal listen semantics. */
 export async function tryListenOnPort(params: {
   port: number;
   host?: string;
@@ -17,6 +18,7 @@ export async function tryListenOnPort(params: {
       .createServer()
       .once("error", (err) => reject(err))
       .once("listening", () => {
+        // The probe only needs bind proof; close immediately so callers can claim the port.
         tester.close(() => resolve());
       })
       .listen(listenOptions);

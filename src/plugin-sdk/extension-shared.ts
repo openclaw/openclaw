@@ -35,6 +35,7 @@ type RequireOpenAllowFromFn = (params: {
   message: string;
 }) => void;
 
+/** Builds the common status payload for passive channel runtimes. */
 export function buildPassiveChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -49,6 +50,7 @@ export function buildPassiveChannelStatusSummary<TExtra extends object>(
   };
 }
 
+/** Builds a passive status payload that also includes the latest probe result. */
 export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -60,6 +62,7 @@ export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   };
 }
 
+/** Builds normalized inbound/outbound traffic timestamps for status surfaces. */
 export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | null) {
   return {
     lastInboundAt: snapshot?.lastInboundAt ?? null,
@@ -67,8 +70,11 @@ export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | nul
   };
 }
 
+/** Runs a passive monitor until abort and calls the monitor's stop hook during shutdown. */
 export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonitor>(params: {
+  /** Abort signal that owns the passive monitor lifecycle. */
   abortSignal: AbortSignal;
+  /** Starts the underlying monitor and returns its stop handle. */
   start: () => Promise<TMonitor>;
 }): Promise<void> {
   await runPassiveAccountLifecycle({
@@ -80,6 +86,7 @@ export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonit
   });
 }
 
+/** Returns an injected runtime or creates a logger-backed runtime for bundled extension tests. */
 export function resolveLoggerBackedRuntime<TRuntime>(
   runtime: TRuntime | undefined,
   logger: Parameters<typeof createLoggerBackedRuntime>[0]["logger"],
@@ -93,11 +100,17 @@ export function resolveLoggerBackedRuntime<TRuntime>(
   );
 }
 
+/** Adds the standard open-DM allowFrom validation issue for channel config schemas. */
 export function requireChannelOpenAllowFrom(params: {
+  /** Channel id used to build the config path in the validation message. */
   channel: string;
+  /** DM policy value being validated. */
   policy?: string;
+  /** Configured allowFrom entries for the channel. */
   allowFrom?: Array<string | number>;
+  /** Zod refinement context that receives the issue. */
   ctx: z.RefinementCtx;
+  /** Shared policy validator injected by the channel schema. */
   requireOpenAllowFrom: RequireOpenAllowFromFn;
 }) {
   params.requireOpenAllowFrom({
@@ -109,6 +122,7 @@ export function requireChannelOpenAllowFrom(params: {
   });
 }
 
+/** Reads selected status issue fields from an unknown issue-like value. */
 export function readStatusIssueFields<TField extends string>(
   value: unknown,
   fields: readonly TField[],
@@ -124,10 +138,12 @@ export function readStatusIssueFields<TField extends string>(
   return result;
 }
 
+/** Coerces supported account-id field values from status issues. */
 export function coerceStatusIssueAccountId(value: unknown): string | undefined {
   return typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
 }
 
+/** Creates a Promise with exposed resolve/reject hooks for lifecycle bridges. */
 export function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -159,6 +175,7 @@ type PluginConfigIssueMessageOptions = {
   rootInvalidTypeMessage?: string;
 };
 
+/** Formats a Zod config issue into short user-facing channel/plugin config text. */
 export function formatPluginConfigIssue(
   issue: z.ZodIssue | undefined,
   options?: PluginConfigIssueMessageOptions,
@@ -175,6 +192,7 @@ export function formatPluginConfigIssue(
   return issue.message;
 }
 
+/** Keeps only string/number path segments that can be returned in plugin config issues. */
 export function normalizePluginConfigIssuePath(
   path: readonly unknown[],
 ): PluginConfigIssuePathSegment[] {
@@ -184,6 +202,7 @@ export function normalizePluginConfigIssuePath(
   });
 }
 
+/** Maps Zod config issues into stable path/message objects for plugin status/config APIs. */
 export function mapPluginConfigIssues(
   issues: readonly z.ZodIssue[],
   options?: PluginConfigIssueMessageOptions,
@@ -194,9 +213,13 @@ export function mapPluginConfigIssues(
   }));
 }
 
+/** Checks whether a read-only env secret ref can be resolved without mutating config. */
 export function canResolveEnvSecretRefInReadOnlyPath(params: {
+  /** Config containing secret provider declarations. */
   cfg?: OpenClawConfig;
+  /** Secret provider alias from the ref. */
   provider: string;
+  /** Secret id from the ref. */
   id: string;
 }): boolean {
   const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
@@ -210,9 +233,13 @@ export function canResolveEnvSecretRefInReadOnlyPath(params: {
   return !allowlist || allowlist.includes(params.id);
 }
 
+/** Reads plugin package version across source and bundled package layouts. */
 export function readPluginPackageVersion(params: {
+  /** CommonJS-style require scoped to the plugin module. */
   require: PackageJsonRequire;
+  /** Candidate package.json paths to try, in order. */
   candidates?: readonly string[];
+  /** Value returned when no candidate exposes a non-empty version. */
   fallback?: string;
 }): string {
   for (const candidate of params.candidates ?? DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES) {
@@ -228,9 +255,13 @@ export function readPluginPackageVersion(params: {
   return params.fallback ?? "unknown";
 }
 
+/** Resolves an ambient Node proxy agent when proxy env/config is present. */
 export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
+  /** Error observer for proxy agent construction failures. */
   onError?: (error: unknown) => void;
+  /** Called when an ambient proxy agent is actually returned. */
   onUsingProxy?: () => void;
+  /** Protocol whose ambient proxy settings should be inspected. */
   protocol?: "http" | "https";
 }): Promise<TAgent | undefined> {
   const protocol = params?.protocol ?? "https";
@@ -238,6 +269,7 @@ export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
     return undefined;
   }
   try {
+    // Managed proxy TLS state is process-local and only applies when the active proxy owns it.
     const proxyTls = resolveActiveManagedProxyTlsOptions();
     const agent = createAmbientNodeProxyAgent({
       protocol,

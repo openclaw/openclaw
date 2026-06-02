@@ -1,3 +1,4 @@
+/** Return the UTF-8 byte size of JSON output, falling back for unserializable values. */
 export function jsonUtf8Bytes(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -6,11 +7,13 @@ export function jsonUtf8Bytes(value: unknown): number {
   }
 }
 
+/** Bounded JSON byte-count result where incomplete means traversal exceeded a guardrail. */
 export type BoundedJsonUtf8Bytes = {
   bytes: number;
   complete: boolean;
 };
 
+/** Return JSON UTF-8 bytes, or infinity when JSON.stringify cannot produce a string. */
 export function jsonUtf8BytesOrInfinity(value: unknown): number {
   try {
     const serialized = JSON.stringify(value);
@@ -52,6 +55,7 @@ export function firstEnumerableOwnKeys(value: object, maxKeys: number): string[]
   return keys;
 }
 
+/** Estimate JSON UTF-8 bytes without walking past maxBytes or unsafe JSON shapes. */
 export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJsonUtf8Bytes {
   let bytes = 0;
   const seen = new WeakSet<object>();
@@ -99,6 +103,7 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
       typeof (objectEntry as { toJSON?: unknown }).toJSON === "function" &&
       !(objectEntry instanceof Date)
     ) {
+      // Custom toJSON can hide arbitrary work/output, so bounded traversal refuses it.
       throw new Error("json_byte_length_custom_to_json");
     }
     seen.add(objectEntry);

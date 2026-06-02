@@ -1,10 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-/**
- * On Windows, Node's ESM loader requires absolute paths to be expressed as
- * file:// URLs. Raw drive-letter paths like C:\... are parsed as URL schemes.
- */
+/** Converts Windows absolute filesystem paths to file URLs for Node ESM import(). */
 export function toSafeImportPath(specifier: string): string {
   if (process.platform !== "win32") {
     return specifier;

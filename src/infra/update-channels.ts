@@ -1,7 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseComparableSemver } from "./semver-compare.js";
 
+/** Release channel used for package registry and self-update decisions. */
 export type UpdateChannel = "stable" | "beta" | "dev";
+/** Provenance for the selected update channel shown in status/debug output. */
 export type UpdateChannelSource =
   | "config"
   | "git-tag"
@@ -9,10 +11,14 @@ export type UpdateChannelSource =
   | "installed-version"
   | "default";
 
+/** Package installs default to stable unless config or beta-version state says otherwise. */
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
+/** Git checkouts default to dev because branch installs usually track unreleased code. */
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
+/** Branch name treated as the canonical development stream for git installs. */
 export const DEV_BRANCH = "main";
 
+/** Normalize user/config channel text to the supported update channels. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
@@ -24,6 +30,7 @@ export function normalizeUpdateChannel(value?: string | null): UpdateChannel | n
   return null;
 }
 
+/** Map OpenClaw update channels onto npm dist-tags. */
 export function channelToNpmTag(channel: UpdateChannel): string {
   if (channel === "beta") {
     return "beta";
@@ -34,10 +41,12 @@ export function channelToNpmTag(channel: UpdateChannel): string {
   return "latest";
 }
 
+/** Detect OpenClaw beta tags without treating words like "alphabeta" as beta releases. */
 export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+/** Classify semantic prereleases, with a regex fallback for legacy/non-semver tags. */
 export function isPrereleaseTag(tag: string): boolean {
   const parsed = parseComparableSemver(tag, { normalizeLegacyDotBeta: true });
   if (parsed) {
@@ -48,10 +57,12 @@ export function isPrereleaseTag(tag: string): boolean {
   );
 }
 
+/** True only for tags that should track the stable channel. */
 export function isStableTag(tag: string): boolean {
   return !isPrereleaseTag(tag);
 }
 
+/** Resolve the npm registry channel, preserving beta when the installed version is beta. */
 export function resolveRegistryUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
@@ -62,11 +73,13 @@ export function resolveRegistryUpdateChannel(params: {
     params.configChannel !== "beta" &&
     params.configChannel !== "dev"
   ) {
+    // Beta installs should keep receiving beta-compatible plugin/package targets.
     return "beta";
   }
   return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
 }
 
+/** Resolve the effective channel plus the evidence that selected it. */
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
@@ -79,6 +92,7 @@ export function resolveEffectiveUpdateChannel(params: {
     params.configChannel !== "beta" &&
     params.configChannel !== "dev"
   ) {
+    // A beta install should not silently downgrade to stable because of stale config.
     return { channel: "beta", source: "installed-version" };
   }
 
@@ -89,6 +103,7 @@ export function resolveEffectiveUpdateChannel(params: {
   if (params.installKind === "git") {
     const tag = params.git?.tag;
     if (tag) {
+      // Git tags carry stronger release-channel evidence than detached branch state.
       return {
         channel: isBetaTag(tag) ? "beta" : isStableTag(tag) ? "stable" : "dev",
         source: "git-tag",
@@ -96,6 +111,7 @@ export function resolveEffectiveUpdateChannel(params: {
     }
     const branch = params.git?.branch;
     if (branch && branch !== "HEAD") {
+      // Any named branch is treated as dev because it can advance outside npm releases.
       return { channel: "dev", source: "git-branch" };
     }
     return { channel: DEFAULT_GIT_CHANNEL, source: "default" };
@@ -108,6 +124,7 @@ export function resolveEffectiveUpdateChannel(params: {
   return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
 }
 
+/** Format channel/source pairs for user-facing status and diagnostics. */
 export function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
@@ -131,6 +148,7 @@ export function formatUpdateChannelLabel(params: {
   return `${params.channel} (default)`;
 }
 
+/** Resolve update channel, provenance, and display label in one call. */
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;

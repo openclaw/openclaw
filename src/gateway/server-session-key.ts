@@ -20,7 +20,9 @@ const RUN_LOOKUP_CACHE_LIMIT = 256;
 const RUN_LOOKUP_MISS_TTL_MS = 1_000;
 
 type RunLookupCacheEntry = {
+  /** Resolved request-facing session key, or null for a cached miss. */
   sessionKey: string | null;
+  /** Expiry for cached misses; successful lookups stay until LRU eviction. */
   expiresAt: number | null;
 };
 
@@ -50,6 +52,8 @@ function setResolvedSessionKeyCache(
   }
   let expiresAt: number | null = null;
   if (sessionKey === null) {
+    // Misses are short-lived because session rows can appear after the first
+    // run event; hits are stable enough to keep until the bounded cache evicts.
     const missExpiresAt = resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_MISS_TTL_MS);
     if (missExpiresAt === undefined) {
       return;
@@ -79,6 +83,7 @@ function resolveRunSessionKeyForCaller(storeKey: string) {
   return toAgentRequestSessionKey(storeKey) ?? storeKey;
 }
 
+/** Resolve the caller-facing session key that owns an agent run id. */
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
   const explicitAgentId =
@@ -124,6 +129,7 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   return undefined;
 }
 
+/** Clear module-local run-id lookup cache between tests. */
 export function resetResolvedSessionKeyForRunCacheForTest(): void {
   resolvedSessionKeyByRunId.clear();
 }

@@ -5,6 +5,7 @@ import { isWSL2Sync } from "./wsl.js";
 // clipboard process as the timeout-owned child while values stay on stdin.
 const WSL_CLIPBOARD_ARGV = ["/bin/sh", "-c", "exec /mnt/c/Windows/System32/clip.exe"];
 
+/** Copies text to the host clipboard using the first available platform backend. */
 export async function copyToClipboard(value: string): Promise<boolean> {
   const attempts: Array<{ argv: string[] }> = [
     ...(isWSL2Sync() ? [{ argv: WSL_CLIPBOARD_ARGV }] : []),

@@ -229,7 +229,11 @@ const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpe
   CORE_GATEWAY_METHOD_SPECS.map((spec) => [spec.name, spec]),
 );
 
-/** Core methods that are listed early but return retryable unavailable until sidecars are ready. */
+/**
+ * Core methods that are listed early but return retryable unavailable until
+ * sidecars are ready. Keep this derived from the policy table so startup gating
+ * cannot drift from method advertisement.
+ */
 export const STARTUP_UNAVAILABLE_GATEWAY_METHODS = CORE_GATEWAY_METHOD_SPECS.filter(
   (spec) => spec.startup === true,
 ).map((spec) => spec.name);
@@ -274,7 +278,11 @@ export function isCoreGatewayMethodClassified(method: string): boolean {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
 }
 
-/** Creates dispatch descriptors for core handlers and fails if any handler lacks policy. */
+/**
+ * Create dispatch descriptors for core handlers and fail if any handler lacks
+ * policy. This keeps authorization, startup availability, advertised names, and
+ * control-plane write throttling tied to one canonical method table.
+ */
 export function createCoreGatewayMethodDescriptors(
   handlers: Record<string, GatewayMethodHandler>,
 ): GatewayMethodDescriptorInput[] {

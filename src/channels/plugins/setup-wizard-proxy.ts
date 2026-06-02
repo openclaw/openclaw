@@ -15,16 +15,19 @@ type ResolveGroupAllowlistParams = Parameters<
   NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
 >[0];
 
+/** Forwards configured-state checks through a lazy setup wizard loader. */
 export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async ({ cfg, accountId }: ResolveConfiguredParams) =>
     await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
 }
 
+/** Forwards prepare through a lazy setup wizard loader when the wizard implements it. */
 export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async (params: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]) =>
     await (await loadWizard()).prepare?.(params);
 }
 
+/** Forwards finalize through a lazy setup wizard loader when the wizard implements it. */
 export function createDelegatedFinalize(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async (params: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]) =>
     await (await loadWizard()).finalize?.(params);
@@ -35,6 +38,7 @@ type DelegatedStatusBase = Omit<
   "resolveConfigured" | "resolveStatusLines" | "resolveSelectionHint" | "resolveQuickstartScore"
 >;
 
+/** Builds a setup wizard shell whose expensive hooks resolve from a lazy wizard implementation. */
 export function createDelegatedSetupWizardProxy(params: {
   channel: string;
   loadWizard: () => Promise<ChannelSetupWizard>;
@@ -70,6 +74,7 @@ export function createDelegatedSetupWizardProxy(params: {
   } satisfies ChannelSetupWizard;
 }
 
+/** Builds an allowlist-aware proxy while preserving base fallbacks for absent lazy hooks. */
 export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
   loadWizard: () => Promise<ChannelSetupWizard>;
   createBase: (handlers: {
@@ -92,6 +97,7 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
     resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
       const wizard = await params.loadWizard();
       if (!wizard.allowFrom) {
+        // Base wizards still need unresolved rows so callers can show per-entry feedback.
         return entries.map((input) => ({ input, resolved: false, id: null }));
       }
       return await wizard.allowFrom.resolveEntries({
@@ -104,6 +110,7 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
     resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) => {
       const wizard = await params.loadWizard();
       if (!wizard.groupAccess?.resolveAllowlist) {
+        // Group allowlists are plugin-shaped, so the caller supplies the only safe fallback shape.
         return params.fallbackResolvedGroupAllowlist(entries);
       }
       return (await wizard.groupAccess.resolveAllowlist({

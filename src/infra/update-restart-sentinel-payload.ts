@@ -5,6 +5,7 @@ import {
 } from "./restart-sentinel.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
+/** Metadata captured from an update caller so restart follow-up can resume context. */
 export type UpdateRestartSentinelMeta = {
   sessionKey?: string;
   deliveryContext?: {
@@ -18,6 +19,7 @@ export type UpdateRestartSentinelMeta = {
   continuationMessage?: string | null;
 };
 
+/** Build the restart sentinel payload persisted before update-triggered restarts. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;

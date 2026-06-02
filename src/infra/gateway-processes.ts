@@ -8,6 +8,7 @@ import {
   readWindowsProcessArgsSync,
 } from "./windows-port-pids.js";
 
+/** Read process argv for Gateway identity checks across supported host OSes. */
 export function readGatewayProcessArgsSync(pid: number): string[] | null {
   if (process.platform === "linux") {
     try {
@@ -25,6 +26,8 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
       return null;
     }
     const command = ps.stdout.trim();
+    // macOS `ps -o command=` is shell-like text, not argv-safe. It is only used
+    // for Gateway identity heuristics before signaling, never for re-execution.
     return command ? command.split(/\s+/) : null;
   }
   if (process.platform === "win32") {
@@ -33,6 +36,10 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
   return null;
 }
 
+/**
+ * Signal a process only after its argv matches a Gateway command. This keeps
+ * stale-port cleanup from terminating unrelated listeners that reused the port.
+ */
 export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "SIGUSR1"): void {
   const args = readGatewayProcessArgsSync(pid);
   if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
@@ -41,6 +48,10 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
   process.kill(pid, signal);
 }
 
+/**
+ * Find listening PIDs on a Gateway port and keep only verified Gateway processes,
+ * excluding the current process and duplicate listener rows.
+ */
 export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[] {
   const rawPids =
     process.platform === "win32"
@@ -55,6 +66,7 @@ export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[
     });
 }
 
+/** Format verified Gateway PIDs for CLI/status messages. */
 export function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
 }

@@ -3,6 +3,7 @@ import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase, resolveSafeInstallDir } from "./install-safe-path.js";
 
+/** Resolve and canonicalize an install directory while enforcing the base-dir boundary. */
 export async function resolveCanonicalInstallTarget(params: {
   baseDir: string;
   id: string;
@@ -21,6 +22,7 @@ export async function resolveCanonicalInstallTarget(params: {
     return { ok: false, error: targetDirResult.error };
   }
   try {
+    // The encoded path is not trusted until the real/canonical target stays inside baseDir.
     await assertCanonicalPathWithinBase({
       baseDir: params.baseDir,
       candidatePath: targetDirResult.path,
@@ -32,6 +34,7 @@ export async function resolveCanonicalInstallTarget(params: {
   return { ok: true, targetDir: targetDirResult.path };
 }
 
+/** Enforce install/update mode semantics without deleting or replacing existing targets. */
 export async function ensureInstallTargetAvailable(params: {
   mode: "install" | "update";
   targetDir: string;

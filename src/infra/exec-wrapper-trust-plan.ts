@@ -10,12 +10,19 @@ import {
 } from "./shell-wrapper-resolution.js";
 
 type ExecWrapperTrustPlan = {
+  /** Runtime argv after transparent wrappers have been unwrapped. */
   argv: string[];
+  /** Argv that policy should evaluate when shell multiplexers hide the runtime target. */
   policyArgv: string[];
+  /** Wrapper executable names removed or inspected from outermost to innermost. */
   wrapperChain: string[];
+  /** True when a wrapper must remain the policy boundary. */
   policyBlocked: boolean;
+  /** Wrapper that stopped unwrapping because it is semantic, unsupported, or too deep. */
   blockedWrapper?: string;
+  /** True when the final runtime argv is a directly bindable shell wrapper. */
   shellWrapperExecutable: boolean;
+  /** Inline shell payload when it can be bound without startup-file ambiguity. */
   shellInlineCommand: string | null;
 };
 
@@ -62,6 +69,7 @@ function finalizeExecWrapperTrustPlan(
   return plan;
 }
 
+/** Builds the command-resolution trust plan across dispatch and shell-wrapper layers. */
 export function resolveExecWrapperTrustPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,

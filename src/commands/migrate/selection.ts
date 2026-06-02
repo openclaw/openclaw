@@ -113,6 +113,7 @@ function resolveSelectedMigrationItemIds(params: {
       continue;
     }
     if (matches.size > 1) {
+      // CLI refs are accepted only when they resolve to one item; guessing could migrate wrong data.
       ambiguousRefs.push(ref);
       continue;
     }
@@ -173,6 +174,7 @@ function resolveSelectedPluginItemIds(
   });
 }
 
+/** Returns skill copy items that the user can explicitly include or skip before apply. */
 export function getSelectableMigrationSkillItems(plan: MigrationPlan): MigrationItem[] {
   return plan.items.filter(
     (item) =>
@@ -182,6 +184,7 @@ export function getSelectableMigrationSkillItems(plan: MigrationPlan): Migration
   );
 }
 
+/** Returns plugin install items that can drive plugin install and config-pruning choices. */
 export function getSelectableMigrationPluginItems(plan: MigrationPlan): MigrationItem[] {
   // Only source-installed curated Codex plugins become selectable install items.
   // Cached/manual-review plugin bundles are emitted as manual items, the aggregate
@@ -196,28 +199,34 @@ export function getSelectableMigrationPluginItems(plan: MigrationPlan): Migratio
   );
 }
 
+/** Stable checkbox value for interactive skill migration selection. */
 export function getMigrationSkillSelectionValue(item: MigrationItem): string {
   return item.id;
 }
 
+/** Stable checkbox value for interactive plugin migration selection. */
 export function getMigrationPluginSelectionValue(item: MigrationItem): string {
   return item.id;
 }
 
+/** User-facing plugin selector label, preferring discovered metadata over generated ids. */
 export function formatMigrationPluginSelectionLabel(item: MigrationItem): string {
   return readMigrationPluginName(item) ?? item.id.replace(/^plugin:/u, "");
 }
 
+/** Default skill selections include planned work but leave conflicts opt-in. */
 export function getDefaultMigrationSkillSelectionValues(items: readonly MigrationItem[]): string[] {
   return items.filter((item) => item.status === "planned").map(getMigrationSkillSelectionValue);
 }
 
+/** Default plugin selections include planned work but leave conflicts opt-in. */
 export function getDefaultMigrationPluginSelectionValues(
   items: readonly MigrationItem[],
 ): string[] {
   return items.filter((item) => item.status === "planned").map(getMigrationPluginSelectionValue);
 }
 
+/** User-facing skill selector label, preferring source metadata over generated ids. */
 export function formatMigrationSkillSelectionLabel(item: MigrationItem): string {
   return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
 }
@@ -247,6 +256,7 @@ export function formatMigrationPluginSelectionHint(item: MigrationItem): string 
   return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
 
+/** Marks selectable skill items outside the chosen id set as skipped and refreshes the summary. */
 export function applyMigrationSelectedSkillItemIds(
   plan: MigrationPlan,
   selectedItemIds: ReadonlySet<string>,
@@ -265,6 +275,7 @@ export function applyMigrationSelectedSkillItemIds(
   };
 }
 
+/** Applies CLI-provided skill refs to a migration plan. */
 export function applyMigrationSkillSelection(
   plan: MigrationPlan,
   selectedSkillRefs: readonly string[] | undefined,
@@ -277,6 +288,7 @@ export function applyMigrationSkillSelection(
   return applyMigrationSelectedSkillItemIds(plan, selectedIds);
 }
 
+/** Applies CLI-provided plugin refs to install items and their aggregate config patch. */
 export function applyMigrationPluginSelection(
   plan: MigrationPlan,
   selectedPluginRefs: readonly string[] | undefined,
@@ -289,6 +301,7 @@ export function applyMigrationPluginSelection(
   return applyMigrationSelectedPluginItemIds(plan, selectedIds);
 }
 
+/** Marks unselected plugin installs as skipped and prunes their generated Codex config entries. */
 export function applyMigrationSelectedPluginItemIds(
   plan: MigrationPlan,
   selectedItemIds: ReadonlySet<string>,
@@ -303,6 +316,7 @@ export function applyMigrationSelectedPluginItemIds(
   );
   const items = plan.items.map((item) => {
     if (isCodexPluginConfigItem(item)) {
+      // The aggregate config patch must mirror selected installs or skipped plugins would be enabled.
       return applyCodexPluginConfigSelection(item, selectedConfigKeys);
     }
     if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
@@ -424,6 +438,7 @@ function resolveMigrationSelectionBulkToggleValues(
   return undefined;
 }
 
+/** Resolves the current checkbox payload into selected skill item ids. */
 export function resolveInteractiveMigrationSkillSelection(
   items: readonly MigrationItem[],
   selectedValues: readonly string[],
@@ -435,6 +450,7 @@ export function resolveInteractiveMigrationSkillSelection(
   );
 }
 
+/** Resolves the current checkbox payload into selected plugin item ids. */
 export function resolveInteractiveMigrationPluginSelection(
   items: readonly MigrationItem[],
   selectedValues: readonly string[],
@@ -446,6 +462,7 @@ export function resolveInteractiveMigrationPluginSelection(
   );
 }
 
+/** Reconciles checkbox toggle events with bulk select/deselect sentinel values. */
 export function reconcileInteractiveMigrationSkillToggleValues(
   selectedValues: readonly string[],
   activatedValue: string | undefined,
@@ -456,6 +473,7 @@ export function reconcileInteractiveMigrationSkillToggleValues(
     return bulkValues;
   }
   if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
+    // Item toggles drop bulk sentinels so the next render reflects the actual partial selection.
     return selectedMigrationItemValues(selectedValues);
   }
   return selectedValues.filter(
@@ -465,6 +483,7 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   );
 }
 
+/** Reconciles Enter key activation with explicit item selection and bulk sentinel actions. */
 export function reconcileInteractiveMigrationEnterValues(
   selectedValues: readonly string[],
   activatedValue: string | undefined,
@@ -485,6 +504,7 @@ export function reconcileInteractiveMigrationEnterValues(
   return [...selectedValues];
 }
 
+/** Reconciles keyboard shortcuts that select all, invert all, or preserve partial selection. */
 export function reconcileInteractiveMigrationShortcutValues(
   previousValues: readonly string[],
   selectedValues: readonly string[],
@@ -493,6 +513,7 @@ export function reconcileInteractiveMigrationShortcutValues(
 ): string[] {
   const previousSelectable = previousValues.filter((value) => selectableValues.includes(value));
   if (key === "a" && previousSelectable.length === selectableValues.length) {
+    // Pressing "a" from an all-selected state means invert to none, not reselect all.
     return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
   }
 

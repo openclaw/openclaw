@@ -41,6 +41,11 @@ function hasUnsupportedShellWrapper(explanation: CommandExplanation): boolean {
   );
 }
 
+/**
+ * Converts rich command explanations into approval-highlight byte spans.
+ * Unsupported wrapper shells opt out entirely because their nested payload
+ * offsets are not guaranteed to point at the original source text.
+ */
 export function formatCommandSpans(explanation: CommandExplanation): ExecApprovalCommandSpan[] {
   if (hasUnsupportedShellWrapper(explanation)) {
     return [];

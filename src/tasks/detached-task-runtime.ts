@@ -30,6 +30,7 @@ const DETACHED_TASK_RECOVERY_WARN_MS = 5_000;
 
 export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
+/** Core fallback runtime used until a plugin registers task lifecycle hooks. */
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: createQueuedTaskRunFromExecutor,
   createRunningTaskRun: createRunningTaskRunFromExecutor,
@@ -42,16 +43,19 @@ const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   cancelDetachedTaskRunById: cancelDetachedTaskRunByIdInCore,
 };
 
+/** Returns the registered detached task runtime, or core's default executor-backed runtime. */
 export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime {
   return getRegisteredDetachedTaskLifecycleRuntime() ?? DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
 }
 
+/** Returns a copy of the current detached task runtime registration metadata. */
 export function getDetachedTaskLifecycleRuntimeRegistration():
   | DetachedTaskLifecycleRuntimeRegistration
   | undefined {
   return getDetachedTaskLifecycleRuntimeRegistrationState();
 }
 
+/** Installs plugin-owned detached task lifecycle hooks. */
 export function registerDetachedTaskRuntime(
   pluginId: string,
   runtime: DetachedTaskLifecycleRuntime,
@@ -63,6 +67,7 @@ export function setDetachedTaskLifecycleRuntime(runtime: DetachedTaskLifecycleRu
   registerDetachedTaskRuntime("__test__", runtime);
 }
 
+/** Clears test-installed runtime hooks so later tests fall back to core behavior. */
 export function resetDetachedTaskLifecycleRuntimeForTests(): void {
   clearDetachedTaskLifecycleRuntimeRegistration();
 }
@@ -96,6 +101,8 @@ export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams): Task
   if (runtime.finalizeTaskRunByRunId) {
     return runtime.finalizeTaskRunByRunId(params);
   }
+  // Older runtimes expose separate complete/fail hooks. Keep that fallback so
+  // existing task-owning integrations can adopt unified finalization gradually.
   if (params.status === "succeeded") {
     return runtime.completeTaskRunByRunId(params);
   }
@@ -150,6 +157,8 @@ export async function tryRecoverTaskBeforeMarkLost(
     if (result && typeof result.recovered === "boolean") {
       return result;
     }
+    // Invalid hook results are treated as no recovery; maintenance can still
+    // mark the task lost instead of trusting malformed plugin state.
     log.warn("Detached task recovery hook returned invalid result, proceeding with markTaskLost", {
       taskId: params.taskId,
       runtime: params.runtime,

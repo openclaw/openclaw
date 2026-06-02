@@ -24,18 +24,28 @@ import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
 export type ChannelUiMetaEntry = {
+  /** Channel id used by config, setup, and runtime selection. */
   id: string;
+  /** Short label for compact channel pickers. */
   label: string;
+  /** Longer label for account/setup screens that need disambiguation. */
   detailLabel: string;
+  /** Optional platform icon name for native UI surfaces. */
   systemImage?: string;
 };
 
 export type ChannelUiCatalog = {
+  /** Ordered channel entries for modern callers. */
   entries: ChannelUiMetaEntry[];
+  /** Legacy ordered id list kept in sync with `entries`. */
   order: string[];
+  /** Legacy lookup map from channel id to compact label. */
   labels: Record<string, string>;
+  /** Legacy lookup map from channel id to detail label. */
   detailLabels: Record<string, string>;
+  /** Legacy lookup map from channel id to native icon name. */
   systemImages: Record<string, string>;
+  /** Lookup map for callers that need the full entry by id. */
   byId: Record<string, ChannelUiMetaEntry>;
 };
 
@@ -43,12 +53,19 @@ export type ChannelPluginCatalogInstall = PluginPackageInstall &
   ({ clawhubSpec: string } | { npmSpec: string });
 
 export type ChannelPluginCatalogEntry = {
+  /** Channel id surfaced to setup, docs, and config. */
   id: string;
+  /** Owning plugin id when the channel metadata comes from a plugin manifest. */
   pluginId?: string;
+  /** Discovery origin used to resolve catalog shadowing and trust. */
   origin?: PluginOrigin;
+  /** True when a fallback entry is linked to the shipped official catalog. */
   trustedSourceLinkedOfficialInstall?: boolean;
+  /** Normalized presentation metadata for setup and docs. */
   meta: ChannelMeta;
+  /** Install choices exposed to setup/doctor flows. */
   install: ChannelPluginCatalogInstall;
+  /** Human-readable install source details derived from `install`. */
   installSource?: PluginInstallSourceInfo;
 };
 
@@ -276,6 +293,8 @@ function resolveInstallInfo(params: {
     parsedNpmSpec?.selectorKind === "none" &&
     (!parsedPackageName || parsedNpmSpec.name === parsedPackageName.name)
   ) {
+    // Prerelease channel plugins should install the exact advertised package
+    // version unless the catalog already selected a range, tag, or specifier.
     npmSpec = `${parsedNpmSpec.name}@${packageVersion}`;
   }
   if (!clawhubSpec && !npmSpec) {
@@ -390,6 +409,10 @@ function buildExternalCatalogEntry(
   });
 }
 
+/**
+ * Builds the channel catalog shape consumed by UI code, including the legacy
+ * lookup maps that older setup surfaces still read.
+ */
 export function buildChannelUiCatalog(
   plugins: Array<{ id: string; meta: ChannelMeta }>,
 ): ChannelUiCatalog {
@@ -462,6 +485,8 @@ export function listRawChannelPluginCatalogEntries(
   }
 
   for (const entry of loadOfficialCatalogEntries(options)) {
+    // Official fallback entries fill gaps for shipped channels, but any
+    // discovered install source must win because it reflects local reality.
     const priority = FALLBACK_CATALOG_PRIORITY;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
@@ -505,6 +530,10 @@ export function listChannelPluginCatalogEntries(
   return listRawChannelPluginCatalogEntries(options);
 }
 
+/**
+ * Finds a catalog entry by normalized channel id. Returns raw catalog data, so
+ * execution-facing callers should still apply trust filtering before loading.
+ */
 export function getChannelPluginCatalogEntry(
   id: string,
   options: CatalogOptions = {},

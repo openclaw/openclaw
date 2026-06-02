@@ -12,6 +12,7 @@ const DEFAULT_SAFE_BUILTINS: ReadonlySet<string> = new Set([
   "true",
 ]);
 
+/** Returns true when a parsed command segment is a closed, side-effect-light POSIX builtin. */
 export function isSafeBuiltinSegment(params: {
   segment: ExecCommandSegment;
   platform?: string | null;

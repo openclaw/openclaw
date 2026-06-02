@@ -19,6 +19,7 @@ type OpenClawReleaseVersion = {
   correctionNumber?: number;
 };
 
+/** Parsed npm registry spec used by plugin install/update policy checks. */
 export type ParsedRegistryNpmSpec = {
   name: string;
   raw: string;
@@ -54,6 +55,8 @@ function parseRegistryNpmSpecInternal(
   const name = hasSelector ? spec.slice(0, at) : spec;
   const selector = hasSelector ? spec.slice(at + 1) : "";
 
+  // Keep package-name validation registry-shaped only; aliases and path-like
+  // names are rejected before installer code receives the spec.
   const unscopedName = /^[a-z0-9][a-z0-9-._~]*$/;
   const scopedName = /^@[a-z0-9][a-z0-9-._~]*\/[a-z0-9][a-z0-9-._~]*$/;
   const isValidName = name.startsWith("@") ? scopedName.test(name) : unscopedName.test(name);
@@ -112,21 +115,32 @@ function parseRegistryNpmSpecInternal(
   };
 }
 
+/**
+ * Parse an npm registry-only package spec. URL, git, file, alias, range, and
+ * whitespace forms are rejected because this parser feeds host-side install and
+ * release paths that must not execute arbitrary package-manager resolution.
+ */
 export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
   return parsed.ok ? parsed.parsed : null;
 }
 
+/** Return true when a registry npm spec names an `@openclaw/*` package. */
 export function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean {
   const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
   return parsed?.name.startsWith("@openclaw/") === true;
 }
 
+/**
+ * Validate a registry-only npm spec and return the user-facing rejection reason.
+ * A null result means the spec is safe for the registry install pipeline.
+ */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
   return parsed.ok ? null : parsed.error;
 }
 
+/** Return true when a value is an exact semver version, allowing an optional leading `v`. */
 export function isExactSemverVersion(value: string): boolean {
   return EXACT_SEMVER_VERSION_RE.test(value.trim());
 }
@@ -156,6 +170,7 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
     date.getUTCMonth() !== month - 1 ||
     date.getUTCDate() !== day
   ) {
+    // Date-based OpenClaw versions must be real UTC calendar dates.
     return null;
   }
 
@@ -181,11 +196,20 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
   };
 }
 
+/**
+ * Return true for OpenClaw's date-based stable correction versions, such as
+ * `2026.6.1-2`. These are stable releases even though they contain a hyphen.
+ */
 export function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed?.channel === "stable" && parsed.correctionNumber !== undefined;
 }
 
+/**
+ * Compare OpenClaw date-based release versions across alpha, beta, stable, and
+ * stable-correction channels. Returns null for versions outside this scheme so
+ * generic semver comparison can remain a separate concern.
+ */
 export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
   const parsedLeft = parseOpenClawReleaseVersion(left);
   const parsedRight = parseOpenClawReleaseVersion(right);
@@ -208,12 +232,21 @@ export function compareOpenClawReleaseVersions(left: string, right: string): num
   return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
 }
 
+/**
+ * Return true for exact semver prereleases while treating OpenClaw stable
+ * correction versions as stable.
+ */
 export function isPrereleaseSemverVersion(value: string): boolean {
   const trimmed = value.trim();
   const match = EXACT_SEMVER_VERSION_RE.exec(trimmed);
   return Boolean(match?.[4]) && !isOpenClawStableCorrectionVersion(trimmed);
 }
 
+/**
+ * Decide whether a resolved prerelease version is allowed for the parsed spec.
+ * Bare specs and `latest` cannot resolve to prereleases; exact prerelease
+ * versions and explicit prerelease tags are treated as user opt-in.
+ */
 export function isPrereleaseResolutionAllowed(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedVersion?: string;
@@ -227,9 +260,11 @@ export function isPrereleaseResolutionAllowed(params: {
   if (params.spec.selectorKind === "exact-version") {
     return params.spec.selectorIsPrerelease;
   }
+  // Any non-latest dist-tag is an explicit selector controlled by the caller.
   return normalizeLowercaseStringOrEmpty(params.spec.selector) !== "latest";
 }
 
+/** Build the install error shown when a spec unexpectedly resolves to a prerelease. */
 export function formatPrereleaseResolutionError(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedVersion: string;

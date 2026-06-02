@@ -14,12 +14,14 @@ function accessGroupNames(entries: readonly (string | number)[]): string[] {
   );
 }
 
+/** Extracts every referenced access-group name from raw allowlist entry groups. */
 export function allReferencedAccessGroupNames(
   entries: Array<readonly (string | number)[]>,
 ): string[] {
   return uniqueStrings(entries.flatMap((entryGroup) => accessGroupNames(entryGroup)));
 }
 
+/** Normalizes direct entries while preserving access-group tokens for later expansion. */
 export async function normalizeEffectiveEntries(params: {
   adapter: ChannelIngressAdapter;
   accountId: string;
@@ -45,6 +47,7 @@ export async function normalizeEffectiveEntries(params: {
   ]);
 }
 
+/** Resolves dynamic access-group facts before the state builder expands static sender groups. */
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {
   input: ResolveChannelMessageIngressParams;
   channelId: ChannelIngressChannelId;

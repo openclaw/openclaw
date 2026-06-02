@@ -19,6 +19,10 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
+/**
+ * Read and trim a loopback tool name without trusting tool object getters. A
+ * missing name makes the tool ineligible for MCP schema export.
+ */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -136,6 +140,11 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
   return typeof value === "boolean" || isRecord(value);
 }
 
+/**
+ * Convert gateway-scoped tools into MCP tool schema entries. Malformed tool
+ * definitions are skipped, and union input schemas are flattened because older
+ * MCP clients expect a single object schema.
+ */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

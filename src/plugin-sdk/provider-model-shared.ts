@@ -1,8 +1,3 @@
-// Shared model/catalog helpers for provider plugins.
-//
-// Keep provider-owned exports out of this subpath so plugin loaders can import it
-// without recursing through provider-specific facades.
-
 import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
@@ -85,6 +80,7 @@ export {
   buildStrictAnthropicReplayPolicy,
 };
 
+/** Normalizes provider ids using the same canonicalization as model catalog config. */
 export function normalizeProviderId(provider: string): string {
   return normalizeProviderIdCore(provider);
 }
@@ -123,6 +119,7 @@ function getModelProviderHint(modelId: string): string | null {
   if (slashIndex <= 0) {
     return null;
   }
+  // Only provider-prefixed refs carry a reliable owner hint; bare model ids stay provider-neutral.
   return trimmed.slice(0, slashIndex) || null;
 }
 
@@ -172,14 +169,17 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
   return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
+/** Normalizes Antigravity preview aliases to their catalog model id. */
 export function normalizeAntigravityPreviewModelId(id: string): string {
   return normalizeAntigravityPreviewModelIdCore(id);
 }
 
+/** Normalizes Google preview aliases to their catalog model id. */
 export function normalizeGooglePreviewModelId(id: string): string {
   return normalizeGooglePreviewModelIdCore(id);
 }
 
+/** Replay hook families shared by provider plugins with compatible transcript semantics. */
 export type ProviderReplayFamily =
   | "openai-compatible"
   | "anthropic-by-model"
@@ -196,7 +196,9 @@ type ProviderReplayFamilyHooks = Pick<
 type BuildProviderReplayFamilyHooksOptions =
   | {
       family: "openai-compatible";
+      /** Whether OpenAI-compatible replay should rewrite tool call ids for provider limits. */
       sanitizeToolCallIds?: boolean;
+      /** Whether OpenAI-compatible replay should remove reasoning blocks from history. */
       dropReasoningFromHistory?: boolean;
     }
   | { family: "anthropic-by-model" }
@@ -205,9 +207,11 @@ type BuildProviderReplayFamilyHooksOptions =
   | { family: "passthrough-gemini" }
   | {
       family: "hybrid-anthropic-openai";
+      /** Whether Anthropic-shaped models in the hybrid family should drop thinking blocks. */
       anthropicModelDropThinkingBlocks?: boolean;
     };
 
+/** Builds provider replay/sanitization/reasoning hooks for a known compatibility family. */
 export function buildProviderReplayFamilyHooks(
   options: BuildProviderReplayFamilyHooksOptions,
 ): ProviderReplayFamilyHooks {
@@ -218,6 +222,7 @@ export function buildProviderReplayFamilyHooks(
         dropReasoningFromHistory: options.dropReasoningFromHistory,
       };
       return {
+        // Capture options once so every replay request for this provider uses the same family policy.
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
           buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
             ...policyOptions,

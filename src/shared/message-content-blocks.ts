@@ -1,3 +1,4 @@
+/** Visits object-shaped blocks in an unknown message `content` array. */
 export function visitObjectContentBlocks(
   message: unknown,
   visitor: (block: Record<string, unknown>) => void,
@@ -13,6 +14,7 @@ export function visitObjectContentBlocks(
     if (!block || typeof block !== "object") {
       continue;
     }
+    // Tool-call repair mutates provider block objects in place, so keep the original reference.
     visitor(block as Record<string, unknown>);
   }
 }

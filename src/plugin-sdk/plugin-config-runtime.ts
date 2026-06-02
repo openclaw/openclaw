@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.js";
 
 export { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 
+/** Requires a resolved runtime config at plugin runtime boundaries. */
 export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {
   if (config) {
     return config;
@@ -11,6 +12,7 @@ export function requireRuntimeConfig(config: OpenClawConfig, context: string): O
   );
 }
 
+/** Resolves a plugin's config object from the normalized plugins.entries map. */
 export function resolvePluginConfigObject(
   config: OpenClawConfig | undefined,
   pluginId: string,
@@ -28,11 +30,14 @@ export function resolvePluginConfigObject(
     return undefined;
   }
   const pluginConfig = (entry as { config?: unknown }).config;
+  // Plugin config must remain an object here; scalar config is ignored instead of flowing into
+  // plugin runtime code as a misleading empty config.
   return pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)
     ? (pluginConfig as Record<string, unknown>)
     : undefined;
 }
 
+/** Resolves live plugin config when a runtime loader exists, otherwise falls back to startup config. */
 export function resolveLivePluginConfigObject(
   runtimeConfigLoader: (() => OpenClawConfig | undefined) | undefined,
   pluginId: string,
@@ -41,5 +46,7 @@ export function resolveLivePluginConfigObject(
   if (typeof runtimeConfigLoader !== "function") {
     return startupPluginConfig;
   }
+  // Once a live loader is available, do not fall back to startup config; a missing runtime
+  // plugin entry means the plugin was removed or disabled after startup.
   return resolvePluginConfigObject(runtimeConfigLoader(), pluginId);
 }

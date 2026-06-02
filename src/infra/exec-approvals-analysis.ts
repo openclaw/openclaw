@@ -31,6 +31,7 @@ export {
   type ExecArgvToken,
 } from "./exec-command-resolution.js";
 
+/** One executable segment extracted from shell text or argv for approval analysis. */
 export type ExecCommandSegment = {
   raw: string;
   argv: string[];
@@ -38,6 +39,7 @@ export type ExecCommandSegment = {
   resolution: CommandResolution | null;
 };
 
+/** Parsed command analysis returned to allowlist and approval policy evaluators. */
 export type ExecCommandAnalysis = {
   ok: boolean;
   reason?: string;
@@ -45,8 +47,10 @@ export type ExecCommandAnalysis = {
   chains?: ExecCommandSegment[][]; // Segments grouped by chain operator (&&, ||, ;)
 };
 
+/** Shell chain operators that preserve ordering semantics between command groups. */
 export type ShellChainOperator = "&&" | "||" | ";";
 
+/** One shell command part plus the operator that links it to the following part. */
 export type ShellChainPart = {
   part: string;
   opToNext: ShellChainOperator | null;
@@ -672,6 +676,7 @@ function analyzeWindowsShellCommand(params: {
   };
 }
 
+/** Returns true when the supplied platform string should use Windows shell rules. */
 export function isWindowsPlatform(platform?: string | null): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(platform);
   return normalized.startsWith("win");
@@ -834,6 +839,7 @@ function shellEscapeSingleArg(value: string): string {
 // strings (unlike cmd.exe delayed expansion), so "Hello!" is safe to pass through.
 const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$])/;
 
+/** Escapes one Windows command argument or rejects tokens with unsafe shell metacharacters. */
 export function windowsEscapeArg(value: string): { ok: true; escaped: string } | { ok: false } {
   if (value === "") {
     return { ok: true, escaped: '""' };
@@ -981,6 +987,7 @@ function finalizeRebuiltShellCommand(
   return { ok: true, command: rebuilt.command };
 }
 
+/** Resolves the exact argv that approval enforcement should execute for a parsed segment. */
 export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[] | null {
   if (segment.resolution?.policyBlocked === true) {
     return null;
@@ -1201,6 +1208,7 @@ export function splitCommandChain(command: string): string[] | null {
   return parts.map((p) => p.part);
 }
 
+/** Parses shell command text into executable segments and optional chain groups. */
 export function analyzeShellCommand(params: {
   command: string;
   cwd?: string;
@@ -1249,6 +1257,7 @@ export function analyzeShellCommand(params: {
   return { ok: true, segments };
 }
 
+/** Wraps an already-tokenized argv command in the same analysis shape as shell parsing. */
 export function analyzeArgvCommand(params: {
   argv: string[];
   cwd?: string;

@@ -18,6 +18,7 @@ function tryRelative(root: string, filePath: string): string | null {
   return rel.replaceAll("\\", "/");
 }
 
+/** Formats a plugin source path for human CLI tables using stock/workspace/global prefixes. */
 export function formatPluginSourceForTable(
   plugin: Pick<PluginRecord, "source" | "origin">,
   roots: PluginSourceRoots,
@@ -43,6 +44,7 @@ export function formatPluginSourceForTable(
     }
   }
 
-  // Keep this stable/pasteable; only ~-shorten.
+  // Keep absolute fallback values stable/pasteable; only ~-shorten instead of relativizing
+  // against whichever root happens to be nearest.
   return { value: shortenHomeInString(raw) };
 }

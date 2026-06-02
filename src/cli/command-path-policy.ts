@@ -18,6 +18,7 @@ const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   networkProxy: "default",
 };
 
+/** Resolve command policy by applying every matching catalog prefix in declaration order. */
 export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPathPolicy {
   const resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
   for (const entry of cliCommandCatalog) {
@@ -39,6 +40,7 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
   return pattern.every((segment, index) => commandPath[index] === segment);
 }
 
+/** Resolve argv to the best command catalog path for early routing/startup decisions. */
 export function resolveCliCatalogCommandPath(argv: string[]): string[] {
   const tokens =
     resolveGatewayCatalogCommandPath(argv) ?? getCommandPathWithRootOptions(argv, argv.length);
@@ -57,6 +59,7 @@ export function resolveCliCatalogCommandPath(argv: string[]): string[] {
   return bestMatch ? [...bestMatch] : [tokens[0]];
 }
 
+/** Resolve whether early command routing should bypass network proxy wiring. */
 export function resolveCliNetworkProxyPolicy(argv: string[]): CliNetworkProxyPolicy {
   const commandPath = resolveCliCatalogCommandPath(argv);
   const networkProxy = resolveCliCommandPathPolicy(commandPath).networkProxy;
