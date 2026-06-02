@@ -1,5 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { domainToUnicode } from "node:url";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -334,7 +335,7 @@ export function isBlockedHostname(hostname: string): boolean {
   if (!normalized) {
     return false;
   }
-  return isBlockedHostnameNormalized(normalized);
+  return isBlockedHostnameNormalizedOrIdna(normalized);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {
@@ -348,12 +349,39 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
   );
 }
 
+function normalizeIdnaHostnameForBlockedComparison(normalized: string): string | undefined {
+  const decoded = domainToUnicode(normalized);
+  if (!decoded || decoded === normalized) {
+    return undefined;
+  }
+  const decodedNormalized = normalizeHostname(decoded);
+  if (!decodedNormalized || decodedNormalized === normalized) {
+    return undefined;
+  }
+  return decodedNormalized;
+}
+
+function isBlockedHostnameNormalizedOrIdna(normalized: string): boolean {
+  if (isBlockedHostnameNormalized(normalized)) {
+    return true;
+  }
+  const decodedNormalized = normalizeIdnaHostnameForBlockedComparison(normalized);
+  return decodedNormalized ? isBlockedHostnameNormalized(decodedNormalized) : false;
+}
+
 export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     return false;
   }
-  return isBlockedHostnameNormalized(normalized) || isPrivateIpAddress(normalized, policy);
+  if (isBlockedHostnameNormalized(normalized) || isPrivateIpAddress(normalized, policy)) {
+    return true;
+  }
+  const decodedNormalized = normalizeIdnaHostnameForBlockedComparison(normalized);
+  return decodedNormalized
+    ? isBlockedHostnameNormalized(decodedNormalized) ||
+        isPrivateIpAddress(decodedNormalized, policy)
+    : false;
 }
 
 const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
