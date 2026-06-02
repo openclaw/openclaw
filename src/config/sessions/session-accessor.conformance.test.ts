@@ -8,6 +8,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  cleanupSessionLifecycleArtifacts,
   listSessionEntries,
   loadExactSessionEntry,
   loadSessionEntry,
@@ -32,6 +33,7 @@ import {
 import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
+  cleanupSqliteSessionLifecycleArtifacts,
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
@@ -72,6 +74,13 @@ type AccessorAdapter = {
     scope: SessionAccessScope,
     update: (entry: SessionEntry) => Partial<SessionEntry> | null,
   ): Promise<SessionEntry | null>;
+  cleanupSessionLifecycleArtifacts(params: {
+    storePath: string;
+    sessionKeySegmentPrefix: string;
+    transcriptContentMarker: string;
+    orphanTranscriptMinAgeMs: number;
+    nowMs?: number;
+  }): Promise<{ removedEntries: number; archivedTranscriptArtifacts: number }>;
   loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
   appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
   appendTranscriptMessage<TMessage>(
@@ -117,6 +126,7 @@ const fileBackedAdapter: AccessorAdapter = {
   replaceSessionEntry,
   patchSessionEntry,
   updateSessionEntry,
+  cleanupSessionLifecycleArtifacts,
   loadTranscriptEvents,
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -152,6 +162,7 @@ const sqliteAdapter: AccessorAdapter = {
   replaceSessionEntry: replaceSqliteSessionEntry,
   patchSessionEntry: patchSqliteSessionEntry,
   updateSessionEntry: updateSqliteSessionEntry,
+  cleanupSessionLifecycleArtifacts: cleanupSqliteSessionLifecycleArtifacts,
   loadTranscriptEvents: loadSqliteTranscriptEvents,
   appendTranscriptEvent: appendSqliteTranscriptEvent,
   appendTranscriptMessage: appendSqliteTranscriptMessage,
@@ -283,6 +294,150 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
           sessionId: "exact-session",
         }),
       });
+    });
+
+    it("conforms for lifecycle entry and transcript cleanup", async () => {
+      const nowMs = Date.now();
+      const oldTimestamp = nowMs - 600_000;
+      const cleanupStorePath =
+        adapter.name === "sqlite"
+          ? path.join(paths.stateDir, "agents", "main", "sessions", "sessions.json")
+          : paths.storePath;
+      const scopedEntry = (sessionKey: string): SessionAccessScope => ({
+        ...adapter.entryScope(paths),
+        sessionKey,
+        storePath: cleanupStorePath,
+      });
+      const scopedTranscript = (
+        sessionKey: string,
+        sessionId: string,
+      ): SessionTranscriptAccessScope => ({
+        ...adapter.transcriptScope(paths, sessionId),
+        sessionKey,
+        storePath: cleanupStorePath,
+      });
+      const writeTranscript = async (params: {
+        sessionKey: string;
+        sessionId: string;
+        old?: boolean;
+      }) => {
+        const timestamp = params.old ? oldTimestamp : nowMs;
+        const event = {
+          id: `${params.sessionId}-event`,
+          message: { role: "assistant", content: "cleanup" },
+          runId: "lifecycle-marker-run",
+          timestamp: new Date(timestamp).toISOString(),
+          type: "message",
+        };
+        if (adapter.name === "sqlite") {
+          await adapter.appendTranscriptEvent(
+            scopedTranscript(params.sessionKey, params.sessionId),
+            event,
+          );
+          return;
+        }
+        const transcriptPath = path.join(
+          path.dirname(cleanupStorePath),
+          `${params.sessionId}.jsonl`,
+        );
+        fs.writeFileSync(transcriptPath, `${JSON.stringify(event)}\n`, "utf-8");
+        if (params.old) {
+          const oldDate = new Date(oldTimestamp);
+          fs.utimesSync(transcriptPath, oldDate, oldDate);
+        }
+      };
+
+      await adapter.upsertSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing"), {
+        sessionId: "missing-lifecycle",
+        updatedAt: oldTimestamp,
+      });
+      await adapter.upsertSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-removed"), {
+        sessionId: "removed-lifecycle",
+        updatedAt: oldTimestamp,
+      });
+      await adapter.upsertSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-fresh"), {
+        sessionId: "fresh-lifecycle",
+        updatedAt: nowMs,
+      });
+      await adapter.upsertSessionEntry(
+        scopedEntry("agent:main:telegram:group:lifecycle-cleanup-room"),
+        {
+          sessionId: "kept-by-segment",
+          updatedAt: oldTimestamp,
+        },
+      );
+      await adapter.upsertSessionEntry(scopedEntry("agent:main:regular"), {
+        sessionId: "referenced",
+        updatedAt: oldTimestamp,
+      });
+      await writeTranscript({
+        sessionKey: "agent:main:lifecycle-cleanup-removed",
+        sessionId: "removed-lifecycle",
+        old: true,
+      });
+      await writeTranscript({
+        sessionKey: "agent:main:lifecycle-cleanup-fresh",
+        sessionId: "fresh-lifecycle",
+      });
+      await writeTranscript({
+        sessionKey: "agent:main:regular",
+        sessionId: "referenced",
+        old: true,
+      });
+      await writeTranscript({
+        sessionKey: "agent:main:orphan",
+        sessionId: "orphan-lifecycle",
+        old: true,
+      });
+
+      await expect(
+        adapter.cleanupSessionLifecycleArtifacts({
+          storePath: cleanupStorePath,
+          sessionKeySegmentPrefix: "lifecycle-cleanup-",
+          transcriptContentMarker: "lifecycle-marker-",
+          orphanTranscriptMinAgeMs: 300_000,
+          nowMs,
+        }),
+      ).resolves.toEqual({ removedEntries: 2, archivedTranscriptArtifacts: 2 });
+
+      expect(
+        adapter.loadSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing")),
+      ).toBeUndefined();
+      expect(
+        adapter.loadSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-removed")),
+      ).toBeUndefined();
+      expect(
+        adapter.loadSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-fresh")),
+      ).toMatchObject({
+        sessionId: "fresh-lifecycle",
+      });
+      expect(
+        adapter.loadSessionEntry(scopedEntry("agent:main:telegram:group:lifecycle-cleanup-room")),
+      ).toMatchObject({ sessionId: "kept-by-segment" });
+      expect(adapter.loadSessionEntry(scopedEntry("agent:main:regular"))).toMatchObject({
+        sessionId: "referenced",
+      });
+      if (adapter.name === "sqlite") {
+        expect(fs.existsSync(cleanupStorePath)).toBe(false);
+        await expect(
+          adapter.loadTranscriptEvents(scopedTranscript("agent:main:regular", "referenced")),
+        ).resolves.not.toEqual([]);
+        await expect(
+          adapter.loadTranscriptEvents(
+            scopedTranscript("agent:main:lifecycle-cleanup-removed", "removed-lifecycle"),
+          ),
+        ).resolves.toEqual([]);
+      } else {
+        const files = fs.readdirSync(path.dirname(cleanupStorePath));
+        expect(
+          files.filter((file) => file.startsWith("removed-lifecycle.jsonl.deleted.")),
+        ).toHaveLength(1);
+        expect(
+          files.filter((file) => file.startsWith("orphan-lifecycle.jsonl.deleted.")),
+        ).toHaveLength(1);
+        expect(files).toContain("fresh-lifecycle.jsonl");
+        expect(files).toContain("referenced.jsonl");
+      }
     });
 
     it("conforms for raw transcript event load and append", async () => {
