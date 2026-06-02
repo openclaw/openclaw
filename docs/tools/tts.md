@@ -764,6 +764,45 @@ Reply -> TTS enabled?
                             yes -> summarize -> TTS -> attach audio
 ```
 
+## Captioned final text (`captionedFinalText`)
+
+Channel plugins can opt in to **captioned final text** delivery by returning
+`{ captionedFinalText: true }` from `resolveChannelTtsVoiceDelivery`. When
+enabled, core changes how text and audio are delivered during an auto-TTS reply:
+
+1. **Live text suppression.** Instead of streaming block text to the channel
+   while TTS synthesis runs, core accumulates the text internally.
+2. **Bundled caption.** When synthesis completes, the accumulated text is
+   attached as a caption on the final voice-note message, so the user sees
+   text and audio together.
+3. **Text-only fallback.** If TTS synthesis fails, core delivers the
+   accumulated text as a plain text reply so the user still sees the content.
+
+### When to opt in
+
+Only channels whose voice-note send path supports captions should opt in.
+Telegram is the primary example — its `sendVoice` API accepts a `caption`
+parameter. Channels that cannot attach text to voice messages (or where
+clients do not render voice-note captions) should not enable this.
+
+### Tagged mode behavior
+
+In `auto: "tagged"` mode on caption-capable channels, partial reply previews
+are suppressed to prevent raw `[[tts:text]]...[[/tts:text]]` directives from
+leaking through the channel's draft preview lane before the final
+voice-plus-caption delivery.
+
+### How to opt in (channel plugin)
+
+Return `captionedFinalText: true` from your channel's
+`resolveChannelTtsVoiceDelivery` implementation:
+
+```ts
+resolveChannelTtsVoiceDelivery() {
+  return { captionedFinalText: true };
+}
+```
+
 ## Output formats by channel
 
 | Target                                | Format                                                                                                                                |
