@@ -454,6 +454,13 @@ export const th: TranslationMap = {
       useCurrentChatAria: "ใช้แชทปัจจุบันสำหรับคำขอแก้ไข",
       useCurrentChatTooltip: "ส่งคำขอแก้ไขไปยังเซสชันแชทปัจจุบันแทนเซสชัน workshop ของข้อเสนอ",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "กิจกรรม",

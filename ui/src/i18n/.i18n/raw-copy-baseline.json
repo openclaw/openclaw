@@ -3,27 +3,6 @@
   "entries": [
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Workshop view"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Board view"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Today view"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/app-render.ts",
@@ -34,21 +13,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/app-render.ts",
-      "text": "Board"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/app-render.ts",
       "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/app-render.ts",
-      "text": "Today"
     },
     {
       "count": 1,

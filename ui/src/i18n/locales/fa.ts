@@ -458,6 +458,13 @@ export const fa: TranslationMap = {
       useCurrentChatTooltip:
         "درخواست‌های بازبینی را به جای جلسه کارگاهی پیشنهاد، به جلسه گفتگوی فعلی ارسال کنید.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "فعالیت",

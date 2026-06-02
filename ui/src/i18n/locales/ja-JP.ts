@@ -460,6 +460,13 @@ export const ja_JP: TranslationMap = {
       useCurrentChatTooltip:
         "修正リクエストを提案のワークショップセッションではなく現在のチャットセッションに送信します。",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "アクティビティ",

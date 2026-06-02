@@ -459,6 +459,13 @@ export const uk: TranslationMap = {
       useCurrentChatTooltip:
         "Надсилати запити на перегляд до поточної сесії чату замість сесії воркшопу пропозиції.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Активність",

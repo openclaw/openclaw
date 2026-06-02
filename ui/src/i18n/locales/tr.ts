@@ -460,6 +460,13 @@ export const tr: TranslationMap = {
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Etkinlik",

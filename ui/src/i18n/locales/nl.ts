@@ -459,6 +459,13 @@ export const nl: TranslationMap = {
       useCurrentChatTooltip:
         "Stuur revisieverzoeken naar de huidige chatsessie in plaats van de workshopsessie van het voorstel.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Activiteit",

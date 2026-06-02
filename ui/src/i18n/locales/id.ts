@@ -457,6 +457,13 @@ export const id: TranslationMap = {
       useCurrentChatTooltip:
         "Kirim permintaan revisi ke sesi obrolan saat ini alih-alih sesi workshop proposal.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Aktivitas",

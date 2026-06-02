@@ -456,6 +456,13 @@ export const ar: TranslationMap = {
       useCurrentChatTooltip:
         "إرسال طلبات المراجعة إلى جلسة المحادثة الحالية بدلاً من جلسة workshop الخاصة بالمقترح.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "النشاط",

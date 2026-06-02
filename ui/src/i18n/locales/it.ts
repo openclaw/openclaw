@@ -459,6 +459,13 @@ export const it: TranslationMap = {
       useCurrentChatTooltip:
         "Invia le richieste di revisione alla sessione di chat corrente invece che alla sessione di workshop della proposta.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Attività",

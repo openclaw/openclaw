@@ -460,6 +460,13 @@ export const fr: TranslationMap = {
       useCurrentChatTooltip:
         "Envoyer les demandes de révision à la session de discussion actuelle plutôt qu'à la session d'atelier de la proposition.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Activité",

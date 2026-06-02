@@ -453,6 +453,13 @@ export const zh_CN: TranslationMap = {
       useCurrentChatAria: "将当前聊天用于修订请求",
       useCurrentChatTooltip: "将修订请求发送到当前聊天会话，而不是提案的工作坊会话。",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "活动",

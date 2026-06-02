@@ -461,6 +461,13 @@ export const de: TranslationMap = {
       useCurrentChatTooltip:
         "Überarbeitungsanfragen an die aktuelle Chat-Sitzung statt an die Workshop-Sitzung des Vorschlags senden.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Aktivität",

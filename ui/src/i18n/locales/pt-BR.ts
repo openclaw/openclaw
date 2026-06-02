@@ -457,6 +457,13 @@ export const pt_BR: TranslationMap = {
       useCurrentChatTooltip:
         "Enviar solicitações de revisão para a sessão de conversa atual em vez da sessão de workshop da proposta.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Atividade",

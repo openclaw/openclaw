@@ -458,6 +458,13 @@ export const pl: TranslationMap = {
       useCurrentChatTooltip:
         "Wysyłaj prośby o poprawki do bieżącej sesji czatu zamiast do sesji warsztatu propozycji.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Aktywność",

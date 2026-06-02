@@ -297,7 +297,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
       <div
         class="sw-mode-switch"
         role="tablist"
-        aria-label="Workshop view"
+        aria-label=${t("skillWorkshop.modeSwitcher.label")}
         data-mode=${state.skillWorkshopMode}
       >
         <button
@@ -305,7 +305,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
           class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
           role="tab"
           aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
-          title="Board view"
+          title=${t("skillWorkshop.modeSwitcher.boardTitle")}
           @click=${() => setSkillWorkshopMode(state, "board")}
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
@@ -313,14 +313,14 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
             <rect x="14" y="4" width="7" height="9" rx="1.5" />
             <rect x="14" y="15" width="7" height="5" rx="1.5" />
           </svg>
-          <span>Board</span>
+          <span>${t("skillWorkshop.modeSwitcher.board")}</span>
         </button>
         <button
           type="button"
           class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
           role="tab"
           aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
-          title="Today view"
+          title=${t("skillWorkshop.modeSwitcher.todayTitle")}
           @click=${() => setSkillWorkshopMode(state, "today")}
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
@@ -329,7 +329,7 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
               d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
             />
           </svg>
-          <span>Today</span>
+          <span>${t("skillWorkshop.modeSwitcher.today")}</span>
         </button>
         <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
       </div>

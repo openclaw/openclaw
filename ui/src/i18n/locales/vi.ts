@@ -458,6 +458,13 @@ export const vi: TranslationMap = {
       useCurrentChatTooltip:
         "Gửi yêu cầu chỉnh sửa đến phiên trò chuyện hiện tại thay vì phiên workshop của đề xuất.",
     },
+    modeSwitcher: {
+      label: "Workshop view",
+      board: "Board",
+      boardTitle: "Board view",
+      today: "Today",
+      todayTitle: "Today view",
+    },
   },
   activity: {
     title: "Hoạt động",
