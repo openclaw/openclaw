@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -2141,6 +2142,55 @@ describe("dispatchReplyFromConfig", () => {
     expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(false);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "agent:main:telegram:direct:1000001",
+    "agent:main:main",
+    "agent:main:direct:1000001",
+  ])("does not deliver raw internal exec failure warnings to Telegram direct chats (%s)", async (
+    sessionKey,
+  ) => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "private",
+      From: "telegram:1000001",
+      To: "telegram:bot",
+      SessionKey: sessionKey,
+    });
+    const rawCommand = "agent-flow task:list --project shopgent-app --json | jq empty";
+    const rawError = "jq: parse error: Invalid string: control characters";
+    const replyResolver = vi.fn(async () => {
+      const [payload] = buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        toolMetas: [],
+        lastAssistant: undefined,
+        currentAssistant: undefined,
+        lastToolError: {
+          toolName: "exec",
+          meta: `\`${rawCommand}\``,
+          error: rawError,
+          mutatingAction: true,
+        },
+        messageProvider: ctx.Provider,
+        sessionKey: ctx.SessionKey,
+        inlineToolResultsAllowed: false,
+        verboseLevel: "off",
+        toolResultFormat: "plain",
+      });
+      return payload ?? ({ text: "" } satisfies ReplyPayload);
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(JSON.stringify(dispatcher.sendToolResult.mock.calls)).not.toContain(rawCommand);
+    expect(JSON.stringify(dispatcher.sendFinalReply.mock.calls)).not.toContain(rawError);
   });
 
   it("forwards channel-owned group progress callbacks while verbose is off", async () => {

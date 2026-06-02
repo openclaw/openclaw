@@ -2916,6 +2916,8 @@ export async function runEmbeddedAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
+            messageChannel: params.messageChannel,
+            messageProvider: params.messageProvider,
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,

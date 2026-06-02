@@ -78,6 +78,28 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
 );
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
+const CHAT_MESSAGE_PROVIDERS = new Set([
+  "discord",
+  "feishu",
+  "googlechat",
+  "imessage",
+  "line",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "qqbot",
+  "signal",
+  "slack",
+  "telegram",
+  "tlon",
+  "twitch",
+  "whatsapp",
+  "zalo",
+]);
+const CHAT_SURFACE_SESSION_KEY_PATTERN =
+  /^agent:[^:]+:(?:discord|feishu|googlechat|imessage|line|matrix|mattermost|msteams|nextcloud-talk|nostr|qqbot|signal|slack|telegram|tlon|twitch|whatsapp|zalo)(?::|$)/u;
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
@@ -145,6 +167,31 @@ function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary):
   return lastToolError.middlewareError === true;
 }
 
+function shouldFailClosedForInternalToolWarning(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  messageChannel?: string;
+  messageProvider?: string;
+  sessionKey: string;
+}): boolean {
+  if (params.lastToolError.middlewareError === true) {
+    return true;
+  }
+  if (params.isCronTrigger === true || isCronSessionKey(params.sessionKey)) {
+    return false;
+  }
+  const messageSurface = normalizeOptionalLowercaseString(
+    params.messageChannel ?? params.messageProvider,
+  );
+  if (messageSurface && CHAT_MESSAGE_PROVIDERS.has(messageSurface)) {
+    return isExecLikeToolName(params.lastToolError.toolName);
+  }
+  return (
+    CHAT_SURFACE_SESSION_KEY_PATTERN.test(params.sessionKey) &&
+    isExecLikeToolName(params.lastToolError.toolName)
+  );
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
@@ -153,6 +200,8 @@ function resolveToolErrorWarningPolicy(params: {
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
+  messageChannel?: string;
+  messageProvider?: string;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
@@ -171,6 +220,9 @@ function resolveToolErrorWarningPolicy(params: {
   });
   const suppressToolErrorWarnings = toolErrorWarningOverride === true;
   if (suppressToolErrorWarnings) {
+    return { showWarning: false, includeDetails };
+  }
+  if (shouldFailClosedForInternalToolWarning(params)) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -207,6 +259,8 @@ export function buildEmbeddedRunPayloads(params: {
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
+  messageChannel?: string;
+  messageProvider?: string;
   sessionKey: string;
   provider?: string;
   model?: string;

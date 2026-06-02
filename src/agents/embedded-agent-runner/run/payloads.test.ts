@@ -351,7 +351,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
+  it("suppresses middleware tool-error diagnostics after assistant output", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Queued 3 topics."],
       lastToolError: {
@@ -362,15 +362,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "off",
     });
 
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Queued 3 topics.");
-    expect(payloads[1]).toMatchObject({
-      isError: true,
-    });
-    expect(payloads[1]?.text).toContain("Exec failed");
-    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
-      nonTerminalToolErrorWarning: true,
-    });
+    expect(JSON.stringify(payloads)).not.toContain("Exec failed");
+    expect(JSON.stringify(payloads)).not.toContain("Tool output unavailable");
   });
 
   it("surfaces concise bash tool errors when verbose mode is off", () => {
@@ -400,6 +395,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       title: "Bash",
       absentDetail: "codex native tool blocked",
     });
+  });
+
+  it.each([
+    "agent:main:telegram:direct:1000001",
+    "agent:main:main",
+    "agent:main:direct:1000001",
+  ])("fails closed for raw exec tool warnings on Telegram chat sessions (%s)", (sessionKey) => {
+    const payloads = buildPayloads({
+      messageProvider: "telegram",
+      sessionKey,
+      lastToolError: {
+        toolName: "exec",
+        meta: "`agent-flow task:list --project shopgent-app --json | jq empty`",
+        error: "jq: parse error: Invalid string: control characters",
+        mutatingAction: true,
+      },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toEqual([]);
+    expect(JSON.stringify(payloads)).not.toContain("agent-flow task:list");
+    expect(JSON.stringify(payloads)).not.toContain("jq: parse error");
   });
 
   it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
