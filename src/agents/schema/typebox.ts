@@ -1,34 +1,9 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import {
   CHANNEL_TARGET_DESCRIPTION,
   CHANNEL_TARGETS_DESCRIPTION,
 } from "../../infra/outbound/channel-target.js";
-
-type StringEnumOptions<T extends readonly string[]> = {
-  description?: string;
-  title?: string;
-  default?: T[number];
-};
-
-// NOTE: Avoid Type.Union([Type.Literal(...)]) which compiles to anyOf.
-// Some providers reject anyOf in tool schemas; a flat string enum is safer.
-export function stringEnum<T extends readonly string[]>(
-  values: T,
-  options: StringEnumOptions<T> = {},
-) {
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    enum: [...values],
-    ...options,
-  });
-}
-
-export function optionalStringEnum<T extends readonly string[]>(
-  values: T,
-  options: StringEnumOptions<T> = {},
-) {
-  return Type.Optional(stringEnum(values, options));
-}
+export { optionalStringEnum, stringEnum } from "./string-enum.js";
 
 export function channelTargetSchema(options?: { description?: string }) {
   return Type.String({
@@ -39,5 +14,41 @@ export function channelTargetSchema(options?: { description?: string }) {
 export function channelTargetsSchema(options?: { description?: string }) {
   return Type.Array(
     channelTargetSchema({ description: options?.description ?? CHANNEL_TARGETS_DESCRIPTION }),
+  );
+}
+
+type IntegerSchemaOptions = {
+  description?: string;
+  maximum?: number;
+};
+
+type NumberSchemaOptions = {
+  description?: string;
+  deprecated?: boolean;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+};
+
+export function optionalFiniteNumberSchema(options: NumberSchemaOptions = {}) {
+  return Type.Optional(Type.Number(options));
+}
+
+export function optionalPositiveIntegerSchema(options: IntegerSchemaOptions = {}) {
+  return Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      ...options,
+    }),
+  );
+}
+
+export function optionalNonNegativeIntegerSchema(options: IntegerSchemaOptions = {}) {
+  return Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      ...options,
+    }),
   );
 }

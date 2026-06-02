@@ -1,7 +1,8 @@
 import Foundation
+import OpenClawKit
 
-// NetService-based resolver for Bonjour services.
-// Used to resolve the service endpoint (SRV + A/AAAA) without trusting TXT for routing.
+/// NetService-based resolver for Bonjour services.
+/// Used to resolve the service endpoint (SRV + A/AAAA) without trusting TXT for routing.
 final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     private let service: NetService
     private let completion: ((host: String, port: Int)?) -> Void
@@ -20,8 +21,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     }
 
     func start(timeout: TimeInterval = 2.0) {
-        self.service.schedule(in: .main, forMode: .common)
-        self.service.resolve(withTimeout: timeout)
+        BonjourServiceResolverSupport.start(self.service, timeout: timeout)
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
@@ -38,7 +38,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
         self.finish(result: nil)
     }
 
-    private func finish(result: ((host: String, port: Int))?) {
+    private func finish(result: (host: String, port: Int)?) {
         guard !self.didFinish else { return }
         self.didFinish = true
         self.service.stop()
@@ -47,9 +47,6 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     }
 
     private static func normalizeHost(_ raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty { return nil }
-        return trimmed.hasSuffix(".") ? String(trimmed.dropLast()) : trimmed
+        BonjourServiceResolverSupport.normalizeHost(raw)
     }
 }
-

@@ -1,9 +1,20 @@
 import { execFileSync } from "node:child_process";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
+
+function buildNormalizedTimestamp(
+  timestampMs: number,
+): { timestampMs: number; timestampUtc: string } | undefined {
+  if (!Number.isSafeInteger(timestampMs)) {
+    return undefined;
+  }
+  const timestampUtc = new Date(timestampMs).toISOString();
+  return { timestampMs, timestampUtc };
+}
 
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
@@ -28,6 +39,24 @@ export function resolveUserTimeFormat(preference?: TimeFormatPreference): Resolv
   }
   cachedTimeFormat = detectSystemTimeFormat() ? "24" : "12";
   return cachedTimeFormat;
+}
+
+export function formatDateStamp(nowMs: number, timeZone: string): string {
+  const timestampMs = resolveDateTimestampMs(nowMs);
+  const date = new Date(timestampMs);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  return date.toISOString().slice(0, 10);
 }
 
 export function normalizeTimestamp(
@@ -69,7 +98,11 @@ export function normalizeTimestamp(
   if (timestampMs === undefined || !Number.isFinite(timestampMs)) {
     return undefined;
   }
-  return { timestampMs, timestampUtc: new Date(timestampMs).toISOString() };
+  try {
+    return buildNormalizedTimestamp(timestampMs);
+  } catch {
+    return undefined;
+  }
 }
 
 export function withNormalizedTimestamp<T extends Record<string, unknown>>(
@@ -181,12 +214,12 @@ export function formatUserTime(
     if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute) {
       return undefined;
     }
-    const dayNum = parseInt(map.day, 10);
+    const dayNum = Number.parseInt(map.day, 10);
     const suffix = ordinalSuffix(dayNum);
     const timePart = use24Hour
       ? `${map.hour}:${map.minute}`
       : `${map.hour}:${map.minute} ${map.dayPeriod ?? ""}`.trim();
-    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} — ${timePart}`;
+    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} - ${timePart}`;
   } catch {
     return undefined;
   }

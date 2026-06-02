@@ -1,7 +1,14 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../../views/config-form.shared.ts";
 import { coerceFormValues } from "./form-coerce.ts";
-import { cloneConfigObject, serializeConfigForm, setPathValue } from "./form-utils.ts";
+import {
+  cloneConfigObject,
+  removePathValue,
+  sanitizeRedactedFormForSubmit,
+  serializeConfigForm,
+  setPathValue,
+} from "./form-utils.ts";
 
 /**
  * Minimal model provider schema matching the Zod-generated JSON Schema for
@@ -80,7 +87,7 @@ function makeConfigWithProvider(): Record<string, unknown> {
               name: "Grok 4",
               contextWindow: 131072,
               maxTokens: 8192,
-              cost: { input: 0.5, output: 1.0, cacheRead: 0.1, cacheWrite: 0.2 },
+              cost: { input: 0.5, output: 1, cacheRead: 0.1, cacheWrite: 0.2 },
             },
           ],
         },
@@ -89,37 +96,204 @@ function makeConfigWithProvider(): Record<string, unknown> {
   };
 }
 
+function getFirstXaiModel(payload: Record<string, unknown>): Record<string, unknown> {
+  const model = payload.models as Record<string, unknown>;
+  const providers = model.providers as Record<string, unknown>;
+  const xai = providers.xai as Record<string, unknown>;
+  const models = xai.models as Array<Record<string, unknown>>;
+  return models[0] ?? {};
+}
+
+function expectNumericModelCore(model: Record<string, unknown>) {
+  expect(typeof model.maxTokens).toBe("number");
+  expect(model.maxTokens).toBe(8192);
+  expect(typeof model.contextWindow).toBe("number");
+  expect(model.contextWindow).toBe(131072);
+}
+
 describe("form-utils preserves numeric types", () => {
   it("serializeConfigForm preserves numbers in JSON output", () => {
     const form = makeConfigWithProvider();
     const raw = serializeConfigForm(form);
     const parsed = JSON.parse(raw);
-    const model = parsed.models.providers.xai.models[0];
+    const model = parsed.models.providers.xai.models[0] as Record<string, unknown>;
+    const cost = model.cost as Record<string, unknown>;
 
-    expect(typeof model.maxTokens).toBe("number");
-    expect(model.maxTokens).toBe(8192);
-    expect(typeof model.contextWindow).toBe("number");
-    expect(model.contextWindow).toBe(131072);
-    expect(typeof model.cost.input).toBe("number");
-    expect(model.cost.input).toBe(0.5);
+    expectNumericModelCore(model);
+    expect(typeof cost.input).toBe("number");
+    expect(cost.input).toBe(0.5);
   });
 
   it("cloneConfigObject + setPathValue preserves unrelated numeric fields", () => {
     const form = makeConfigWithProvider();
     const cloned = cloneConfigObject(form);
     setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
+    const first = getFirstXaiModel(cloned);
 
-    const model = cloned.models as Record<string, unknown>;
-    const providers = model.providers as Record<string, unknown>;
-    const xai = providers.xai as Record<string, unknown>;
-    const models = xai.models as Array<Record<string, unknown>>;
-    const first = models[0];
-
-    expect(typeof first.maxTokens).toBe("number");
-    expect(first.maxTokens).toBe(8192);
-    expect(typeof first.contextWindow).toBe("number");
+    expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
+  });
+});
+
+describe("sanitizeRedactedFormForSubmit", () => {
+  it("drops loaded redacted placeholders for paths missing from original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  gateway: {\n    mode: "remote"\n  }\n}\n',
+      ),
+    ).toEqual({
+      gateway: {
+        mode: "remote",
+      },
+    });
+  });
+
+  it("preserves loaded redacted placeholders that exist in original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  gateway: {\n    mode: "remote",\n    remote: {\n      token: "__OPENCLAW_REDACTED__"\n    }\n  }\n}\n',
+      ),
+    ).toEqual(form);
+  });
+
+  it("keeps newly entered sentinel literals so gateway validation rejects them", () => {
+    const form = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = {
+      gateway: {
+        remote: {},
+      },
+    };
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        "{\n  gateway: {\n    remote: {}\n  }\n}\n",
+      ),
+    ).toEqual(form);
+  });
+
+  it("prunes empty object parents when they are absent from original raw config", () => {
+    const form = {
+      gateway: {
+        remote: {
+          nested: {
+            token: "__OPENCLAW_REDACTED__",
+          },
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(form, originalForm, '{\n  ui: { theme: "dark" }\n}\n'),
+    ).toEqual({
+      ui: { theme: "dark" },
+    });
+  });
+
+  it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
+    const form = {
+      channels: {
+        slack: {
+          tokens: ["__OPENCLAW_REDACTED__", "second-token"],
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(
+      sanitizeRedactedFormForSubmit(
+        form,
+        originalForm,
+        '{\n  channels: { slack: { tokens: ["second-token"] } }\n}\n',
+      ),
+    ).toEqual(form);
+  });
+
+  it("leaves the form unchanged when original raw config cannot be parsed", () => {
+    const form = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    const originalForm = cloneConfigObject(form);
+
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, "{")).toEqual(form);
+  });
+});
+
+describe("prototype pollution prevention", () => {
+  it("setPathValue rejects __proto__ in path", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["__proto__", "polluted"], true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+
+  it("setPathValue rejects constructor in path", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["constructor", "prototype", "polluted"], true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("setPathValue rejects prototype in path", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["prototype", "bad"], true);
+    expect(obj).toStrictEqual({});
+  });
+
+  it("removePathValue rejects __proto__ in path", () => {
+    const obj = { safe: 1 } as Record<string, unknown>;
+    removePathValue(obj, ["__proto__", "toString"]);
+    expect("toString" in {}).toBe(true);
+  });
+
+  it("setPathValue allows normal keys", () => {
+    const obj: Record<string, unknown> = {};
+    setPathValue(obj, ["a", "b"], 42);
+    expect((obj.a as Record<string, unknown>).b).toBe(42);
   });
 });
 
@@ -145,16 +319,9 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    const first = model[0];
+    const first = getFirstXaiModel(coerced);
 
-    expect(typeof first.maxTokens).toBe("number");
-    expect(first.maxTokens).toBe(8192);
-    expect(typeof first.contextWindow).toBe("number");
-    expect(first.contextWindow).toBe(131072);
+    expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     const cost = first.cost as Record<string, number>;
     expect(typeof cost.input).toBe("number");
@@ -170,12 +337,7 @@ describe("coerceFormValues", () => {
   it("preserves already-correct numeric values", () => {
     const form = makeConfigWithProvider();
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    const first = model[0];
-
+    const first = getFirstXaiModel(coerced);
     expect(typeof first.maxTokens).toBe("number");
     expect(first.maxTokens).toBe(8192);
   });
@@ -199,11 +361,7 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    const first = model[0];
+    const first = getFirstXaiModel(coerced);
 
     expect(first.maxTokens).toBe("not-a-number");
   });
@@ -227,11 +385,8 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    expect(model[0].reasoning).toBe(true);
+    const first = getFirstXaiModel(coerced);
+    expect(first.reasoning).toBe(true);
   });
 
   it("handles empty string for number fields as undefined", () => {
@@ -253,11 +408,8 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    expect(model[0].maxTokens).toBeUndefined();
+    const first = getFirstXaiModel(coerced);
+    expect(first.maxTokens).toBeUndefined();
   });
 
   it("passes through null and undefined values untouched", () => {
@@ -467,5 +619,85 @@ describe("coerceFormValues", () => {
     const form = { flag: "true" };
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
+  });
+
+  it("returns undefined for empty string with minLength constraint", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", minLength: 1 },
+      },
+    };
+    const form = { baseUrl: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.baseUrl).toBeUndefined();
+    expect("baseUrl" in coerced).toBe(false);
+  });
+
+  it("returns empty string when no minLength constraint", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        description: { type: "string" },
+      },
+    };
+    const form = { description: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.description).toBe("");
+    expect("description" in coerced).toBe(true);
+  });
+
+  it("returns non-empty string with minLength constraint unchanged", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", minLength: 1 },
+      },
+    };
+    const form = { baseUrl: "https://api.example.com" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.baseUrl).toBe("https://api.example.com");
+  });
+
+  it("handles minLength: 0 as no constraint (empty string allowed)", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        optional: { type: "string", minLength: 0 },
+      },
+    };
+    const form = { optional: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.optional).toBe("");
+  });
+
+  it("clears empty nested string field with minLength in object graph", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        provider: {
+          type: "object",
+          properties: {
+            baseUrl: { type: "string", minLength: 1 },
+            apiKey: { type: "string" },
+          },
+        },
+      },
+    };
+    const form = {
+      provider: {
+        baseUrl: "",
+        apiKey: "test-key",
+      },
+    };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const provider = coerced.provider as Record<string, unknown>;
+
+    expect("baseUrl" in provider).toBe(false);
+    expect(provider.apiKey).toBe("test-key");
   });
 });

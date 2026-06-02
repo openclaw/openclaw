@@ -1,9 +1,7 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./node-list-types.js";
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
+/** Extracts pending and paired node arrays from permissive node.pair.list payloads. */
 export function parsePairingList(value: unknown): PairingList {
   const obj = asRecord(value);
   const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
@@ -11,6 +9,7 @@ export function parsePairingList(value: unknown): PairingList {
   return { pending, paired };
 }
 
+/** Extracts the nodes array from a node.list response, treating malformed payloads as empty. */
 export function parseNodeList(value: unknown): NodeListNode[] {
   const obj = asRecord(value);
   return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];

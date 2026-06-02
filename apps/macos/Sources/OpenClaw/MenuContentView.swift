@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import Observation
+import OpenClawKit
 import SwiftUI
 
 /// Menu contents for the OpenClaw menu bar extra.
@@ -14,9 +15,9 @@ struct MenuContent: View {
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
+    private let nodesStore = NodesStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
-    @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var micObserver = AudioInputDeviceObserver()
@@ -44,6 +45,9 @@ struct MenuContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.connectionLabel)
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
+                    if let macNodeStatus = self.macNodeStatus {
+                        self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
+                    }
                     if self.pairingPrompter.pendingCount > 0 {
                         let repairCount = self.pairingPrompter.pendingRepairCount
                         let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
@@ -107,31 +111,18 @@ struct MenuContent: View {
             }
             Divider()
             Button {
-                Task { @MainActor in
-                    await self.openDashboard()
-                }
+                AppNavigationActions.openDashboard()
             } label: {
                 Label("Open Dashboard", systemImage: "gauge")
             }
             Button {
-                Task { @MainActor in
-                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                    WebChatManager.shared.show(sessionKey: sessionKey)
-                }
+                AppNavigationActions.openChat()
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
             if self.state.canvasEnabled {
                 Button {
-                    Task { @MainActor in
-                        if self.state.canvasPanelVisible {
-                            CanvasManager.shared.hideAll()
-                        } else {
-                            let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                            // Don't force a navigation on re-open: preserve the current web view state.
-                            _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
-                        }
-                    }
+                    AppNavigationActions.toggleCanvas()
                 } label: {
                     Label(
                         self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
@@ -170,15 +161,16 @@ struct MenuContent: View {
             await self.loadBrowserControlEnabled()
         }
         .onAppear {
-            self.startMicObserver()
+            MicRefreshSupport.startObserver(self.micObserver) {
+                MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
+                    await self.loadMicrophones(force: true)
+                }
+            }
         }
         .onDisappear {
             self.micRefreshTask?.cancel()
             self.micRefreshTask = nil
             self.micObserver.stop()
-        }
-        .task { @MainActor in
-            SettingsWindowOpener.shared.register(openSettings: self.openSettings)
         }
     }
 
@@ -325,26 +317,32 @@ struct MenuContent: View {
     }
 
     private func open(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        NSApp.activate(ignoringOtherApps: true)
-        self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
+        AppNavigationActions.openSettings(tab: tab)
     }
 
-    @MainActor
-    private func openDashboard() async {
-        do {
-            let config = try await GatewayEndpointStore.shared.requireConfig()
-            let url = try GatewayEndpointStore.dashboardURL(for: config, mode: self.state.connectionMode)
-            NSWorkspace.shared.open(url)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Dashboard unavailable"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
+    private var macNodeStatus: (label: String, color: Color)? {
+        guard self.state.connectionMode != .unconfigured else { return nil }
+        guard case .connected = self.controlChannel.state else { return nil }
+
+        let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
+        if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
+            guard entry.isConnected else {
+                return ("Mac capabilities offline", .orange)
+            }
+            let commands = Set(entry.commands ?? [])
+            let missingRequiredCommands = [
+                OpenClawSystemCommand.notify.rawValue,
+                OpenClawSystemCommand.run.rawValue,
+                OpenClawSystemCommand.which.rawValue,
+            ].filter { !commands.contains($0) }
+            if !missingRequiredCommands.isEmpty {
+                return ("Mac capabilities incomplete", .orange)
+            }
+            return nil
         }
+
+        guard !self.nodesStore.isLoading, !self.nodesStore.nodes.isEmpty else { return nil }
+        return ("Mac capabilities offline", .orange)
     }
 
     private var healthStatus: (label: String, color: Color) {
@@ -425,11 +423,7 @@ struct MenuContent: View {
     }
 
     private var voiceWakeBinding: Binding<Bool> {
-        Binding(
-            get: { self.state.swabbleEnabled },
-            set: { newValue in
-                Task { await self.state.setVoiceWakeEnabled(newValue) }
-            })
+        MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
     private var showVoiceWakeMicPicker: Bool {
@@ -546,44 +540,18 @@ struct MenuContent: View {
             }
             .map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
         self.availableMics = self.filterAliveInputs(self.availableMics)
-        self.updateSelectedMicName()
+        self.state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
+            selectedID: self.state.voiceWakeMicID,
+            in: self.availableMics,
+            uid: \.uid,
+            name: \.name)
         self.loadingMics = false
-    }
-
-    private func startMicObserver() {
-        self.micObserver.start {
-            Task { @MainActor in
-                self.scheduleMicRefresh()
-            }
-        }
-    }
-
-    @MainActor
-    private func scheduleMicRefresh() {
-        self.micRefreshTask?.cancel()
-        self.micRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
-            await self.loadMicrophones(force: true)
-        }
     }
 
     private func filterAliveInputs(_ inputs: [AudioInputDevice]) -> [AudioInputDevice] {
         let aliveUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
         guard !aliveUIDs.isEmpty else { return inputs }
         return inputs.filter { aliveUIDs.contains($0.uid) }
-    }
-
-    @MainActor
-    private func updateSelectedMicName() {
-        let selected = self.state.voiceWakeMicID
-        if selected.isEmpty {
-            self.state.voiceWakeMicName = ""
-            return
-        }
-        if let match = self.availableMics.first(where: { $0.uid == selected }) {
-            self.state.voiceWakeMicName = match.name
-        }
     }
 
     private struct AudioInputDevice: Identifiable, Equatable {

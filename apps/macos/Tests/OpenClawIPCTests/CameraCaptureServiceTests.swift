@@ -1,15 +1,14 @@
 import Testing
-
 @testable import OpenClaw
 
-@Suite struct CameraCaptureServiceTests {
-    @Test func normalizeSnapDefaults() {
+struct CameraCaptureServiceTests {
+    @Test func `normalize snap defaults`() {
         let res = CameraCaptureService.normalizeSnap(maxWidth: nil, quality: nil)
         #expect(res.maxWidth == 1600)
         #expect(res.quality == 0.9)
     }
 
-    @Test func normalizeSnapClampsValues() {
+    @Test func `normalize snap clamps values`() {
         let low = CameraCaptureService.normalizeSnap(maxWidth: -1, quality: -10)
         #expect(low.maxWidth == 1600)
         #expect(low.quality == 0.05)

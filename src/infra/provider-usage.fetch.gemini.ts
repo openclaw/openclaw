@@ -1,4 +1,9 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildUsageHttpErrorSnapshot,
+  fetchJson,
+  readUsageJson,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -37,7 +42,11 @@ export async function fetchGeminiUsage(
     });
   }
 
-  const data = (await res.json()) as GeminiUsageResponse;
+  const parsed = await readUsageJson(provider, res);
+  if (!parsed.ok) {
+    return parsed.snapshot;
+  }
+  const data = parsed.data as GeminiUsageResponse;
   const quotas: Record<string, number> = {};
 
   for (const bucket of data.buckets || []) {
@@ -55,7 +64,7 @@ export async function fetchGeminiUsage(
   let hasFlash = false;
 
   for (const [model, frac] of Object.entries(quotas)) {
-    const lower = model.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(model);
     if (lower.includes("pro")) {
       hasPro = true;
       if (frac < proMin) {

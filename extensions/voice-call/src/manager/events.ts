@@ -1,17 +1,15 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
+import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
+import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import {
-  clearMaxDurationTimer,
-  rejectTranscriptWaiter,
-  resolveTranscriptWaiter,
-  startMaxDurationTimer,
-} from "./timers.js";
+import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -25,6 +23,7 @@ type EventContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "onCallAnswered"
+  | "streamSessionIssuer"
 >;
 
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
@@ -59,27 +58,42 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
-function createInboundCall(params: {
+function createWebhookCall(params: {
   ctx: EventContext;
   providerCallId: string;
+  direction: "inbound" | "outbound";
   from: string;
   to: string;
 }): CallRecord {
   const callId = crypto.randomUUID();
+  const effective = resolveVoiceCallEffectiveConfig(
+    params.ctx.config,
+    params.direction === "inbound" ? params.to : undefined,
+  );
+  const effectiveConfig = effective.config;
 
   const callRecord: CallRecord = {
     callId,
     providerCallId: params.providerCallId,
     provider: params.ctx.provider?.name || "twilio",
-    direction: "inbound",
+    direction: params.direction,
     state: "ringing",
     from: params.from,
     to: params.to,
+    sessionKey: resolveVoiceCallSessionKey({
+      config: effectiveConfig,
+      callId,
+      phone: params.direction === "outbound" ? params.to : params.from,
+    }),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
     metadata: {
-      initialMessage: params.ctx.config.inboundGreeting || "Hello! How can I help you today?",
+      initialMessage:
+        params.direction === "inbound"
+          ? effectiveConfig.inboundGreeting || "Hello! How can I help you today?"
+          : undefined,
+      ...(effective.numberRouteKey ? { numberRouteKey: effective.numberRouteKey } : {}),
     },
   };
 
@@ -87,8 +101,36 @@ function createInboundCall(params: {
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
   persistCallRecord(params.ctx.storePath, callRecord);
 
-  console.log(`[voice-call] Created inbound call record: ${callId} from ${params.from}`);
+  console.log(
+    `[voice-call] Created ${params.direction} call record: ${callId} from ${params.from}`,
+  );
   return callRecord;
+}
+
+function persistRejectedInboundCall(params: {
+  ctx: EventContext;
+  event: NormalizedEvent;
+  dedupeKey: string;
+  providerCallId: string;
+}): void {
+  const callId = params.event.callId || params.providerCallId;
+  const now = Date.now();
+  const rejectedCall: CallRecord = {
+    callId,
+    providerCallId: params.providerCallId,
+    provider: params.ctx.provider?.name || "twilio",
+    direction: "inbound",
+    state: "hangup-bot",
+    from: params.event.from || "unknown",
+    to: params.event.to || params.ctx.config.fromNumber || "unknown",
+    startedAt: params.event.timestamp || now,
+    endedAt: now,
+    endReason: "hangup-bot",
+    transcript: [],
+    processedEventIds: [params.dedupeKey],
+    metadata: { rejectionReason: "inbound-policy" },
+  };
+  persistCallRecord(params.ctx.storePath, rejectedCall);
 }
 
 export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
@@ -96,7 +138,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (ctx.processedEventIds.has(dedupeKey)) {
     return;
   }
-  ctx.processedEventIds.add(dedupeKey);
 
   let call = findCall({
     activeCalls: ctx.activeCalls,
@@ -104,20 +145,31 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     callIdOrProviderCallId: event.callId,
   });
 
-  if (!call && event.direction === "inbound" && event.providerCallId) {
-    if (!shouldAcceptInbound(ctx.config, event.from)) {
-      const pid = event.providerCallId;
+  const providerCallId = event.providerCallId;
+  const eventDirection =
+    event.direction === "inbound" || event.direction === "outbound" ? event.direction : undefined;
+
+  // Auto-register untracked calls arriving via webhook. This covers both
+  // true inbound calls and externally-initiated outbound-api calls (e.g. calls
+  // placed directly via the Twilio REST API pointing at our webhook URL).
+  if (!call && providerCallId && eventDirection) {
+    // Apply inbound policy for true inbound calls; external outbound-api calls
+    // are implicitly trusted because the caller controls the webhook URL.
+    if (eventDirection === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
+      const pid = providerCallId;
       if (!ctx.provider) {
         console.warn(
           `[voice-call] Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, from: ${event.from}); call will time out on provider side.`,
         );
         return;
       }
+      ctx.processedEventIds.add(dedupeKey);
       if (ctx.rejectedProviderCallIds.has(pid)) {
         return;
       }
       ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
+      persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
       console.log(`[voice-call] Rejecting inbound call by policy: ${pid}`);
       void ctx.provider
         .hangupCall({
@@ -125,16 +177,18 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           providerCallId: pid,
           reason: "hangup-bot",
         })
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
+        .catch((err: unknown) => {
+          ctx.rejectedProviderCallIds.delete(pid);
+          const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
       return;
     }
 
-    call = createInboundCall({
+    call = createWebhookCall({
       ctx,
-      providerCallId: event.providerCallId,
+      providerCallId,
+      direction: eventDirection === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
     });
@@ -159,11 +213,45 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     }
   }
 
-  call.processedEventIds.push(dedupeKey);
+  const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
+  if (shouldCommitReplayKey) {
+    ctx.processedEventIds.add(dedupeKey);
+    call.processedEventIds.push(dedupeKey);
+  }
 
   switch (event.type) {
     case "call.initiated":
       transitionState(call, "initiated");
+      if (call.direction === "inbound" && call.providerCallId && ctx.provider?.answerCall) {
+        const inboundStreamSession =
+          ctx.config.realtime?.enabled && ctx.provider.name === "telnyx" && ctx.streamSessionIssuer
+            ? ctx.streamSessionIssuer({
+                providerName: "telnyx",
+                callId: call.callId,
+                from: call.from,
+                to: call.to,
+                direction: "inbound",
+              })
+            : undefined;
+        void ctx.provider
+          .answerCall({
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+            ...(inboundStreamSession
+              ? {
+                  streamUrl: inboundStreamSession.streamUrl,
+                  streamAuthToken: inboundStreamSession.token,
+                }
+              : {}),
+          })
+          .catch((err: unknown) => {
+            const message = formatErrorMessage(err);
+            console.warn(
+              `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
+              message,
+            );
+          });
+      }
       break;
 
     case "call.ringing":
@@ -177,7 +265,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         ctx,
         callId: call.callId,
         onTimeout: async (callId) => {
-          await endCall(ctx, callId);
+          await endCall(ctx, callId, { reason: "timeout" });
         },
       });
       ctx.onCallAnswered?.(call);
@@ -211,30 +299,32 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       transitionState(call, "listening");
       break;
 
-    case "call.ended":
-      call.endedAt = event.timestamp;
-      call.endReason = event.reason;
-      transitionState(call, event.reason as CallState);
-      clearMaxDurationTimer(ctx, call.callId);
-      rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${event.reason}`);
-      ctx.activeCalls.delete(call.callId);
-      if (call.providerCallId) {
-        ctx.providerCallIdMap.delete(call.providerCallId);
-      }
+    case "call.silence":
+    case "call.dtmf":
       break;
+
+    case "call.ended":
+      finalizeCall({
+        ctx,
+        call,
+        endReason: event.reason,
+        endedAt: event.timestamp,
+      });
+      return;
 
     case "call.error":
       if (!event.retryable) {
-        call.endedAt = event.timestamp;
-        call.endReason = "error";
-        transitionState(call, "error");
-        clearMaxDurationTimer(ctx, call.callId);
-        rejectTranscriptWaiter(ctx, call.callId, `Call error: ${event.error}`);
-        ctx.activeCalls.delete(call.callId);
-        if (call.providerCallId) {
-          ctx.providerCallIdMap.delete(call.providerCallId);
-        }
+        finalizeCall({
+          ctx,
+          call,
+          endReason: "error",
+          endedAt: event.timestamp,
+          transcriptRejectReason: `Call error: ${event.error}`,
+        });
+        return;
       }
+      // Keep retryable provider errors replayable so a redelivery can still
+      // drive later recovery or terminal handling for the same event key.
       break;
   }
 

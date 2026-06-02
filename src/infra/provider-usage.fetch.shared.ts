@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
@@ -7,8 +9,9 @@ export async function fetchJson(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<Response> {
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), safeTimeoutMs);
   try {
     return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {
@@ -17,16 +20,7 @@ export async function fetchJson(
 }
 
 export function parseFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return undefined;
+  return parseFiniteNumberish(value);
 }
 
 type BuildUsageHttpErrorSnapshotOptions = {
@@ -57,4 +51,18 @@ export function buildUsageHttpErrorSnapshot(
   }
   const suffix = options.message?.trim() ? `: ${options.message.trim()}` : "";
   return buildUsageErrorSnapshot(options.provider, `HTTP ${options.status}${suffix}`);
+}
+
+export async function readUsageJson(
+  provider: UsageProviderId,
+  response: Response,
+): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
+  try {
+    return { ok: true, data: await response.json() };
+  } catch {
+    return {
+      ok: false,
+      snapshot: buildUsageErrorSnapshot(provider, "Malformed usage response"),
+    };
+  }
 }

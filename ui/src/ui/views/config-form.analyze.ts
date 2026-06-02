@@ -5,7 +5,15 @@ export type ConfigSchemaAnalysis = {
   unsupportedPaths: string[];
 };
 
-const META_KEYS = new Set(["title", "description", "default", "nullable"]);
+const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
+const RENDERABLE_UNION_TYPES = new Set([
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "object",
+  "array",
+]);
 
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
@@ -15,13 +23,17 @@ function isAnySchema(schema: JsonSchema): boolean {
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
   const filtered = values.filter((value) => value != null);
   const nullable = filtered.length !== values.length;
-  const enumValues: unknown[] = [];
-  for (const value of filtered) {
-    if (!enumValues.some((existing) => Object.is(existing, value))) {
-      enumValues.push(value);
+  return { enumValues: uniqueValues(filtered), nullable };
+}
+
+function uniqueValues(values: unknown[]): unknown[] {
+  const unique: unknown[] = [];
+  for (const value of values) {
+    if (!unique.some((existing) => Object.is(existing, value))) {
+      unique.push(value);
     }
   }
-  return { enumValues, nullable };
+  return unique;
 }
 
 export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
@@ -79,7 +91,8 @@ function normalizeSchemaNode(
     normalized.properties = normalizedProps;
 
     if (schema.additionalProperties === true) {
-      unsupported.add(pathLabel);
+      // Treat `true` as an untyped map schema so dynamic object keys can still be edited.
+      normalized.additionalProperties = {};
     } else if (schema.additionalProperties === false) {
       normalized.additionalProperties = false;
     } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
@@ -116,6 +129,58 @@ function normalizeSchemaNode(
     schema: normalized,
     unsupportedPaths: Array.from(unsupported),
   };
+}
+
+function isSecretRefVariant(entry: JsonSchema): boolean {
+  if (schemaType(entry) !== "object") {
+    return false;
+  }
+  const source = entry.properties?.source;
+  const provider = entry.properties?.provider;
+  const id = entry.properties?.id;
+  if (!source || !provider || !id) {
+    return false;
+  }
+  return (
+    typeof source.const === "string" &&
+    schemaType(provider) === "string" &&
+    schemaType(id) === "string"
+  );
+}
+
+function isSecretRefUnion(entry: JsonSchema): boolean {
+  const variants = entry.oneOf ?? entry.anyOf;
+  if (!variants || variants.length === 0) {
+    return false;
+  }
+  return variants.every((variant) => isSecretRefVariant(variant));
+}
+
+function normalizeSecretInputUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
+  if (stringIndex < 0) {
+    return null;
+  }
+  const nonString = remaining.filter((_, index) => index !== stringIndex);
+  if (nonString.length !== 1 || !isSecretRefUnion(nonString[0])) {
+    return null;
+  }
+  return normalizeSchemaNode(
+    {
+      ...schema,
+      ...remaining[stringIndex],
+      nullable: nullable || remaining[stringIndex].nullable,
+      anyOf: undefined,
+      oneOf: undefined,
+      allOf: undefined,
+    },
+    path,
+  );
 }
 
 function normalizeUnion(
@@ -161,17 +226,18 @@ function normalizeUnion(
     remaining.push(entry);
   }
 
+  // Config secrets accept either a raw key string or a structured secret ref object.
+  // The form only supports editing the string path for now.
+  const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
+  if (secretInput) {
+    return secretInput;
+  }
+
   if (literals.length > 0 && remaining.length === 0) {
-    const unique: unknown[] = [];
-    for (const value of literals) {
-      if (!unique.some((existing) => Object.is(existing, value))) {
-        unique.push(value);
-      }
-    }
     return {
       schema: {
         ...schema,
-        enum: unique,
+        enum: uniqueValues(literals),
         nullable,
         anyOf: undefined,
         oneOf: undefined,
@@ -182,18 +248,26 @@ function normalizeUnion(
   }
 
   if (remaining.length === 1) {
-    const res = normalizeSchemaNode(remaining[0], path);
-    if (res.schema) {
-      res.schema.nullable = nullable || res.schema.nullable;
-    }
-    return res;
+    return normalizeSchemaNode(
+      {
+        ...schema,
+        ...remaining[0],
+        nullable: nullable || remaining[0].nullable,
+        anyOf: undefined,
+        oneOf: undefined,
+        allOf: undefined,
+      },
+      path,
+    );
   }
 
-  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
   if (
     remaining.length > 0 &&
     literals.length === 0 &&
-    remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
+    remaining.every((entry) => {
+      const type = schemaType(entry);
+      return Boolean(type) && RENDERABLE_UNION_TYPES.has(String(type));
+    })
   ) {
     return {
       schema: {

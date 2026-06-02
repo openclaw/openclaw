@@ -1,11 +1,11 @@
+import Darwin
 import Foundation
 import UIKit
-
-import Darwin
 
 /// Shared device and platform info for Settings, gateway node payloads, and device status.
 enum DeviceInfoHelper {
     /// e.g. "iOS 18.0.0" or "iPadOS 18.0.0" by interface idiom. Use for gateway/device payloads.
+    @MainActor
     static func platformString() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         let name = switch UIDevice.current.userInterfaceIdiom {
@@ -26,6 +26,7 @@ enum DeviceInfoHelper {
     }
 
     /// Device family for display: "iPad", "iPhone", or "iOS".
+    @MainActor
     static func deviceFamily() -> String {
         switch UIDevice.current.userInterfaceIdiom {
         case .pad:
@@ -48,9 +49,11 @@ enum DeviceInfoHelper {
         return trimmed.isEmpty ? "unknown" : trimmed
     }
 
-    /// App marketing version only, e.g. "2026.2.0" or "dev".
+    /// Canonical app version when present, otherwise the Apple marketing version.
     static func appVersion() -> String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        (Bundle.main.infoDictionary?["OpenClawCanonicalVersion"] as? String)
+            ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+            ?? "dev"
     }
 
     /// App build string, e.g. "123" or "".
@@ -61,8 +64,8 @@ enum DeviceInfoHelper {
 
     /// Display string for Settings: "1.2.3" or "1.2.3 (456)" when build differs.
     static func openClawVersionString() -> String {
-        let version = appVersion()
-        let build = appBuild()
+        let version = self.appVersion()
+        let build = self.appBuild()
         if build.isEmpty || build == version {
             return version
         }

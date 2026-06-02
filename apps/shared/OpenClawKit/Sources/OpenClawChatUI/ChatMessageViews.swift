@@ -1,10 +1,59 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import SwiftUI
 
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
     static let bubbleCorner: CGFloat = 18
+}
+
+struct ChatAgentAvatar: View {
+    let text: String?
+    let name: String?
+    let tint: Color?
+    var size: CGFloat = 30
+
+    var body: some View {
+        Text(self.displayText)
+            .font(.system(size: self.fontSize, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .minimumScaleFactor(0.6)
+            .lineLimit(1)
+            .frame(width: self.size, height: self.size)
+            .background(
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                (self.tint ?? Color.accentColor).opacity(0.95),
+                                Color(red: 38 / 255.0, green: 40 / 255.0, blue: 43 / 255.0),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing)))
+            .overlay(
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+            .shadow(color: (self.tint ?? Color.accentColor).opacity(0.18), radius: 8, y: 4)
+            .accessibilityLabel(self.name.map { "\($0) avatar" } ?? "Agent avatar")
+    }
+
+    private var displayText: String {
+        if let text = self.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return String(text.prefix(3))
+        }
+        if let name = self.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            let words = name.split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" }).prefix(2)
+            let initials = words.compactMap(\.first).map(String.init).joined()
+            if !initials.isEmpty {
+                return initials.uppercased()
+            }
+        }
+        return "OC"
+    }
+
+    private var fontSize: CGFloat {
+        self.displayText.count > 2 ? self.size * 0.34 : self.size * 0.42
+    }
 }
 
 private struct ChatBubbleShape: InsettableShape {
@@ -70,13 +119,12 @@ private struct ChatBubbleShape: InsettableShape {
             to: baseBottom,
             control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
             control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
-            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        self.addBottomEdge(
+            path: &path,
+            bubbleMinX: bubbleMinX,
+            bubbleMaxX: bubbleMaxX,
+            bubbleMaxY: bubbleMaxY,
+            radius: r)
         path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
@@ -108,13 +156,12 @@ private struct ChatBubbleShape: InsettableShape {
             to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
             control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
-            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        self.addBottomEdge(
+            path: &path,
+            bubbleMinX: bubbleMinX,
+            bubbleMaxX: bubbleMaxX,
+            bubbleMaxY: bubbleMaxY,
+            radius: r)
         path.addLine(to: baseBottom)
         path.addCurve(
             to: tip,
@@ -131,6 +178,22 @@ private struct ChatBubbleShape: InsettableShape {
 
         return path
     }
+
+    private func addBottomEdge(
+        path: inout Path,
+        bubbleMinX: CGFloat,
+        bubbleMaxX: CGFloat,
+        bubbleMaxY: CGFloat,
+        radius: CGFloat)
+    {
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMaxX - radius, y: bubbleMaxY),
+            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + radius, y: bubbleMaxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - radius),
+            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+    }
 }
 
 @MainActor
@@ -139,20 +202,49 @@ struct ChatMessageBubble: View {
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
+    let showsAssistantTrace: Bool
+    let assistantName: String?
+    let assistantAvatarText: String?
+    let assistantAvatarTint: Color?
+    let showsAssistantAvatar: Bool
 
     var body: some View {
+        if self.isUser {
+            self.messageBody
+                .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 2)
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                if self.showsAssistantAvatar {
+                    ChatAgentAvatar(
+                        text: self.assistantAvatarText,
+                        name: self.assistantName,
+                        tint: self.assistantAvatarTint)
+                        .padding(.top, 1)
+                }
+
+                self.messageBody
+                    .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private var isUser: Bool {
+        self.message.role.lowercased() == "user"
+    }
+
+    private var messageBody: some View {
         ChatMessageBody(
             message: self.message,
             isUser: self.isUser,
             style: self.style,
             markdownVariant: self.markdownVariant,
-            userAccent: self.userAccent)
-            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
-            .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
-            .padding(.horizontal, 2)
+            userAccent: self.userAccent,
+            showsAssistantTrace: self.showsAssistantTrace)
     }
-
-    private var isUser: Bool { self.message.role.lowercased() == "user" }
 }
 
 @MainActor
@@ -162,13 +254,14 @@ private struct ChatMessageBody: View {
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
+    let showsAssistantTrace: Bool
 
     var body: some View {
         let text = self.primaryText
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
-            if self.isToolResultMessage {
+            if self.isToolResultMessage, self.showsAssistantTrace {
                 if !text.isEmpty {
                     ToolResultCard(
                         title: self.toolResultTitle,
@@ -184,7 +277,10 @@ private struct ChatMessageBody: View {
                     font: .system(size: 14),
                     textColor: textColor)
             } else {
-                ChatAssistantTextBody(text: text, markdownVariant: self.markdownVariant)
+                ChatAssistantTextBody(
+                    text: text,
+                    markdownVariant: self.markdownVariant,
+                    includesThinking: self.showsAssistantTrace)
             }
 
             if !self.inlineAttachments.isEmpty {
@@ -193,7 +289,7 @@ private struct ChatMessageBody: View {
                 }
             }
 
-            if !self.toolCalls.isEmpty {
+            if self.showsAssistantTrace, !self.toolCalls.isEmpty {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
                         content: self.toolCalls[idx],
@@ -201,7 +297,7 @@ private struct ChatMessageBody: View {
                 }
             }
 
-            if !self.inlineToolResults.isEmpty {
+            if self.showsAssistantTrace, !self.inlineToolResults.isEmpty {
                 ForEach(self.inlineToolResults.indices, id: \.self) { idx in
                     let toolResult = self.inlineToolResults[idx]
                     let display = ToolDisplayRegistry.resolve(name: toolResult.name ?? "tool", args: nil)
@@ -231,7 +327,11 @@ private struct ChatMessageBody: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return OpenClawChatMessage.displayText(
+            contentText: parts.joined(separator: "\n"),
+            role: self.message.role,
+            stopReason: self.message.stopReason,
+            errorMessage: self.message.errorMessage)
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
@@ -463,28 +563,62 @@ private struct ToolResultCard: View {
 @MainActor
 struct ChatTypingIndicatorBubble: View {
     let style: OpenClawChatView.Style
+    let assistantName: String?
+    let assistantAvatarText: String?
+    let assistantAvatarTint: Color?
+    let showsAssistantAvatar: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            TypingDots()
-            Spacer(minLength: 0)
+        HStack(alignment: .center, spacing: 8) {
+            if self.showsAssistantAvatar {
+                ChatAgentAvatar(
+                    text: self.assistantAvatarText,
+                    name: self.assistantName,
+                    tint: self.assistantAvatarTint,
+                    size: 28)
+            }
+
+            HStack(spacing: 9) {
+                TypingDots()
+                Text("Writing")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, self.style == .standard ? 10 : 9)
+            .padding(.horizontal, self.style == .standard ? 12 : 14)
+            .background(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(OpenClawChatTheme.assistantBubble))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.vertical, self.style == .standard ? 12 : 10)
-        .padding(.horizontal, self.style == .standard ? 12 : 14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .focusable(false)
     }
 }
 
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.style == rhs.style
+        lhs.style == rhs.style &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar
+    }
+}
+
+extension View {
+    fileprivate func assistantBubbleContainerStyle() -> some View {
+        self
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(OpenClawChatTheme.assistantBubble))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+            .focusable(false)
     }
 }
 
@@ -492,20 +626,32 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
 struct ChatStreamingAssistantBubble: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
+    let showsAssistantTrace: Bool
+    let assistantName: String?
+    let assistantAvatarText: String?
+    let assistantAvatarTint: Color?
+    let showsAssistantAvatar: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ChatAssistantTextBody(text: self.text, markdownVariant: self.markdownVariant)
+        HStack(alignment: .top, spacing: 8) {
+            if self.showsAssistantAvatar {
+                ChatAgentAvatar(
+                    text: self.assistantAvatarText,
+                    name: self.assistantName,
+                    tint: self.assistantAvatarTint)
+                    .padding(.top, 1)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ChatAssistantTextBody(
+                    text: self.text,
+                    markdownVariant: self.markdownVariant,
+                    includesThinking: self.showsAssistantTrace)
+            }
+            .padding(12)
+            .assistantBubbleContainerStyle()
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
-        .focusable(false)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -542,14 +688,7 @@ struct ChatPendingToolsBubble: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.assistantBubble))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
-        .focusable(false)
+        .assistantBubbleContainerStyle()
     }
 }
 
@@ -602,9 +741,10 @@ private struct TypingDots: View {
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
+    let includesThinking: Bool
 
     var body: some View {
-        let segments = AssistantTextParser.segments(from: self.text)
+        let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
                 let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)

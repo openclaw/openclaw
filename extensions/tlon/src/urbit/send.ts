@@ -1,4 +1,9 @@
 import { scot, da } from "@urbit/aura";
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
 export type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
@@ -11,8 +16,44 @@ type SendTextParams = {
   text: string;
 };
 
+type SendStoryParams = {
+  api: TlonPokeApi;
+  fromShip: string;
+  toShip: string;
+  story: Story;
+  kind?: MessageReceiptPartKind;
+};
+
+function createTlonSendReceipt(params: {
+  messageId: string;
+  conversationId: string;
+  kind: MessageReceiptPartKind;
+}) {
+  return createMessageReceiptFromOutboundResults({
+    results: [
+      {
+        channel: "tlon",
+        messageId: params.messageId,
+        conversationId: params.conversationId,
+      },
+    ],
+    threadId: params.conversationId,
+    kind: params.kind,
+  });
+}
+
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
-  const story = [{ inline: [text] }];
+  const story: Story = markdownToStory(text);
+  return sendDmWithStory({ api, fromShip, toShip, story, kind: "text" });
+}
+
+export async function sendDmWithStory({
+  api,
+  fromShip,
+  toShip,
+  story,
+  kind = "unknown",
+}: SendStoryParams) {
   const sentAt = Date.now();
   const idUd = scot("ud", da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
@@ -40,7 +81,11 @@ export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
     json: action,
   });
 
-  return { channel: "tlon", messageId: id };
+  return {
+    channel: "tlon",
+    messageId: id,
+    receipt: createTlonSendReceipt({ messageId: id, conversationId: toShip, kind }),
+  };
 }
 
 type SendGroupParams = {
@@ -52,6 +97,16 @@ type SendGroupParams = {
   replyToId?: string | null;
 };
 
+type SendGroupStoryParams = {
+  api: TlonPokeApi;
+  fromShip: string;
+  hostShip: string;
+  channelName: string;
+  story: Story;
+  replyToId?: string | null;
+  kind?: MessageReceiptPartKind;
+};
+
 export async function sendGroupMessage({
   api,
   fromShip,
@@ -60,13 +115,34 @@ export async function sendGroupMessage({
   text,
   replyToId,
 }: SendGroupParams) {
-  const story = [{ inline: [text] }];
+  const story: Story = markdownToStory(text);
+  return sendGroupMessageWithStory({
+    api,
+    fromShip,
+    hostShip,
+    channelName,
+    story,
+    replyToId,
+    kind: "text",
+  });
+}
+
+export async function sendGroupMessageWithStory({
+  api,
+  fromShip,
+  hostShip,
+  channelName,
+  story,
+  replyToId,
+  kind = "unknown",
+}: SendGroupStoryParams) {
   const sentAt = Date.now();
 
   // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
     try {
+      // scot('ud', n) formats a number as @ud with dots
       formattedReplyId = scot("ud", BigInt(replyToId));
     } catch {
       // Fall back to raw ID if formatting fails
@@ -115,17 +191,38 @@ export async function sendGroupMessage({
     json: action,
   });
 
-  return { channel: "tlon", messageId: `${fromShip}/${sentAt}` };
+  const messageId = `${fromShip}/${sentAt}`;
+  return {
+    channel: "tlon",
+    messageId,
+    receipt: createTlonSendReceipt({
+      messageId,
+      conversationId: `${hostShip}/${channelName}`,
+      kind,
+    }),
+  };
 }
 
-export function buildMediaText(text: string | undefined, mediaUrl: string | undefined): string {
+/**
+ * Build a story with text and optional media (image)
+ */
+export function buildMediaStory(text: string | undefined, mediaUrl: string | undefined): Story {
+  const story: Story = [];
   const cleanText = text?.trim() ?? "";
   const cleanUrl = mediaUrl?.trim() ?? "";
-  if (cleanText && cleanUrl) {
-    return `${cleanText}\n${cleanUrl}`;
+
+  // Add text content if present
+  if (cleanText) {
+    story.push(...markdownToStory(cleanText));
   }
-  if (cleanUrl) {
-    return cleanUrl;
+
+  // Add image block if URL looks like an image
+  if (cleanUrl && isImageUrl(cleanUrl)) {
+    story.push(createImageBlock(cleanUrl, ""));
+  } else if (cleanUrl) {
+    // For non-image URLs, add as a link
+    story.push({ inline: [{ link: { href: cleanUrl, content: cleanUrl } }] });
   }
-  return cleanText;
+
+  return story.length > 0 ? story : [{ inline: [""] }];
 }

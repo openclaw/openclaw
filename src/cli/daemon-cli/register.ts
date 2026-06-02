@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 
 export function registerDaemonCli(program: Command) {
@@ -14,6 +14,6 @@ export function registerDaemonCli(program: Command) {
     );
 
   addGatewayServiceCommands(daemon, {
-    statusDescription: "Show service install status + probe the Gateway",
+    statusDescription: "Show service install status + probe connectivity/capability",
   });
 }

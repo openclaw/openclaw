@@ -1,18 +1,33 @@
+import fs from "node:fs";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath } from "../utils.js";
-import { CONFIG_PATH } from "./paths.js";
+import { createConfigIO } from "./io.js";
 
 type LogConfigUpdatedOptions = {
   path?: string;
+  backupPath?: string | false;
   suffix?: string;
 };
 
-export function formatConfigPath(path: string = CONFIG_PATH): string {
+export function formatConfigPath(path: string = createConfigIO().configPath): string {
   return displayPath(path);
 }
 
-export function logConfigUpdated(runtime: RuntimeEnv, opts: LogConfigUpdatedOptions = {}): void {
-  const path = formatConfigPath(opts.path ?? CONFIG_PATH);
+export function formatConfigUpdatedMessage(
+  path: string,
+  opts: LogConfigUpdatedOptions = {},
+): string {
+  const displayConfigPath = theme.muted(formatConfigPath(path));
   const suffix = opts.suffix ? ` ${opts.suffix}` : "";
-  runtime.log(`Updated ${path}${suffix}`);
+  const backupPath = opts.backupPath === undefined ? `${path}.bak` : opts.backupPath;
+  const lines = [`Updated config: ${displayConfigPath}${suffix}`];
+  if (backupPath && fs.existsSync(backupPath)) {
+    lines.push(`  Backup: ${theme.muted(formatConfigPath(backupPath))}`);
+  }
+  return lines.join("\n");
+}
+
+export function logConfigUpdated(runtime: RuntimeEnv, opts: LogConfigUpdatedOptions = {}): void {
+  runtime.log(formatConfigUpdatedMessage(opts.path ?? createConfigIO().configPath, opts));
 }

@@ -1,12 +1,12 @@
 ---
 name: eightctl
-description: Control Eight Sleep pods (status, temperature, alarms, schedules).
+description: "Control Eight Sleep pods (status, temperature, alarms, schedules)."
 homepage: https://eightctl.sh
 metadata:
   {
     "openclaw":
       {
-        "emoji": "🎛️",
+        "emoji": "🛌",
         "requires": { "bins": ["eightctl"] },
         "install":
           [

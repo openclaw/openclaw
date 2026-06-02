@@ -1,14 +1,46 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { resolveForwardCompatModel } from "../../agents/model-forward-compat.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelRef } from "../../agents/model-selection.js";
-import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
-import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
-import { DEFAULT_PROVIDER, ensureFlagCompatibility, isLocalBaseUrl, modelKey } from "./shared.js";
+import { loadModelsConfigWithSource } from "./load-config.js";
+import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
+import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
+
+type RegistryLoadModule = typeof import("./list.registry-load.js");
+type RowSourcesModule = typeof import("./list.row-sources.js");
+type SourcePlanModule = typeof import("./list.source-plan.js");
+
+const registryLoadModuleLoader = createLazyImportLoader<RegistryLoadModule>(
+  () => import("./list.registry-load.js"),
+);
+const rowSourcesModuleLoader = createLazyImportLoader<RowSourcesModule>(
+  () => import("./list.row-sources.js"),
+);
+const sourcePlanModuleLoader = createLazyImportLoader<SourcePlanModule>(
+  () => import("./list.source-plan.js"),
+);
+
+function loadRegistryLoadModule(): Promise<RegistryLoadModule> {
+  return registryLoadModuleLoader.load();
+}
+
+function loadRowSourcesModule(): Promise<RowSourcesModule> {
+  return rowSourcesModuleLoader.load();
+}
+
+function loadSourcePlanModule(): Promise<SourcePlanModule> {
+  return sourcePlanModuleLoader.load();
+}
 
 export async function modelsListCommand(
   opts: {
@@ -21,116 +53,187 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const { loadConfig } = await import("../../config/config.js");
-  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.js");
-  const cfg = loadConfig();
-  const authStore = ensureAuthProfileStore();
-  const providerFilter = (() => {
+  const parsedProviderFilter = (() => {
     const raw = opts.provider?.trim();
     if (!raw) {
       return undefined;
     }
-    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER);
-    return parsed?.provider ?? raw.toLowerCase();
+    if (/\s/u.test(raw)) {
+      runtime.error(
+        `Invalid provider filter "${raw}". Use a provider id such as "moonshot", not a display label.`,
+      );
+      process.exitCode = 1;
+      return null;
+    }
+    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
+    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
   })();
+  if (parsedProviderFilter === null) {
+    return;
+  }
+  const [
+    { loadAuthProfileStoreWithoutExternalProfiles },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
+    { resolveDefaultAgentWorkspaceDir },
+  ] = await Promise.all([
+    import("../../agents/auth-profiles/store.js"),
+    import("../../agents/agent-scope.js"),
+    import("../../agents/workspace.js"),
+  ]);
+  const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
+    commandName: "models list",
+    runtime,
+  });
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const providerFilter = parsedProviderFilter
+    ? canonicalizeModelCatalogProviderAlias(parsedProviderFilter, {
+        cfg,
+        metadataSnapshot,
+      })
+    : undefined;
+  const authIndex = createModelListAuthIndex({
+    cfg,
+    authStore,
+    workspaceDir,
+    metadataSnapshot,
+  });
 
-  let models: Model<Api>[] = [];
   let modelRegistry: ModelRegistry | undefined;
+  let registryModels: Model[] = [];
+  let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  try {
-    const loaded = await loadModelRegistry(cfg);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
+  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
+  const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
+  const sourcePlan = sourcePlanModule
+    ? await sourcePlanModule.planAllModelListSources({
+        all: opts.all,
+        enableCascade: enableSourcePlanCascade,
+        providerFilter,
+        cfg,
+        metadataSnapshot,
+      })
+    : undefined;
+  const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
+  const loadRegistryState = async (optsLocal?: {
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+  }) => {
+    const { loadListModelRegistry } = await loadRegistryLoadModule();
+    const loaded = await loadListModelRegistry(cfg, {
+      providerFilter,
+      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: optsLocal?.loadAvailability,
+      workspaceDir,
+    });
     modelRegistry = loaded.registry;
-    models = loaded.models;
+    registryModels = loaded.models;
+    discoveredKeys = loaded.discoveredKeys;
     availableKeys = loaded.availableKeys;
     availabilityErrorMessage = loaded.availabilityErrorMessage;
+  };
+  try {
+    if (shouldLoadRegistry) {
+      await loadRegistryState();
+    } else if (!opts.all && opts.local) {
+      const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, {
+        providerFilter,
+        workspaceDir,
+      });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+    }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
     process.exitCode = 1;
     return;
   }
+  const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
+    cfg,
+    agentDir,
+    authIndex,
+    availableKeys,
+    configuredByKey,
+    discoveredKeys,
+    filter: {
+      provider: providerFilter,
+      local: opts.local,
+    },
+    skipRuntimeModelSuppression,
+    metadataSnapshot,
+    workspaceDir,
+  });
+  const rows: ModelRow[] = [];
+
+  if (enableSourcePlanCascade) {
+    const { appendAllModelRowSources } = await loadRowSourcesModule();
+    if (!sourcePlan || !sourcePlanModule) {
+      throw new Error("models list source plan was not initialized");
+    }
+    let rowContext = buildRowContext(sourcePlan.skipRuntimeModelSuppression);
+    const initialAppend = await appendAllModelRowSources({
+      rows,
+      entries,
+      context: rowContext,
+      modelRegistry,
+      registryModels,
+      sourcePlan,
+    });
+    if (initialAppend.requiresRegistryFallback) {
+      const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
+      try {
+        await loadRegistryState(
+          useScopedRegistryFallback
+            ? {
+                normalizeModels: false,
+                loadAvailability: false,
+              }
+            : undefined,
+        );
+      } catch (err) {
+        runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
+        process.exitCode = 1;
+        return;
+      }
+      rows.length = 0;
+      rowContext = buildRowContext(useScopedRegistryFallback);
+      await appendAllModelRowSources({
+        rows,
+        entries,
+        context: rowContext,
+        modelRegistry,
+        registryModels,
+        sourcePlan: useScopedRegistryFallback
+          ? sourcePlan
+          : sourcePlanModule.createRegistryModelListSourcePlan(),
+      });
+    }
+  } else {
+    const { appendConfiguredModelRowSources } = await loadRowSourcesModule();
+    await appendConfiguredModelRowSources({
+      rows,
+      entries,
+      modelRegistry,
+      context: buildRowContext(!modelRegistry),
+    });
+  }
+
   if (availabilityErrorMessage !== undefined) {
     runtime.error(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
-  }
-
-  const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
-
-  const { entries } = resolveConfiguredEntries(cfg);
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-
-  const rows: ModelRow[] = [];
-
-  if (opts.all) {
-    const sorted = [...models].toSorted((a, b) => {
-      const p = a.provider.localeCompare(b.provider);
-      if (p !== 0) {
-        return p;
-      }
-      return a.id.localeCompare(b.id);
-    });
-
-    for (const model of sorted) {
-      if (providerFilter && model.provider.toLowerCase() !== providerFilter) {
-        continue;
-      }
-      if (opts.local && !isLocalBaseUrl(model.baseUrl)) {
-        continue;
-      }
-      const key = modelKey(model.provider, model.id);
-      const configured = configuredByKey.get(key);
-      rows.push(
-        toModelRow({
-          model,
-          key,
-          tags: configured ? Array.from(configured.tags) : [],
-          aliases: configured?.aliases ?? [],
-          availableKeys,
-          cfg,
-          authStore,
-        }),
-      );
-    }
-  } else {
-    for (const entry of entries) {
-      if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
-        continue;
-      }
-      let model = modelByKey.get(entry.key);
-      if (!model && modelRegistry) {
-        const forwardCompat = resolveForwardCompatModel(
-          entry.ref.provider,
-          entry.ref.model,
-          modelRegistry,
-        );
-        if (forwardCompat) {
-          model = forwardCompat;
-          modelByKey.set(entry.key, forwardCompat);
-        }
-      }
-      if (!model) {
-        const { resolveModel } = await import("../../agents/pi-embedded-runner/model.js");
-        model = resolveModel(entry.ref.provider, entry.ref.model, undefined, cfg).model;
-      }
-      if (opts.local && model && !isLocalBaseUrl(model.baseUrl)) {
-        continue;
-      }
-      if (opts.local && !model) {
-        continue;
-      }
-      rows.push(
-        toModelRow({
-          model,
-          key: entry.key,
-          tags: Array.from(entry.tags),
-          aliases: entry.aliases,
-          availableKeys,
-          cfg,
-          authStore,
-        }),
-      );
-    }
   }
 
   if (rows.length === 0) {

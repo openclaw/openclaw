@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../terminal/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import { formatHealthChannelLines, healthCommand } from "./health.js";
+import {
+  formatContextEngineHealthLine,
+  formatHealthChannelLines,
+  formatModelPricingHealthLine,
+  healthCommand,
+} from "./health.js";
 
 const runtime = {
   log: vi.fn(),
@@ -52,13 +57,53 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const buildGatewayConnectionDetailsMock = vi.fn(() => ({
+  message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+}));
+const formatGatewayTransportErrorJsonMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
+  formatGatewayTransportErrorJson: (...args: unknown[]) =>
+    formatGatewayTransportErrorJsonMock(...args),
 }));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => [],
+}));
+
+function requireFirstRuntimeLog(): string {
+  const [call] = runtime.log.mock.calls;
+  if (!call) {
+    throw new Error("expected health command log output");
+  }
+  const [message] = call;
+  if (message === undefined) {
+    throw new Error("expected health command log output");
+  }
+  return String(message);
+}
+
+function requireFirstGatewayRequest(): Record<string, unknown> {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected gateway request");
+  }
+  return request as Record<string, unknown>;
+}
 
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    buildGatewayConnectionDetailsMock.mockReturnValue({
+      message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+    });
+    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
   });
 
   it("outputs JSON from gateway", async () => {
@@ -87,37 +132,141 @@ describe("healthCommand", () => {
     });
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    const logged = runtime.log.mock.calls[0]?.[0] as string;
-    const parsed = JSON.parse(logged) as HealthSummary;
+    const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
   });
 
-  it("prints text summary when not json", async () => {
-    callGatewayMock.mockResolvedValueOnce(
-      createHealthSummary({
-        channels: {
-          whatsapp: { accountId: "default", linked: false, authAgeMs: null },
-          telegram: { accountId: "default", configured: false },
-          discord: { accountId: "default", configured: false },
+  it("prints the rich text summary and verbose gateway details", async () => {
+    const recent = [
+      { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
+      { key: "foo", updatedAt: null, age: null },
+    ];
+    const snapshot = createHealthSummary({
+      channels: {
+        whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
+        telegram: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: true,
+            elapsedMs: 7,
+            bot: { username: "bot" },
+            webhook: { url: "https://example.com/h" },
+          },
         },
-        channelOrder: ["whatsapp", "telegram", "discord"],
-        channelLabels: {
-          whatsapp: "WhatsApp",
-          telegram: "Telegram",
-          discord: "Discord",
-        },
-      }),
+        discord: { accountId: "default", configured: false },
+      },
+      channelOrder: ["whatsapp", "telegram", "discord"],
+      channelLabels: {
+        whatsapp: "WhatsApp",
+        telegram: "Telegram",
+        discord: "Discord",
+      },
+      sessions: {
+        path: "/tmp/sessions.json",
+        count: 2,
+        recent,
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      { json: false, verbose: true, timeoutMs: 1000, config: {} },
+      runtime as never,
     );
 
-    await healthCommand({ json: false }, runtime as never);
-
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalled();
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toMatch(/WhatsApp: linked/i);
+    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+      ["Gateway connection:"],
+      ["  Gateway mode: local"],
+      ["  Gateway target: ws://127.0.0.1:18789"],
+    ]);
+    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+  });
+
+  it("passes explicit gateway credentials through to the gateway call", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      {
+        json: true,
+        timeoutMs: 5000,
+        config: {},
+        token: "setup-token",
+        password: "setup-password",
+      },
+      runtime as never,
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    const gatewayRequest = requireFirstGatewayRequest();
+    expect(gatewayRequest.method).toBe("health");
+    expect(gatewayRequest.token).toBe("setup-token");
+    expect(gatewayRequest.password).toBe("setup-password");
+  });
+
+  it("outputs JSON for gateway transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
+
+  it("formats degraded model-pricing health as a warning", () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.modelPricing = {
+      state: "degraded",
+      sources: [
+        {
+          source: "openrouter",
+          state: "degraded",
+          lastFailureAt: Date.now(),
+          detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+        },
+      ],
+      detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      lastFailureAt: Date.now(),
+    };
+
+    expect(formatModelPricingHealthLine(snapshot)).toBe(
+      "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
+    );
   });
 
   it("formats per-account probe timings", () => {
@@ -151,8 +300,73 @@ describe("healthCommand", () => {
     });
 
     const lines = formatHealthChannelLines(summary, { accountMode: "all" });
-    expect(lines).toContain(
+    expect(lines).toStrictEqual([
       "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
+    ]);
+  });
+
+  it("formats statusState without inferring from linked", () => {
+    const summary = createHealthSummary({
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          statusState: "unstable",
+          configured: true,
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
+  });
+
+  it("formats iMessage probe failures as failed health lines", () => {
+    const summary = createHealthSummary({
+      channels: {
+        imessage: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: false,
+            error:
+              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+          },
+        },
+      },
+      channelOrder: ["imessage"],
+      channelLabels: { imessage: "iMessage" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toContain(
+      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+  });
+});
+
+describe("formatContextEngineHealthLine", () => {
+  it("summarizes quarantined context engines", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.contextEngines = {
+      quarantined: [
+        {
+          engineId: "lossless-claw",
+          owner: "plugin:lossless-claw",
+          operation: "assemble",
+          reason: "db corrupt",
+          failedAt: 123,
+        },
+      ],
+    };
+
+    expect(formatContextEngineHealthLine(summary)).toBe(
+      "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
   });
 });

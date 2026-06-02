@@ -3,7 +3,7 @@ import OpenClawIPC
 import OSLog
 
 /// Lightweight SemVer helper (major.minor.patch only) for gateway compatibility checks.
-struct Semver: Comparable, CustomStringConvertible, Sendable {
+struct Semver: Comparable, CustomStringConvertible {
     let major: Int
     let minor: Int
     let patch: Int
@@ -193,7 +193,7 @@ enum GatewayEnvironment {
         let port = self.gatewayPort()
         if let gatewayBin {
             let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            let cmd = [gatewayBin, "gateway", "--port", "\(port)", "--bind", bind]
             return GatewayCommandResolution(status: status, command: cmd)
         }
 
@@ -201,7 +201,7 @@ enum GatewayEnvironment {
            case let .success(resolvedRuntime) = runtime
         {
             let bind = self.preferredGatewayBind() ?? "loopback"
-            let cmd = [resolvedRuntime.path, entry, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+            let cmd = [resolvedRuntime.path, entry, "gateway", "--port", "\(port)", "--bind", bind]
             return GatewayCommandResolution(status: status, command: cmd)
         }
 
@@ -291,6 +291,21 @@ enum GatewayEnvironment {
 
     // MARK: - Internals
 
+    /// Exposed for tests so CLI version output normalization stays local to gateway checks.
+    static func normalizeGatewayVersionOutput(_ raw: String?) -> String? {
+        guard var normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !normalized.isEmpty else {
+            return nil
+        }
+        if normalized.lowercased().hasPrefix("openclaw ") {
+            normalized = String(normalized.dropFirst("openclaw ".count))
+        }
+        // Strip trailing commit metadata, e.g. "2026.4.2 (d74a122)" → "2026.4.2"
+        if let parenRange = normalized.range(of: #"\s*\([0-9a-fA-F]+\)\s*$"#, options: .regularExpression) {
+            normalized = String(normalized[normalized.startIndex..<parenRange.lowerBound])
+        }
+        return normalized
+    }
+
     private static func readGatewayVersion(binary: String) -> Semver? {
         let start = Date()
         let process = Process()
@@ -317,9 +332,8 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let raw = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return Semver.parse(raw)
+            let raw = String(data: data, encoding: .utf8)
+            return Semver.parse(self.normalizeGatewayVersionOutput(raw))
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(

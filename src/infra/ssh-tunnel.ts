@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { isErrno } from "./errors.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { formatErrorMessage, isErrno } from "./errors.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable } from "./ports.js";
 
 export type SshParsedTarget = {
@@ -37,8 +39,8 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (colonIdx > 0 && colonIdx < hostPart.length - 1) {
     const host = hostPart.slice(0, colonIdx).trim();
     const portRaw = hostPart.slice(colonIdx + 1).trim();
-    const port = Number.parseInt(portRaw, 10);
-    if (!host || !Number.isFinite(port) || port <= 0) {
+    const port = parseStrictPositiveInteger(portRaw);
+    if (!host || port === undefined || port > 65535) {
       return null;
     }
     // Security: Reject hostnames starting with '-' to prevent argument injection
@@ -95,7 +97,9 @@ async function waitForLocalListener(port: number, timeoutMs: number): Promise<vo
     if (await canConnectLocal(port)) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => {
+      setTimeout(r, 50);
+    });
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }
@@ -157,10 +161,7 @@ export async function startSshPortForward(opts: {
   });
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk) => {
-    const lines = String(chunk)
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
+    const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
 
@@ -196,7 +197,7 @@ export async function startSshPortForward(opts: {
   } catch (err) {
     await stop();
     const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
-    throw new Error(`${err instanceof Error ? err.message : String(err)}${suffix}`, { cause: err });
+    throw new Error(`${formatErrorMessage(err)}${suffix}`, { cause: err });
   }
 
   return {

@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { setActivePluginRegistry as setActivePluginRegistryLocal } from "../plugins/runtime.js";
+import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 export const registryState: { registry: PluginRegistry } = {
   registry: createEmptyPluginRegistry(),
@@ -8,18 +9,23 @@ export const registryState: { registry: PluginRegistry } = {
 
 export function setRegistry(registry: PluginRegistry) {
   registryState.registry = registry;
-  setActivePluginRegistry(registry);
+  setTestPluginRegistry(registry);
+  setActivePluginRegistryLocal(registry);
 }
 
 vi.mock("./server-plugins.js", async () => {
-  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
+  const actual = await vi.importActual<typeof import("./server-plugins.js")>("./server-plugins.js");
+  const { setActivePluginRegistry: setActivePluginRegistryLocalLocal } =
+    await import("../plugins/runtime.js");
   return {
+    ...actual,
     loadGatewayPlugins: (params: { baseMethods: string[] }) => {
-      setActivePluginRegistry(registryState.registry);
+      setActivePluginRegistryLocalLocal(registryState.registry);
       return {
         pluginRegistry: registryState.registry,
         gatewayMethods: params.baseMethods ?? [],
       };
     },
+    setFallbackGatewayContextResolver: vi.fn(),
   };
 });

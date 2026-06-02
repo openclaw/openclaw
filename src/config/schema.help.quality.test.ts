@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -8,7 +9,9 @@ const ROOT_SECTIONS = [
   "wizard",
   "diagnostics",
   "logging",
+  "cli",
   "update",
+  "commitments",
   "browser",
   "ui",
   "auth",
@@ -25,11 +28,11 @@ const ROOT_SECTIONS = [
   "approvals",
   "session",
   "cron",
+  "transcripts",
   "hooks",
   "web",
   "channels",
   "discovery",
-  "canvasHost",
   "talk",
   "gateway",
   "memory",
@@ -40,6 +43,7 @@ const TARGET_KEYS = [
   "memory.citations",
   "memory.backend",
   "memory.qmd.searchMode",
+  "memory.qmd.searchTool",
   "memory.qmd.scope",
   "memory.qmd.includeDefaultMemory",
   "memory.qmd.mcporter.enabled",
@@ -57,6 +61,8 @@ const TARGET_KEYS = [
   "memory.qmd.update.interval",
   "memory.qmd.update.debounceMs",
   "memory.qmd.update.onBoot",
+  "memory.qmd.update.startup",
+  "memory.qmd.update.startupDelayMs",
   "memory.qmd.update.waitForBootSync",
   "memory.qmd.update.embedInterval",
   "memory.qmd.update.commandTimeoutMs",
@@ -70,10 +76,20 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.fallback",
   "agents.defaults.memorySearch.sources",
   "agents.defaults.memorySearch.extraPaths",
+  "agents.defaults.memorySearch.qmd",
+  "agents.defaults.memorySearch.qmd.extraCollections",
+  "agents.defaults.memorySearch.qmd.extraCollections.path",
+  "agents.defaults.memorySearch.qmd.extraCollections.name",
+  "agents.defaults.memorySearch.qmd.extraCollections.pattern",
+  "agents.defaults.memorySearch.multimodal",
+  "agents.defaults.memorySearch.multimodal.enabled",
+  "agents.defaults.memorySearch.multimodal.modalities",
+  "agents.defaults.memorySearch.multimodal.maxFileBytes",
   "agents.defaults.memorySearch.experimental.sessionMemory",
   "agents.defaults.memorySearch.remote.baseUrl",
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.defaults.memorySearch.remote.headers",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency",
   "agents.defaults.memorySearch.remote.batch.enabled",
   "agents.defaults.memorySearch.remote.batch.wait",
   "agents.defaults.memorySearch.remote.batch.concurrency",
@@ -81,6 +97,10 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
   "agents.defaults.memorySearch.store.path",
+  "agents.defaults.memorySearch.inputType",
+  "agents.defaults.memorySearch.queryInputType",
+  "agents.defaults.memorySearch.documentInputType",
+  "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
   "agents.defaults.memorySearch.query.hybrid.enabled",
@@ -95,19 +115,26 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.cache.maxEntries",
   "agents.defaults.memorySearch.sync.onSearch",
   "agents.defaults.memorySearch.sync.watch",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages",
   "models.mode",
   "models.providers.*.auth",
   "models.providers.*.authHeader",
+  "models.providers.*.request",
   "gateway.reload.mode",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
+  "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.retry",
+  "cron.retry.maxAttempts",
+  "cron.retry.backoffMs",
+  "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
@@ -147,7 +174,10 @@ const TARGET_KEYS = [
   "session.agentToAgent.maxPingPongTurns",
   "session.threadBindings",
   "session.threadBindings.enabled",
-  "session.threadBindings.ttlHours",
+  "session.threadBindings.idleHours",
+  "session.threadBindings.maxAgeHours",
+  "session.threadBindings.spawnSessions",
+  "session.threadBindings.defaultSpawnContext",
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",
@@ -214,16 +244,16 @@ const TARGET_KEYS = [
   "hooks.gmail.tailscale.mode",
   "hooks.gmail.thinking",
   "hooks.internal",
-  "hooks.internal.handlers",
-  "hooks.internal.handlers[].event",
-  "hooks.internal.handlers[].module",
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
+  "messages.visibleReplies",
   "messages.responsePrefix",
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
+  "messages.groupChat.unmentionedInbound",
+  "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
   "messages.queue.byChannel",
@@ -238,10 +268,16 @@ const TARGET_KEYS = [
   "channels",
   "channels.defaults",
   "channels.defaults.groupPolicy",
+  "channels.defaults.contextVisibility",
   "channels.defaults.heartbeat",
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
   "channels.defaults.heartbeat.useIndicator",
+  "channels.defaults.botLoopProtection",
+  "channels.defaults.botLoopProtection.enabled",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow",
+  "channels.defaults.botLoopProtection.windowSeconds",
+  "channels.defaults.botLoopProtection.cooldownSeconds",
   "gateway",
   "gateway.mode",
   "gateway.bind",
@@ -259,12 +295,15 @@ const TARGET_KEYS = [
   "browser.headless",
   "browser.noSandbox",
   "browser.profiles",
+  "browser.profiles.*.userDataDir",
   "browser.profiles.*.driver",
+  "browser.profiles.*.attachOnly",
   "tools",
   "tools.allow",
   "tools.deny",
   "tools.exec",
   "tools.exec.host",
+  "tools.exec.mode",
   "tools.exec.security",
   "tools.exec.ask",
   "tools.exec.node",
@@ -282,21 +321,21 @@ const TARGET_KEYS = [
   "web.reconnect.factor",
   "web.reconnect.jitter",
   "web.reconnect.maxAttempts",
+  "web.whatsapp",
+  "web.whatsapp.keepAliveIntervalMs",
+  "web.whatsapp.connectTimeoutMs",
+  "web.whatsapp.defaultQueryTimeoutMs",
   "discovery",
+  "discovery.wideArea.domain",
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",
-  "canvasHost",
-  "canvasHost.enabled",
-  "canvasHost.root",
-  "canvasHost.port",
-  "canvasHost.liveReload",
+  "gateway.controlUi.embedSandbox",
   "talk",
-  "talk.voiceId",
-  "talk.voiceAliases",
-  "talk.modelId",
-  "talk.outputFormat",
+  "talk.consultFastMode",
   "talk.interruptOnSpeech",
+  "talk.silenceTimeoutMs",
+  "talk.consultThinkingLevel",
   "meta",
   "env",
   "env.shellEnv",
@@ -331,10 +370,21 @@ const TARGET_KEYS = [
   "plugins.slots",
   "plugins.entries",
   "plugins.entries.*.enabled",
+  "plugins.entries.*.hooks",
+  "plugins.entries.*.hooks.allowPromptInjection",
+  "plugins.entries.*.hooks.allowConversationAccess",
+  "plugins.entries.*.hooks.timeoutMs",
+  "plugins.entries.*.hooks.timeouts",
+  "plugins.entries.*.subagent",
+  "plugins.entries.*.subagent.allowModelOverride",
+  "plugins.entries.*.subagent.allowedModels",
+  "plugins.entries.*.llm",
+  "plugins.entries.*.llm.allowModelOverride",
+  "plugins.entries.*.llm.allowedModels",
+  "plugins.entries.*.llm.allowAgentIdOverride",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
-  "plugins.installs",
   "auth",
   "auth.cooldowns",
   "models",
@@ -342,26 +392,38 @@ const TARGET_KEYS = [
   "models.providers.*.baseUrl",
   "models.providers.*.apiKey",
   "models.providers.*.api",
+  "models.providers.*.contextWindow",
+  "models.providers.*.contextTokens",
+  "models.providers.*.maxTokens",
+  "models.providers.*.region",
   "models.providers.*.headers",
   "models.providers.*.models",
-  "models.bedrockDiscovery",
-  "models.bedrockDiscovery.enabled",
-  "models.bedrockDiscovery.region",
-  "models.bedrockDiscovery.providerFilter",
-  "models.bedrockDiscovery.refreshInterval",
-  "models.bedrockDiscovery.defaultContextWindow",
-  "models.bedrockDiscovery.defaultMaxTokens",
   "agents",
   "agents.defaults",
   "agents.list",
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
+  "agents.defaults.compaction.provider",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
   "agents.defaults.compaction.maxHistoryShare",
+  "agents.defaults.compaction.identifierPolicy",
+  "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.recentTurnsPreserve",
+  "agents.defaults.compaction.qualityGuard",
+  "agents.defaults.compaction.qualityGuard.enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.midTurnPrecheck",
+  "agents.defaults.compaction.midTurnPrecheck.enabled",
+  "agents.defaults.compaction.postCompactionSections",
+  "agents.defaults.compaction.timeoutSeconds",
+  "agents.defaults.compaction.model",
+  "agents.defaults.compaction.truncateAfterCompaction",
+  "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
+  "agents.defaults.compaction.memoryFlush.model",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
   "agents.defaults.compaction.memoryFlush.prompt",
   "agents.defaults.compaction.memoryFlush.systemPrompt",
@@ -381,22 +443,15 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
   "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": [
-    '"steer"',
-    '"followup"',
-    '"collect"',
-    '"steer-backlog"',
-    '"steer+backlog"',
-    '"queue"',
-    '"interrupt"',
-  ],
+  "messages.queue.mode": ['"steer"', '"followup"', '"collect"', '"interrupt"'],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
+  "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
   "gateway.mode": ['"local"', '"remote"'],
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"clawd"', '"extension"'],
+  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"existing-session"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
@@ -412,8 +467,10 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
+  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
 
 const TOOLS_HOOKS_TARGET_KEYS = [
@@ -443,20 +500,14 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.alsoAllow",
   "tools.byProvider",
   "tools.exec.approvalRunningNoticeMs",
+  "tools.exec.strictInlineEval",
+  "tools.exec.commandHighlighting",
   "tools.links.enabled",
   "tools.links.maxLinks",
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  "tools.media.audio.attachments",
-  "tools.media.audio.enabled",
-  "tools.media.audio.language",
-  "tools.media.audio.maxBytes",
-  "tools.media.audio.maxChars",
-  "tools.media.audio.models",
-  "tools.media.audio.prompt",
-  "tools.media.audio.scope",
-  "tools.media.audio.timeoutSeconds",
+  ...MEDIA_AUDIO_FIELD_KEYS,
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
@@ -490,26 +541,10 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.defaults.workspace",
   "agents.list[].tools.alsoAllow",
   "agents.list[].tools.byProvider",
+  "agents.list[].tools.message.crossContext.allowAcrossProviders",
+  "agents.list[].tools.message.crossContext.allowWithinProvider",
   "agents.list[].tools.profile",
-  "channels.bluebubbles",
-  "channels.discord",
-  "channels.discord.token",
-  "channels.imessage",
-  "channels.imessage.cliPath",
-  "channels.irc",
   "channels.mattermost",
-  "channels.msteams",
-  "channels.signal",
-  "channels.signal.account",
-  "channels.slack",
-  "channels.slack.appToken",
-  "channels.slack.botToken",
-  "channels.slack.userToken",
-  "channels.slack.userTokenReadOnly",
-  "channels.telegram",
-  "channels.telegram.botToken",
-  "channels.telegram.capabilities.inlineButtons",
-  "channels.whatsapp",
 ] as const;
 
 const FINAL_BACKLOG_TARGET_KEYS = [
@@ -519,7 +554,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
-  "browser.ssrfPolicy.allowPrivateNetwork",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
@@ -528,30 +562,49 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.endpoint",
   "diagnostics.otel.flushIntervalMs",
   "diagnostics.otel.headers",
+  "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+  "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
   "diagnostics.otel.serviceName",
+  "diagnostics.otel.tracesEndpoint",
   "diagnostics.otel.traces",
   "gateway.remote.password",
   "gateway.remote.token",
+  "skills.load.allowSymlinkTargets",
+  "skills.load.extraDirs",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
-  "talk.apiKey",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
 ] as const;
 
 describe("config help copy quality", () => {
+  function requireHelp(key: string): string {
+    const help = FIELD_HELP[key];
+    if (typeof help !== "string") {
+      throw new Error(`missing help for ${key}`);
+    }
+    return help;
+  }
+
+  function requireLabel(key: string): string {
+    const label = FIELD_LABELS[key];
+    if (typeof label !== "string") {
+      throw new Error(`missing label for ${key}`);
+    }
+    return label;
+  }
+
   function expectOperationalGuidance(
     keys: readonly string[],
     guidancePattern: RegExp,
     minLength = 80,
   ) {
     for (const key of keys) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
+      const help = requireHelp(key);
       expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
       expect(
         guidancePattern.test(help),
@@ -562,14 +615,14 @@ describe("config help copy quality", () => {
 
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
-      expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
-      expect(FIELD_HELP[key], `missing root help for ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
+      expect(requireHelp(key)).not.toHaveLength(0);
     }
   });
 
   it("keeps labels in parity for all help keys", () => {
     for (const key of Object.keys(FIELD_HELP)) {
-      expect(FIELD_LABELS[key], `missing label for help key ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
     }
   });
 
@@ -603,8 +656,7 @@ describe("config help copy quality", () => {
 
   it("documents option behavior for enum-style fields", () => {
     for (const [key, options] of Object.entries(ENUM_EXPECTATIONS)) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for enum key ${key}`).toBeDefined();
+      const help = requireHelp(key);
       for (const token of options) {
         expect(help.includes(token), `missing option ${token} in ${key}`).toBe(true);
       }
@@ -659,14 +711,28 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
+  it("documents session write-lock policy defaults", () => {
+    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
+    expect(acquireTimeout.includes("60000")).toBe(true);
+    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+
+    const stale = FIELD_HELP["session.writeLock.staleMs"];
+    expect(stale.includes("1800000")).toBe(true);
+    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
+
+    const maxHold = FIELD_HELP["session.writeLock.maxHoldMs"];
+    expect(maxHold.includes("300000")).toBe(true);
+    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
+  });
+
   it("documents session maintenance duration/size examples and deprecations", () => {
     const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
 
     const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
-    expect(rotate.includes("10mb")).toBe(true);
-    expect(rotate.includes("1gb")).toBe(true);
+    expect(/deprecated/i.test(rotate)).toBe(true);
+    expect(rotate.includes("doctor --fix")).toBe(true);
 
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
@@ -685,7 +751,7 @@ describe("config help copy quality", () => {
 
   it("documents cron run-log retention controls", () => {
     const runLog = FIELD_HELP["cron.runLog"];
-    expect(runLog.includes("cron/runs")).toBe(true);
+    expect(runLog.includes("SQLite")).toBe(true);
 
     const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
     expect(maxBytes.includes("2mb")).toBe(true);
@@ -726,7 +792,7 @@ describe("config help copy quality", () => {
 
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer+backlog"')).toBe(true);
+    expect(queueMode.includes('"steer"')).toBe(true);
   });
 
   it("documents gateway bind modes and web reconnect semantics", () => {
@@ -754,15 +820,33 @@ describe("config help copy quality", () => {
 
     const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
+
+    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
+    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
+    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
+    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
+
+    const pluginConversationPolicy = FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"];
+    expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
+    expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
+    expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
+
+    const pluginHookTimeout = FIELD_HELP["plugins.entries.*.hooks.timeoutMs"];
+    expect(pluginHookTimeout.includes("typed hooks")).toBe(true);
+    expect(pluginHookTimeout.includes("hooks.timeouts")).toBe(true);
+
+    const pluginHookTimeouts = FIELD_HELP["plugins.entries.*.hooks.timeouts"];
+    expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
+    expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
+    expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
     const providerKey = FIELD_HELP["models.providers.*.apiKey"];
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
-
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
-    expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
-    expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
+    const modelsMode = FIELD_HELP["models.mode"];
+    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
+    expect(modelsMode.includes("preserve")).toBe(true);
 
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
@@ -776,7 +860,45 @@ describe("config help copy quality", () => {
     const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
 
+    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
+    expect(identifierPolicy.includes('"strict"')).toBe(true);
+    expect(identifierPolicy.includes('"off"')).toBe(true);
+    expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const midTurnPrecheck = FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"];
+    expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
+
+    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
+    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
+    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
+    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
+
+    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
+    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+
+    const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
+    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
+    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
+
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
+  });
+
+  it("documents agent startup-context preload controls", () => {
+    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
+    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
+
+    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
+    expect(applyOn.includes('"new"')).toBe(true);
+    expect(applyOn.includes('"reset"')).toBe(true);
+
+    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
+    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
   });
 });

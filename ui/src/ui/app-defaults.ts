@@ -10,10 +10,16 @@ export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   fatal: true,
 };
 
+export const DEFAULT_SESSIONS_FILTERS = {
+  activeMinutes: "120",
+  limit: "200",
+} as const;
+
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
+  sessionKey: "",
   clearAgent: false,
   enabled: true,
   deleteAfterRun: true,
@@ -32,9 +38,18 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",
+  payloadLightContext: false,
   deliveryMode: "announce",
   deliveryChannel: "last",
   deliveryTo: "",
+  deliveryAccountId: "",
   deliveryBestEffort: false,
+  failureAlertMode: "inherit",
+  failureAlertAfter: "2",
+  failureAlertCooldownSeconds: "3600",
+  failureAlertChannel: "last",
+  failureAlertTo: "",
+  failureAlertDeliveryMode: "announce",
+  failureAlertAccountId: "",
   timeoutSeconds: "",
 };

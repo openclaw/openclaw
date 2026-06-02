@@ -17,9 +17,7 @@ final class DevicePairingApprovalPrompter {
     private var queue: [PendingRequest] = []
     var pendingCount: Int = 0
     var pendingRepairCount: Int = 0
-    private var activeAlert: NSAlert?
-    private var activeRequestId: String?
-    private var alertHostWindow: NSWindow?
+    private let alertState = PairingAlertState()
     private var resolvedByRequestId: Set<String> = []
 
     private struct PairingList: Codable {
@@ -35,7 +33,7 @@ final class DevicePairingApprovalPrompter {
         let remoteIp: String?
     }
 
-    private struct PendingRequest: Codable, Equatable, Identifiable {
+    struct PendingRequest: Codable, Equatable, Identifiable {
         let requestId: String
         let deviceId: String
         let publicKey: String
@@ -55,46 +53,33 @@ final class DevicePairingApprovalPrompter {
         }
     }
 
-    private struct PairingResolvedEvent: Codable {
-        let requestId: String
-        let deviceId: String
-        let decision: String
-        let ts: Double
-    }
-
-    private enum PairingResolution: String {
-        case approved
-        case rejected
-    }
+    private typealias PairingResolvedEvent = PairingAlertSupport.PairingResolvedEvent
 
     func start() {
-        guard self.task == nil else { return }
-        self.isStopping = false
-        self.task = Task { [weak self] in
-            guard let self else { return }
-            _ = try? await GatewayConnection.shared.refresh()
-            await self.loadPendingRequestsFromGateway()
-            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in self?.handle(push: push) }
-            }
-        }
+        self.startPushTask()
+    }
+
+    private func startPushTask() {
+        PairingAlertSupport.startPairingPushTask(
+            task: &self.task,
+            isStopping: &self.isStopping,
+            loadPending: self.loadPendingRequestsFromGateway,
+            handlePush: self.handle(push:))
     }
 
     func stop() {
-        self.isStopping = true
-        self.endActiveAlert()
-        self.task?.cancel()
-        self.task = nil
-        self.queue.removeAll(keepingCapacity: false)
+        self.stopPushTask()
         self.updatePendingCounts()
-        self.isPresenting = false
-        self.activeRequestId = nil
-        self.alertHostWindow?.orderOut(nil)
-        self.alertHostWindow?.close()
-        self.alertHostWindow = nil
         self.resolvedByRequestId.removeAll(keepingCapacity: false)
+    }
+
+    private func stopPushTask() {
+        PairingAlertSupport.stopPairingPrompter(
+            isStopping: &self.isStopping,
+            task: &self.task,
+            queue: &self.queue,
+            isPresenting: &self.isPresenting,
+            state: self.alertState)
     }
 
     private func loadPendingRequestsFromGateway() async {
@@ -127,48 +112,19 @@ final class DevicePairingApprovalPrompter {
 
     private func presentAlert(for req: PendingRequest) {
         self.logger.info("presenting device pairing alert requestId=\(req.requestId, privacy: .public)")
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Allow device to connect?"
-        alert.informativeText = Self.describe(req)
-        alert.addButton(withTitle: "Later")
-        alert.addButton(withTitle: "Approve")
-        alert.addButton(withTitle: "Reject")
-        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
-            alert.buttons[2].hasDestructiveAction = true
-        }
-
-        self.activeAlert = alert
-        self.activeRequestId = req.requestId
-        let hostWindow = self.requireAlertHostWindow()
-
-        let sheetSize = alert.window.frame.size
-        if let screen = hostWindow.screen ?? NSScreen.main {
-            let bounds = screen.visibleFrame
-            let x = bounds.midX - (sheetSize.width / 2)
-            let sheetOriginY = bounds.midY - (sheetSize.height / 2)
-            let hostY = sheetOriginY + sheetSize.height - hostWindow.frame.height
-            hostWindow.setFrameOrigin(NSPoint(x: x, y: hostY))
-        } else {
-            hostWindow.center()
-        }
-
-        hostWindow.makeKeyAndOrderFront(nil)
-        alert.beginSheetModal(for: hostWindow) { [weak self] response in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.activeRequestId = nil
-                self.activeAlert = nil
-                await self.handleAlertResponse(response, request: req)
-                hostWindow.orderOut(nil)
-            }
-        }
+        PairingAlertSupport.presentPairingAlert(
+            request: req,
+            requestId: req.requestId,
+            messageText: Self.alertTitle(for: req),
+            informativeText: Self.alertSummary(for: req),
+            buttonTitles: PairingAlertSupport.ButtonTitles(approve: Self.approveButtonTitle(for: req)),
+            accessoryView: Self.buildAccessoryView(for: req),
+            state: self.alertState,
+            onResponse: self.handleAlertResponse)
     }
 
     private func handleAlertResponse(_ response: NSApplication.ModalResponse, request: PendingRequest) async {
-        var shouldRemove = response != .alertFirstButtonReturn
+        var shouldRemove = response != .alertSecondButtonReturn
         defer {
             if shouldRemove {
                 if self.queue.first == request {
@@ -190,14 +146,14 @@ final class DevicePairingApprovalPrompter {
 
         switch response {
         case .alertFirstButtonReturn:
+            _ = await self.approve(requestId: request.requestId)
+        case .alertSecondButtonReturn:
             shouldRemove = false
             if let idx = self.queue.firstIndex(of: request) {
                 self.queue.remove(at: idx)
             }
             self.queue.append(request)
             return
-        case .alertSecondButtonReturn:
-            _ = await self.approve(requestId: request.requestId)
         case .alertThirdButtonReturn:
             await self.reject(requestId: request.requestId)
         default:
@@ -206,33 +162,27 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func approve(requestId: String) async -> Bool {
-        do {
+        await PairingAlertSupport.approveRequest(
+            requestId: requestId,
+            kind: "device",
+            logger: self.logger)
+        {
             try await GatewayConnection.shared.devicePairApprove(requestId: requestId)
-            self.logger.info("approved device pairing requestId=\(requestId, privacy: .public)")
-            return true
-        } catch {
-            self.logger.error("approve failed requestId=\(requestId, privacy: .public)")
-            self.logger.error("approve failed: \(error.localizedDescription, privacy: .public)")
-            return false
         }
     }
 
     private func reject(requestId: String) async {
-        do {
+        await PairingAlertSupport.rejectRequest(
+            requestId: requestId,
+            kind: "device",
+            logger: self.logger)
+        {
             try await GatewayConnection.shared.devicePairReject(requestId: requestId)
-            self.logger.info("rejected device pairing requestId=\(requestId, privacy: .public)")
-        } catch {
-            self.logger.error("reject failed requestId=\(requestId, privacy: .public)")
-            self.logger.error("reject failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func endActiveAlert() {
-        PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
-    }
-
-    private func requireAlertHostWindow() -> NSWindow {
-        PairingAlertSupport.requireAlertHostWindow(alertHostWindow: &self.alertHostWindow)
+        PairingAlertSupport.endActiveAlert(state: self.alertState)
     }
 
     private func handle(push: GatewayPush) {
@@ -269,9 +219,10 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func handleResolved(_ resolved: PairingResolvedEvent) {
-        let resolution = resolved.decision == PairingResolution.approved.rawValue ? PairingResolution
-            .approved : .rejected
-        if let activeRequestId, activeRequestId == resolved.requestId {
+        let resolution = resolved.decision == PairingAlertSupport.PairingResolution.approved.rawValue
+            ? PairingAlertSupport.PairingResolution.approved
+            : PairingAlertSupport.PairingResolution.rejected
+        if let activeRequestId = self.alertState.activeRequestId, activeRequestId == resolved.requestId {
             self.resolvedByRequestId.insert(resolved.requestId)
             self.endActiveAlert()
             let decision = resolution.rawValue
@@ -284,24 +235,166 @@ final class DevicePairingApprovalPrompter {
         self.updatePendingCounts()
     }
 
-    private static func describe(_ req: PendingRequest) -> String {
-        var lines: [String] = []
-        lines.append("Device: \(req.displayName ?? req.deviceId)")
-        if let platform = req.platform {
-            lines.append("Platform: \(platform)")
+    static func alertTitle(for req: PendingRequest) -> String {
+        self.isMac(req.platform) ? "New Mac wants to connect" : "New device wants to connect"
+    }
+
+    static func alertSummary(for req: PendingRequest) -> String {
+        let subject = self.isMac(req.platform) ? "this Mac app" : "this device"
+        return "Approve \(subject) to control OpenClaw. Only approve if this is yours; you can remove it later in Settings."
+    }
+
+    static func approveButtonTitle(for req: PendingRequest) -> String {
+        self.isMac(req.platform) ? "Approve Mac" : "Approve Device"
+    }
+
+    static func buildAccessoryView(for req: PendingRequest) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 2, left: 0, bottom: 0, right: 0)
+
+        stack.addArrangedSubview(self.makeValueRow(label: "Device", value: self.deviceName(for: req)))
+        if let platform = self.prettyPlatform(req.platform) {
+            stack.addArrangedSubview(self.makeValueRow(label: "Platform", value: platform))
         }
-        if let role = req.role {
-            lines.append("Role: \(role)")
+        if let role = self.prettyRole(req.role) {
+            stack.addArrangedSubview(self.makeValueRow(label: "Role", value: role))
         }
-        if let scopes = req.scopes, !scopes.isEmpty {
-            lines.append("Scopes: \(scopes.joined(separator: ", "))")
+        let accessItems = self.friendlyScopeNames(req.scopes)
+        if !accessItems.isEmpty {
+            stack.addArrangedSubview(self.makeSectionLabel("Access requested"))
+            for item in accessItems {
+                stack.addArrangedSubview(self.makeBullet(item))
+            }
         }
-        if let remoteIp = req.remoteIp {
-            lines.append("IP: \(remoteIp)")
+        stack.addArrangedSubview(self.makeDetailLine(req))
+
+        let fitting = stack.fittingSize
+        stack.frame = NSRect(x: 0, y: 0, width: 420, height: fitting.height)
+        return stack
+    }
+
+    static func deviceName(for req: PendingRequest) -> String {
+        let trimmedName = req.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedName, !trimmedName.isEmpty, trimmedName != req.deviceId {
+            return trimmedName
+        }
+        return self.isMac(req.platform) ? "OpenClaw Mac app" : "New device"
+    }
+
+    static func prettyPlatform(_ raw: String?) -> String? {
+        let platform = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let platform, !platform.isEmpty else { return nil }
+        switch platform.lowercased() {
+        case "macintel", "x86_64-apple-darwin":
+            return "Mac (Intel)"
+        case "macarm", "macarm64", "arm64-apple-darwin", "aarch64-apple-darwin":
+            return "Mac (Apple silicon)"
+        case "darwin":
+            return "Mac"
+        default:
+            if platform.lowercased().contains("mac") {
+                return "Mac"
+            }
+            return platform
+        }
+    }
+
+    static func prettyRole(_ raw: String?) -> String? {
+        let role = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let role, !role.isEmpty else { return nil }
+        return role == "operator" ? "Operator" : role
+    }
+
+    static func friendlyScopeNames(_ scopes: [String]?) -> [String] {
+        guard let scopes else { return [] }
+        var seen = Set<String>()
+        return scopes.compactMap { scope in
+            let normalized = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { return nil }
+            switch normalized {
+            case "operator.admin":
+                return "Admin access"
+            case "operator.read":
+                return "Read OpenClaw data"
+            case "operator.write":
+                return "Send messages and make changes"
+            case "operator.approvals":
+                return "Manage approvals"
+            case "operator.pairing":
+                return "Pair and repair devices"
+            case "operator.talk.secrets":
+                return "Use Talk credentials"
+            default:
+                return normalized
+            }
+        }
+    }
+
+    static func shortIdentifier(_ id: String) -> String {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 20 else { return trimmed }
+        return "\(trimmed.prefix(8))...\(trimmed.suffix(7))"
+    }
+
+    private static func isMac(_ platform: String?) -> Bool {
+        guard let platform else { return false }
+        let lower = platform.lowercased()
+        return lower.contains("mac") || lower.contains("darwin")
+    }
+
+    private static func makeValueRow(label: String, value: String) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 8
+
+        let labelField = self.makeLabel("\(label):", font: .systemFont(ofSize: 12, weight: .semibold))
+        labelField.textColor = .secondaryLabelColor
+        labelField.setContentHuggingPriority(.required, for: .horizontal)
+        let valueField = self.makeLabel(value, font: .systemFont(ofSize: 12, weight: .regular))
+        valueField.maximumNumberOfLines = 2
+
+        row.addArrangedSubview(labelField)
+        row.addArrangedSubview(valueField)
+        return row
+    }
+
+    private static func makeSectionLabel(_ text: String) -> NSTextField {
+        let label = self.makeLabel(text, font: .systemFont(ofSize: 12, weight: .semibold))
+        label.textColor = .secondaryLabelColor
+        return label
+    }
+
+    private static func makeBullet(_ text: String) -> NSTextField {
+        let label = self.makeLabel("• \(text)", font: .systemFont(ofSize: 12, weight: .regular))
+        label.maximumNumberOfLines = 2
+        return label
+    }
+
+    private static func makeDetailLine(_ req: PendingRequest) -> NSTextField {
+        var parts = ["ID \(self.shortIdentifier(req.deviceId))"]
+        if let remoteIp = req.remoteIp?.trimmingCharacters(in: .whitespacesAndNewlines), !remoteIp.isEmpty {
+            parts.append("IP \(remoteIp.replacingOccurrences(of: "::ffff:", with: ""))")
         }
         if req.isRepair == true {
-            lines.append("Repair: yes")
+            parts.append("repair request")
         }
-        return lines.joined(separator: "\n")
+        let label = self.makeLabel(
+            parts.joined(separator: " · "),
+            font: .monospacedSystemFont(ofSize: 11, weight: .regular))
+        label.textColor = .tertiaryLabelColor
+        label.maximumNumberOfLines = 2
+        return label
+    }
+
+    private static func makeLabel(_ text: String, font: NSFont) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = font
+        label.lineBreakMode = .byWordWrapping
+        label.textColor = .labelColor
+        return label
     }
 }

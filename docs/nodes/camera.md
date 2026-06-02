@@ -1,12 +1,10 @@
 ---
-summary: "Camera capture (iOS node + macOS app) for agent use: photos (jpg) and short video clips (mp4)"
+summary: "Camera capture (iOS/Android nodes + macOS app) for agent use: photos (jpg) and short video clips (mp4)"
 read_when:
-  - Adding or modifying camera capture on iOS nodes or macOS
+  - Adding or modifying camera capture on iOS/Android nodes or macOS
   - Extending agent-accessible MEDIA temp-file workflows
-title: "Camera Capture"
+title: "Camera capture"
 ---
-
-# Camera capture (agent)
 
 OpenClaw supports **camera capture** for agent workflows:
 
@@ -61,9 +59,9 @@ All camera access is gated behind **user-controlled settings**.
 
 Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
-### CLI helper (temp files + MEDIA)
+### CLI helper
 
-The easiest way to get attachments is via the CLI helper, which writes decoded media to a temp file and prints `MEDIA:<path>`.
+The easiest way to get media files is via the CLI helper, which writes decoded media to a temp file and prints the saved path.
 
 Examples:
 
@@ -100,6 +98,12 @@ If permissions are missing, the app will prompt when possible; if denied, `camer
 
 Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
+### Android commands (via Gateway `node.invoke`)
+
+- `camera.list`
+  - Response payload:
+    - `devices`: array of `{ id, name, position, deviceType }`
+
 ### Payload guard
 
 Photos are recompressed to keep the base64 payload under 5 MB.
@@ -112,7 +116,7 @@ The macOS companion app exposes a checkbox:
 
 - **Settings → General → Allow Camera** (`openclaw.cameraEnabled`)
   - Default: **off**
-  - When off: camera requests return “Camera disabled by user”.
+  - When off: camera requests return "Camera disabled by user".
 
 ### CLI helper (node invoke)
 
@@ -122,12 +126,12 @@ Examples:
 
 ```bash
 openclaw nodes camera list --node <id>            # list camera ids
-openclaw nodes camera snap --node <id>            # prints MEDIA:<path>
+openclaw nodes camera snap --node <id>            # prints saved path
 openclaw nodes camera snap --node <id> --max-width 1280
 openclaw nodes camera snap --node <id> --delay-ms 2000
 openclaw nodes camera snap --node <id> --device-id <id>
-openclaw nodes camera clip --node <id> --duration 10s          # prints MEDIA:<path>
-openclaw nodes camera clip --node <id> --duration-ms 3000      # prints MEDIA:<path> (legacy flag)
+openclaw nodes camera clip --node <id> --duration 10s          # prints saved path
+openclaw nodes camera clip --node <id> --duration-ms 3000      # prints saved path (legacy flag)
 openclaw nodes camera clip --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --no-audio
 ```
@@ -148,9 +152,15 @@ Notes:
 For _screen_ video (not camera), use the macOS companion:
 
 ```bash
-openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints MEDIA:<path>
+openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints saved path
 ```
 
 Notes:
 
 - Requires macOS **Screen Recording** permission (TCC).
+
+## Related
+
+- [Image and media support](/nodes/images)
+- [Media understanding](/nodes/media-understanding)
+- [Location command](/nodes/location-command)

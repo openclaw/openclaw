@@ -7,11 +7,46 @@ import PhotosUI
 import UniformTypeIdentifiers
 #endif
 
+public struct OpenClawChatTalkControl {
+    public var isEnabled: Bool
+    public var isListening: Bool
+    public var isSpeaking: Bool
+    public var isGatewayConnected: Bool
+    public var statusText: String
+    public var providerLabel: String
+    public var toggle: @MainActor (_ sessionKey: String) -> Void
+
+    public init(
+        isEnabled: Bool,
+        isListening: Bool,
+        isSpeaking: Bool,
+        isGatewayConnected: Bool,
+        statusText: String,
+        providerLabel: String,
+        toggle: @escaping @MainActor (_ sessionKey: String) -> Void)
+    {
+        self.isEnabled = isEnabled
+        self.isListening = isListening
+        self.isSpeaking = isSpeaking
+        self.isGatewayConnected = isGatewayConnected
+        self.statusText = statusText
+        self.providerLabel = providerLabel
+        self.toggle = toggle
+    }
+}
+
 @MainActor
 struct OpenClawChatComposer: View {
     @Bindable var viewModel: OpenClawChatViewModel
     let style: OpenClawChatView.Style
     let showsSessionSwitcher: Bool
+    let userAccent: Color?
+    let assistantName: String?
+    let assistantAvatarText: String?
+    let assistantAvatarTint: Color?
+    let composerChrome: OpenClawChatView.ComposerChrome
+    let messagePlaceholder: String?
+    let talkControl: OpenClawChatTalkControl?
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -23,15 +58,7 @@ struct OpenClawChatComposer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.showsToolbar {
-                HStack(spacing: 6) {
-                    if self.showsSessionSwitcher {
-                        self.sessionPicker
-                    }
-                    self.thinkingPicker
-                    Spacer()
-                    self.refreshButton
-                    self.attachmentPicker
-                }
+                self.composerToolbar
             }
 
             if self.showsAttachments, !self.viewModel.attachments.isEmpty {
@@ -42,35 +69,37 @@ struct OpenClawChatComposer: View {
         }
         .padding(self.composerPadding)
         .background {
-            let cornerRadius: CGFloat = 18
+            if self.composerChrome == .full {
+                let cornerRadius: CGFloat = 18
 
-            #if os(macOS)
-            if self.style == .standard {
-                let shape = UnevenRoundedRectangle(
-                    cornerRadii: RectangleCornerRadii(
-                        topLeading: 0,
-                        bottomLeading: cornerRadius,
-                        bottomTrailing: cornerRadius,
-                        topTrailing: 0),
-                    style: .continuous)
-                shape
-                    .fill(OpenClawChatTheme.composerBackground)
-                    .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
-            } else {
+                #if os(macOS)
+                if self.style == .standard {
+                    let shape = UnevenRoundedRectangle(
+                        cornerRadii: RectangleCornerRadii(
+                            topLeading: 0,
+                            bottomLeading: cornerRadius,
+                            bottomTrailing: cornerRadius,
+                            topTrailing: 0),
+                        style: .continuous)
+                    shape
+                        .fill(OpenClawChatTheme.composerBackground)
+                        .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
+                } else {
+                    let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    shape
+                        .fill(OpenClawChatTheme.composerBackground)
+                        .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
+                }
+                #else
                 let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 shape
                     .fill(OpenClawChatTheme.composerBackground)
                     .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
+                #endif
             }
-            #else
-            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            shape
-                .fill(OpenClawChatTheme.composerBackground)
-                .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
-                .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
-            #endif
         }
         #if os(macOS)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -82,17 +111,64 @@ struct OpenClawChatComposer: View {
         #endif
     }
 
+    private var composerToolbar: some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    if self.showsSessionSwitcher {
+                        self.sessionPicker
+                        self.thinkingPicker
+                    }
+                    if self.viewModel.showsModelPicker {
+                        self.modelPicker
+                    }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            if self.style == .standard {
+                self.refreshButton
+                self.attachmentPicker
+            }
+        }
+        .padding(.horizontal, 10)
+    }
+
     private var thinkingPicker: some View {
-        Picker("Thinking", selection: self.$viewModel.thinkingLevel) {
-            Text("Off").tag("off")
-            Text("Low").tag("low")
-            Text("Medium").tag("medium")
-            Text("High").tag("high")
+        Picker(
+            "Thinking",
+            selection: Binding(
+                get: { self.viewModel.thinkingLevel },
+                set: { next in self.viewModel.selectThinkingLevel(next) }))
+        {
+            ForEach(self.viewModel.thinkingLevelOptions) { option in
+                Text(option.label).tag(option.id)
+            }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
+    }
+
+    private var modelPicker: some View {
+        Picker(
+            "Model",
+            selection: Binding(
+                get: { self.viewModel.modelSelectionID },
+                set: { next in self.viewModel.selectModel(next) }))
+        {
+            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
+            ForEach(self.viewModel.modelChoices) { model in
+                Text(model.displayLabel).tag(model.selectionID)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(maxWidth: 240, alignment: .leading)
+        .help("Model")
     }
 
     private var sessionPicker: some View {
@@ -118,23 +194,46 @@ struct OpenClawChatComposer: View {
     @ViewBuilder
     private var attachmentPicker: some View {
         #if os(macOS)
-        Button {
-            self.pickFilesMac()
-        } label: {
-            Image(systemName: "paperclip")
+        if self.composerChrome == .clean {
+            Button {
+                self.pickFilesMac()
+            } label: {
+                Image(systemName: "paperclip")
+            }
+            .help("Add Image")
+            .buttonStyle(.plain)
+            .controlSize(.small)
+        } else {
+            Button {
+                self.pickFilesMac()
+            } label: {
+                Image(systemName: "paperclip")
+            }
+            .help("Add Image")
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
-        .help("Add Image")
-        .buttonStyle(.bordered)
-        .controlSize(.small)
         #else
-        PhotosPicker(selection: self.$pickerItems, maxSelectionCount: 8, matching: .images) {
-            Image(systemName: "paperclip")
-        }
-        .help("Add Image")
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .onChange(of: self.pickerItems) { _, newItems in
-            Task { await self.loadPhotosPickerItems(newItems) }
+        if self.composerChrome == .clean {
+            PhotosPicker(selection: self.$pickerItems, maxSelectionCount: 8, matching: .images) {
+                Image(systemName: "paperclip")
+            }
+            .help("Add Image")
+            .buttonStyle(.plain)
+            .controlSize(.small)
+            .onChange(of: self.pickerItems) { _, newItems in
+                Task { await self.loadPhotosPickerItems(newItems) }
+            }
+        } else {
+            PhotosPicker(selection: self.$pickerItems, maxSelectionCount: 8, matching: .images) {
+                Image(systemName: "paperclip")
+            }
+            .help("Add Image")
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .onChange(of: self.pickerItems) { _, newItems in
+                Task { await self.loadPhotosPickerItems(newItems) }
+            }
         }
         #endif
     }
@@ -176,18 +275,28 @@ struct OpenClawChatComposer: View {
         }
     }
 
+    @ViewBuilder
     private var editor: some View {
+        if self.composerChrome == .clean {
+            self.cleanEditor
+        } else {
+            self.fullEditor
+        }
+    }
+
+    private var fullEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             self.editorOverlay
 
-            if !self.isComposerCompacted {
-                Rectangle()
-                    .fill(OpenClawChatTheme.divider)
-                    .frame(height: 1)
-                    .padding(.horizontal, 2)
-            }
+            Rectangle()
+                .fill(OpenClawChatTheme.divider)
+                .frame(height: 1)
+                .padding(.horizontal, 2)
 
             HStack(alignment: .center, spacing: 8) {
+                if let talkControl {
+                    self.talkButton(talkControl)
+                }
                 if self.showsConnectionPill {
                     self.connectionPill
                 }
@@ -198,29 +307,160 @@ struct OpenClawChatComposer: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(OpenClawChatTheme.composerField)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(OpenClawChatTheme.composerBorder)))
         .padding(self.editorPadding)
+    }
+
+    private var cleanEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                self.compactAccessory(self.attachmentPicker)
+
+                HStack(alignment: .center, spacing: 8) {
+                    self.editorOverlay
+                        .frame(minHeight: self.cleanControlHeight)
+
+                    if let talkControl {
+                        self.compactTalkButton(talkControl)
+                    }
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 6)
+                .frame(height: self.cleanControlHeight)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(OpenClawChatTheme.composerField)
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(OpenClawChatTheme.composerBorder)))
+
+                self.sendButton
+                    .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+            }
+            .frame(height: self.cleanControlHeight)
+
+            if self.showsConnectionPill {
+                self.connectionPill
+                    .padding(.leading, 52)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 4)
+    }
+
+    private func talkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
+        Button {
+            talkControl.toggle(self.viewModel.sessionKey)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
+                    .font(.caption.weight(.semibold))
+                Text(talkControl.isEnabled ? "Stop" : "Talk")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(talkControl.isEnabled ? .white : .primary)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background {
+                Capsule()
+                    .fill(self.talkButtonFill(talkControl))
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
+        .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        .accessibilityValue(self.talkAccessibilityValue(talkControl))
+        .help(self.talkHelpText(talkControl))
+    }
+
+    private func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
+        Button {
+            talkControl.toggle(self.viewModel.sessionKey)
+        } label: {
+            Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(talkControl.isEnabled ? .white : .secondary)
+                .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
+                .background {
+                    Circle()
+                        .fill(self.talkButtonFill(talkControl))
+                }
+                .overlay {
+                    Circle()
+                        .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
+        .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
+        .accessibilityValue(self.talkAccessibilityValue(talkControl))
+        .help(self.talkHelpText(talkControl))
+    }
+
+    private func compactAccessory(_ content: some View) -> some View {
+        content
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+    }
+
+    private func talkButtonFill(_ talkControl: OpenClawChatTalkControl) -> AnyShapeStyle {
+        if talkControl.isEnabled {
+            return AnyShapeStyle(OpenClawChatTheme.userBubble)
+        }
+        if !talkControl.isGatewayConnected {
+            return AnyShapeStyle(Color.secondary.opacity(0.12))
+        }
+        return OpenClawChatTheme.subtleCard
+    }
+
+    private func talkButtonStroke(_ talkControl: OpenClawChatTalkControl) -> Color {
+        if talkControl.isEnabled {
+            return Color.white.opacity(0.18)
+        }
+        return OpenClawChatTheme.composerBorder
+    }
+
+    private func talkAccessibilityValue(_ talkControl: OpenClawChatTalkControl) -> String {
+        let status = talkControl.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = talkControl.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [status, provider].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    private func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
+        if !talkControl.isGatewayConnected, !talkControl.isEnabled {
+            return "Connect the gateway before starting realtime chat"
+        }
+        let action = talkControl.isEnabled ? "Stop" : "Start"
+        return "\(action) realtime chat for \(self.activeSessionLabel)"
     }
 
     private var connectionPill: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(self.viewModel.healthOK ? .green : .orange)
+                .fill(self.connectionOK ? .green : .orange)
                 .frame(width: 7, height: 7)
-            Text(self.activeSessionLabel)
-                .font(.caption2.weight(.semibold))
-            Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
+            Text(self.connectionStatusText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(OpenClawChatTheme.subtleCard)
-        .clipShape(Capsule())
+        .padding(.horizontal, self.composerChrome == .clean ? 0 : 8)
+        .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
+        .background {
+            if self.composerChrome == .full {
+                Capsule()
+                    .fill(OpenClawChatTheme.subtleCard)
+            }
+        }
     }
 
     private var activeSessionLabel: String {
@@ -230,31 +470,45 @@ struct OpenClawChatComposer: View {
     }
 
     private var editorOverlay: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack(alignment: self.editorOverlayAlignment) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Message OpenClaw…")
+                Text(self.placeholderText)
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, self.cleanFieldTextInset)
+                    .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
             }
 
             #if os(macOS)
-            ChatComposerTextView(text: self.$viewModel.input, shouldFocus: self.$shouldFocusTextView) {
-                self.viewModel.send()
-            }
-            .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 3)
+            ChatComposerTextView(
+                text: self.$viewModel.input,
+                shouldFocus: self.$shouldFocusTextView,
+                onSend: {
+                    self.viewModel.send()
+                },
+                onPasteImageAttachment: { data, fileName, mimeType in
+                    self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
+                })
+                .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
             #else
-            TextEditor(text: self.$viewModel.input)
+            TextField(
+                "",
+                text: self.$viewModel.input,
+                axis: .vertical)
                 .font(.system(size: 15))
-                .scrollContentBackground(.hidden)
+                .lineLimit(1...4)
+                .submitLabel(.send)
+                .onSubmit {
+                    self.viewModel.send()
+                }
                 .frame(
                     minHeight: self.textMinHeight,
                     idealHeight: self.textMinHeight,
-                    maxHeight: self.textMaxHeight)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
+                    maxHeight: self.textMaxHeight,
+                    alignment: self.editorTextAlignment)
+                .padding(.horizontal, self.cleanFieldTextInset)
+                .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)
             #endif
         }
@@ -262,7 +516,7 @@ struct OpenClawChatComposer: View {
 
     private var sendButton: some View {
         Group {
-            if self.viewModel.pendingRunCount > 0 {
+            if self.viewModel.pendingRunCount > 0, !self.viewModel.hasDraftToSend {
                 Button {
                     self.viewModel.abort()
                 } label: {
@@ -275,8 +529,12 @@ struct OpenClawChatComposer: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                .padding(6)
-                .background(Circle().fill(Color.red))
+                .frame(width: self.sendButtonSize, height: self.sendButtonSize)
+                .background(
+                    RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
+                        .fill(Color.red))
+                .contentShape(RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous))
+                .accessibilityLabel("Stop response")
                 .disabled(self.viewModel.isAborting)
             } else {
                 Button {
@@ -291,8 +549,16 @@ struct OpenClawChatComposer: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                .padding(6)
-                .background(Circle().fill(Color.accentColor))
+                .frame(width: self.sendButtonSize, height: self.sendButtonSize)
+                .background(
+                    RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
+                        .fill(self.viewModel.canSend ? self.sendButtonFill : Color.secondary
+                            .opacity(0.32)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(self.viewModel.canSend ? 0.18 : 0.08), lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous))
+                .accessibilityLabel("Send message")
                 .disabled(!self.viewModel.canSend)
             }
         }
@@ -310,7 +576,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var showsToolbar: Bool {
-        self.style == .standard && !self.isComposerCompacted
+        self.style == .standard && self.composerChrome == .full
     }
 
     private var showsAttachments: Bool {
@@ -318,31 +584,70 @@ struct OpenClawChatComposer: View {
     }
 
     private var showsConnectionPill: Bool {
-        self.style == .standard && !self.isComposerCompacted
+        self.style == .standard && self.composerChrome == .full
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
+        self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
     }
 
     private var editorPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.isComposerCompacted ? 4 : 6)
+        self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
     }
 
     private var textMinHeight: CGFloat {
-        self.style == .onboarding ? 24 : 28
+        if self.style == .onboarding { return 24 }
+        return self.composerChrome == .clean ? 24 : 28
     }
 
     private var textMaxHeight: CGFloat {
-        self.style == .onboarding ? 52 : 64
+        if self.style == .onboarding { return 52 }
+        return self.composerChrome == .clean ? 48 : 64
     }
 
-    private var isComposerCompacted: Bool {
-        #if os(macOS)
-        false
-        #else
-        self.style == .standard && self.isFocused
-        #endif
+    private var sendButtonSize: CGFloat {
+        self.composerChrome == .clean ? self.cleanControlHeight : 44
+    }
+
+    private var sendButtonCornerRadius: CGFloat {
+        self.composerChrome == .clean ? self.cleanControlHeight / 2 : 12
+    }
+
+    private var cleanControlHeight: CGFloat {
+        40
+    }
+
+    private var cleanIconControlSize: CGFloat {
+        32
+    }
+
+    private var cleanFieldTextInset: CGFloat {
+        self.composerChrome == .clean ? 0 : 4
+    }
+
+    private var editorOverlayAlignment: Alignment {
+        self.composerChrome == .clean ? .leading : .topLeading
+    }
+
+    private var editorTextAlignment: Alignment {
+        self.composerChrome == .clean ? .leading : .top
+    }
+
+    private var sendButtonFill: Color {
+        self.userAccent ?? OpenClawChatTheme.userBubble
+    }
+
+    private var connectionStatusText: String {
+        self.connectionOK ? "Gateway connected" : "Connecting..."
+    }
+
+    private var connectionOK: Bool {
+        self.viewModel.healthOK || (self.talkControl?.isGatewayConnected ?? false)
+    }
+
+    private var placeholderText: String {
+        let trimmed = self.messagePlaceholder?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Message…" : trimmed
     }
 
     #if os(macOS)
@@ -400,37 +705,25 @@ private struct ChatComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var shouldFocus: Bool
     var onSend: () -> Void
+    var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerNSTextView()
-        textView.delegate = context.coordinator
-        textView.drawsBackground = false
-        textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 4)
-        textView.focusRingType = .none
+        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
+        guard let composerTextView = textView as? ChatComposerNSTextView else {
+            preconditionFailure("ChatComposerTextViewFactory must return ChatComposerNSTextView")
+        }
+        composerTextView.delegate = context.coordinator
 
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
-
-        textView.string = self.text
-        textView.onSend = { [weak textView] in
-            textView?.window?.makeFirstResponder(nil)
+        composerTextView.string = self.text
+        composerTextView.onSend = { [weak composerTextView] in
+            composerTextView?.window?.makeFirstResponder(nil)
             self.onSend()
         }
+        composerTextView.onPasteImageAttachment = self.onPasteImageAttachment
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -445,6 +738,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
+        textView.onPasteImageAttachment = self.onPasteImageAttachment
 
         if self.shouldFocus, let window = scrollView.window {
             window.makeFirstResponder(textView)
@@ -469,7 +763,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
         var parent: ChatComposerTextView
         var isProgrammaticUpdate = false
 
-        init(_ parent: ChatComposerTextView) { self.parent = parent }
+        init(_ parent: ChatComposerTextView) {
+            self.parent = parent
+        }
 
         func textDidChange(_ notification: Notification) {
             guard !self.isProgrammaticUpdate else { return }
@@ -480,8 +776,45 @@ private struct ChatComposerTextView: NSViewRepresentable {
     }
 }
 
+enum ChatComposerTextViewFactory {
+    /// Internal for @testable import coverage of composer text view defaults.
+    @MainActor
+    static func makeConfiguredTextView() -> NSTextView {
+        let textView = ChatComposerNSTextView()
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.focusRingType = .none
+        textView.allowsUndo = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        return textView
+    }
+}
+
 private final class ChatComposerNSTextView: NSTextView {
     var onSend: (() -> Void)?
+    var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        var types = super.readablePasteboardTypes
+        for type in ChatComposerPasteSupport.readablePasteboardTypes where !types.contains(type) {
+            types.append(type)
+        }
+        return types
+    }
 
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
@@ -498,6 +831,215 @@ private final class ChatComposerNSTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if !self.handleImagePaste(from: pboard, matching: type) {
+            return super.readSelection(from: pboard, type: type)
+        }
+        return true
+    }
+
+    override func paste(_ sender: Any?) {
+        if !self.handleImagePaste(from: NSPasteboard.general, matching: nil) {
+            super.paste(sender)
+        }
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        self.paste(sender)
+    }
+
+    private func handleImagePaste(
+        from pasteboard: NSPasteboard,
+        matching preferredType: NSPasteboard.PasteboardType?) -> Bool
+    {
+        let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard, matching: preferredType)
+        if !attachments.isEmpty {
+            self.deliver(attachments)
+            return true
+        }
+
+        let fileReferences = ChatComposerPasteSupport.imageFileReferences(from: pasteboard, matching: preferredType)
+        if !fileReferences.isEmpty {
+            self.loadAndDeliver(fileReferences)
+            return true
+        }
+
+        return false
+    }
+
+    private func deliver(_ attachments: [ChatComposerPasteSupport.ImageAttachment]) {
+        for attachment in attachments {
+            self.onPasteImageAttachment?(
+                attachment.data,
+                attachment.fileName,
+                attachment.mimeType)
+        }
+    }
+
+    private func loadAndDeliver(_ fileReferences: [ChatComposerPasteSupport.FileImageReference]) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, fileReferences] in
+            let attachments = ChatComposerPasteSupport.loadImageAttachments(from: fileReferences)
+            guard !attachments.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.deliver(attachments)
+            }
+        }
+    }
+}
+
+enum ChatComposerPasteSupport {
+    typealias ImageAttachment = (data: Data, fileName: String, mimeType: String)
+    typealias FileImageReference = (url: URL, fileName: String, mimeType: String)
+
+    static var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [.fileURL] + self.preferredImagePasteboardTypes.map(\.type)
+    }
+
+    static func imageAttachments(
+        from pasteboard: NSPasteboard,
+        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [ImageAttachment]
+    {
+        let dataAttachments = self.imageAttachmentsFromRawData(in: pasteboard, matching: preferredType)
+        if !dataAttachments.isEmpty {
+            return dataAttachments
+        }
+
+        if let preferredType, !self.matchesImageType(preferredType) {
+            return []
+        }
+
+        guard let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage], !images.isEmpty else {
+            return []
+        }
+        return images.enumerated().compactMap { index, image in
+            self.imageAttachment(from: image, index: index)
+        }
+    }
+
+    static func imageFileReferences(
+        from pasteboard: NSPasteboard,
+        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [FileImageReference]
+    {
+        guard self.matchesFileURL(preferredType) else { return [] }
+        return self.imageFileReferencesFromFileURLs(in: pasteboard)
+    }
+
+    static func loadImageAttachments(from fileReferences: [FileImageReference]) -> [ImageAttachment] {
+        fileReferences.compactMap { reference in
+            guard let data = try? Data(contentsOf: reference.url), !data.isEmpty else {
+                return nil
+            }
+            return (
+                data: data,
+                fileName: reference.fileName,
+                mimeType: reference.mimeType)
+        }
+    }
+
+    private static func imageFileReferencesFromFileURLs(in pasteboard: NSPasteboard) -> [FileImageReference] {
+        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty else {
+            return []
+        }
+
+        return urls.enumerated().compactMap { index, url -> FileImageReference? in
+            guard url.isFileURL,
+                  let type = UTType(filenameExtension: url.pathExtension),
+                  type.conforms(to: .image)
+            else {
+                return nil
+            }
+
+            let mimeType = type.preferredMIMEType ?? "image/\(type.preferredFilenameExtension ?? "png")"
+            let fileName = url.lastPathComponent.isEmpty
+                ? self.defaultFileName(index: index, ext: type.preferredFilenameExtension ?? "png")
+                : url.lastPathComponent
+            return (url: url, fileName: fileName, mimeType: mimeType)
+        }
+    }
+
+    private static func imageAttachmentsFromRawData(
+        in pasteboard: NSPasteboard,
+        matching preferredType: NSPasteboard.PasteboardType?) -> [ImageAttachment]
+    {
+        let items = pasteboard.pasteboardItems ?? []
+        guard !items.isEmpty else { return [] }
+
+        return items.enumerated().compactMap { index, item in
+            self.imageAttachment(from: item, index: index, matching: preferredType)
+        }
+    }
+
+    private static func imageAttachment(from image: NSImage, index: Int) -> ImageAttachment? {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData)
+        else {
+            return nil
+        }
+
+        if let pngData = bitmap.representation(using: .png, properties: [:]), !pngData.isEmpty {
+            return (
+                data: pngData,
+                fileName: self.defaultFileName(index: index, ext: "png"),
+                mimeType: "image/png")
+        }
+
+        guard !tiffData.isEmpty else {
+            return nil
+        }
+        return (
+            data: tiffData,
+            fileName: self.defaultFileName(index: index, ext: "tiff"),
+            mimeType: "image/tiff")
+    }
+
+    private static func imageAttachment(
+        from item: NSPasteboardItem,
+        index: Int,
+        matching preferredType: NSPasteboard.PasteboardType?) -> ImageAttachment?
+    {
+        for type in self.preferredImagePasteboardTypes where self.matches(preferredType, candidate: type.type) {
+            guard let data = item.data(forType: type.type), !data.isEmpty else { continue }
+            return (
+                data: data,
+                fileName: self.defaultFileName(index: index, ext: type.fileExtension),
+                mimeType: type.mimeType)
+        }
+        return nil
+    }
+
+    private static let preferredImagePasteboardTypes: [
+        (type: NSPasteboard.PasteboardType, fileExtension: String, mimeType: String)
+    ] = [
+        (.png, "png", "image/png"),
+        (.tiff, "tiff", "image/tiff"),
+        (NSPasteboard.PasteboardType("public.jpeg"), "jpg", "image/jpeg"),
+        (NSPasteboard.PasteboardType("com.compuserve.gif"), "gif", "image/gif"),
+        (NSPasteboard.PasteboardType("public.heic"), "heic", "image/heic"),
+        (NSPasteboard.PasteboardType("public.heif"), "heif", "image/heif"),
+    ]
+
+    private static func matches(
+        _ preferredType: NSPasteboard.PasteboardType?,
+        candidate: NSPasteboard.PasteboardType) -> Bool
+    {
+        guard let preferredType else { return true }
+        return preferredType == candidate
+    }
+
+    private static func matchesFileURL(_ preferredType: NSPasteboard.PasteboardType?) -> Bool {
+        guard let preferredType else { return true }
+        return preferredType == .fileURL
+    }
+
+    private static func matchesImageType(_ preferredType: NSPasteboard.PasteboardType) -> Bool {
+        self.preferredImagePasteboardTypes.contains { $0.type == preferredType }
+    }
+
+    private static func defaultFileName(index: Int, ext: String) -> String {
+        "pasted-image-\(index + 1).\(ext)"
     }
 }
 #endif

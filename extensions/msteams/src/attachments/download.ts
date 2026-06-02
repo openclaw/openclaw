@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -6,11 +11,15 @@ import {
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  type MSTeamsAttachmentDownloadLogger,
+  type MSTeamsAttachmentFetchPolicy,
+  type MSTeamsAttachmentResolveFn,
   normalizeContentType,
+  resolveMediaSsrfPolicy,
+  resolveAttachmentFetchPolicy,
   resolveRequestUrl,
-  resolveAuthAllowedHosts,
-  resolveAllowedHosts,
-  safeFetch,
+  safeFetchWithPolicy,
+  tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -27,21 +36,20 @@ type DownloadCandidate = {
 
 function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
-  const name = typeof att.name === "string" ? att.name.trim() : "";
+  const name = normalizeOptionalString(att.name) ?? "";
 
   if (contentType === "application/vnd.microsoft.teams.file.download.info") {
     if (!isRecord(att.content)) {
       return null;
     }
-    const downloadUrl =
-      typeof att.content.downloadUrl === "string" ? att.content.downloadUrl.trim() : "";
+    const downloadUrl = normalizeOptionalString(att.content.downloadUrl) ?? "";
     if (!downloadUrl) {
       return null;
     }
 
-    const fileType = typeof att.content.fileType === "string" ? att.content.fileType.trim() : "";
-    const uniqueId = typeof att.content.uniqueId === "string" ? att.content.uniqueId.trim() : "";
-    const fileName = typeof att.content.fileName === "string" ? att.content.fileName.trim() : "";
+    const fileType = normalizeOptionalString(att.content.fileType) ?? "";
+    const uniqueId = normalizeOptionalString(att.content.uniqueId) ?? "";
+    const fileName = normalizeOptionalString(att.content.fileName) ?? "";
 
     const fileHint = name || fileName || (uniqueId && fileType ? `${uniqueId}.${fileType}` : "");
     return {
@@ -56,22 +64,33 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     };
   }
 
-  const contentUrl = typeof att.contentUrl === "string" ? att.contentUrl.trim() : "";
+  const contentUrl = normalizeOptionalString(att.contentUrl) ?? "";
   if (!contentUrl) {
     return null;
   }
 
+  // OneDrive/SharePoint shared links (delivered in 1:1 DMs when the user
+  // picks "Attach > OneDrive") cannot be fetched directly — the URL returns
+  // an HTML landing page rather than the file bytes. Rewrite them to the
+  // Graph shares endpoint so the auth fallback attaches a Graph-scoped token
+  // and the response is the real file content.
+  const sharesUrl = tryBuildGraphSharesUrlForSharedLink(contentUrl);
+  const resolvedUrl = sharesUrl ?? contentUrl;
+  // Graph shares returns raw bytes without a declared content type we can
+  // trust for routing — let the downloader infer MIME from the buffer.
+  const resolvedContentTypeHint = sharesUrl ? undefined : contentType;
+
   return {
-    url: contentUrl,
+    url: resolvedUrl,
     fileHint: name || undefined,
-    contentTypeHint: contentType,
+    contentTypeHint: resolvedContentTypeHint,
     placeholder: inferPlaceholder({ contentType, fileName: name }),
   };
 }
 
 function scopeCandidatesForUrl(url: string): string[] {
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
     const looksLikeGraph =
       host.endsWith("graph.microsoft.com") ||
       host.endsWith("sharepoint.com") ||
@@ -85,23 +104,36 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+async function resolveInlineDataImageMime(inline: {
+  data: Buffer;
+  contentType?: string;
+}): Promise<string | undefined> {
+  const detectedMime = await getMSTeamsRuntime().media.detectMime({
+    buffer: inline.data,
+    headerMime: inline.contentType,
+  });
+  const mime = normalizeOptionalLowercaseString(detectedMime ?? inline.contentType);
+  return mime?.startsWith("image/") ? mime : undefined;
+}
+
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
-  allowHosts: string[];
-  authAllowHosts: string[];
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
+  policy: MSTeamsAttachmentFetchPolicy;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
-
-  // Use safeFetch for the initial attempt — redirect: "manual" with
-  // allowlist + DNS/IP validation on every hop (prevents SSRF via redirect).
-  const firstAttempt = await safeFetch({
+  const firstAttempt = await safeFetchWithPolicy({
     url: params.url,
-    allowHosts: params.allowHosts,
-    fetchFn,
+    policy: params.policy,
+    fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
   });
@@ -114,20 +146,23 @@ async function fetchWithAuthFallback(params: {
   if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
     return firstAttempt;
   }
-  if (!isUrlAllowed(params.url, params.authAllowHosts)) {
+  if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
+  await firstAttempt.body?.cancel();
 
   const scopes = scopeCandidatesForUrl(params.url);
+  const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
       const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await safeFetch({
+      const authAttempt = await safeFetchWithPolicy({
         url: params.url,
-        allowHosts: params.allowHosts,
+        policy: params.policy,
         fetchFn,
+        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
         requestInit: {
           ...params.requestInit,
           headers: authHeaders,
@@ -137,28 +172,16 @@ async function fetchWithAuthFallback(params: {
       if (authAttempt.ok) {
         return authAttempt;
       }
+      if (isRedirectStatus(authAttempt.status)) {
+        // Redirects in guarded fetch mode must propagate to the outer guard.
+        return authAttempt;
+      }
       if (authAttempt.status !== 401 && authAttempt.status !== 403) {
+        // Preserve scope fallback semantics for non-auth failures.
+        await authAttempt.body?.cancel();
         continue;
       }
-
-      const finalUrl =
-        typeof authAttempt.url === "string" && authAttempt.url ? authAttempt.url : "";
-      if (!finalUrl || finalUrl === params.url || !isUrlAllowed(finalUrl, params.authAllowHosts)) {
-        continue;
-      }
-      const redirectedAuthAttempt = await safeFetch({
-        url: finalUrl,
-        allowHosts: params.allowHosts,
-        fetchFn,
-        requestInit: {
-          ...params.requestInit,
-          headers: authHeaders,
-        },
-        resolveFn: params.resolveFn,
-      });
-      if (redirectedAuthAttempt.ok) {
-        return redirectedAuthAttempt;
-      }
+      await authAttempt.body?.cancel();
     } catch {
       // Try the next scope.
     }
@@ -178,17 +201,27 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
+  resolveFn?: MSTeamsAttachmentResolveFn;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
-  /** Override DNS resolver for testing (anti-SSRF IP validation). */
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  /**
+   * Optional logger used to surface inline data decode failures and remote
+   * media download errors. Errors that are not logged here are invisible at
+   * INFO level and block diagnosis of issues like #63396.
+   */
+  logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
   if (list.length === 0) {
     return [];
   }
-  const allowHosts = resolveAllowedHosts(params.allowHosts);
-  const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
+  const policy = resolveAttachmentFetchPolicy({
+    allowHosts: params.allowHosts,
+    authAllowHosts: params.authAllowHosts,
+  });
+  const allowHosts = policy.allowHosts;
+  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   // Download ANY downloadable attachment (not just images)
   const downloadable = list.filter(isDownloadableAttachment);
@@ -196,7 +229,10 @@ export async function downloadMSTeamsAttachments(params: {
     .map(resolveDownloadCandidate)
     .filter(Boolean) as DownloadCandidate[];
 
-  const inlineCandidates = extractInlineImageCandidates(list);
+  const inlineCandidates = extractInlineImageCandidates(list, {
+    maxInlineBytes: params.maxBytes,
+    maxInlineTotalBytes: params.maxBytes,
+  });
 
   const seenUrls = new Set<string>();
   for (const inline of inlineCandidates) {
@@ -229,20 +265,26 @@ export async function downloadMSTeamsAttachments(params: {
       continue;
     }
     try {
+      const contentType = await resolveInlineDataImageMime(inline);
+      if (!contentType) {
+        continue;
+      }
       // Data inline candidates (base64 data URLs) don't have original filenames
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         inline.data,
-        inline.contentType,
+        contentType,
         "inbound",
         params.maxBytes,
       );
       out.push({
         path: saved.path,
         contentType: saved.contentType,
-        placeholder: inline.placeholder,
+        placeholder: inferPlaceholder({ contentType: saved.contentType ?? contentType }),
       });
-    } catch {
-      // Ignore decode failures and continue.
+    } catch (err) {
+      params.logger?.warn?.("msteams inline attachment decode failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   for (const candidate of candidates) {
@@ -257,26 +299,36 @@ export async function downloadMSTeamsAttachments(params: {
         contentTypeHint: candidate.contentTypeHint,
         placeholder: candidate.placeholder,
         preserveFilenames: params.preserveFilenames,
+        ssrfPolicy,
+        // `fetchImpl` below owns Teams auth fallback and enforces the
+        // attachment fetch policy through `safeFetchWithPolicy`.
+        useDirectFetch: true,
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
+            fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
             requestInit: init,
-            allowHosts,
-            authAllowHosts,
             resolveFn: params.resolveFn,
+            policy,
           }),
       });
       out.push(media);
-    } catch {
-      // Ignore download failures and continue with next candidate.
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      params.logger?.warn?.(
+        `msteams attachment download failed host=${safeHostForLog(candidate.url)} error=${msg}`,
+      );
     }
   }
   return out;
 }
 
-/**
- * @deprecated Use `downloadMSTeamsAttachments` instead (supports all file types).
- */
-export const downloadMSTeamsImageAttachments = downloadMSTeamsAttachments;
+function safeHostForLog(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "invalid-url";
+  }
+}

@@ -1,20 +1,23 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   DEFAULT_NODE_DAEMON_RUNTIME,
   isNodeDaemonRuntime,
 } from "../../commands/node-daemon-runtime.js";
-import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "../../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
+import {
+  buildPlatformRuntimeLogHints,
+  buildPlatformServiceStartHints,
+} from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -22,17 +25,16 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "../daemon-cli/lifecycle-core.js";
-import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  installDaemonServiceAndEmit,
-} from "../daemon-cli/response.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daemon-cli/response.js";
 import {
   createCliStatusTextStyles,
+  createDaemonInstallActionContext,
+  failIfNixDaemonInstallMode,
   formatRuntimeStatus,
   parsePort,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -55,46 +57,28 @@ type NodeDaemonStatusOptions = {
 };
 
 function renderNodeServiceStartHints(): string[] {
-  const base = [formatCliCommand("openclaw node install"), formatCliCommand("openclaw node start")];
-  switch (process.platform) {
-    case "darwin":
-      return [
-        ...base,
-        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
-      ];
-    case "linux":
-      return [...base, `systemctl --user start ${resolveNodeSystemdServiceName()}.service`];
-    case "win32":
-      return [...base, `schtasks /Run /TN "${resolveNodeWindowsTaskName()}"`];
-    default:
-      return base;
-  }
+  return buildPlatformServiceStartHints({
+    installCommand: formatCliCommand("openclaw node install"),
+    startCommand: formatCliCommand("openclaw node start"),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
+    systemdServiceName: resolveNodeSystemdServiceName(),
+    windowsTaskName: resolveNodeWindowsTaskName(),
+  });
 }
 
 function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (process.platform === "darwin") {
-    const logs = resolveGatewayLogPaths(env);
-    return [
-      `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      `Launchd stderr (if installed): ${logs.stderrPath}`,
-    ];
-  }
-  if (process.platform === "linux") {
-    const unit = resolveNodeSystemdServiceName();
-    return [`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`];
-  }
-  if (process.platform === "win32") {
-    const task = resolveNodeWindowsTaskName();
-    return [`Logs: schtasks /Query /TN "${task}" /V /FO LIST`];
-  }
-  return [];
+  return buildPlatformRuntimeLogHints({
+    env,
+    systemdServiceName: resolveNodeSystemdServiceName(),
+    windowsTaskName: resolveNodeWindowsTaskName(),
+  });
 }
 
 function resolveNodeDefaults(
   opts: NodeDaemonInstallOptions,
   config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
 ) {
-  const host = opts.host?.trim() || config?.gateway?.host || "127.0.0.1";
+  const host = normalizeOptionalString(opts.host) || config?.gateway?.host || "127.0.0.1";
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     return { host, port: null };
@@ -104,29 +88,30 @@ function resolveNodeDefaults(
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 
   const config = await loadNodeHostConfig();
   const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? NaN) || (port ?? 0) <= 0) {
-    fail("Invalid port");
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
+    fail(
+      opts.port !== undefined
+        ? formatInvalidPortOption("--port")
+        : formatInvalidConfigPort("node.gateway.port"),
+    );
     return;
   }
 
-  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_NODE_DAEMON_RUNTIME;
+  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
   if (!isNodeDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -148,9 +133,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
+  const tlsFingerprint =
+    normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
-  const { programArguments, workingDirectory, environment, description } =
+  const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
@@ -182,6 +168,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
         description,
       });
     },
@@ -232,7 +219,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
 
   const payload = {
@@ -244,7 +231,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    defaultRuntime.writeJson(payload);
     return;
   }
 
@@ -290,7 +277,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
     return;
   }
@@ -298,7 +285,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
   }
 }

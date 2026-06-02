@@ -1,18 +1,20 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { canonicalizeBase64 } from "../media/base64.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
+  isImageProcessorUnavailableError,
   resizeToJpeg,
-} from "../media/image-ops.js";
+} from "../media/media-services.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
@@ -71,22 +73,6 @@ function formatBytesShort(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
 }
 
-function parseMediaPathFromText(text: string): string | undefined {
-  for (const line of text.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("MEDIA:")) {
-      continue;
-    }
-    const raw = trimmed.slice("MEDIA:".length).trim();
-    if (!raw) {
-      continue;
-    }
-    const backtickWrapped = raw.match(/^`([^`]+)`$/u);
-    return (backtickWrapped?.[1] ?? raw).trim();
-  }
-  return undefined;
-}
-
 function fileNameFromPathLike(pathLike: string): string | undefined {
   const value = pathLike.trim();
   if (!value) {
@@ -95,14 +81,14 @@ function fileNameFromPathLike(pathLike: string): string | undefined {
 
   try {
     const url = new URL(value);
-    const candidate = url.pathname.split("/").filter(Boolean).at(-1);
+    const candidate = url.pathname.split("/").findLast(Boolean);
     return candidate && candidate.length > 0 ? candidate : undefined;
   } catch {
     // Not a URL; continue with path-like parsing.
   }
 
   const normalized = value.replaceAll("\\", "/");
-  const candidate = normalized.split("/").filter(Boolean).at(-1);
+  const candidate = normalized.split("/").findLast(Boolean);
   return candidate && candidate.length > 0 ? candidate : undefined;
 }
 
@@ -187,14 +173,24 @@ async function resizeImageBase64IfNeeded(params: {
   const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
+  let processorUnavailableError: unknown;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      const out = await resizeToJpeg({
-        buffer: buf,
-        maxSide: side,
-        quality,
-        withoutEnlargement: true,
-      });
+      let out: Buffer;
+      try {
+        out = await resizeToJpeg({
+          buffer: buf,
+          maxSide: side,
+          quality,
+          withoutEnlargement: true,
+        });
+      } catch (err) {
+        if (isImageProcessorUnavailableError(err)) {
+          processorUnavailableError = err;
+          break;
+        }
+        throw err;
+      }
       if (!smallest || out.byteLength < smallest.size) {
         smallest = { buffer: out, size: out.byteLength };
       }
@@ -239,6 +235,13 @@ async function resizeImageBase64IfNeeded(params: {
         };
       }
     }
+    if (processorUnavailableError) {
+      break;
+    }
+  }
+
+  if (processorUnavailableError) {
+    throw toLintErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const best = smallest?.buffer ?? buf;
@@ -271,19 +274,12 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
-  const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
+  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
+    min: 1,
+  });
+  const maxBytes = resolveIntegerOption(opts.maxBytes, MAX_IMAGE_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
-  let mediaPathHint: string | undefined;
-
   for (const block of blocks) {
-    if (isTextBlock(block)) {
-      const mediaPath = parseMediaPathFromText(block.text);
-      if (mediaPath) {
-        mediaPathHint = mediaPath;
-      }
-    }
-
     if (!isImageBlock(block)) {
       out.push(block);
       continue;
@@ -309,7 +305,7 @@ export async function sanitizeContentBlocksImages(
     try {
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
-      const fileName = inferImageFileName({ block, label, mediaPathHint });
+      const fileName = inferImageFileName({ block, label });
       const resized = await resizeImageBase64IfNeeded({
         base64: canonicalData,
         mimeType,
@@ -359,4 +355,18 @@ export async function sanitizeToolResultImages(
 
   const next = await sanitizeContentBlocksImages(content, label, opts);
   return { ...result, content: next };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

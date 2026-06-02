@@ -1,22 +1,33 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
-import {
-  recordSessionMetaFromInbound,
-  type GroupKeyResolution,
-  type SessionEntry,
-  updateLastRoute,
-} from "../config/sessions.js";
+import type { GroupKeyResolution } from "../config/sessions/types.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import type { InboundLastRouteUpdate } from "./session.types.js";
+export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
 
-function normalizeSessionStoreKey(sessionKey: string): string {
-  return sessionKey.trim().toLowerCase();
+let inboundSessionRuntimePromise: Promise<
+  typeof import("../config/sessions/inbound.runtime.js")
+> | null = null;
+
+function loadInboundSessionRuntime() {
+  inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
+  return inboundSessionRuntimePromise;
 }
 
-export type InboundLastRouteUpdate = {
-  sessionKey: string;
-  channel: SessionEntry["lastChannel"];
-  to: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+function shouldSkipPinnedMainDmRouteUpdate(
+  pin: InboundLastRouteUpdate["mainDmOwnerPin"] | undefined,
+): boolean {
+  if (!pin) {
+    return false;
+  }
+  const owner = normalizeLowercaseStringOrEmpty(pin.ownerRecipient);
+  const sender = normalizeLowercaseStringOrEmpty(pin.senderRecipient);
+  if (!owner || !sender || owner === sender) {
+    return false;
+  }
+  pin.onSkip?.({ ownerRecipient: pin.ownerRecipient, senderRecipient: pin.senderRecipient });
+  return true;
+}
 
 export async function recordInboundSession(params: {
   storePath: string;
@@ -26,25 +37,35 @@ export async function recordInboundSession(params: {
   createIfMissing?: boolean;
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void;
+  trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
-  const canonicalSessionKey = normalizeSessionStoreKey(sessionKey);
-  void recordSessionMetaFromInbound({
-    storePath,
-    sessionKey: canonicalSessionKey,
-    ctx,
-    groupResolution,
-    createIfMissing,
-  }).catch(params.onRecordError);
+  const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
+  const runtime = await loadInboundSessionRuntime();
+  const metaTask = runtime
+    .recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: canonicalSessionKey,
+      ctx,
+      groupResolution,
+      createIfMissing,
+    })
+    .catch(params.onRecordError);
+  params.trackSessionMetaTask?.(metaTask);
+  void metaTask;
 
   const update = params.updateLastRoute;
   if (!update) {
     return;
   }
-  const targetSessionKey = normalizeSessionStoreKey(update.sessionKey);
-  await updateLastRoute({
+  if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
+    return;
+  }
+  const targetSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(update.sessionKey);
+  await runtime.updateLastRoute({
     storePath,
     sessionKey: targetSessionKey,
+    route: update.route,
     deliveryContext: {
       channel: update.channel,
       to: update.to,
@@ -54,5 +75,6 @@ export async function recordInboundSession(params: {
     // Avoid leaking inbound origin metadata into a different target session.
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
+    createIfMissing,
   });
 }

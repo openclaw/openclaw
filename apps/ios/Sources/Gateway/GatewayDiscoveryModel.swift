@@ -1,7 +1,7 @@
-import OpenClawKit
 import Foundation
 import Network
 import Observation
+import OpenClawKit
 
 @MainActor
 @Observable
@@ -13,7 +13,10 @@ final class GatewayDiscoveryModel {
     }
 
     struct DiscoveredGateway: Identifiable, Equatable {
-        var id: String { self.stableID }
+        var id: String {
+            self.stableID
+        }
+
         var name: String
         var endpoint: NWEndpoint
         var stableID: String
@@ -53,23 +56,17 @@ final class GatewayDiscoveryModel {
         self.appendDebugLog("start()")
 
         for domain in OpenClawBonjour.gatewayServiceDomains {
-            let params = NWParameters.tcp
-            params.includePeerToPeer = true
-            let browser = NWBrowser(
-                for: .bonjour(type: OpenClawBonjour.gatewayServiceType, domain: domain),
-                using: params)
-
-            browser.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in
+            let browser = GatewayDiscoveryBrowserSupport.makeBrowser(
+                serviceType: OpenClawBonjour.gatewayServiceType,
+                domain: domain,
+                queueLabelPrefix: "ai.openclaw.ios.gateway-discovery",
+                onState: { [weak self] state in
                     guard let self else { return }
                     self.statesByDomain[domain] = state
                     self.updateStatusText()
                     self.appendDebugLog("state[\(domain)]: \(Self.prettyState(state))")
-                }
-            }
-
-            browser.browseResultsChangedHandler = { [weak self] results, _ in
-                Task { @MainActor in
+                },
+                onResults: { [weak self] results in
                     guard let self else { return }
                     self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
                         switch result.endpoint {
@@ -98,13 +95,10 @@ final class GatewayDiscoveryModel {
                         }
                     }
                     .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
                     self.recomputeGateways()
-                }
-            }
+                })
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "ai.openclaw.ios.gateway-discovery.\(domain)"))
         }
     }
 

@@ -1,8 +1,8 @@
+import { readBool, readString } from "@openclaw/acp-core/meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import type { GatewayClient } from "../gateway/client.js";
-import { readBool, readString } from "./meta.js";
-import type { AcpServerOptions } from "./types.js";
 
-export type AcpSessionMeta = {
+type AcpSessionMeta = {
   sessionKey?: string;
   sessionLabel?: string;
   resetSession?: boolean;

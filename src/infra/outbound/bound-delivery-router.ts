@@ -1,3 +1,4 @@
+import { normalizeConversationRef } from "./session-binding-normalization.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -5,6 +6,7 @@ import {
   type SessionBindingService,
 } from "./session-binding-service.js";
 
+/** Session-bound delivery lookup input for routing task completion messages. */
 export type BoundDeliveryRouterInput = {
   eventKind: "task_completion";
   targetSessionKey: string;
@@ -12,12 +14,14 @@ export type BoundDeliveryRouterInput = {
   failClosed: boolean;
 };
 
+/** Resolved session binding or the fallback reason used by delivery callers. */
 export type BoundDeliveryRouterResult = {
   binding: SessionBindingRecord | null;
   mode: "bound" | "fallback";
   reason: string;
 };
 
+/** Router facade that maps a target session/requester pair to a bound conversation. */
 export type BoundDeliveryRouter = {
   resolveDestination: (input: BoundDeliveryRouterInput) => BoundDeliveryRouterResult;
 };
@@ -30,17 +34,19 @@ function resolveBindingForRequester(
   requester: ConversationRef,
   bindings: SessionBindingRecord[],
 ): SessionBindingRecord | null {
-  const matchingChannelAccount = bindings.filter(
-    (entry) =>
-      entry.conversation.channel === requester.channel &&
-      entry.conversation.accountId === requester.accountId,
-  );
+  const matchingChannelAccount = bindings.filter((entry) => {
+    const conversation = normalizeConversationRef(entry.conversation);
+    return (
+      conversation.channel === requester.channel && conversation.accountId === requester.accountId
+    );
+  });
   if (matchingChannelAccount.length === 0) {
     return null;
   }
 
   const exactConversation = matchingChannelAccount.find(
-    (entry) => entry.conversation.conversationId === requester.conversationId,
+    (entry) =>
+      normalizeConversationRef(entry.conversation).conversationId === requester.conversationId,
   );
   if (exactConversation) {
     return exactConversation;
@@ -52,6 +58,7 @@ function resolveBindingForRequester(
   return null;
 }
 
+/** Creates a router that resolves task-completion delivery through active session bindings. */
 export function createBoundDeliveryRouter(
   service: SessionBindingService = getSessionBindingService(),
 ): BoundDeliveryRouter {
@@ -76,6 +83,13 @@ export function createBoundDeliveryRouter(
       }
 
       if (!input.requester) {
+        if (input.failClosed) {
+          return {
+            binding: null,
+            mode: "fallback",
+            reason: "missing-requester",
+          };
+        }
         if (activeBindings.length === 1) {
           return {
             binding: activeBindings[0] ?? null,
@@ -83,6 +97,8 @@ export function createBoundDeliveryRouter(
             reason: "single-active-binding",
           };
         }
+        // Without requester context, multiple active bindings are ambiguous;
+        // fallback avoids leaking one session's completion into another chat.
         return {
           binding: null,
           mode: "fallback",
@@ -90,12 +106,7 @@ export function createBoundDeliveryRouter(
         };
       }
 
-      const requester: ConversationRef = {
-        channel: input.requester.channel.trim().toLowerCase(),
-        accountId: input.requester.accountId.trim(),
-        conversationId: input.requester.conversationId.trim(),
-        parentConversationId: input.requester.parentConversationId?.trim() || undefined,
-      };
+      const requester: ConversationRef = normalizeConversationRef(input.requester);
       if (!requester.channel || !requester.conversationId) {
         return {
           binding: null,

@@ -1,46 +1,43 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
-import { shouldIncludeHook } from "./config.js";
 import {
   parseFrontmatter,
-  resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
+  resolveOpenClawMetadata,
 } from "./frontmatter.js";
-import type {
-  Hook,
-  HookEligibilityContext,
-  HookEntry,
-  HookSnapshot,
-  HookSource,
-  ParsedHookFrontmatter,
-} from "./types.js";
+import { resolvePluginHookDirs } from "./plugin-hooks.js";
+import { resolveHookEntries } from "./policy.js";
+import type { Hook, HookEntry, HookSource, ParsedHookFrontmatter } from "./types.js";
 
 type HookPackageManifest = {
   name?: string;
 } & Partial<Record<typeof MANIFEST_KEY, { hooks?: string[] }>>;
 const log = createSubsystemLogger("hooks/workspace");
 
-function filterHookEntries(
-  entries: HookEntry[],
-  config?: OpenClawConfig,
-  eligibility?: HookEligibilityContext,
-): HookEntry[] {
-  return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
-}
+type LoadedHook = {
+  hook: Hook;
+  frontmatter: ParsedHookFrontmatter;
+};
 
 function readHookPackageManifest(dir: string): HookPackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) {
+  const raw = readRootFileUtf8({
+    absolutePath: manifestPath,
+    rootPath: dir,
+    boundaryLabel: "hook package directory",
+  });
+  if (raw === null) {
     return null;
   }
   try {
-    const raw = fs.readFileSync(manifestPath, "utf-8");
     return JSON.parse(raw) as HookPackageManifest;
   } catch {
     return null;
@@ -48,11 +45,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
-  const raw = manifest[MANIFEST_KEY]?.hooks;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return normalizeTrimmedStringList(manifest[MANIFEST_KEY]?.hooks);
 }
 
 function resolveContainedDir(baseDir: string, targetDir: string): string | null {
@@ -73,14 +66,17 @@ function loadHookFromDir(params: {
   source: HookSource;
   pluginId?: string;
   nameHint?: string;
-}): Hook | null {
+}): LoadedHook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
-  if (!fs.existsSync(hookMdPath)) {
+  const content = readRootFileUtf8({
+    absolutePath: hookMdPath,
+    rootPath: params.hookDir,
+    boundaryLabel: "hook directory",
+  });
+  if (content === null) {
     return null;
   }
-
   try {
-    const content = fs.readFileSync(hookMdPath, "utf-8");
     const frontmatter = parseFrontmatter(content);
 
     const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
@@ -90,8 +86,13 @@ function loadHookFromDir(params: {
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
-      if (fs.existsSync(candidatePath)) {
-        handlerPath = candidatePath;
+      const safeCandidatePath = resolveRootFilePath({
+        absolutePath: candidatePath,
+        rootPath: params.hookDir,
+        boundaryLabel: "hook directory",
+      });
+      if (safeCandidatePath) {
+        handlerPath = safeCandidatePath;
         break;
       }
     }
@@ -101,14 +102,24 @@ function loadHookFromDir(params: {
       return null;
     }
 
+    let baseDir = params.hookDir;
+    try {
+      baseDir = fs.realpathSync.native(params.hookDir);
+    } catch {
+      // keep the discovered path when realpath is unavailable
+    }
+
     return {
-      name,
-      description,
-      source: params.source,
-      pluginId: params.pluginId,
-      filePath: hookMdPath,
-      baseDir: params.hookDir,
-      handlerPath,
+      hook: {
+        name,
+        description,
+        source: params.source,
+        pluginId: params.pluginId,
+        filePath: hookMdPath,
+        baseDir,
+        handlerPath,
+      },
+      frontmatter,
     };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -120,7 +131,11 @@ function loadHookFromDir(params: {
 /**
  * Scan a directory for hooks (subdirectories containing HOOK.md)
  */
-function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: string }): Hook[] {
+function loadHooksFromDir(params: {
+  dir: string;
+  source: HookSource;
+  pluginId?: string;
+}): LoadedHook[] {
   const { dir, source, pluginId } = params;
 
   if (!fs.existsSync(dir)) {
@@ -132,7 +147,7 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
     return [];
   }
 
-  const hooks: Hook[] = [];
+  const hooks: LoadedHook[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
@@ -190,14 +205,7 @@ export function loadHookEntriesFromDir(params: {
     source: params.source,
     pluginId: params.pluginId,
   });
-  return hooks.map((hook) => {
-    let frontmatter: ParsedHookFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(hook.filePath, "utf-8");
-      frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed hooks
-    }
+  return hooks.map(({ hook, frontmatter }) => {
     const entry: HookEntry = {
       hook: {
         ...hook,
@@ -212,7 +220,7 @@ export function loadHookEntriesFromDir(params: {
   });
 }
 
-function loadHookEntries(
+function discoverWorkspaceHookEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
@@ -224,86 +232,42 @@ function loadHookEntries(
   const workspaceHooksDir = path.join(workspaceDir, "hooks");
   const bundledHooksDir = opts?.bundledHooksDir ?? resolveBundledHooksDir();
   const extraDirsRaw = opts?.config?.hooks?.internal?.load?.extraDirs ?? [];
-  const extraDirs = extraDirsRaw
-    .map((d) => (typeof d === "string" ? d.trim() : ""))
-    .filter(Boolean);
+  const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
+  const pluginHookDirs = resolvePluginHookDirs({
+    workspaceDir,
+    config: opts?.config,
+  });
 
   const bundledHooks = bundledHooksDir
-    ? loadHooksFromDir({
+    ? loadHookEntriesFromDir({
         dir: bundledHooksDir,
         source: "openclaw-bundled",
       })
     : [];
   const extraHooks = extraDirs.flatMap((dir) => {
     const resolved = resolveUserPath(dir);
-    return loadHooksFromDir({
+    return loadHookEntriesFromDir({
       dir: resolved,
-      source: "openclaw-workspace", // Extra dirs treated as workspace
+      source: "openclaw-managed",
     });
   });
-  const managedHooks = loadHooksFromDir({
+  const pluginHooks = pluginHookDirs.flatMap(({ dir, pluginId }) =>
+    loadHookEntriesFromDir({
+      dir,
+      source: "openclaw-plugin",
+      pluginId,
+    }),
+  );
+  const managedHooks = loadHookEntriesFromDir({
     dir: managedHooksDir,
     source: "openclaw-managed",
   });
-  const workspaceHooks = loadHooksFromDir({
+  const workspaceHooks = loadHookEntriesFromDir({
     dir: workspaceHooksDir,
     source: "openclaw-workspace",
   });
 
-  const merged = new Map<string, Hook>();
-  // Precedence: extra < bundled < managed < workspace (workspace wins)
-  for (const hook of extraHooks) {
-    merged.set(hook.name, hook);
-  }
-  for (const hook of bundledHooks) {
-    merged.set(hook.name, hook);
-  }
-  for (const hook of managedHooks) {
-    merged.set(hook.name, hook);
-  }
-  for (const hook of workspaceHooks) {
-    merged.set(hook.name, hook);
-  }
-
-  return Array.from(merged.values()).map((hook) => {
-    let frontmatter: ParsedHookFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(hook.filePath, "utf-8");
-      frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed hooks
-    }
-    return {
-      hook,
-      frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
-      invocation: resolveHookInvocationPolicy(frontmatter),
-    };
-  });
-}
-
-export function buildWorkspaceHookSnapshot(
-  workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedHooksDir?: string;
-    bundledHooksDir?: string;
-    entries?: HookEntry[];
-    eligibility?: HookEligibilityContext;
-    snapshotVersion?: number;
-  },
-): HookSnapshot {
-  const hookEntries = opts?.entries ?? loadHookEntries(workspaceDir, opts);
-  const eligible = filterHookEntries(hookEntries, opts?.config, opts?.eligibility);
-
-  return {
-    hooks: eligible.map((entry) => ({
-      name: entry.hook.name,
-      events: entry.metadata?.events ?? [],
-    })),
-    resolvedHooks: eligible.map((entry) => entry.hook),
-    version: opts?.snapshotVersion,
-  };
+  return [...extraHooks, ...bundledHooks, ...pluginHooks, ...managedHooks, ...workspaceHooks];
 }
 
 export function loadWorkspaceHookEntries(
@@ -312,7 +276,59 @@ export function loadWorkspaceHookEntries(
     config?: OpenClawConfig;
     managedHooksDir?: string;
     bundledHooksDir?: string;
+    entries?: HookEntry[];
   },
 ): HookEntry[] {
-  return loadHookEntries(workspaceDir, opts);
+  return resolveHookEntries(opts?.entries ?? discoverWorkspaceHookEntries(workspaceDir, opts), {
+    onCollisionIgnored: ({ name, kept, ignored }) => {
+      log.warn(
+        `Ignoring ${ignored.hook.source} hook "${name}" because it cannot override ${kept.hook.source} hook code`,
+      );
+    },
+  });
+}
+
+function readRootFileUtf8(params: {
+  absolutePath: string;
+  rootPath: string;
+  boundaryLabel: string;
+}): string | null {
+  return withOpenedRootFileSync(params, (opened) => {
+    try {
+      return fs.readFileSync(opened.fd, "utf-8");
+    } catch {
+      return null;
+    }
+  });
+}
+
+function withOpenedRootFileSync<T>(
+  params: {
+    absolutePath: string;
+    rootPath: string;
+    boundaryLabel: string;
+  },
+  read: (opened: { fd: number; path: string }) => T,
+): T | null {
+  const opened = openRootFileSync({
+    absolutePath: params.absolutePath,
+    rootPath: params.rootPath,
+    boundaryLabel: params.boundaryLabel,
+  });
+  if (!opened.ok) {
+    return null;
+  }
+  try {
+    return read({ fd: opened.fd, path: opened.path });
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}
+
+function resolveRootFilePath(params: {
+  absolutePath: string;
+  rootPath: string;
+  boundaryLabel: string;
+}): string | null {
+  return withOpenedRootFileSync(params, (opened) => opened.path);
 }

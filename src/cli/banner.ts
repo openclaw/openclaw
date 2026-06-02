@@ -1,13 +1,23 @@
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+  stripDecorativeEmojiForTerminal,
+  supportsDecorativeEmoji,
+  type DecorativeEmojiOptions,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
-import { visibleWidth } from "../terminal/ansi.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { pickTagline, type TaglineOptions } from "./tagline.js";
+import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
+import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
   argv?: string[];
   commit?: string | null;
   columns?: number;
+  isTty?: boolean;
+  platform?: NodeJS.Platform;
   richTty?: boolean;
 };
 
@@ -35,18 +45,44 @@ const hasJsonFlag = (argv: string[]) =>
 const hasVersionFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
 
+function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
+  const explicit = parseTaglineMode(options.mode);
+  if (explicit) {
+    return explicit;
+  }
+  return readCliBannerTaglineMode(options.env);
+}
+
+function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
+  return {
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.isTty === undefined ? {} : { isTty: options.isTty }),
+    ...(options.platform ? { platform: options.platform } : {}),
+  };
+}
+
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
-  const commit = options.commit ?? resolveCommitHash({ env: options.env });
+  const commit =
+    options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
-  const tagline = pickTagline(options);
+  const emojiOptions = resolveEmojiOptions(options);
+  const tagline = stripDecorativeEmojiForTerminal(
+    pickTagline({ ...options, mode: resolveTaglineMode(options) }),
+    emojiOptions,
+  );
   const rich = options.richTty ?? isRich();
-  const title = "🦞 OpenClaw";
-  const prefix = "🦞 ";
+  const title = decorativePrefix("🦞", "OpenClaw", emojiOptions);
+  const prefix = decorativeEmoji("🦞", emojiOptions);
+  const indent = prefix ? `${prefix} ` : "";
   const columns = options.columns ?? process.stdout.columns ?? 120;
-  const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
+  const plainBaseLine = `${title} ${version} (${commitLabel})`;
+  const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
     if (fitsOnOneLine) {
+      if (!tagline) {
+        return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(`(${commitLabel})`)}`;
+      }
       return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
         `(${commitLabel})`,
       )} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
@@ -54,31 +90,50 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
     const line1 = `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
       `(${commitLabel})`,
     )}`;
-    const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(tagline)}`;
+    if (!tagline) {
+      return line1;
+    }
+    const line2 = `${" ".repeat(indent.length)}${theme.accentDim(tagline)}`;
     return `${line1}\n${line2}`;
   }
   if (fitsOnOneLine) {
     return plainFullLine;
   }
-  const line1 = `${title} ${version} (${commitLabel})`;
-  const line2 = `${" ".repeat(prefix.length)}${tagline}`;
+  const line1 = plainBaseLine;
+  if (!tagline) {
+    return line1;
+  }
+  const line2 = `${" ".repeat(indent.length)}${tagline}`;
   return `${line1}\n${line2}`;
 }
 
-const LOBSTER_ASCII = [
+const LOBSTER_ASCII_BODY = [
   "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
   "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
   "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
   "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
   "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-  "                  🦞 OPENCLAW 🦞                    ",
-  " ",
 ];
+
+function centerText(text: string, width: number): string {
+  const pad = Math.max(0, width - visibleWidth(text));
+  const left = Math.floor(pad / 2);
+  const right = pad - left;
+  return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
+}
+
+function formatCliBannerArtLines(options: BannerOptions): string[] {
+  const width = visibleWidth(LOBSTER_ASCII_BODY[0] ?? "");
+  const emojiOptions = resolveEmojiOptions(options);
+  const title = supportsDecorativeEmoji(emojiOptions) ? "🦞 OPENCLAW 🦞" : "OPENCLAW";
+  return [...LOBSTER_ASCII_BODY, centerText(title, width), " "];
+}
 
 export function formatCliBannerArt(options: BannerOptions = {}): string {
   const rich = options.richTty ?? isRich();
+  const lines = formatCliBannerArtLines(options);
   if (!rich) {
-    return LOBSTER_ASCII.join("\n");
+    return lines.join("\n");
   }
 
   const colorChar = (ch: string) => {
@@ -94,13 +149,18 @@ export function formatCliBannerArt(options: BannerOptions = {}): string {
     return theme.muted(ch);
   };
 
-  const colored = LOBSTER_ASCII.map((line) => {
+  const emojiOptions = resolveEmojiOptions(options);
+  const icon = decorativeEmoji("🦞", emojiOptions);
+  const colored = lines.map((line) => {
     if (line.includes("OPENCLAW")) {
+      if (!icon) {
+        return theme.info(centerText("OPENCLAW", visibleWidth(line)));
+      }
       return (
         theme.muted("              ") +
-        theme.accent("🦞") +
+        theme.accent(icon) +
         theme.info(" OPENCLAW ") +
-        theme.accent("🦞")
+        theme.accent(icon)
       );
     }
     return splitGraphemes(line).map(colorChar).join("");
@@ -114,7 +174,8 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  if (!process.stdout.isTTY) {
+  const isTty = options.isTty ?? process.stdout.isTTY;
+  if (!isTty) {
     return;
   }
   if (hasJsonFlag(argv)) {

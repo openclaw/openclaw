@@ -1,4 +1,7 @@
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
+export type TaglineMode = "random" | "default" | "off";
 
 const HOLIDAY_TAGLINES = {
   newYear:
@@ -63,34 +66,42 @@ const TAGLINES: string[] = [
   "I'll butter your workflow like a lobster roll: messy, delicious, effective.",
   "Shell yeah—I'm here to pinch the toil and leave you the glory.",
   "If it's repetitive, I'll automate it; if it's hard, I'll bring jokes and a rollback plan.",
-  "Because texting yourself reminders is so 2024.",
-  "Your inbox, your infra, your rules.",
-  'Turning "I\'ll reply later" into "my bot replied instantly".',
   "The only crab in your contacts you actually want to hear from. 🦞",
-  "Chat automation for people who peaked at IRC.",
-  "Because Siri wasn't answering at 3AM.",
-  "IPC, but it's your phone.",
-  "The UNIX philosophy meets your DMs.",
-  "curl for conversations.",
-  "Less middlemen, more messages.",
-  "Ship fast, log faster.",
-  "End-to-end encrypted, drama-to-drama excluded.",
-  "The only bot that stays out of your training set.",
   'WhatsApp automation without the "please accept our new privacy policy".',
-  "Chat APIs that don't require a Senate hearing.",
-  "Meta wishes they shipped this fast.",
-  "Because the right answer is usually a script.",
-  "Your messages, your servers, your control.",
-  "OpenAI-compatible, not OpenAI-dependent.",
   "iMessage green bubble energy, but for everyone.",
-  "Siri's competent cousin.",
-  "Works on Android. Crazy concept, we know.",
   "No $999 stand required.",
   "We ship features faster than Apple ships calculator updates.",
   "Your AI assistant, now without the $3,499 headset.",
-  "Think different. Actually think.",
   "Ah, the fruit tree company! 🍎",
   "Greetings, Professor Falken",
+  "I don't sleep, I just enter low-power mode and dream of clean diffs.",
+  "Your personal assistant, minus the passive-aggressive calendar reminders.",
+  "Built by lobsters, for humans. Don't question the hierarchy.",
+  "I've seen your commit messages. We'll work on that together.",
+  "More integrations than your therapist's intake form.",
+  "Running on your hardware, reading your logs, judging nothing (mostly).",
+  "The only open-source project where the mascot could eat the competition.",
+  "Self-hosted, self-updating, self-aware (just kidding... unless?).",
+  "I autocomplete your thoughts—just slower and with more API calls.",
+  "Somewhere between 'hello world' and 'oh god what have I built.'",
+  "Your .zshrc wishes it could do what I do.",
+  "I've read more man pages than any human should—so you don't have to.",
+  "Powered by open source, sustained by spite and good documentation.",
+  "I'm the middleware between your ambition and your attention span.",
+  "Finally, a use for that always-on Mac Mini under your desk.",
+  "Like having a senior engineer on call, except I don't bill hourly or sigh audibly.",
+  "Making 'I'll automate that later' happen now.",
+  "Your second brain, except this one actually remembers where you left things.",
+  "Half butler, half debugger, full crustacean.",
+  "I don't have opinions about tabs vs spaces. I have opinions about everything else.",
+  "Open source means you can see exactly how I judge your config.",
+  "I've survived more breaking changes than your last three relationships.",
+  "Runs on a Raspberry Pi. Dreams of a rack in Iceland.",
+  "The lobster in your shell. 🦞",
+  "Alexa, but with taste.",
+  "I'm not AI-powered, I'm AI-possessed. Big difference.",
+  "Deployed locally, trusted globally, debugged eternally.",
+  "You had me at 'openclaw gateway start.'",
   HOLIDAY_TAGLINES.newYear,
   HOLIDAY_TAGLINES.lunarNewYear,
   HOLIDAY_TAGLINES.christmas,
@@ -176,6 +187,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 0, 29],
         [2026, 1, 17],
         [2027, 1, 6],
+        [2028, 0, 26],
+        [2029, 1, 13],
+        [2030, 1, 3],
       ],
       1,
     ),
@@ -188,6 +202,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 2, 31],
         [2026, 2, 20],
         [2027, 2, 10],
+        [2028, 1, 27],
+        [2029, 1, 15],
+        [2030, 1, 5],
       ],
       1,
     ),
@@ -199,6 +216,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 9, 20],
         [2026, 10, 8],
         [2027, 9, 28],
+        [2028, 9, 17],
+        [2029, 10, 5],
+        [2030, 9, 25],
       ],
       1,
     ),
@@ -210,6 +230,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2025, 3, 20],
         [2026, 3, 5],
         [2027, 2, 28],
+        [2028, 3, 16],
+        [2029, 3, 1],
+        [2030, 3, 21],
       ],
       1,
     ),
@@ -220,6 +243,9 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
       { year: 2025, month: 11, day: 15, duration: 8 },
       { year: 2026, month: 11, day: 5, duration: 8 },
       { year: 2027, month: 11, day: 25, duration: 8 },
+      { year: 2028, month: 11, day: 13, duration: 8 },
+      { year: 2029, month: 11, day: 2, duration: 8 },
+      { year: 2030, month: 11, day: 21, duration: 8 },
     ]),
   ],
   [HOLIDAY_TAGLINES.halloween, onMonthDay(9, 31)],
@@ -240,9 +266,10 @@ export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
   random?: () => number;
   now?: () => Date;
+  mode?: TaglineMode;
 }
 
-export function activeTaglines(options: TaglineOptions = {}): string[] {
+function activeTaglines(options: TaglineOptions = {}): string[] {
   if (TAGLINES.length === 0) {
     return [DEFAULT_TAGLINE];
   }
@@ -252,11 +279,17 @@ export function activeTaglines(options: TaglineOptions = {}): string[] {
 }
 
 export function pickTagline(options: TaglineOptions = {}): string {
+  if (options.mode === "off") {
+    return "";
+  }
+  if (options.mode === "default") {
+    return DEFAULT_TAGLINE;
+  }
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
-    const parsed = Number.parseInt(override, 10);
-    if (!Number.isNaN(parsed) && parsed >= 0) {
+    const parsed = parseStrictNonNegativeInteger(override);
+    if (parsed !== undefined) {
       const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
       return pool[parsed % pool.length];
     }
@@ -267,4 +300,4 @@ export function pickTagline(options: TaglineOptions = {}): string {
   return pool[index];
 }
 
-export { TAGLINES, HOLIDAY_RULES, DEFAULT_TAGLINE };
+export { DEFAULT_TAGLINE };

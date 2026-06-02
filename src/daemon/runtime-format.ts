@@ -1,6 +1,7 @@
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { getSystemdCgroupHygieneSummary } from "./service-runtime.js";
 
-export type ServiceRuntimeLike = {
+type ServiceRuntimeLike = {
   status?: string;
   state?: string;
   subState?: string;
@@ -10,7 +11,22 @@ export type ServiceRuntimeLike = {
   lastRunResult?: string;
   lastRunTime?: string;
   detail?: string;
+  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
 };
+
+const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
+  [129, "SIGHUP"],
+  [130, "SIGINT"],
+  [131, "SIGQUIT"],
+  [134, "SIGABRT/abort"],
+  [137, "SIGKILL"],
+  [143, "SIGTERM"],
+]);
+
+function formatLastExitStatus(status: number): string {
+  const signalName = SIGNAL_NAMES_BY_STATUS.get(status);
+  return signalName ? `last exit ${status} (${signalName})` : `last exit ${status}`;
+}
 
 export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): string | null {
   if (!runtime) {
@@ -21,7 +37,7 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
     details.push(`sub ${runtime.subState}`);
   }
   if (runtime.lastExitStatus !== undefined) {
-    details.push(`last exit ${runtime.lastExitStatus}`);
+    details.push(formatLastExitStatus(runtime.lastExitStatus));
   }
   if (runtime.lastExitReason) {
     details.push(`reason ${runtime.lastExitReason}`);
@@ -31,6 +47,10 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
   }
   if (runtime.lastRunTime) {
     details.push(`last run time ${runtime.lastRunTime}`);
+  }
+  const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
+  if (cgroupSummary) {
+    details.push(cgroupSummary);
   }
   if (runtime.detail) {
     details.push(runtime.detail);

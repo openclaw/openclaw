@@ -3,7 +3,6 @@ import OpenClawDiscovery
 import Testing
 @testable import OpenClaw
 
-@Suite
 struct GatewayDiscoveryHelpersTests {
     private func makeGateway(
         serviceHost: String?,
@@ -11,7 +10,8 @@ struct GatewayDiscoveryHelpersTests {
         lanHost: String? = "txt-host.local",
         tailnetDns: String? = "txt-host.ts.net",
         sshPort: Int = 22,
-        gatewayPort: Int? = 18789) -> GatewayDiscoveryModel.DiscoveredGateway
+        gatewayPort: Int? = 18789,
+        gatewayTls: Bool = false) -> GatewayDiscoveryModel.DiscoveredGateway
     {
         GatewayDiscoveryModel.DiscoveredGateway(
             displayName: "Gateway",
@@ -21,43 +21,44 @@ struct GatewayDiscoveryHelpersTests {
             tailnetDns: tailnetDns,
             sshPort: sshPort,
             gatewayPort: gatewayPort,
+            gatewayTls: gatewayTls,
             cliPath: "/tmp/openclaw",
             stableID: UUID().uuidString,
             debugID: UUID().uuidString,
             isLocal: false)
     }
 
-    @Test func sshTargetUsesResolvedServiceHostOnly() {
+    private func assertSSHTarget(
+        for gateway: GatewayDiscoveryModel.DiscoveredGateway,
+        host: String,
+        port: Int)
+    {
+        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) else {
+            Issue.record("expected ssh target")
+            return
+        }
+        let parsed = CommandResolver.parseSSHTarget(target)
+        #expect(parsed?.host == host)
+        #expect(parsed?.port == port)
+    }
+
+    @Test func `ssh target uses resolved service host only`() {
         let gateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
             servicePort: 18789,
             sshPort: 2201)
-
-        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) else {
-            Issue.record("expected ssh target")
-            return
-        }
-        let parsed = CommandResolver.parseSSHTarget(target)
-        #expect(parsed?.host == "resolved.example.ts.net")
-        #expect(parsed?.port == 2201)
+        self.assertSSHTarget(for: gateway, host: "resolved.example.ts.net", port: 2201)
     }
 
-    @Test func sshTargetAllowsMissingResolvedServicePort() {
+    @Test func `ssh target allows missing resolved service port`() {
         let gateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
             servicePort: nil,
             sshPort: 2201)
-
-        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway) else {
-            Issue.record("expected ssh target")
-            return
-        }
-        let parsed = CommandResolver.parseSSHTarget(target)
-        #expect(parsed?.host == "resolved.example.ts.net")
-        #expect(parsed?.port == 2201)
+        self.assertSSHTarget(for: gateway, host: "resolved.example.ts.net", port: 2201)
     }
 
-    @Test func sshTargetRejectsTxtOnlyGateways() {
+    @Test func `ssh target rejects txt only gateways`() {
         let gateway = self.makeGateway(
             serviceHost: nil,
             servicePort: nil,
@@ -68,16 +69,17 @@ struct GatewayDiscoveryHelpersTests {
         #expect(GatewayDiscoveryHelpers.sshTarget(for: gateway) == nil)
     }
 
-    @Test func directUrlUsesResolvedServiceEndpointOnly() {
+    @Test func `direct url uses resolved service endpoint only`() {
         let tlsGateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
-            servicePort: 443)
+            servicePort: 443,
+            gatewayTls: true)
         #expect(GatewayDiscoveryHelpers.directUrl(for: tlsGateway) == "wss://resolved.example.ts.net")
 
         let wsGateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
             servicePort: 18789)
-        #expect(GatewayDiscoveryHelpers.directUrl(for: wsGateway) == "wss://resolved.example.ts.net:18789")
+        #expect(GatewayDiscoveryHelpers.directUrl(for: wsGateway) == "ws://resolved.example.ts.net:18789")
 
         let localGateway = self.makeGateway(
             serviceHost: "127.0.0.1",
@@ -85,7 +87,16 @@ struct GatewayDiscoveryHelpersTests {
         #expect(GatewayDiscoveryHelpers.directUrl(for: localGateway) == "ws://127.0.0.1:18789")
     }
 
-    @Test func directUrlRejectsTxtOnlyFallback() {
+    @Test func `direct url rejects public plaintext service endpoint`() {
+        let gateway = self.makeGateway(
+            serviceHost: "gateway.example",
+            servicePort: 18789,
+            gatewayTls: false)
+
+        #expect(GatewayDiscoveryHelpers.directUrl(for: gateway) == nil)
+    }
+
+    @Test func `direct url rejects txt only fallback`() {
         let gateway = self.makeGateway(
             serviceHost: nil,
             servicePort: nil,

@@ -1,14 +1,20 @@
+import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import { sanitizeForPlainText } from "../../../infra/outbound/sanitize-text.js";
+import type { OutboundMediaAccess } from "../../../media/load-options.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
-import type { ChannelOutboundAdapter } from "../types.js";
+import type { ChannelOutboundAdapter } from "../types.adapters.js";
 
 type DirectSendOptions = {
+  cfg: OpenClawConfig;
   accountId?: string | null;
   replyToId?: string | null;
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
 };
 
@@ -19,6 +25,25 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   text: string,
   opts: TOpts,
 ) => Promise<TResult>;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNumberField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+export {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceAndFinalize,
+  sendPayloadMediaSequenceOrFallback,
+  sendTextMediaPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
@@ -32,14 +57,19 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
-export function createScopedChannelMediaMaxBytesResolver(channel: "imessage" | "signal") {
+export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
       cfg: params.cfg,
       accountId: params.accountId,
-      resolveChannelLimitMb: ({ cfg, accountId }) =>
-        cfg.channels?.[channel]?.accounts?.[accountId]?.mediaMaxMb ??
-        cfg.channels?.[channel]?.mediaMaxMb,
+      resolveChannelLimitMb: ({ cfg, accountId }) => {
+        const channelConfig = asRecord(cfg.channels?.[channel]);
+        const accountConfig = asRecord(asRecord(channelConfig?.accounts)?.[accountId]);
+        return (
+          readNumberField(accountConfig, "mediaMaxMb") ??
+          readNumberField(channelConfig, "mediaMaxMb")
+        );
+      },
     });
 }
 
@@ -47,7 +77,7 @@ export function createDirectTextMediaOutbound<
   TOpts extends Record<string, unknown>,
   TResult extends DirectSendResult,
 >(params: {
-  channel: "imessage" | "signal";
+  channel: string;
   resolveSender: (deps: OutboundSendDeps | undefined) => DirectSendFn<TOpts, TResult>;
   resolveMaxBytes: (params: {
     cfg: OpenClawConfig;
@@ -64,7 +94,7 @@ export function createDirectTextMediaOutbound<
     deps?: OutboundSendDeps;
     replyToId?: string | null;
     mediaUrl?: string;
-    mediaLocalRoots?: readonly string[];
+    mediaAccess?: OutboundMediaAccess;
     buildOptions: (params: DirectSendOptions) => TOpts;
   }) => {
     const send = params.resolveSender(sendParams.deps);
@@ -76,8 +106,11 @@ export function createDirectTextMediaOutbound<
       sendParams.to,
       sendParams.text,
       sendParams.buildOptions({
+        cfg: sendParams.cfg,
         mediaUrl: sendParams.mediaUrl,
-        mediaLocalRoots: sendParams.mediaLocalRoots,
+        mediaAccess: sendParams.mediaAccess,
+        mediaLocalRoots: sendParams.mediaAccess?.localRoots,
+        mediaReadFile: sendParams.mediaAccess?.readFile,
         accountId: sendParams.accountId,
         replyToId: sendParams.replyToId,
         maxBytes,
@@ -86,11 +119,14 @@ export function createDirectTextMediaOutbound<
     return { channel: params.channel, ...result };
   };
 
-  return {
+  const outbound: ChannelOutboundAdapter = {
     deliveryMode: "direct",
     chunker: chunkText,
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sanitizeText: ({ text }) => sanitizeForPlainText(text),
+    sendPayload: async (ctx) =>
+      await sendTextMediaPayload({ channel: params.channel, ctx, adapter: outbound }),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       return await sendDirect({
         cfg,
@@ -102,13 +138,31 @@ export function createDirectTextMediaOutbound<
         buildOptions: params.buildTextOptions,
       });
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId,
+      deps,
+      replyToId,
+    }) => {
       return await sendDirect({
         cfg,
         to,
         text,
         mediaUrl,
-        mediaLocalRoots,
+        mediaAccess:
+          mediaAccess ??
+          (mediaLocalRoots || mediaReadFile
+            ? {
+                ...(mediaLocalRoots?.length ? { localRoots: mediaLocalRoots } : {}),
+                ...(mediaReadFile ? { readFile: mediaReadFile } : {}),
+              }
+            : undefined),
         accountId,
         deps,
         replyToId,
@@ -116,4 +170,5 @@ export function createDirectTextMediaOutbound<
       });
     },
   };
+  return outbound;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureOwnerDisplaySecret, resolveOwnerDisplaySetting } from "./owner-display.js";
 
 describe("resolveOwnerDisplaySetting", () => {
@@ -13,7 +13,7 @@ describe("resolveOwnerDisplaySetting", () => {
 
     expect(resolveOwnerDisplaySetting(cfg)).toEqual({
       ownerDisplay: "hash",
-      ownerDisplaySecret: "owner-secret",
+      ownerDisplaySecret: "owner-secret", // pragma: allowlist secret
     });
   });
 
@@ -38,7 +38,7 @@ describe("resolveOwnerDisplaySetting", () => {
     const cfg = {
       commands: {
         ownerDisplay: "raw",
-        ownerDisplaySecret: "owner-secret",
+        ownerDisplaySecret: "owner-secret", // pragma: allowlist secret
       },
     } as OpenClawConfig;
 
@@ -67,7 +67,7 @@ describe("ensureOwnerDisplaySecret", () => {
     const cfg = {
       commands: {
         ownerDisplay: "hash",
-        ownerDisplaySecret: "existing-owner-secret",
+        ownerDisplaySecret: "existing-owner-secret", // pragma: allowlist secret
       },
     } as OpenClawConfig;
 

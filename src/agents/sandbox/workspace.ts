@@ -1,5 +1,8 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OptionalBootstrapFileName } from "../../config/types.agent-defaults.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -16,6 +19,7 @@ export async function ensureSandboxWorkspace(
   workspaceDir: string,
   seedFrom?: string,
   skipBootstrap?: boolean,
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[],
 ) {
   await fs.mkdir(workspaceDir, { recursive: true });
   if (seedFrom) {
@@ -36,8 +40,20 @@ export async function ensureSandboxWorkspace(
         await fs.access(dest);
       } catch {
         try {
-          const content = await fs.readFile(src, "utf-8");
-          await fs.writeFile(dest, content, { encoding: "utf-8", flag: "wx" });
+          const opened = await openRootFile({
+            absolutePath: src,
+            rootPath: seed,
+            boundaryLabel: "sandbox seed workspace",
+          });
+          if (!opened.ok) {
+            continue;
+          }
+          try {
+            const content = syncFs.readFileSync(opened.fd, "utf-8");
+            await fs.writeFile(dest, content, { encoding: "utf-8", flag: "wx" });
+          } finally {
+            syncFs.closeSync(opened.fd);
+          }
         } catch {
           // ignore missing seed file
         }
@@ -47,5 +63,6 @@ export async function ensureSandboxWorkspace(
   await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !skipBootstrap,
+    skipOptionalBootstrapFiles,
   });
 }

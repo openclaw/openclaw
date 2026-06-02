@@ -1,0 +1,16 @@
+export {
+  parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  positiveSecondsToSafeMilliseconds,
+  nonNegativeSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "../../packages/normalization-core/src/number-coercion.js";

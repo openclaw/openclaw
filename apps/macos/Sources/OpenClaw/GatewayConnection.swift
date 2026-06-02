@@ -6,7 +6,7 @@ import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
 
-enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
+enum GatewayAgentChannel: String, Codable, CaseIterable {
     case last
     case whatsapp
     case telegram
@@ -16,7 +16,6 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case signal
     case imessage
     case msteams
-    case bluebubbles
     case webchat
 
     init(raw: String?) {
@@ -33,7 +32,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     }
 }
 
-struct GatewayAgentInvocation: Sendable {
+struct GatewayAgentInvocation {
     var message: String
     var sessionKey: String = "main"
     var thinking: String?
@@ -42,6 +41,7 @@ struct GatewayAgentInvocation: Sendable {
     var channel: GatewayAgentChannel = .last
     var timeoutSeconds: Int?
     var idempotencyKey: String = UUID().uuidString
+    var voiceWakeTrigger: String?
 }
 
 /// Single, shared Gateway websocket connection for the whole app.
@@ -53,7 +53,7 @@ actor GatewayConnection {
 
     typealias Config = (url: URL, token: String?, password: String?)
 
-    enum Method: String, Sendable {
+    enum Method: String {
         case agent
         case status
         case setHeartbeats = "set-heartbeats"
@@ -64,12 +64,14 @@ actor GatewayConnection {
         case configSet = "config.set"
         case configPatch = "config.patch"
         case configSchema = "config.schema"
+        case configSchemaLookup = "config.schema.lookup"
         case wizardStart = "wizard.start"
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"
         case wizardStatus = "wizard.status"
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
+        case talkSpeak = "talk.speak"
         case webLoginStart = "web.login.start"
         case webLoginWait = "web.login.wait"
         case channelsLogout = "channels.logout"
@@ -109,6 +111,44 @@ actor GatewayConnection {
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
+
+    private struct LossyDecodable<Value: Decodable>: Decodable {
+        let value: Value?
+
+        init(from decoder: Decoder) throws {
+            do {
+                self.value = try Value(from: decoder)
+            } catch {
+                self.value = nil
+            }
+        }
+    }
+
+    private struct LossyCronListResponse: Decodable {
+        let jobs: [LossyDecodable<CronJob>]
+
+        enum CodingKeys: String, CodingKey {
+            case jobs
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.jobs = try container.decodeIfPresent([LossyDecodable<CronJob>].self, forKey: .jobs) ?? []
+        }
+    }
+
+    private struct LossyCronRunsResponse: Decodable {
+        let entries: [LossyDecodable<CronRunLogEntry>]
+
+        enum CodingKeys: String, CodingKey {
+            case entries
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.entries = try container.decodeIfPresent([LossyDecodable<CronRunLogEntry>].self, forKey: .entries) ?? []
+        }
+    }
 
     init(
         configProvider: @escaping @Sendable () async throws -> Config = GatewayConnection.defaultConfigProvider,
@@ -271,10 +311,33 @@ actor GatewayConnection {
         self.lastSnapshot = nil
     }
 
-    func canvasHostUrl() async -> String? {
+    func canvasPluginSurfaceUrl() async -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
-        let trimmed = snapshot.canvashosturl?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        let raw = snapshot.pluginsurfaceurls?["canvas"]?.value as? String
+        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func controlUiAutoAuthToken(config: Config) async -> String? {
+        if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty
+        {
+            return token
+        }
+        if let deviceToken = self.lastSnapshot?.auth["deviceToken"]?.value as? String {
+            let trimmed = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        let identity = DeviceIdentityStore.loadOrCreate()
+        if let entry = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") {
+            let trimmed = entry.token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return nil
     }
 
     private func sessionDefaultString(_ defaults: [String: OpenClawProtocol.AnyCodable]?, key: String) -> String {
@@ -390,9 +453,9 @@ actor GatewayConnection {
 // MARK: - Typed gateway API
 
 extension GatewayConnection {
-    struct ConfigGetSnapshot: Decodable, Sendable {
-        struct SnapshotConfig: Decodable, Sendable {
-            struct Session: Decodable, Sendable {
+    struct ConfigGetSnapshot: Decodable {
+        struct SnapshotConfig: Decodable {
+            struct Session: Decodable {
                 let mainKey: String?
                 let scope: String?
             }
@@ -451,14 +514,22 @@ extension GatewayConnection {
         var params: [String: AnyCodable] = [
             "message": AnyCodable(trimmed),
             "sessionKey": AnyCodable(sessionKey),
-            "thinking": AnyCodable(invocation.thinking ?? "default"),
             "deliver": AnyCodable(invocation.deliver),
             "to": AnyCodable(invocation.to ?? ""),
             "channel": AnyCodable(invocation.channel.rawValue),
             "idempotencyKey": AnyCodable(invocation.idempotencyKey),
         ]
+        if let thinking = invocation.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !thinking.isEmpty
+        {
+            params["thinking"] = AnyCodable(thinking)
+        }
         if let timeout = invocation.timeoutSeconds {
             params["timeout"] = AnyCodable(timeout)
+        }
+        if let trigger = invocation.voiceWakeTrigger {
+            params["voiceWakeTrigger"] = AnyCodable(
+                trigger.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
         do {
@@ -520,12 +591,16 @@ extension GatewayConnection {
     func skillsInstall(
         name: String,
         installId: String,
+        dangerouslyForceUnsafeInstall: Bool? = nil,
         timeoutMs: Int? = nil) async throws -> SkillInstallResult
     {
         var params: [String: AnyCodable] = [
             "name": AnyCodable(name),
             "installId": AnyCodable(installId),
         ]
+        if let dangerouslyForceUnsafeInstall {
+            params["dangerouslyForceUnsafeInstall"] = AnyCodable(dangerouslyForceUnsafeInstall)
+        }
         if let timeoutMs {
             params["timeoutMs"] = AnyCodable(timeoutMs)
         }
@@ -576,11 +651,13 @@ extension GatewayConnection {
     func chatHistory(
         sessionKey: String,
         limit: Int? = nil,
+        maxChars: Int? = nil,
         timeoutMs: Int? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
         if let limit { params["limit"] = AnyCodable(limit) }
+        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
         let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .chatHistory,
@@ -591,7 +668,7 @@ extension GatewayConnection {
     func chatSend(
         sessionKey: String,
         message: String,
-        thinking: String,
+        thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         timeoutMs: Int = 30000) async throws -> OpenClawChatSendResponse
@@ -600,10 +677,14 @@ extension GatewayConnection {
         var params: [String: AnyCodable] = [
             "sessionKey": AnyCodable(resolvedKey),
             "message": AnyCodable(message),
-            "thinking": AnyCodable(thinking),
             "idempotencyKey": AnyCodable(idempotencyKey),
             "timeoutMs": AnyCodable(timeoutMs),
         ]
+        if let thinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !thinking.isEmpty
+        {
+            params["thinking"] = AnyCodable(thinking)
+        }
 
         if !attachments.isEmpty {
             let encoded = attachments.map { att in
@@ -691,7 +772,7 @@ extension GatewayConnection {
 
     // MARK: - Cron
 
-    struct CronSchedulerStatus: Decodable, Sendable {
+    struct CronSchedulerStatus: Decodable {
         let enabled: Bool
         let storePath: String
         let jobs: Int
@@ -703,17 +784,17 @@ extension GatewayConnection {
     }
 
     func cronList(includeDisabled: Bool = true) async throws -> [CronJob] {
-        let res: CronListResponse = try await self.requestDecoded(
+        let data = try await self.requestRaw(
             method: .cronList,
             params: ["includeDisabled": AnyCodable(includeDisabled)])
-        return res.jobs
+        return try Self.decodeCronListResponse(data)
     }
 
     func cronRuns(jobId: String, limit: Int = 200) async throws -> [CronRunLogEntry] {
-        let res: CronRunsResponse = try await self.requestDecoded(
+        let data = try await self.requestRaw(
             method: .cronRuns,
             params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)])
-        return res.entries
+        return try Self.decodeCronRunsResponse(data)
     }
 
     func cronRun(jobId: String, force: Bool = true) async throws {
@@ -738,5 +819,25 @@ extension GatewayConnection {
 
     func cronAdd(payload: [String: AnyCodable]) async throws {
         try await self.requestVoid(method: .cronAdd, params: payload)
+    }
+
+    nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {
+        let decoded = try JSONDecoder().decode(LossyCronListResponse.self, from: data)
+        let jobs = decoded.jobs.compactMap(\.value)
+        let skipped = decoded.jobs.count - jobs.count
+        if skipped > 0 {
+            gatewayConnectionLogger.warning("cron.list skipped \(skipped, privacy: .public) malformed jobs")
+        }
+        return jobs
+    }
+
+    nonisolated static func decodeCronRunsResponse(_ data: Data) throws -> [CronRunLogEntry] {
+        let decoded = try JSONDecoder().decode(LossyCronRunsResponse.self, from: data)
+        let entries = decoded.entries.compactMap(\.value)
+        let skipped = decoded.entries.count - entries.count
+        if skipped > 0 {
+            gatewayConnectionLogger.warning("cron.runs skipped \(skipped, privacy: .public) malformed entries")
+        }
+        return entries
     }
 }

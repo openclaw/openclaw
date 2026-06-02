@@ -1,5 +1,13 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
-import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+import {
+  completeFollowupRunLifecycle,
+  type FollowupRun,
+  type QueueDropPolicy,
+  type QueueMode,
+  type QueueSettings,
+} from "./types.js";
 
 export type FollowupQueueState = {
   items: FollowupRun[];
@@ -11,14 +19,21 @@ export type FollowupQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  summarySources: FollowupRun[];
   lastRun?: FollowupRun["run"];
 };
 
-export const DEFAULT_QUEUE_DEBOUNCE_MS = 1000;
+export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
-export const FOLLOWUP_QUEUES = new Map<string, FollowupQueueState>();
+/**
+ * Share followup queues across bundled chunks so busy-session enqueue/drain
+ * logic observes one queue registry per process.
+ */
+const FOLLOWUP_QUEUES_KEY = Symbol.for("openclaw.followupQueues");
+
+export const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(FOLLOWUP_QUEUES_KEY);
 
 export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
   const cleaned = key.trim();
@@ -54,6 +69,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
+    summarySources: [],
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -70,11 +86,93 @@ export function clearFollowupQueue(key: string): number {
     return 0;
   }
   const cleared = queue.items.length + queue.droppedCount;
+  for (const item of queue.items) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const item of queue.summarySources) {
+    completeFollowupRunLifecycle(item);
+  }
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
+  queue.summarySources = [];
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
   return cleared;
+}
+
+export function refreshQueuedFollowupSession(params: {
+  key: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextModelOverrideSource?: "auto" | "user";
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
+}): void {
+  const cleaned = params.key.trim();
+  if (!cleaned) {
+    return;
+  }
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return;
+  }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteModelSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextModelOverrideSource");
+  const shouldRewriteSelection =
+    shouldRewriteModelSelection ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
+
+  const rewriteRun = (run?: FollowupRun["run"]) => {
+    if (!run) {
+      return;
+    }
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+      if (nextSessionFile) {
+        run.sessionFile = nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (shouldRewriteModelSelection) {
+        delete run.hasAutoFallbackProvenance;
+      }
+      if (Object.hasOwn(params, "nextModelOverrideSource")) {
+        run.hasSessionModelOverride = Boolean(run.provider || run.model);
+        run.modelOverrideSource = params.nextModelOverrideSource;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+    }
+  };
+
+  rewriteRun(queue.lastRun);
+  for (const item of queue.items) {
+    rewriteRun(item.run);
+  }
 }

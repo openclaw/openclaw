@@ -2,59 +2,47 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import * as crypto from "node:crypto";
-
-export type DmAuthorizationResult =
-  | { allowed: true }
-  | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import {
+  createFixedWindowRateLimiter,
+  type FixedWindowRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 
 /**
  * Validate webhook token using constant-time comparison.
- * Prevents timing attacks that could leak token bytes.
+ * Reject empty tokens explicitly; use shared constant-time comparison otherwise.
  */
 export function validateToken(received: string, expected: string): boolean {
-  if (!received || !expected) return false;
-
-  // Use HMAC to normalize lengths before comparison,
-  // preventing timing side-channel on token length.
-  const key = "openclaw-token-cmp";
-  const a = crypto.createHmac("sha256", key).update(received).digest();
-  const b = crypto.createHmac("sha256", key).update(expected).digest();
-
-  return crypto.timingSafeEqual(a, b);
+  if (!received || !expected) {
+    return false;
+  }
+  return safeEqualSecret(received, expected);
 }
 
-/**
- * Check if a user ID is in the allowed list.
- * Allowlist mode must be explicit; empty lists should not match any user.
- */
-export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
-  if (allowedUserIds.length === 0) return false;
-  return allowedUserIds.includes(userId);
-}
-
-/**
- * Resolve DM authorization for a sender across all DM policy modes.
- * Keeps policy semantics in one place so webhook/startup behavior stays consistent.
- */
-export function authorizeUserForDm(
-  userId: string,
-  dmPolicy: "open" | "allowlist" | "disabled",
-  allowedUserIds: string[],
-): DmAuthorizationResult {
-  if (dmPolicy === "disabled") {
-    return { allowed: false, reason: "disabled" };
-  }
-  if (dmPolicy === "open") {
-    return { allowed: true };
-  }
-  if (allowedUserIds.length === 0) {
-    return { allowed: false, reason: "allowlist-empty" };
-  }
-  if (!checkUserAllowed(userId, allowedUserIds)) {
-    return { allowed: false, reason: "not-allowlisted" };
-  }
-  return { allowed: true };
+export async function authorizeUserForDmWithIngress(params: {
+  accountId: string;
+  userId: string;
+  dmPolicy: "open" | "allowlist" | "disabled";
+  allowedUserIds: string[];
+}) {
+  return await resolveStableChannelMessageIngress({
+    channelId: "synology-chat",
+    accountId: params.accountId,
+    identity: {
+      key: "sender-id",
+      entryIdPrefix: "synology-chat-entry",
+    },
+    subject: { stableId: params.userId },
+    conversation: {
+      kind: "direct",
+      id: "direct",
+    },
+    event: { mayPair: false },
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowedUserIds,
+  });
 }
 
 /**
@@ -86,55 +74,36 @@ export function sanitizeInput(text: string): string {
  * Sliding window rate limiter per user ID.
  */
 export class RateLimiter {
-  private requests: Map<string, number[]> = new Map();
-  private limit: number;
-  private windowMs: number;
-  private lastCleanup = 0;
-  private cleanupIntervalMs: number;
+  private readonly limiter: FixedWindowRateLimiter;
+  private readonly limit: number;
 
-  constructor(limit = 30, windowSeconds = 60) {
+  constructor(limit = 30, windowSeconds = 60, maxTrackedUsers = 5_000) {
     this.limit = limit;
-    this.windowMs = windowSeconds * 1000;
-    this.cleanupIntervalMs = this.windowMs * 5; // cleanup every 5 windows
+    const windowMs = finiteSecondsToTimerSafeMilliseconds(windowSeconds) ?? 1;
+    this.limiter = createFixedWindowRateLimiter({
+      windowMs,
+      maxRequests: Math.max(1, Math.floor(limit)),
+      maxTrackedKeys: Math.max(1, Math.floor(maxTrackedUsers)),
+    });
   }
 
   /** Returns true if the request is allowed, false if rate-limited. */
   check(userId: string): boolean {
-    const now = Date.now();
-    const windowStart = now - this.windowMs;
-
-    // Periodic cleanup of stale entries to prevent memory leak
-    if (now - this.lastCleanup > this.cleanupIntervalMs) {
-      this.cleanup(windowStart);
-      this.lastCleanup = now;
-    }
-
-    let timestamps = this.requests.get(userId);
-    if (timestamps) {
-      timestamps = timestamps.filter((ts) => ts > windowStart);
-    } else {
-      timestamps = [];
-    }
-
-    if (timestamps.length >= this.limit) {
-      this.requests.set(userId, timestamps);
-      return false;
-    }
-
-    timestamps.push(now);
-    this.requests.set(userId, timestamps);
-    return true;
+    return !this.limiter.isRateLimited(userId);
   }
 
-  /** Remove entries with no recent activity. */
-  private cleanup(windowStart: number): void {
-    for (const [userId, timestamps] of this.requests) {
-      const active = timestamps.filter((ts) => ts > windowStart);
-      if (active.length === 0) {
-        this.requests.delete(userId);
-      } else {
-        this.requests.set(userId, active);
-      }
-    }
+  /** Exposed for tests and diagnostics. */
+  size(): number {
+    return this.limiter.size();
+  }
+
+  /** Exposed for tests and account lifecycle cleanup. */
+  clear(): void {
+    this.limiter.clear();
+  }
+
+  /** Exposed for tests. */
+  maxRequests(): number {
+    return this.limit;
   }
 }

@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
 import {
   readNostrBusState,
+  readNostrProfileState,
   writeNostrBusState,
+  writeNostrProfileState,
   computeSinceTimestamp,
 } from "./nostr-state-store.js";
 import { setNostrRuntime } from "./runtime.js";
@@ -14,11 +21,17 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   const previous = process.env.OPENCLAW_STATE_DIR;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-"));
   process.env.OPENCLAW_STATE_DIR = dir;
+  resetPluginStateStoreForTests();
   setNostrRuntime({
     state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("nostr", {
+          ...options,
+          env: { ...process.env, OPENCLAW_STATE_DIR: dir },
+        }),
       resolveStateDir: (env, homedir) => {
         const stateEnv = env ?? process.env;
-        const override = stateEnv.OPENCLAW_STATE_DIR?.trim() || stateEnv.CLAWDBOT_STATE_DIR?.trim();
+        const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
         if (override) {
           return override;
         }
@@ -81,6 +94,31 @@ describe("nostr bus state store", () => {
 
       expect(stateA?.lastProcessedAt).toBe(1000);
       expect(stateB?.lastProcessedAt).toBe(2000);
+    });
+  });
+});
+
+describe("nostr profile state store", () => {
+  it("persists and reloads profile publish state", async () => {
+    await withTempStateDir(async () => {
+      await writeNostrProfileState({
+        accountId: "test-bot",
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "evt-1",
+        lastPublishResults: {
+          "wss://relay.example": "ok",
+        },
+      });
+
+      const state = await readNostrProfileState({ accountId: "test-bot" });
+      expect(state).toEqual({
+        version: 1,
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "evt-1",
+        lastPublishResults: {
+          "wss://relay.example": "ok",
+        },
+      });
     });
   });
 });

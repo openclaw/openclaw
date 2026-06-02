@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
 export type GatewayBindUrlResult =
   | {
       url: string;
@@ -8,6 +10,7 @@ export type GatewayBindUrlResult =
     }
   | null;
 
+/** Resolves the externally advertised gateway URL for non-loopback bind modes. */
 export function resolveGatewayBindUrl(params: {
   bind?: string;
   customBindHost?: string;
@@ -18,7 +21,7 @@ export function resolveGatewayBindUrl(params: {
 }): GatewayBindUrlResult {
   const bind = params.bind ?? "loopback";
   if (bind === "custom") {
-    const host = params.customBindHost?.trim();
+    const host = normalizeOptionalString(params.customBindHost);
     if (host) {
       return { url: `${params.scheme}://${host}:${params.port}`, source: "gateway.bind=custom" };
     }
@@ -41,5 +44,6 @@ export function resolveGatewayBindUrl(params: {
     return { error: "gateway.bind=lan set, but no private LAN IP was found." };
   }
 
+  // Loopback/default and unknown bind values do not need an advertised non-local URL.
   return null;
 }

@@ -1,7 +1,9 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -11,19 +13,22 @@ import {
 
 type DashboardOptions = {
   noOpen?: boolean;
+  yes?: boolean;
 };
 
-export async function dashboardCommand(
-  runtime: RuntimeEnv = defaultRuntime,
-  options: DashboardOptions = {},
-) {
+async function resolveDashboardTarget() {
   const snapshot = await readConfigFileSnapshot();
-  const cfg = snapshot.valid ? snapshot.config : {};
+  const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  const resolvedToken = await resolveGatewayAuthToken({
+    cfg,
+    env: process.env,
+    envFallback: "always",
+  });
+  const token = resolvedToken.token ?? "";
 
   // LAN URLs fail secure-context checks in browsers.
   // Coerce only lan->loopback and preserve other bind modes.
@@ -32,13 +37,60 @@ export async function dashboardCommand(
     bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
+    tlsEnabled: cfg.gateway?.tls?.enabled === true,
   });
+  // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
+  const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;
   // Prefer URL fragment to avoid leaking auth tokens via query params.
-  const dashboardUrl = token
+  const dashboardUrl = includeTokenInUrl
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  return {
+    port,
+    basePath,
+    links,
+    resolvedToken,
+    token,
+    includeTokenInUrl,
+    dashboardUrl,
+  };
+}
+
+export async function dashboardCommand(
+  runtime: RuntimeEnv = defaultRuntime,
+  options: DashboardOptions = {},
+) {
+  const initialTarget = await resolveDashboardTarget();
+  const readiness = await ensureGatewayReadyForOperation({
+    runtime,
+    operation: "open the dashboard",
+    yes: options.yes,
+    probeUrl: initialTarget.links.wsUrl,
+    readyWhenReachable: true,
+  });
+  if (!readiness.ready) {
+    return;
+  }
+
+  const target = readiness.recovered ? await resolveDashboardTarget() : initialTarget;
+  const { port, basePath, links, resolvedToken, token, includeTokenInUrl, dashboardUrl } = target;
+
+  runtime.log(`Dashboard URL: ${links.httpUrl}`);
+  if (includeTokenInUrl) {
+    runtime.log("Token auto-auth included in browser/clipboard URL.");
+  }
+  if (resolvedToken.secretRefConfigured && token) {
+    runtime.log(
+      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+    );
+  }
+  if (resolvedToken.unresolvedRefReason) {
+    runtime.log(`Token auto-auth unavailable: ${resolvedToken.unresolvedRefReason}`);
+    runtime.log(
+      "Set OPENCLAW_GATEWAY_TOKEN in this shell or resolve your secret provider, then rerun `openclaw dashboard`.",
+    );
+  }
 
   const copied = await copyToClipboard(dashboardUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
@@ -54,16 +106,27 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: token || undefined,
       });
     }
   } else {
-    hint = "Browser launch disabled (--no-open). Use the URL above.";
+    hint =
+      copied && includeTokenInUrl
+        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
+        : "Browser launch disabled (--no-open). Use the URL above.";
   }
+
+  const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;
+  const suppressNoOpenHint = options.noOpen === true && fallbackToManualAuth;
 
   if (opened) {
     runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
-  } else if (hint) {
+  } else if (hint && !suppressNoOpenHint) {
     runtime.log(hint);
+  }
+
+  if (fallbackToManualAuth) {
+    runtime.log(
+      "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate.",
+    );
   }
 }

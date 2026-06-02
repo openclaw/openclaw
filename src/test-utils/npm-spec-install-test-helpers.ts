@@ -1,13 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect } from "vitest";
-import type { SpawnResult } from "../process/exec.js";
+import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
 
-export type InstallResultLike = {
+type InstallResultLike = {
   ok: boolean;
   error?: string;
 };
 
-export type NpmPackMetadata = {
+type NpmPackMetadata = {
   id: string;
   name: string;
   version: string;
@@ -16,7 +18,14 @@ export type NpmPackMetadata = {
   shasum: string;
 };
 
-export function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
+type NpmViewMetadata = {
+  name: string;
+  version: string;
+  integrity?: string;
+  shasum?: string;
+};
+
+function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   return {
     code: 0,
     stdout,
@@ -25,6 +34,35 @@ export function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
     killed: false,
     termination: "exit",
   };
+}
+
+export function mockNpmViewMetadataResult(
+  run: {
+    mockImplementation: (
+      implementation: (
+        argv: string[],
+        optionsOrTimeout: number | CommandOptions,
+      ) => Promise<SpawnResult>,
+    ) => unknown;
+  },
+  metadata: NpmViewMetadata,
+) {
+  run.mockImplementation(async (argv) => {
+    if (argv[0] !== "npm" || argv[1] !== "view") {
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    }
+
+    return createSuccessfulSpawnResult(
+      JSON.stringify({
+        name: metadata.name,
+        version: metadata.version,
+        dist: {
+          integrity: metadata.integrity,
+          shasum: metadata.shasum,
+        },
+      }),
+    );
+  });
 }
 
 export async function expectUnsupportedNpmSpec(
@@ -40,10 +78,31 @@ export async function expectUnsupportedNpmSpec(
 }
 
 export function mockNpmPackMetadataResult(
-  run: { mockResolvedValue: (value: SpawnResult) => unknown },
+  run: {
+    mockImplementation: (
+      implementation: (
+        argv: string[],
+        optionsOrTimeout: number | CommandOptions,
+      ) => Promise<SpawnResult>,
+    ) => unknown;
+  },
   metadata: NpmPackMetadata,
 ) {
-  run.mockResolvedValue(createSuccessfulSpawnResult(JSON.stringify([metadata])));
+  run.mockImplementation(async (argv, optionsOrTimeout) => {
+    if (argv[0] !== "npm" || argv[1] !== "pack") {
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    }
+
+    const cwd =
+      typeof optionsOrTimeout === "object" && optionsOrTimeout !== null
+        ? optionsOrTimeout.cwd
+        : undefined;
+    if (cwd) {
+      fs.writeFileSync(path.join(cwd, metadata.filename), "");
+    }
+
+    return createSuccessfulSpawnResult(JSON.stringify([metadata]));
+  });
 }
 
 export function expectIntegrityDriftRejected(params: {
@@ -89,6 +148,6 @@ export async function expectInstallUsesIgnoreScripts(params: {
   }
   expectSingleNpmInstallIgnoreScriptsCall({
     calls: params.run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-    expectedCwd: result.targetDir,
+    expectedTargetDir: result.targetDir,
   });
 }

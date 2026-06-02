@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { getMe, ZaloApiError, type ZaloBotInfo, type ZaloFetch } from "./api.js";
 
 export type ZaloProbeResult = BaseProbeResult<string> & {

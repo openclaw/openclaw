@@ -1,20 +1,31 @@
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
-import { resolveGatewayDevMode } from "./daemon-install-helpers.js";
+import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
-  emitNodeRuntimeWarning,
-  type DaemonInstallWarnFn,
-} from "./daemon-install-runtime-warning.js";
+  emitDaemonInstallRuntimeWarning,
+  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
+} from "./daemon-install-plan.shared.js";
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 
-export type NodeInstallPlan = {
+type NodeInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
 };
+
+function buildNodeInstallEnvironmentValueSources(): Record<
+  string,
+  GatewayServiceEnvironmentValueSource | undefined
+> {
+  return {
+    OPENCLAW_GATEWAY_TOKEN: "file",
+  };
+}
 
 export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
@@ -29,13 +40,12 @@ export async function buildNodeInstallPlan(params: {
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
-  const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
-    params.nodePath ??
-    (await resolvePreferredNodePath({
-      env: params.env,
-      runtime: params.runtime,
-    }));
+  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    nodePath: params.nodePath,
+  });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
     port: params.port,
@@ -48,18 +58,29 @@ export async function buildNodeInstallPlan(params: {
     nodePath,
   });
 
-  await emitNodeRuntimeWarning({
+  await emitDaemonInstallRuntimeWarning({
     env: params.env,
     runtime: params.runtime,
-    nodeProgram: programArguments[0],
+    programArguments,
     warn: params.warn,
     title: "Node daemon runtime",
   });
 
-  const environment = buildNodeServiceEnvironment({ env: params.env });
+  const environment = buildNodeServiceEnvironment({
+    env: params.env,
+    // Match the gateway install path so supervised node services keep the chosen
+    // node toolchain on PATH for sibling binaries like npm/pnpm when needed.
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
+  });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,
   });
 
-  return { programArguments, workingDirectory, environment, description };
+  return {
+    programArguments,
+    workingDirectory,
+    environment,
+    environmentValueSources: buildNodeInstallEnvironmentValueSources(),
+    description,
+  };
 }

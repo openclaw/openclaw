@@ -1,55 +1,33 @@
+import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
-import { stripThinkingTags } from "../format.ts";
+import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
+import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
+import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
+function processMessageText(text: string, role: string): string {
+  const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
+  const withoutInternalContext = stripInternalRuntimeContext(text);
+  if (role === "assistant") {
+    return stripThinkingTags(withoutInternalContext);
+  }
+  return shouldStripInboundMetadata
+    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
+    : stripEnvelope(withoutInternalContext);
+}
+
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const shouldStripInboundMetadata = role.toLowerCase() === "user";
-  const content = m.content;
-  if (typeof content === "string") {
-    const processed =
-      role === "assistant"
-        ? stripThinkingTags(content)
-        : shouldStripInboundMetadata
-          ? stripInboundMetadata(stripEnvelope(content))
-          : stripEnvelope(content);
-    return processed;
+  const raw =
+    role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
+  if (!raw) {
+    return null;
   }
-  if (Array.isArray(content)) {
-    const parts = content
-      .map((p) => {
-        const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") {
-          return item.text;
-        }
-        return null;
-      })
-      .filter((v): v is string => typeof v === "string");
-    if (parts.length > 0) {
-      const joined = parts.join("\n");
-      const processed =
-        role === "assistant"
-          ? stripThinkingTags(joined)
-          : shouldStripInboundMetadata
-            ? stripInboundMetadata(stripEnvelope(joined))
-            : stripEnvelope(joined);
-      return processed;
-    }
-  }
-  if (typeof m.text === "string") {
-    const processed =
-      role === "assistant"
-        ? stripThinkingTags(m.text)
-        : shouldStripInboundMetadata
-          ? stripInboundMetadata(stripEnvelope(m.text))
-          : stripEnvelope(m.text);
-    return processed;
-  }
-  return null;
+  return processMessageText(raw, role);
 }
 
 export function extractTextCached(message: unknown): string | null {
@@ -92,7 +70,7 @@ export function extractThinking(message: unknown): string | null {
   const matches = [
     ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
   ];
-  const extracted = matches.map((m) => (m[1] ?? "").trim()).filter(Boolean);
+  const extracted = normalizeStringEntries(matches.map((mLocal) => mLocal[1] ?? ""));
   return extracted.length > 0 ? extracted.join("\n") : null;
 }
 

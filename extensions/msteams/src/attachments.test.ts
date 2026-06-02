@@ -1,26 +1,30 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildMSTeamsAttachmentPlaceholder,
-  buildMSTeamsGraphMessageUrls,
-  buildMSTeamsMediaPayload,
-  downloadMSTeamsAttachments,
-  downloadMSTeamsGraphMedia,
-} from "./attachments.js";
+import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
+import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
+import { downloadMSTeamsAttachments } from "./attachments/download.js";
+import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk")>();
-  return {
-    ...actual,
-    isPrivateIpAddress: () => false,
-  };
-});
+const saveResponseMediaMock = vi.hoisted(() =>
+  vi.fn(async (response: Response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get("content-type") ?? "image/png";
+    return {
+      id: contentType === "application/pdf" ? "saved.pdf" : "saved.png",
+      path: contentType === "application/pdf" ? "/tmp/saved.pdf" : "/tmp/saved.png",
+      size: 42,
+      contentType,
+    };
+  }),
+);
 
-/** Mock DNS resolver that always returns a public IP (for anti-SSRF validation in tests). */
-const publicResolveFn = async () => ({ address: "13.107.136.10" });
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => ({
+  saveResponseMedia: saveResponseMediaMock,
+}));
+
 const GRAPH_HOST = "graph.microsoft.com";
-const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const AZUREEDGE_HOST = "azureedge.net";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
@@ -28,121 +32,142 @@ const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathS
 const SAVED_PNG_PATH = "/tmp/saved.png";
 const SAVED_PDF_PATH = "/tmp/saved.pdf";
 const TEST_URL_IMAGE = createTestUrl("img");
-const TEST_URL_IMAGE_PNG = createTestUrl("img.png");
-const TEST_URL_IMAGE_1_PNG = createTestUrl("1.png");
-const TEST_URL_IMAGE_2_JPG = createTestUrl("2.jpg");
-const TEST_URL_PDF = createTestUrl("x.pdf");
-const TEST_URL_PDF_1 = createTestUrl("1.pdf");
-const TEST_URL_PDF_2 = createTestUrl("2.pdf");
-const TEST_URL_HTML_A = createTestUrl("a.png");
-const TEST_URL_HTML_B = createTestUrl("b.png");
 const TEST_URL_INLINE_IMAGE = createTestUrl("inline.png");
 const TEST_URL_DOC_PDF = createTestUrl("doc.pdf");
 const TEST_URL_FILE_DOWNLOAD = createTestUrl("dl");
 const TEST_URL_OUTSIDE_ALLOWLIST = "https://evil.test/img";
 const CONTENT_TYPE_IMAGE_PNG = "image/png";
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
+const CONTENT_TYPE_APPLICATION_ZIP = "application/zip";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
 const CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO = "application/vnd.microsoft.teams.file.download.info";
-const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECT_HOPS = 5;
 type RemoteMediaFetchParams = {
   url: string;
   maxBytes?: number;
   filePathHint?: string;
+  ssrfPolicy?: SsrFPolicy;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
-const detectMimeMock = vi.fn(async () => CONTENT_TYPE_IMAGE_PNG);
-const saveMediaBufferMock = vi.fn(async () => ({
-  path: SAVED_PNG_PATH,
-  contentType: CONTENT_TYPE_IMAGE_PNG,
-}));
-const readRemoteMediaResponse = async (
-  res: Response,
-  params: Pick<RemoteMediaFetchParams, "maxBytes" | "filePathHint">,
-) => {
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
+const detectMimeDefault = async () => CONTENT_TYPE_IMAGE_PNG;
+const saveMediaBufferDefault = async (
+  _buffer: Buffer,
+  contentType?: string,
+  _subdir?: string,
+  _maxBytes?: number,
+  _originalFilename?: string,
+) => ({
+  id: "saved.png",
+  path: contentType === CONTENT_TYPE_APPLICATION_PDF ? SAVED_PDF_PATH : SAVED_PNG_PATH,
+  size: Buffer.byteLength(PNG_BUFFER),
+  contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
+});
+const detectMimeMock = vi.fn(detectMimeDefault);
+const saveMediaBufferMock = vi.fn(saveMediaBufferDefault);
+function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
+  if (pattern.startsWith("*.")) {
+    const suffix = pattern.slice(2);
+    return suffix.length > 0 && hostname !== suffix && hostname.endsWith(`.${suffix}`);
   }
-  const buffer = Buffer.from(await res.arrayBuffer());
-  if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
-    throw new Error(`payload exceeds maxBytes ${params.maxBytes}`);
+  return hostname === pattern;
+}
+
+function isUrlAllowedBySsrfPolicy(url: string, policy?: SsrFPolicy): boolean {
+  if (!policy?.hostnameAllowlist || policy.hostnameAllowlist.length === 0) {
+    return true;
   }
-  return {
-    buffer,
-    contentType: res.headers.get("content-type") ?? undefined,
-    fileName: params.filePathHint,
-  };
-};
-const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+  const hostname = new URL(url).hostname.toLowerCase();
+  return policy.hostnameAllowlist.some((pattern) =>
+    isHostnameAllowedByPattern(hostname, pattern.toLowerCase()),
+  );
+}
+
+async function readRemoteMediaBufferWithRedirects(
+  params: RemoteMediaFetchParams,
+  requestInit?: RequestInit,
+) {
   const fetchFn = params.fetchImpl ?? fetch;
-  const res = await fetchFn(params.url);
-  return readRemoteMediaResponse(res, params);
+  let currentUrl = params.url;
+  for (let i = 0; i <= MAX_REDIRECT_HOPS; i += 1) {
+    if (!isUrlAllowedBySsrfPolicy(currentUrl, params.ssrfPolicy)) {
+      throw new Error(`Blocked hostname (not in allowlist): ${currentUrl}`);
+    }
+    const res = await fetchFn(currentUrl, { redirect: "manual", ...requestInit });
+    if (REDIRECT_STATUS_CODES.has(res.status)) {
+      const location = res.headers.get("location");
+      if (!location) {
+        throw new Error("redirect missing location");
+      }
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return readRemoteMediaResponse(res, params);
+  }
+  throw new Error("too many redirects");
+}
+
+const readRemoteMediaBufferMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+  return await readRemoteMediaBufferWithRedirects(params);
+});
+const saveRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+  const fetched = await readRemoteMediaBufferWithRedirects(params);
+  return await saveMediaBufferMock(
+    fetched.buffer,
+    fetched.contentType,
+    "inbound",
+    params.maxBytes,
+    params.filePathHint,
+  );
 });
 
 const runtimeStub = {
   media: {
-    detectMime: detectMimeMock as unknown as PluginRuntime["media"]["detectMime"],
+    detectMime: detectMimeMock,
   },
   channel: {
     media: {
-      fetchRemoteMedia:
-        fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-      saveMediaBuffer:
-        saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
+      saveRemoteMedia: saveRemoteMediaMock,
+      saveResponseMedia: saveResponseMediaMock,
+      saveMediaBuffer: saveMediaBufferMock,
     },
   },
 } as unknown as PluginRuntime;
 
 type DownloadAttachmentsParams = Parameters<typeof downloadMSTeamsAttachments>[0];
-type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
 type DownloadedMedia = Awaited<ReturnType<typeof downloadMSTeamsAttachments>>;
-type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
 type DownloadAttachmentsBuildOverrides = Partial<
-  Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts" | "resolveFn">
+  Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts">
 > &
-  Pick<DownloadAttachmentsParams, "allowHosts" | "resolveFn">;
+  Pick<DownloadAttachmentsParams, "allowHosts">;
 type DownloadAttachmentsNoFetchOverrides = Partial<
-  Omit<
-    DownloadAttachmentsParams,
-    "attachments" | "maxBytes" | "allowHosts" | "resolveFn" | "fetchFn"
-  >
+  Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts" | "fetchFn">
 > &
-  Pick<DownloadAttachmentsParams, "allowHosts" | "resolveFn">;
-type DownloadGraphMediaOverrides = Partial<
-  Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider" | "maxBytes">
->;
+  Pick<DownloadAttachmentsParams, "allowHosts">;
 type FetchFn = typeof fetch;
 type MSTeamsAttachments = DownloadAttachmentsParams["attachments"];
-type AttachmentPlaceholderInput = Parameters<typeof buildMSTeamsAttachmentPlaceholder>[0];
-type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrls>[0];
 type LabeledCase = { label: string };
 type FetchCallExpectation = { expectFetchCalled?: boolean };
 type DownloadedMediaExpectation = { path?: string; placeholder?: string };
-type MSTeamsMediaPayloadExpectation = {
-  firstPath: string;
-  paths: string[];
-  types: string[];
-};
 
-const DEFAULT_MESSAGE_URL = `https://${GRAPH_HOST}/v1.0/chats/19%3Achat/messages/123`;
-const GRAPH_SHARES_URL_PREFIX = `https://${GRAPH_HOST}/v1.0/shares/`;
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
-const DEFAULT_SHAREPOINT_ALLOW_HOSTS = [GRAPH_HOST, SHAREPOINT_HOST];
-const DEFAULT_SHARE_REFERENCE_URL = createUrlForHost(SHAREPOINT_HOST, "site/file");
-const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
-const formatImagePlaceholder = (count: number) =>
-  count > 1 ? `${MEDIA_PLACEHOLDER_IMAGE} (${count} images)` : MEDIA_PLACEHOLDER_IMAGE;
 const formatDocumentPlaceholder = (count: number) =>
   count > 1 ? `${MEDIA_PLACEHOLDER_DOCUMENT} (${count} files)` : MEDIA_PLACEHOLDER_DOCUMENT;
 const IMAGE_ATTACHMENT = { contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: TEST_URL_IMAGE };
 const PNG_BUFFER = Buffer.from("png");
 const PNG_BASE64 = PNG_BUFFER.toString("base64");
 const PDF_BUFFER = Buffer.from("pdf");
-const createTokenProvider = () => ({ getAccessToken: vi.fn(async () => "token") });
+const createTokenProvider = (
+  tokenOrResolver: string | ((scope: string) => string | Promise<string>) = "token",
+) => ({
+  getAccessToken: vi.fn(async (scope: string) =>
+    typeof tokenOrResolver === "function" ? await tokenOrResolver(scope) : tokenOrResolver,
+  ),
+});
 const asSingleItemArray = <T>(value: T) => [value];
 const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase => ({
   label,
@@ -172,34 +197,24 @@ const createTeamsFileDownloadInfoAttachments = (
       content: { downloadUrl, fileType },
     }),
   );
-const createMediaEntriesWithType = (contentType: string, ...paths: string[]) =>
-  paths.map((path) => ({ path, contentType }));
-const createHostedContentsWithType = (contentType: string, ...ids: string[]) =>
-  ids.map((id) => ({ id, contentType, contentBytes: PNG_BASE64 }));
-const createImageMediaEntries = (...paths: string[]) =>
-  createMediaEntriesWithType(CONTENT_TYPE_IMAGE_PNG, ...paths);
-const createHostedImageContents = (...ids: string[]) =>
-  createHostedContentsWithType(CONTENT_TYPE_IMAGE_PNG, ...ids);
-const createPdfResponse = (payload: Buffer | string = PDF_BUFFER) => {
-  return createBufferResponse(payload, CONTENT_TYPE_APPLICATION_PDF);
-};
-const createBufferResponse = (payload: Buffer | string, contentType: string, status = 200) => {
-  const raw = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+type BinaryPayload = Uint8Array | string;
+const createBufferResponse = (payload: BinaryPayload, contentType: string, status = 200) => {
+  const raw = typeof payload === "string" ? Buffer.from(payload) : payload;
   return new Response(new Uint8Array(raw), {
     status,
     headers: { "content-type": contentType },
   });
 };
-const createJsonResponse = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), { status });
 const createTextResponse = (body: string, status = 200) => new Response(body, { status });
-const createGraphCollectionResponse = (value: unknown[]) => createJsonResponse({ value });
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
 const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });
+const publicResolve = async () => ({ address: "13.107.136.10" });
 
 const createOkFetchMock = (contentType: string, payload = "png") =>
-  vi.fn(async () => createBufferResponse(payload, contentType));
+  vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    createBufferResponse(payload, contentType),
+  );
 const asFetchFn = (fetchFn: unknown): FetchFn => fetchFn as FetchFn;
 
 const buildDownloadParams = (
@@ -210,7 +225,7 @@ const buildDownloadParams = (
     attachments,
     maxBytes: DEFAULT_MAX_BYTES,
     allowHosts: DEFAULT_ALLOW_HOSTS,
-    resolveFn: publicResolveFn,
+    resolveFn: publicResolve,
     ...overrides,
   };
 };
@@ -248,25 +263,6 @@ const expectMockCallState = (mockFn: unknown, shouldCall: boolean) => {
   }
 };
 
-const DEFAULT_CHANNEL_TEAM_ID = "team-id";
-const DEFAULT_CHANNEL_ID = "chan-id";
-const createChannelGraphMessageUrlParams = (params: {
-  messageId: string;
-  replyToId?: string;
-  conversationId?: string;
-}) => ({
-  conversationType: "channel" as const,
-  ...params,
-  channelData: {
-    team: { id: DEFAULT_CHANNEL_TEAM_ID },
-    channel: { id: DEFAULT_CHANNEL_ID },
-  },
-});
-const buildExpectedChannelMessagePath = (params: { messageId: string; replyToId?: string }) =>
-  params.replyToId
-    ? `/teams/${DEFAULT_CHANNEL_TEAM_ID}/channels/${DEFAULT_CHANNEL_ID}/messages/${params.replyToId}/replies/${params.messageId}`
-    : `/teams/${DEFAULT_CHANNEL_TEAM_ID}/channels/${DEFAULT_CHANNEL_ID}/messages/${params.messageId}`;
-
 const expectAttachmentMediaLength = (media: DownloadedMedia, expectedLength: number) => {
   expect(media).toHaveLength(expectedLength);
 };
@@ -275,7 +271,9 @@ const expectSingleMedia = (media: DownloadedMedia, expected: DownloadedMediaExpe
   expectFirstMedia(media, expected);
 };
 const expectMediaBufferSaved = () => {
-  expect(saveMediaBufferMock).toHaveBeenCalled();
+  expect(
+    saveResponseMediaMock.mock.calls.length + saveMediaBufferMock.mock.calls.length,
+  ).toBeGreaterThan(0);
 };
 const expectFirstMedia = (media: DownloadedMedia, expected: DownloadedMediaExpectation) => {
   const first = media[0];
@@ -285,25 +283,6 @@ const expectFirstMedia = (media: DownloadedMedia, expected: DownloadedMediaExpec
   if (expected.placeholder !== undefined) {
     expect(first?.placeholder).toBe(expected.placeholder);
   }
-};
-const expectMSTeamsMediaPayload = (
-  payload: MSTeamsMediaPayload,
-  expected: MSTeamsMediaPayloadExpectation,
-) => {
-  expect(payload.MediaPath).toBe(expected.firstPath);
-  expect(payload.MediaUrl).toBe(expected.firstPath);
-  expect(payload.MediaPaths).toEqual(expected.paths);
-  expect(payload.MediaUrls).toEqual(expected.paths);
-  expect(payload.MediaTypes).toEqual(expected.types);
-};
-type AttachmentPlaceholderCase = LabeledCase & {
-  attachments: AttachmentPlaceholderInput;
-  expected: string;
-};
-type CountedAttachmentPlaceholderCaseDef = LabeledCase & {
-  attachments: AttachmentPlaceholderCase["attachments"];
-  count: number;
-  formatPlaceholder: (count: number) => string;
 };
 type AttachmentDownloadSuccessCase = LabeledCase & {
   attachments: MSTeamsAttachments;
@@ -322,77 +301,6 @@ type AttachmentAuthRetryCase = LabeledCase & {
   expectedMediaLength: number;
   expectTokenFetch: boolean;
 };
-type GraphUrlExpectationCase = LabeledCase & {
-  params: GraphMessageUrlParams;
-  expectedPath: string;
-};
-type ChannelGraphUrlCaseParams = {
-  messageId: string;
-  replyToId?: string;
-  conversationId?: string;
-};
-type GraphMediaDownloadResult = {
-  fetchMock: ReturnType<typeof createGraphFetchMock>;
-  media: Awaited<ReturnType<typeof downloadMSTeamsGraphMedia>>;
-};
-type GraphMediaSuccessCase = LabeledCase & {
-  buildOptions: () => GraphFetchMockOptions;
-  expectedLength: number;
-  assert?: (params: GraphMediaDownloadResult) => void;
-};
-const EMPTY_ATTACHMENT_PLACEHOLDER_CASES: AttachmentPlaceholderCase[] = [
-  withLabel("returns empty string when no attachments", { attachments: undefined, expected: "" }),
-  withLabel("returns empty string when attachments are empty", { attachments: [], expected: "" }),
-];
-const COUNTED_ATTACHMENT_PLACEHOLDER_CASE_DEFS: CountedAttachmentPlaceholderCaseDef[] = [
-  withLabel("returns image placeholder for one image attachment", {
-    attachments: createImageAttachments(TEST_URL_IMAGE_PNG),
-    count: 1,
-    formatPlaceholder: formatImagePlaceholder,
-  }),
-  withLabel("returns image placeholder with count for many image attachments", {
-    attachments: [
-      ...createImageAttachments(TEST_URL_IMAGE_1_PNG),
-      { contentType: "image/jpeg", contentUrl: TEST_URL_IMAGE_2_JPG },
-    ],
-    count: 2,
-    formatPlaceholder: formatImagePlaceholder,
-  }),
-  withLabel("treats Teams file.download.info image attachments as images", {
-    attachments: createTeamsFileDownloadInfoAttachments(),
-    count: 1,
-    formatPlaceholder: formatImagePlaceholder,
-  }),
-  withLabel("returns document placeholder for non-image attachments", {
-    attachments: createPdfAttachments(TEST_URL_PDF),
-    count: 1,
-    formatPlaceholder: formatDocumentPlaceholder,
-  }),
-  withLabel("returns document placeholder with count for many non-image attachments", {
-    attachments: createPdfAttachments(TEST_URL_PDF_1, TEST_URL_PDF_2),
-    count: 2,
-    formatPlaceholder: formatDocumentPlaceholder,
-  }),
-  withLabel("counts one inline image in html attachments", {
-    attachments: createHtmlImageAttachments([TEST_URL_HTML_A], "<p>hi</p>"),
-    count: 1,
-    formatPlaceholder: formatImagePlaceholder,
-  }),
-  withLabel("counts many inline images in html attachments", {
-    attachments: createHtmlImageAttachments([TEST_URL_HTML_A, TEST_URL_HTML_B]),
-    count: 2,
-    formatPlaceholder: formatImagePlaceholder,
-  }),
-];
-const ATTACHMENT_PLACEHOLDER_CASES: AttachmentPlaceholderCase[] = [
-  ...EMPTY_ATTACHMENT_PLACEHOLDER_CASES,
-  ...COUNTED_ATTACHMENT_PLACEHOLDER_CASE_DEFS.map((testCase) =>
-    withLabel(testCase.label, {
-      attachments: testCase.attachments,
-      expected: testCase.formatPlaceholder(testCase.count),
-    }),
-  ),
-];
 const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
   withLabel("downloads and stores image contentUrl attachments", {
     attachments: asSingleItemArray(IMAGE_ATTACHMENT),
@@ -413,7 +321,9 @@ const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
     beforeDownload: () => {
       detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
       saveMediaBufferMock.mockResolvedValueOnce({
+        id: "saved.pdf",
         path: SAVED_PDF_PATH,
+        size: Buffer.byteLength(PDF_BUFFER),
         contentType: CONTENT_TYPE_APPLICATION_PDF,
       });
     },
@@ -450,150 +360,6 @@ const ATTACHMENT_AUTH_RETRY_CASES: AttachmentAuthRetryCase[] = [
     expectTokenFetch: false,
   }),
 ];
-const GRAPH_MEDIA_SUCCESS_CASES: GraphMediaSuccessCase[] = [
-  withLabel("downloads hostedContents images", {
-    buildOptions: () => ({ hostedContents: createHostedImageContents("1") }),
-    expectedLength: 1,
-    assert: ({ fetchMock }) => {
-      expect(fetchMock).toHaveBeenCalled();
-      expectMediaBufferSaved();
-    },
-  }),
-  withLabel("merges SharePoint reference attachments with hosted content", {
-    buildOptions: () => {
-      return {
-        hostedContents: createHostedImageContents("hosted-1"),
-        ...buildDefaultShareReferenceGraphFetchOptions({
-          onShareRequest: () => createPdfResponse(),
-        }),
-      };
-    },
-    expectedLength: 2,
-  }),
-];
-const CHANNEL_GRAPH_URL_CASES: Array<LabeledCase & ChannelGraphUrlCaseParams> = [
-  withLabel("builds channel message urls", {
-    conversationId: "19:thread@thread.tacv2",
-    messageId: "123",
-  }),
-  withLabel("builds channel reply urls when replyToId is present", {
-    messageId: "reply-id",
-    replyToId: "root-id",
-  }),
-];
-const GRAPH_URL_EXPECTATION_CASES: GraphUrlExpectationCase[] = [
-  ...CHANNEL_GRAPH_URL_CASES.map<GraphUrlExpectationCase>(({ label, ...params }) =>
-    withLabel(label, {
-      params: createChannelGraphMessageUrlParams(params),
-      expectedPath: buildExpectedChannelMessagePath(params),
-    }),
-  ),
-  withLabel("builds chat message urls", {
-    params: {
-      conversationType: "groupChat" as const,
-      conversationId: "19:chat@thread.v2",
-      messageId: "456",
-    },
-    expectedPath: "/chats/19%3Achat%40thread.v2/messages/456",
-  }),
-];
-
-type GraphFetchMockOptions = {
-  hostedContents?: unknown[];
-  attachments?: unknown[];
-  messageAttachments?: unknown[];
-  onShareRequest?: (url: string) => Response | Promise<Response>;
-  onUnhandled?: (url: string) => Response | Promise<Response> | undefined;
-};
-
-const createReferenceAttachment = (shareUrl = DEFAULT_SHARE_REFERENCE_URL) => ({
-  id: "ref-1",
-  contentType: "reference",
-  contentUrl: shareUrl,
-  name: "report.pdf",
-});
-const buildShareReferenceGraphFetchOptions = (params: {
-  referenceAttachment: ReturnType<typeof createReferenceAttachment>;
-  onShareRequest?: GraphFetchMockOptions["onShareRequest"];
-  onUnhandled?: GraphFetchMockOptions["onUnhandled"];
-}) => ({
-  attachments: [params.referenceAttachment],
-  messageAttachments: [params.referenceAttachment],
-  ...(params.onShareRequest ? { onShareRequest: params.onShareRequest } : {}),
-  ...(params.onUnhandled ? { onUnhandled: params.onUnhandled } : {}),
-});
-const buildDefaultShareReferenceGraphFetchOptions = (
-  params: Omit<Parameters<typeof buildShareReferenceGraphFetchOptions>[0], "referenceAttachment">,
-) =>
-  buildShareReferenceGraphFetchOptions({
-    referenceAttachment: createReferenceAttachment(),
-    ...params,
-  });
-type GraphEndpointResponseHandler = {
-  suffix: string;
-  buildResponse: () => Response;
-};
-const createGraphEndpointResponseHandlers = (params: {
-  hostedContents: unknown[];
-  attachments: unknown[];
-  messageAttachments: unknown[];
-}): GraphEndpointResponseHandler[] => [
-  {
-    suffix: "/hostedContents",
-    buildResponse: () => createGraphCollectionResponse(params.hostedContents),
-  },
-  {
-    suffix: "/attachments",
-    buildResponse: () => createGraphCollectionResponse(params.attachments),
-  },
-  {
-    suffix: "/messages/123",
-    buildResponse: () => createJsonResponse({ attachments: params.messageAttachments }),
-  },
-];
-const resolveGraphEndpointResponse = (
-  url: string,
-  handlers: GraphEndpointResponseHandler[],
-): Response | undefined => {
-  const handler = handlers.find((entry) => url.endsWith(entry.suffix));
-  return handler ? handler.buildResponse() : undefined;
-};
-
-const createGraphFetchMock = (options: GraphFetchMockOptions = {}) => {
-  const hostedContents = options.hostedContents ?? [];
-  const attachments = options.attachments ?? [];
-  const messageAttachments = options.messageAttachments ?? [];
-  const endpointHandlers = createGraphEndpointResponseHandlers({
-    hostedContents,
-    attachments,
-    messageAttachments,
-  });
-  return vi.fn(async (url: string) => {
-    const endpointResponse = resolveGraphEndpointResponse(url, endpointHandlers);
-    if (endpointResponse) {
-      return endpointResponse;
-    }
-    if (url.startsWith(GRAPH_SHARES_URL_PREFIX) && options.onShareRequest) {
-      return options.onShareRequest(url);
-    }
-    const unhandled = options.onUnhandled ? await options.onUnhandled(url) : undefined;
-    return unhandled ?? createNotFoundResponse();
-  });
-};
-const downloadGraphMediaWithMockOptions = async (
-  options: GraphFetchMockOptions = {},
-  overrides: DownloadGraphMediaOverrides = {},
-): Promise<GraphMediaDownloadResult> => {
-  const fetchMock = createGraphFetchMock(options);
-  const media = await downloadMSTeamsGraphMedia({
-    messageUrl: DEFAULT_MESSAGE_URL,
-    tokenProvider: createTokenProvider(),
-    maxBytes: DEFAULT_MAX_BYTES,
-    fetchFn: asFetchFn(fetchMock),
-    ...overrides,
-  });
-  return { fetchMock, media };
-};
 const runAttachmentDownloadSuccessCase = async ({
   attachments,
   buildFetchFn,
@@ -624,31 +390,17 @@ const runAttachmentAuthRetryCase = async ({
   expectAttachmentMediaLength(media, expectedMediaLength);
   expectMockCallState(tokenProvider.getAccessToken, expectTokenFetch);
 };
-const runGraphMediaSuccessCase = async ({
-  buildOptions,
-  expectedLength,
-  assert,
-}: GraphMediaSuccessCase) => {
-  const { fetchMock, media } = await downloadGraphMediaWithMockOptions(buildOptions());
-  expectAttachmentMediaLength(media.media, expectedLength);
-  assert?.({ fetchMock, media });
-};
 
 describe("msteams attachments", () => {
   beforeEach(() => {
-    detectMimeMock.mockClear();
-    saveMediaBufferMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    detectMimeMock.mockReset();
+    detectMimeMock.mockImplementation(detectMimeDefault);
+    saveMediaBufferMock.mockReset();
+    saveMediaBufferMock.mockImplementation(saveMediaBufferDefault);
+    readRemoteMediaBufferMock.mockClear();
+    saveRemoteMediaMock.mockClear();
+    saveResponseMediaMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
-  });
-
-  describe("buildMSTeamsAttachmentPlaceholder", () => {
-    it.each<AttachmentPlaceholderCase>(ATTACHMENT_PLACEHOLDER_CASES)(
-      "$label",
-      ({ attachments, expected }) => {
-        expect(buildMSTeamsAttachmentPlaceholder(attachments)).toBe(expected);
-      },
-    );
   });
 
   describe("downloadMSTeamsAttachments", () => {
@@ -668,10 +420,139 @@ describe("msteams attachments", () => {
       expectMediaBufferSaved();
     });
 
+    it("stores every inline data:image base64 payload", async () => {
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([
+          ...createHtmlImageAttachments([
+            `data:image/png;base64,${PNG_BASE64}`,
+            `data:image/png;base64,${PNG_BASE64}`,
+          ]),
+        ]),
+      );
+
+      expectAttachmentMediaLength(media, 2);
+      expect(saveMediaBufferMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips inline data:image payloads whose bytes sniff as non-image", async () => {
+      detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_ZIP);
+
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([
+          ...createHtmlImageAttachments([`data:image/png;base64,${PNG_BASE64}`]),
+        ]),
+      );
+
+      expectAttachmentMediaLength(media, 0);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    });
+
     it.each<AttachmentAuthRetryCase>(ATTACHMENT_AUTH_RETRY_CASES)(
       "$label",
       runAttachmentAuthRetryCase,
     );
+
+    it("preserves auth fallback when dispatcher-mode fetch returns a redirect", async () => {
+      const redirectedUrl = createTestUrl("redirected.png");
+      const tokenProvider = createTokenProvider();
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        const hasAuth = Boolean(new Headers(opts?.headers).get("Authorization"));
+        if (url === TEST_URL_IMAGE) {
+          return hasAuth
+            ? createRedirectResponse(redirectedUrl)
+            : createTextResponse("unauthorized", 401);
+        }
+        if (url === redirectedUrl) {
+          return createBufferResponse(PNG_BUFFER, CONTENT_TYPE_IMAGE_PNG);
+        }
+        return createNotFoundResponse();
+      });
+
+      readRemoteMediaBufferMock.mockImplementationOnce(async (params) => {
+        return await readRemoteMediaBufferWithRedirects(params, {
+          dispatcher: {},
+        } as RequestInit);
+      });
+
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
+        { tokenProvider, authAllowHosts: [TEST_HOST] },
+      );
+
+      expectAttachmentMediaLength(media, 1);
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls.map(([calledUrl]) => calledUrl)).toContain(redirectedUrl);
+    });
+
+    it("continues scope fallback after non-auth failure and succeeds on later scope", async () => {
+      let authAttempt = 0;
+      const tokenProvider = createTokenProvider((scope) => `token:${scope}`);
+      const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
+        const auth = new Headers(opts?.headers).get("Authorization");
+        if (!auth) {
+          return createTextResponse("unauthorized", 401);
+        }
+        authAttempt += 1;
+        if (authAttempt === 1) {
+          return createTextResponse("upstream transient", 500);
+        }
+        return createBufferResponse(PNG_BUFFER, CONTENT_TYPE_IMAGE_PNG);
+      });
+
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
+        { tokenProvider, authAllowHosts: [TEST_HOST] },
+      );
+
+      expectAttachmentMediaLength(media, 1);
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not forward Authorization to redirects outside auth allowlist", async () => {
+      const tokenProvider = createTokenProvider("top-secret-token");
+      const graphFileUrl = createUrlForHost(GRAPH_HOST, "file");
+      const seen: Array<{ url: string; auth: string }> = [];
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        const auth = new Headers(opts?.headers).get("Authorization") ?? "";
+        seen.push({ url, auth });
+        if (url === graphFileUrl && !auth) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (url === graphFileUrl && auth) {
+          return new Response("", {
+            status: 302,
+            headers: { location: "https://attacker.azureedge.net/collect" },
+          });
+        }
+        if (url === "https://attacker.azureedge.net/collect") {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": CONTENT_TYPE_IMAGE_PNG },
+          });
+        }
+        return createNotFoundResponse();
+      });
+
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([{ contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: graphFileUrl }], {
+          tokenProvider,
+          allowHosts: [GRAPH_HOST, AZUREEDGE_HOST],
+          authAllowHosts: [GRAPH_HOST],
+          fetchFn: asFetchFn(fetchMock),
+        }),
+      );
+
+      expectSingleMedia(media);
+      const redirected = seen.find(
+        (entry) => entry.url === "https://attacker.azureedge.net/collect",
+      );
+      if (!redirected) {
+        throw new Error("expected Azure CDN redirect request to be observed");
+      }
+      expect(redirected.auth).toBe("");
+    });
 
     it("skips urls outside the allowlist", async () => {
       const fetchMock = vi.fn();
@@ -680,76 +561,178 @@ describe("msteams attachments", () => {
         fetchMock,
         {
           allowHosts: [GRAPH_HOST],
-          resolveFn: undefined,
         },
         { expectFetchCalled: false },
       );
 
       expectAttachmentMediaLength(media, 0);
     });
-  });
 
-  describe("buildMSTeamsGraphMessageUrls", () => {
-    it.each(GRAPH_URL_EXPECTATION_CASES)("$label", ({ params, expectedPath }) => {
-      const urls = buildMSTeamsGraphMessageUrls(params);
-      expect(urls[0]).toContain(expectedPath);
-    });
-  });
-
-  describe("downloadMSTeamsGraphMedia", () => {
-    it.each<GraphMediaSuccessCase>(GRAPH_MEDIA_SUCCESS_CASES)("$label", runGraphMediaSuccessCase);
-
-    it("blocks SharePoint redirects to hosts outside allowHosts", async () => {
-      const escapedUrl = "https://evil.example/internal.pdf";
-      fetchRemoteMediaMock.mockImplementationOnce(async (params) => {
-        const fetchFn = params.fetchImpl ?? fetch;
-        let currentUrl = params.url;
-        for (let i = 0; i < MAX_REDIRECT_HOPS; i += 1) {
-          const res = await fetchFn(currentUrl, { redirect: "manual" });
-          if (REDIRECT_STATUS_CODES.includes(res.status)) {
-            const location = res.headers.get("location");
-            if (!location) {
-              throw new Error("redirect missing location");
-            }
-            currentUrl = new URL(location, currentUrl).toString();
-            continue;
-          }
-          return readRemoteMediaResponse(res, params);
+    it("blocks redirects to non-https URLs", async () => {
+      const insecureUrl = "http://x/insecure.png";
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = resolveRequestUrl(input);
+        if (url === TEST_URL_IMAGE) {
+          return createRedirectResponse(insecureUrl);
         }
-        throw new Error("too many redirects");
+        if (url === insecureUrl) {
+          return createBufferResponse("insecure", CONTENT_TYPE_IMAGE_PNG);
+        }
+        return createNotFoundResponse();
       });
 
-      const { fetchMock, media } = await downloadGraphMediaWithMockOptions(
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
         {
-          ...buildDefaultShareReferenceGraphFetchOptions({
-            onShareRequest: () => createRedirectResponse(escapedUrl),
-            onUnhandled: (url) => {
-              if (url === escapedUrl) {
-                return createPdfResponse("should-not-be-fetched");
-              }
-              return undefined;
-            },
-          }),
-        },
-        {
-          allowHosts: DEFAULT_SHAREPOINT_ALLOW_HOSTS,
+          allowHosts: [TEST_HOST],
         },
       );
 
-      expectAttachmentMediaLength(media.media, 0);
-      const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
-      expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
-      expect(calledUrls).not.toContain(escapedUrl);
+      expectAttachmentMediaLength(media, 0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
-  });
 
-  describe("buildMSTeamsMediaPayload", () => {
-    it("returns single and multi-file fields", async () => {
-      const payload = buildMSTeamsMediaPayload(createImageMediaEntries("/tmp/a.png", "/tmp/b.png"));
-      expectMSTeamsMediaPayload(payload, {
-        firstPath: "/tmp/a.png",
-        paths: ["/tmp/a.png", "/tmp/b.png"],
-        types: [CONTENT_TYPE_IMAGE_PNG, CONTENT_TYPE_IMAGE_PNG],
+    describe("OneDrive/SharePoint shared links", () => {
+      const GRAPH_SHARES_URL_PREFIX = `https://${GRAPH_HOST}/v1.0/shares/`;
+      const DEFAULT_GRAPH_ALLOW_HOSTS = [GRAPH_HOST];
+      const PDF_PAYLOAD = Buffer.from("pdf-bytes");
+
+      const createGraphSharesFetchMock = () =>
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = resolveRequestUrl(input);
+          const auth = new Headers(init?.headers).get("Authorization");
+          if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
+            if (!auth) {
+              return createTextResponse("unauthorized", 401);
+            }
+            return createBufferResponse(PDF_PAYLOAD, CONTENT_TYPE_APPLICATION_PDF);
+          }
+          return createNotFoundResponse();
+        });
+
+      it.each([
+        {
+          label: "SharePoint URL",
+          contentUrl: "https://contoso.sharepoint.com/personal/user/Documents/report.pdf",
+        },
+        {
+          label: "OneDrive 1drv.ms URL",
+          contentUrl: "https://1drv.ms/b/s!AkxYabcdefg",
+        },
+        {
+          label: "OneDrive onedrive.live.com URL",
+          contentUrl: "https://onedrive.live.com/share/file",
+        },
+      ])("routes $label through Graph shares endpoint", async ({ contentUrl }) => {
+        const tokenProvider = createTokenProvider();
+        const fetchMock = createGraphSharesFetchMock();
+        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
+        saveMediaBufferMock.mockResolvedValueOnce({
+          id: "saved.pdf",
+          path: SAVED_PDF_PATH,
+          size: Buffer.byteLength(PDF_PAYLOAD),
+          contentType: CONTENT_TYPE_APPLICATION_PDF,
+        });
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(
+            [
+              {
+                contentType: "reference",
+                contentUrl,
+                name: "report.pdf",
+              },
+            ],
+            {
+              tokenProvider,
+              allowHosts: DEFAULT_GRAPH_ALLOW_HOSTS,
+              authAllowHosts: DEFAULT_GRAPH_ALLOW_HOSTS,
+              fetchFn: asFetchFn(fetchMock),
+            },
+          ),
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        expect(media[0]?.path).toBe(SAVED_PDF_PATH);
+        // The only host that should be fetched is graph.microsoft.com.
+        const calledUrls = (fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).map(
+          ([input]) => resolveRequestUrl(input),
+        );
+        expect(calledUrls.length).toBeGreaterThan(0);
+        for (const url of calledUrls) {
+          expect(url.startsWith(GRAPH_SHARES_URL_PREFIX)).toBe(true);
+        }
+        // Graph scope token was acquired for the shares fetch.
+        expect(tokenProvider.getAccessToken).toHaveBeenCalled();
+      });
+
+      it("falls through to direct fetch for non-shared-link URLs", async () => {
+        const directUrl = createTestUrl("direct.pdf");
+        const fetchMock = createOkFetchMock(CONTENT_TYPE_APPLICATION_PDF, "pdf");
+        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
+        saveMediaBufferMock.mockResolvedValueOnce({
+          id: "saved.pdf",
+          path: SAVED_PDF_PATH,
+          size: Buffer.byteLength(PDF_BUFFER),
+          contentType: CONTENT_TYPE_APPLICATION_PDF,
+        });
+
+        const media = await downloadAttachmentsWithFetch(
+          createPdfAttachments(directUrl),
+          fetchMock,
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        const calledUrls = (fetchMock.mock.calls as unknown[]).map((call) => {
+          const input = (call as [RequestInfo | URL])[0];
+          return resolveRequestUrl(input);
+        });
+        // Should have hit the original host, NOT graph shares.
+        expect(calledUrls).toContain(directUrl);
+        expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+      });
+    });
+
+    describe("error logging (issue #63396)", () => {
+      // Before this fix, fetch failures were swallowed by empty `catch {}`
+      // blocks, leaving operators with no signal that SharePoint downloads
+      // were silently failing on Node 24+. These tests pin the logger contract
+      // so the regression cannot return.
+      it("invokes logger.warn when a remote media download fails", async () => {
+        const logger = { warn: vi.fn(), error: vi.fn() };
+        const fetchMock = vi.fn(async () => createTextResponse("server error", 500));
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createImageAttachments(TEST_URL_IMAGE), {
+            fetchFn: asFetchFn(fetchMock),
+            logger,
+          }),
+        );
+
+        expectAttachmentMediaLength(media, 0);
+
+        // Migration inlines host + error into the message text — the structured
+        // meta object was being dropped by the logger formatter pre-migration.
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringMatching(/msteams attachment download failed.*host=.*error=.*HTTP 500/),
+        );
+      });
+
+      it("does not log when downloads succeed", async () => {
+        const logger = { warn: vi.fn(), error: vi.fn() };
+        const fetchMock = createOkFetchMock(CONTENT_TYPE_IMAGE_PNG);
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createImageAttachments(TEST_URL_IMAGE), {
+            fetchFn: asFetchFn(fetchMock),
+            logger,
+          }),
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        expect(logger.warn).not.toHaveBeenCalled();
+        expect(logger.error).not.toHaveBeenCalled();
       });
     });
   });

@@ -1,10 +1,9 @@
 import SwiftUI
 
 struct VoiceWakeToast: View {
-    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var colorScheme
 
     var command: String
-    var brighten: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -20,18 +19,10 @@ struct VoiceWakeToast: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(
-                            .white.opacity(self.contrast == .increased ? 0.5 : (self.brighten ? 0.24 : 0.18)),
-                            lineWidth: self.contrast == .increased ? 1.0 : 0.5
-                        )
-                }
-                .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
-        }
+        .proGlassSurface(
+            fill: self.colorScheme == .dark ? Color.white.opacity(0.055) : Color.white.opacity(0.72),
+            stroke: self.colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08),
+            radius: 14)
         .accessibilityLabel("Voice Wake triggered")
         .accessibilityValue("Command: \(self.command)")
     }

@@ -1,18 +1,28 @@
+import {
+  hasNonEmptyString as sharedHasNonEmptyString,
+  normalizeOptionalString,
+} from "../../../packages/normalization-core/src/string-coerce.js";
 import { MESSAGE_ACTION_TARGET_MODE } from "./message-action-spec.js";
 
-export const CHANNEL_TARGET_DESCRIPTION =
-  "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id";
+/** Shared non-empty string guard for message-action target params. */
+export const hasNonEmptyString = sharedHasNonEmptyString;
 
+/** Human-readable description for a single message-action destination. */
+export const CHANNEL_TARGET_DESCRIPTION =
+  "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id";
+
+/** Human-readable description for repeated message-action destinations. */
 export const CHANNEL_TARGETS_DESCRIPTION =
   "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.";
 
+/** Maps canonical `target` into the legacy field required by the action implementation. */
 export function applyTargetToParams(params: {
   action: string;
   args: Record<string, unknown>;
 }): void {
-  const target = typeof params.args.target === "string" ? params.args.target.trim() : "";
-  const hasLegacyTo = typeof params.args.to === "string";
-  const hasLegacyChannelId = typeof params.args.channelId === "string";
+  const target = normalizeOptionalString(params.args.target) ?? "";
+  const hasLegacyTo = hasNonEmptyString(params.args.to);
+  const hasLegacyChannelId = hasNonEmptyString(params.args.channelId);
   const mode =
     MESSAGE_ACTION_TARGET_MODE[params.action as keyof typeof MESSAGE_ACTION_TARGET_MODE] ?? "none";
 

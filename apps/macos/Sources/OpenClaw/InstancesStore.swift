@@ -62,14 +62,11 @@ final class InstancesStore {
         self.startCount += 1
         guard self.startCount == 1 else { return }
         guard self.task == nil else { return }
-        self.startGatewaySubscription()
-        self.task = Task.detached { [weak self] in
-            guard let self else { return }
-            await self.refresh()
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
-                await self.refresh()
-            }
+        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
+            self?.handle(push: push)
+        }
+        SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
+            await self?.refresh()
         }
     }
 
@@ -82,20 +79,6 @@ final class InstancesStore {
         self.task = nil
         self.eventTask?.cancel()
         self.eventTask = nil
-    }
-
-    private func startGatewaySubscription() {
-        self.eventTask?.cancel()
-        self.eventTask = Task { [weak self] in
-            guard let self else { return }
-            let stream = await GatewayConnection.shared.subscribe()
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in
-                    self?.handle(push: push)
-                }
-            }
-        }
     }
 
     private func handle(push: GatewayPush) {

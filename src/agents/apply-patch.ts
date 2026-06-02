@@ -1,9 +1,14 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
+import { root as fsRoot } from "../infra/fs-safe.js";
+import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
+import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import type { AgentTool } from "./runtime/index.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -49,12 +54,12 @@ export type ApplyPatchSummary = {
   deleted: string[];
 };
 
-export type ApplyPatchResult = {
+type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
 };
 
-export type ApplyPatchToolDetails = {
+type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
 };
 
@@ -147,6 +152,7 @@ export async function applyPatch(
 
     if (hunk.kind === "add") {
       const target = await resolvePatchPath(hunk.path, options);
+      await assertPatchParentPath(hunk.path, options);
       await ensureDir(target.resolved, fileOps);
       await fileOps.writeFile(target.resolved, hunk.contents);
       recordSummary(summary, seen, "added", target.display);
@@ -154,7 +160,7 @@ export async function applyPatch(
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, "unlink");
+      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
@@ -162,15 +168,28 @@ export async function applyPatch(
 
     const target = await resolvePatchPath(hunk.path, options);
     const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
-      readFile: (path) => fileOps.readFile(path),
+      readFile: (pathLocal) => fileOps.readFile(pathLocal),
     });
 
     if (hunk.movePath) {
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
+      await assertPatchParentPath(hunk.movePath, options);
       await ensureDir(moveTarget.resolved, fileOps);
-      await fileOps.writeFile(moveTarget.resolved, applied);
-      await fileOps.remove(target.resolved);
-      recordSummary(summary, seen, "modified", moveTarget.display);
+      const moveResolvesToSource =
+        path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
+      await fileOps.writeFile(
+        moveResolvesToSource ? target.resolved : moveTarget.resolved,
+        applied,
+      );
+      if (!moveResolvesToSource) {
+        await fileOps.remove(target.resolved);
+      }
+      recordSummary(
+        summary,
+        seen,
+        "modified",
+        moveResolvesToSource ? target.display : moveTarget.display,
+      );
     } else {
       await fileOps.writeFile(target.resolved, applied);
       recordSummary(summary, seen, "modified", target.display);
@@ -234,11 +253,57 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
     };
   }
+  const workspaceOnly = options.workspaceOnly !== false;
+  const rootPromise = workspaceOnly ? fsRoot(options.cwd) : undefined;
   return {
-    readFile: (filePath) => fs.readFile(filePath, "utf8"),
-    writeFile: (filePath, content) => fs.writeFile(filePath, content, "utf8"),
-    remove: (filePath) => fs.rm(filePath),
-    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+    readFile: async (filePath) => {
+      if (!workspaceOnly) {
+        return await fs.readFile(filePath, "utf8");
+      }
+      const opened = await openRootFile({
+        absolutePath: filePath,
+        rootPath: options.cwd,
+        boundaryLabel: "workspace root",
+      });
+      assertBoundaryRead(opened, filePath);
+      try {
+        return syncFs.readFileSync(opened.fd, "utf8");
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+    },
+    writeFile: async (filePath, content) => {
+      if (!workspaceOnly) {
+        await fs.writeFile(filePath, content, "utf8");
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      await (await rootPromise)?.write(relative, content, { encoding: "utf8" });
+    },
+    remove: async (filePath) => {
+      if (!workspaceOnly) {
+        await fs.rm(filePath);
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      await (await rootPromise)?.remove(relative);
+    },
+    mkdirp: async (dir) => {
+      if (!workspaceOnly) {
+        await fs.mkdir(dir, { recursive: true });
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
+      const root = await rootPromise;
+      if (!root) {
+        return;
+      }
+      if (relative === "" || relative === ".") {
+        await root.ensureRoot();
+        return;
+      }
+      await root.mkdir(relative);
+    },
   };
 }
 
@@ -250,27 +315,76 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
   await ops.mkdirp(parent);
 }
 
+async function assertPatchParentPath(filePath: string, options: ApplyPatchOptions) {
+  if (options.workspaceOnly === false || options.sandbox) {
+    return;
+  }
+  const parent = path.dirname(filePath);
+  if (!parent || parent === ".") {
+    return;
+  }
+  await assertSandboxPath({
+    filePath: parent,
+    cwd: options.cwd,
+    root: options.cwd,
+  });
+  await assertNoExistingParentAliases({
+    parentPath: resolvePathFromInput(parent, options.cwd),
+    rootPath: options.cwd,
+  });
+}
+
+async function assertNoExistingParentAliases(params: { parentPath: string; rootPath: string }) {
+  const rootPath = path.resolve(params.rootPath);
+  const parentPath = path.resolve(params.parentPath);
+  const relative = path.relative(rootPath, parentPath);
+  if (!relative || relative === "" || relativePathEscapesRoot(relative)) {
+    return;
+  }
+
+  let current = rootPath;
+  for (const segment of relative.split(path.sep)) {
+    if (!segment) {
+      continue;
+    }
+    current = path.join(current, segment);
+    const stat = await fs.lstat(current).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    });
+    if (!stat) {
+      return;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Path alias under sandbox root: ${path.relative(rootPath, current)}`);
+    }
+  }
+}
+
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
-  purpose: "readWrite" | "unlink" = "readWrite",
+  aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; display: string }> {
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
     });
-    if (options.workspaceOnly !== false) {
+    if (options.workspaceOnly !== false && resolved.hostPath) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
         root: options.cwd,
-        allowFinalSymlink: purpose === "unlink",
+        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
     }
     return {
-      resolved: resolved.hostPath,
-      display: resolved.relativePath || resolved.hostPath,
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      display: resolved.relativePath || resolved.containerPath,
     };
   }
 
@@ -281,18 +395,26 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.cwd,
-          allowFinalSymlink: purpose === "unlink",
+          allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+          allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
       ).resolved
-    : resolvePathFromCwd(filePath, options.cwd);
+    : resolvePathFromInput(filePath, options.cwd);
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
   };
 }
 
-function resolvePathFromCwd(filePath: string, cwd: string): string {
-  return path.normalize(resolveSandboxInputPath(filePath, cwd));
+function assertBoundaryRead(
+  opened: RootFileOpenResult,
+  targetPath: string,
+): asserts opened is Extract<RootFileOpenResult, { ok: true }> {
+  if (opened.ok) {
+    return;
+  }
+  const reason = opened.reason === "validation" ? "unsafe path" : "path not found";
+  throw new Error(`Failed boundary read for ${targetPath} (${reason})`);
 }
 
 function toDisplayPath(resolved: string, cwd: string): string {
@@ -300,10 +422,19 @@ function toDisplayPath(resolved: string, cwd: string): string {
   if (!relative || relative === "") {
     return path.basename(resolved);
   }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relativePathEscapesRoot(relative)) {
     return resolved;
   }
   return relative;
+}
+
+function relativePathEscapesRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
 }
 
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {
@@ -340,9 +471,13 @@ function checkPatchBoundariesLenient(lines: string[]): string[] {
     throw new Error(strictError);
   }
   const first = lines[0];
-  const last = lines[lines.length - 1];
-  if ((first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') && last.endsWith("EOF")) {
-    const inner = lines.slice(1, lines.length - 1);
+  const last = lines.at(-1);
+  if (
+    last &&
+    (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
+    last.endsWith("EOF")
+  ) {
+    const inner = lines.slice(1, -1);
     const innerError = checkPatchBoundariesStrict(inner);
     if (!innerError) {
       return inner;

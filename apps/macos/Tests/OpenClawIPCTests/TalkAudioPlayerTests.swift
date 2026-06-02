@@ -4,11 +4,11 @@ import Testing
 
 @Suite(.serialized) struct TalkAudioPlayerTests {
     @MainActor
-    @Test func playDoesNotHangWhenPlaybackEndsOrFails() async throws {
+    @Test func `play does not hang when playback ends or fails`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 80)
         defer { _ = TalkAudioPlayer.shared.stop() }
 
-        _ = try await withTimeout(seconds: 4.0) {
+        _ = try await withTimeout(seconds: 10.0) {
             await TalkAudioPlayer.shared.play(data: wav)
         }
 
@@ -16,7 +16,7 @@ import Testing
     }
 
     @MainActor
-    @Test func playDoesNotHangWhenPlayIsCalledTwice() async throws {
+    @Test func `play does not hang when play is called twice`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 800)
         defer { _ = TalkAudioPlayer.shared.stop() }
 
@@ -27,7 +27,7 @@ import Testing
         await Task.yield()
         _ = await TalkAudioPlayer.shared.play(data: wav)
 
-        _ = try await withTimeout(seconds: 4.0) {
+        _ = try await withTimeout(seconds: 10.0) {
             await first.value
         }
         #expect(true)

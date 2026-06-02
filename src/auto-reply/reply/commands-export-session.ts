@@ -1,16 +1,20 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+  migrateSessionEntries,
+  type FileEntry as SessionFileEntry,
+  type SessionEntry as AgentSessionEntry,
+  type SessionHeader,
+} from "../../agents/sessions/session-manager.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  isReplyPayload,
+  parseExportCommandOutputPath,
+  resolveExportCommandSessionTarget,
+} from "./commands-export-common.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -19,24 +23,56 @@ const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 
 
 interface SessionData {
   header: SessionHeader | null;
-  entries: PiSessionEntry[];
+  entries: AgentSessionEntry[];
   leafId: string | null;
   systemPrompt?: string;
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
-function loadTemplate(fileName: string): string {
-  return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
+type SessionExportJsonlWarning = {
+  code: "invalid-session-json" | "invalid-session-row";
+  row: number;
+};
+
+type SessionExportWarningSummary = {
+  code: SessionExportJsonlWarning["code"];
+  count: number;
+  rows: number[];
+};
+
+async function loadTemplate(fileName: string): Promise<string> {
+  return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
 }
 
-function generateHtml(sessionData: SessionData): string {
-  const template = loadTemplate("template.html");
-  const templateCss = loadTemplate("template.css");
-  const templateJs = loadTemplate("template.js");
-  const markedJs = loadTemplate(path.join("vendor", "marked.min.js"));
-  const hljsJs = loadTemplate(path.join("vendor", "highlight.min.js"));
+function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
+  let replaced = false;
+  const placeholder = new RegExp(
+    `(<(?:script|style)\\b(?=[^>]*\\bdata-openclaw-export-placeholder="${name}")[^>]*>)(</(?:script|style)>)`,
+  );
+  const next = template.replace(
+    placeholder,
+    (_match: string, openTag: string, closeTag: string) => {
+      replaced = true;
+      const finalOpenTag = openTag.replace(/\sdata-openclaw-export-placeholder="[^"]*"/, "");
+      return `${finalOpenTag}${value}${closeTag}`;
+    },
+  );
+  if (!replaced) {
+    throw new Error(`Export HTML template missing ${name} placeholder`);
+  }
+  return next;
+}
 
-  // Use pi-mono dark theme colors (matching their theme/dark.json)
+async function generateHtml(sessionData: SessionData): Promise<string> {
+  const [template, templateCss, templateJs, markedJs, hljsJs] = await Promise.all([
+    loadTemplate("template.html"),
+    loadTemplate("template.css"),
+    loadTemplate("template.js"),
+    loadTemplate(path.join("vendor", "marked.min.js")),
+    loadTemplate(path.join("vendor", "highlight.min.js")),
+  ]);
+
+  // Use the bundled dark session-export palette
   const themeVars = `
     --cyan: #00d7ff;
     --blue: #5f87ff;
@@ -90,66 +126,160 @@ function generateHtml(sessionData: SessionData): string {
     .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
     .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
-  return template
-    .replace("{{CSS}}", css)
-    .replace("{{JS}}", templateJs)
-    .replace("{{SESSION_DATA}}", sessionDataBase64)
-    .replace("{{MARKED_JS}}", markedJs)
-    .replace("{{HIGHLIGHT_JS}}", hljsJs);
+  return [
+    ["CSS", css],
+    ["SESSION_DATA", sessionDataBase64],
+    ["MARKED_JS", markedJs],
+    ["HIGHLIGHT_JS", hljsJs],
+    ["JS", templateJs],
+  ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
 }
 
-function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {
-  const normalized = commandBodyNormalized.trim();
-  if (normalized === "/export-session" || normalized === "/export") {
-    return {};
+function addCollisionSuffix(filePath: string, suffix: number): string {
+  const ext = path.extname(filePath);
+  const baseName = path.basename(filePath, ext);
+  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
+}
+
+async function writeNewDefaultExportFile(filePath: string, html: string): Promise<string> {
+  for (let suffix = 1; suffix <= 100; suffix++) {
+    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
+    try {
+      await fsp.writeFile(candidate, html, { encoding: "utf-8", flag: "wx" });
+      return candidate;
+    } catch (error) {
+      if (typeof error === "object" && error && "code" in error && error.code === "EEXIST") {
+        continue;
+      }
+      throw error;
+    }
   }
-  const args = normalized.replace(/^\/(export-session|export)\s*/, "").trim();
-  // First non-flag argument is the output path
-  const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
-  return { outputPath };
+  throw new Error(`Could not find an unused export filename near ${filePath}`);
+}
+
+function isSessionFileEntry(value: unknown): value is SessionFileEntry {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return false;
+  }
+  if (value.type !== "message") {
+    return true;
+  }
+  const message = value.message;
+  return isRecord(message) && typeof message.role === "string";
+}
+
+function parseSessionEntriesWithWarnings(content: string): {
+  entries: SessionFileEntry[];
+  warnings: SessionExportJsonlWarning[];
+} {
+  const entries: SessionFileEntry[] = [];
+  const warnings: SessionExportJsonlWarning[] = [];
+  const rows = content.split(/\r?\n/u);
+  for (const [index, rawLine] of rows.entries()) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (!isSessionFileEntry(parsed)) {
+        warnings.push({ code: "invalid-session-row", row: index + 1 });
+        continue;
+      }
+      entries.push(parsed);
+    } catch {
+      warnings.push({ code: "invalid-session-json", row: index + 1 });
+    }
+  }
+  return { entries, warnings };
+}
+
+function summarizeSessionExportWarnings(
+  warnings: SessionExportJsonlWarning[],
+): SessionExportWarningSummary[] {
+  const summaries = new Map<SessionExportJsonlWarning["code"], SessionExportWarningSummary>();
+  for (const warning of warnings) {
+    const summary = summaries.get(warning.code);
+    if (summary) {
+      summary.count += 1;
+      if (summary.rows.length < 20) {
+        summary.rows.push(warning.row);
+      }
+      continue;
+    }
+    summaries.set(warning.code, {
+      code: warning.code,
+      count: 1,
+      rows: [warning.row],
+    });
+  }
+  return [...summaries.values()];
+}
+
+function formatSkippedRows(count: number): string {
+  return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
+}
+
+function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
+  const rows = summary.rows.length > 0 ? ` rows ${summary.rows.join(", ")}` : "";
+  const verb = summary.count === 1 ? "was" : "were";
+  switch (summary.code) {
+    case "invalid-session-json":
+      return `⚠️ Skipped ${formatSkippedRows(summary.count)} that ${verb} not valid JSON.${rows}`;
+    case "invalid-session-row":
+      return summary.count === 1
+        ? `⚠️ Skipped ${formatSkippedRows(summary.count)} that was not a session entry.${rows}`
+        : `⚠️ Skipped ${formatSkippedRows(summary.count)} that were not session entries.${rows}`;
+  }
+  const unreachable: never = summary.code;
+  return unreachable;
+}
+
+async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+  header: SessionHeader | null;
+  entries: AgentSessionEntry[];
+  leafId: string | null;
+  warnings: SessionExportWarningSummary[];
+}> {
+  const raw = await fsp.readFile(sessionFile, "utf-8");
+  const { entries: fileEntries, warnings } = parseSessionEntriesWithWarnings(raw);
+  migrateSessionEntries(fileEntries);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter(
+    (entry): entry is AgentSessionEntry => entry.type !== "session",
+  );
+  const lastEntry = entries.at(-1);
+  const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
+  return { header, entries, leafId, warnings: summarizeSessionExportWarnings(warnings) };
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
-  const args = parseExportArgs(params.command.commandBodyNormalized);
-
-  // 1. Resolve session file
-  const sessionEntry = params.sessionEntry;
-  if (!sessionEntry?.sessionId) {
-    return { text: "❌ No active session found." };
+  const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
+    "export-session",
+    "export",
+  ]);
+  if (args.error) {
+    return { text: args.error };
   }
-
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[params.sessionKey] as SessionEntry | undefined;
-  if (!entry?.sessionId) {
-    return { text: `❌ Session not found: ${params.sessionKey}` };
+  const sessionTarget = resolveExportCommandSessionTarget(params);
+  if (isReplyPayload(sessionTarget)) {
+    return sessionTarget;
   }
+  const { entry, sessionFile } = sessionTarget;
 
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(
-      entry.sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: params.agentId, storePath }),
-    );
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve session file: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await pathExists(sessionFile))) {
     return { text: `❌ Session file not found: ${sessionFile}` };
   }
 
   // 2. Load session entries
-  const sessionManager = SessionManager.open(sessionFile);
-  const entries = sessionManager.getEntries();
-  const header = sessionManager.getHeader();
-  const leafId = sessionManager.getLeafId();
+  const { entries, header, leafId, warnings } = await readSessionDataFromTranscript(sessionFile);
 
   // 3. Build full system prompt
-  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle(params);
+  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
+    ...params,
+    sessionEntry: entry as HandleCommandsParams["sessionEntry"],
+  });
 
   // 4. Prepare session data
   const sessionData: SessionData = {
@@ -165,12 +295,12 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   };
 
   // 5. Generate HTML
-  const html = generateHtml(sessionData);
+  const html = await generateHtml(sessionData);
 
   // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
-  const outputPath = args.outputPath
+  let outputPath = args.outputPath
     ? path.resolve(
         args.outputPath.startsWith("~")
           ? args.outputPath.replace("~", process.env.HOME ?? "")
@@ -180,12 +310,14 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
 
   // Ensure directory exists
   const outputDir = path.dirname(outputPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+  await fsp.mkdir(outputDir, { recursive: true });
 
   // 7. Write file
-  fs.writeFileSync(outputPath, html, "utf-8");
+  if (args.outputPath) {
+    await fsp.writeFile(outputPath, html, "utf-8");
+  } else {
+    outputPath = await writeNewDefaultExportFile(outputPath, html);
+  }
 
   const relativePath = path.relative(params.workspaceDir, outputPath);
   const displayPath = relativePath.startsWith("..") ? outputPath : relativePath;
@@ -196,6 +328,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       "",
       `📄 File: ${displayPath}`,
       `📊 Entries: ${entries.length}`,
+      ...warnings.map(formatSessionExportWarning),
       `🧠 System prompt: ${systemPrompt.length.toLocaleString()} chars`,
       `🔧 Tools: ${tools.length}`,
     ].join("\n"),

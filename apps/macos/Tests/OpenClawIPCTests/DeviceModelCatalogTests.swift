@@ -1,10 +1,9 @@
 import Testing
 @testable import OpenClaw
 
-@Suite
 struct DeviceModelCatalogTests {
     @Test
-    func symbolPrefersModelIdentifierPrefixes() {
+    func `symbol prefers model identifier prefixes`() {
         #expect(DeviceModelCatalog
             .symbol(deviceFamily: "iPad", modelIdentifier: "iPad16,6", friendlyName: nil) == "ipad")
         #expect(DeviceModelCatalog
@@ -12,7 +11,7 @@ struct DeviceModelCatalogTests {
     }
 
     @Test
-    func symbolUsesFriendlyNameForMacVariants() {
+    func `symbol uses friendly name for mac variants`() {
         #expect(DeviceModelCatalog.symbol(
             deviceFamily: "Mac",
             modelIdentifier: "Mac99,1",
@@ -28,13 +27,13 @@ struct DeviceModelCatalogTests {
     }
 
     @Test
-    func symbolFallsBackToDeviceFamily() {
+    func `symbol falls back to device family`() {
         #expect(DeviceModelCatalog.symbol(deviceFamily: "Android", modelIdentifier: "", friendlyName: nil) == "android")
         #expect(DeviceModelCatalog.symbol(deviceFamily: "Linux", modelIdentifier: "", friendlyName: nil) == "cpu")
     }
 
     @Test
-    func presentationUsesBundledModelMappings() {
+    func `presentation uses bundled model mappings`() {
         let presentation = DeviceModelCatalog.presentation(deviceFamily: "iPhone", modelIdentifier: "iPhone1,1")
         #expect(presentation?.title == "iPhone")
     }

@@ -1,11 +1,22 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
-import { emitCliBanner } from "../banner.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
 import { resolveCliName } from "../cli-name.js";
+import {
+  applyCliExecutionStartupPresentation,
+  ensureCliExecutionBootstrap,
+  resolveCliExecutionStartupContext,
+} from "../command-execution-startup.js";
+import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
+import {
+  resolvePluginInstallInvalidConfigPolicy,
+  resolvePluginInstallPreactionRequest,
+} from "../plugin-install-config-policy.js";
+import { isCommandJsonOutputMode } from "./json-mode.js";
+import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -20,14 +31,17 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
-// Commands that need channel plugins loaded
-const PLUGIN_REQUIRED_COMMANDS = new Set([
-  "message",
-  "channels",
-  "directory",
-  "configure",
-  "onboard",
-]);
+function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
+  return (
+    resolvePluginInstallInvalidConfigPolicy(
+      resolvePluginInstallPreactionRequest({
+        actionCommand,
+        commandPath,
+        argv: process.argv,
+      }),
+    ) === "allow-plugin-recovery"
+  );
+}
 
 function getRootCommand(command: Command): Command {
   let current = command;
@@ -49,22 +63,55 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
+function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
+  if (!isParentDefaultHelpAction(actionCommand)) {
+    return false;
+  }
+  const { commandPath } = resolveCliArgvInvocation(argv);
+  const [primary, extra] = commandPath;
+  if (extra !== undefined || !primary) {
+    return false;
+  }
+  return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
+}
+
+function isGuidedConfigAction(actionCommand: Command): boolean {
+  return actionCommand.name() === "config" && !actionCommand.parent?.parent;
+}
+
+function isGuidedConfigCommandPath(commandPath: string[]): boolean {
+  const [primary, secondary, extra] = commandPath;
+  if (primary !== "config" || extra !== undefined) {
+    return false;
+  }
+  return (
+    secondary !== "get" &&
+    secondary !== "set" &&
+    secondary !== "patch" &&
+    secondary !== "unset" &&
+    secondary !== "file" &&
+    secondary !== "schema" &&
+    secondary !== "validate"
+  );
+}
+
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (hasHelpOrVersion(argv)) {
+    if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
       return;
     }
-    const commandPath = getCommandPath(argv, 2);
-    const hideBanner =
-      isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
-      commandPath[0] === "update" ||
-      commandPath[0] === "completion" ||
-      (commandPath[0] === "plugins" && commandPath[1] === "update");
-    if (!hideBanner) {
-      emitCliBanner(programVersion);
-    }
+    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
+      argv,
+      jsonOutputMode,
+      env: process.env,
+    });
+    await applyCliExecutionStartupPresentation({
+      startupPolicy,
+      version: programVersion,
+    });
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
     const cliLogLevel = getCliLogLevel(actionCommand);
@@ -74,15 +121,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (commandPath[0] === "doctor" || commandPath[0] === "completion") {
+    if (
+      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
-    const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: defaultRuntime, commandPath });
-    // Load plugins for commands that need channel access
-    if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
-      const { ensurePluginRegistryLoaded } = await import("../plugin-registry.js");
-      ensurePluginRegistryLoaded();
-    }
+    await ensureCliExecutionBootstrap({
+      runtime: defaultRuntime,
+      commandPath,
+      startupPolicy,
+      allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
+    });
   });
 }

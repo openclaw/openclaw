@@ -6,11 +6,14 @@ const {
   ensureGoInstalled,
   ensureTailscaledInstalled,
   getTailnetHostname,
+  getTestTailscaleBinaryOverride,
+  readTailscaleWhoisIdentity,
   enableTailscaleServe,
   disableTailscaleServe,
   ensureFunnel,
+  tailscaleFunnelStatusCoversPort,
 } = tailscale;
-const tailscaleBin = expect.stringMatching(/tailscale$/i);
+const tailscaleBin = "tailscale";
 
 function createRuntimeWithExitError() {
   return {
@@ -22,15 +25,38 @@ function createRuntimeWithExitError() {
   };
 }
 
+function expectExecCall(
+  exec: ReturnType<typeof vi.fn>,
+  callNumber: number,
+  command: string,
+  args: readonly string[],
+  options?: Record<string, unknown>,
+) {
+  const call = exec.mock.calls[callNumber - 1];
+  if (!call) {
+    throw new Error(`Expected exec call ${callNumber}`);
+  }
+  expect(call[0]).toBe(command);
+  expect(call[1]).toEqual(args);
+  if (options) {
+    expect(call).toHaveLength(3);
+    expect(call[2]).toEqual(options);
+  } else {
+    expect(call).toHaveLength(2);
+  }
+}
+
 describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY"]);
+    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY", "NODE_ENV", "VITEST"]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
+    process.env.VITEST ??= "true";
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     envSnapshot.restore();
     vi.restoreAllMocks();
   });
@@ -53,53 +79,100 @@ describe("tailscale helpers", () => {
     expect(host).toBe("100.2.2.2");
   });
 
-  it("ensureGoInstalled installs when missing and user agrees", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("no go")).mockResolvedValue({}); // brew install go
-    const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = createRuntimeWithExitError();
-    await ensureGoInstalled(exec as never, prompt, runtime);
-    expect(exec).toHaveBeenCalledWith("brew", ["install", "go"]);
+  it("parses noisy JSON output from tailscale status", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout:
+        'warning: stale state\n{"Self":{"DNSName":"noisy.tailnet.ts.net.","TailscaleIPs":["100.9.9.9"]}}\n',
+    });
+    const host = await getTailnetHostname(exec);
+    expect(host).toBe("noisy.tailnet.ts.net");
   });
 
-  it("ensureGoInstalled exits when missing and user declines install", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("no go"));
+  it("does not cache whois results when the cache expiry would exceed Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "first@example.com" } }),
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "second@example.com" } }),
+      });
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "first@example.com",
+    });
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "second@example.com",
+    });
+
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows the test binary override in explicit test environments", () => {
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/test-tailscale";
+    process.env.NODE_ENV = "test";
+    delete process.env.VITEST;
+
+    expect(getTestTailscaleBinaryOverride()).toBe("/tmp/test-tailscale");
+  });
+
+  it("ignores the test binary override outside test environments", () => {
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/attacker-tailscale";
+    process.env.NODE_ENV = "production";
+    delete process.env.VITEST;
+
+    expect(getTestTailscaleBinaryOverride()).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "ensureGoInstalled installs when missing and user agrees",
+      fn: ensureGoInstalled,
+      missingError: new Error("no go"),
+      installCommand: ["brew", ["install", "go"]] as const,
+      promptResult: true,
+    },
+    {
+      name: "ensureTailscaledInstalled installs when missing and user agrees",
+      fn: ensureTailscaledInstalled,
+      missingError: new Error("missing"),
+      installCommand: ["brew", ["install", "tailscale"]] as const,
+      promptResult: true,
+    },
+  ])("$name", async ({ fn, missingError, installCommand, promptResult }) => {
+    const exec = vi.fn().mockRejectedValueOnce(missingError).mockResolvedValue({});
+    const prompt = vi.fn().mockResolvedValue(promptResult);
+    const runtime = createRuntimeWithExitError();
+    await fn(exec as never, prompt, runtime);
+    expect(exec).toHaveBeenCalledWith(installCommand[0], installCommand[1]);
+  });
+
+  it.each([
+    {
+      name: "ensureGoInstalled exits when missing and user declines install",
+      fn: ensureGoInstalled,
+      missingError: new Error("no go"),
+      errorMessage: "Go is required to build tailscaled from source. Aborting.",
+    },
+    {
+      name: "ensureTailscaledInstalled exits when missing and user declines install",
+      fn: ensureTailscaledInstalled,
+      missingError: new Error("missing"),
+      errorMessage: "tailscaled is required for user-space funnel. Aborting.",
+    },
+  ])("$name", async ({ fn, missingError, errorMessage }) => {
+    const exec = vi.fn().mockRejectedValueOnce(missingError);
     const prompt = vi.fn().mockResolvedValue(false);
     const runtime = createRuntimeWithExitError();
 
-    await expect(ensureGoInstalled(exec as never, prompt, runtime)).rejects.toThrow("exit 1");
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Go is required to build tailscaled from source. Aborting.",
-    );
-    expect(exec).toHaveBeenCalledTimes(1);
-  });
-
-  it("ensureTailscaledInstalled installs when missing and user agrees", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("missing")).mockResolvedValue({});
-    const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = createRuntimeWithExitError();
-    await ensureTailscaledInstalled(exec as never, prompt, runtime);
-    expect(exec).toHaveBeenCalledWith("brew", ["install", "tailscale"]);
-  });
-
-  it("ensureTailscaledInstalled exits when missing and user declines install", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("missing"));
-    const prompt = vi.fn().mockResolvedValue(false);
-    const runtime = createRuntimeWithExitError();
-
-    await expect(ensureTailscaledInstalled(exec as never, prompt, runtime)).rejects.toThrow(
-      "exit 1",
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "tailscaled is required for user-space funnel. Aborting.",
-    );
+    await expect(fn(exec as never, prompt, runtime)).rejects.toThrow("exit 1");
+    expect(runtime.error).toHaveBeenCalledWith(errorMessage);
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
-    // 1. First attempt fails
-    // 2. Second attempt (sudo) succeeds
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("permission denied"))
@@ -107,19 +180,15 @@ describe("tailscale helpers", () => {
 
     await enableTailscaleServe(3000, exec as never);
 
-    expect(exec).toHaveBeenNthCalledWith(
-      1,
-      tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
-    );
-
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
-    );
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
@@ -128,10 +197,27 @@ describe("tailscale helpers", () => {
     await enableTailscaleServe(3000, exec as never);
 
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith(
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("enableTailscaleServe passes a configured service name", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await enableTailscaleServe(3000, exec as never, "svc:openclaw");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expectExecCall(
+      exec,
+      1,
       tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
+      ["serve", "--service=svc:openclaw", "--bg", "--yes", "3000"],
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 15_000,
+      },
     );
   });
 
@@ -144,19 +230,25 @@ describe("tailscale helpers", () => {
     await disableTailscaleServe(exec as never);
 
     expect(exec).toHaveBeenCalledTimes(2);
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "reset"]),
-      expect.any(Object),
-    );
+    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "reset"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("disableTailscaleServe disables only the configured service name", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await disableTailscaleServe(exec as never, "svc:openclaw");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("ensureFunnel uses fallback for enabling", async () => {
-    // Mock exec:
-    // 1. status (success)
-    // 2. enable (fails)
-    // 3. enable sudo (success)
     const exec = vi
       .fn()
       .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
@@ -172,28 +264,16 @@ describe("tailscale helpers", () => {
 
     await ensureFunnel(8080, exec as never, runtime, prompt);
 
-    // 1. status
-    expect(exec).toHaveBeenNthCalledWith(
-      1,
-      tailscaleBin,
-      expect.arrayContaining(["funnel", "status", "--json"]),
-    );
-
-    // 2. enable normal
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      tailscaleBin,
-      expect.arrayContaining(["funnel", "--yes", "--bg", "8080"]),
-      expect.any(Object),
-    );
-
-    // 3. enable sudo
-    expect(exec).toHaveBeenNthCalledWith(
-      3,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"]),
-      expect.any(Object),
-    );
+    expect(exec).toHaveBeenCalledTimes(3);
+    expectExecCall(exec, 1, tailscaleBin, ["funnel", "status", "--json"]);
+    expectExecCall(exec, 2, tailscaleBin, ["funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expectExecCall(exec, 3, "sudo", ["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
@@ -216,5 +296,94 @@ describe("tailscale helpers", () => {
     await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
 
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("tailscaleFunnelStatusCoversPort", () => {
+  function buildFunnelStatus(handlers: Record<string, { Proxy?: unknown }>) {
+    const host = "device.tailnet.ts.net:443";
+    return {
+      AllowFunnel: { [host]: true },
+      Web: {
+        [host]: { Handlers: handlers },
+      },
+    } as Record<string, unknown>;
+  }
+
+  it("matches a Funnel route whose Proxy is a full http URL", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "http://127.0.0.1:18789" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches a Proxy URL with a trailing slash", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "http://127.0.0.1:18789/" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches a Proxy URL with a longer path", () => {
+    const status = buildFunnelStatus({ "/api": { Proxy: "http://127.0.0.1:18789/api" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches the localhost loopback alias", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "http://localhost:18789" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches an IPv6 loopback Proxy", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "http://[::1]:18789" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches the documented https+insecure target scheme", () => {
+    const status = buildFunnelStatus({
+      "/": { Proxy: "https+insecure://localhost:18789" },
+    });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches https+insecure with a trailing path", () => {
+    const status = buildFunnelStatus({
+      "/api": { Proxy: "https+insecure://127.0.0.1:18789/api" },
+    });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("does not match https+insecure on a non-loopback host", () => {
+    const status = buildFunnelStatus({
+      "/": { Proxy: "https+insecure://10.0.0.5:18789" },
+    });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
+  });
+
+  it("matches a bare port form", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "18789" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("does not match a Proxy on a different port", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "http://127.0.0.1:9000" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
+  });
+
+  it("does not match a non-loopback host on the right port", () => {
+    const status = buildFunnelStatus({ "/": { Proxy: "http://10.0.0.5:18789" } });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
+  });
+
+  it("ignores Web entries whose host is not in AllowFunnel", () => {
+    const status = {
+      AllowFunnel: { "device.tailnet.ts.net:443": false },
+      Web: {
+        "device.tailnet.ts.net:443": {
+          Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+        },
+      },
+    } as Record<string, unknown>;
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
+  });
+
+  it("returns false on an empty status payload", () => {
+    expect(tailscaleFunnelStatusCoversPort({}, 18789)).toBe(false);
   });
 });

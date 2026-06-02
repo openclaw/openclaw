@@ -1,19 +1,21 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
+import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
+  ResetScope,
+  SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { onboardCommand } from "../../commands/onboard.js";
-import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -44,25 +46,72 @@ const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
   includeSkip: true,
 });
 
-export function registerOnboardCommand(program: Command) {
+type OnboardAuthFlag = {
+  readonly cliOption: string;
+  readonly description: string;
+  readonly optionKey: string;
+};
+
+function extractCliFlags(cliOption: string): string[] {
+  return cliOption
+    .split(/[ ,|]+/)
+    .filter((part) => part.startsWith("-"))
+    .map((part) => {
+      const equalsIndex = part.indexOf("=");
+      return equalsIndex === -1 ? part : part.slice(0, equalsIndex);
+    });
+}
+
+function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+  const seenCliFlags = new Set<string>();
+  const flags: OnboardAuthFlag[] = [];
+  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {
+    const cliFlags = extractCliFlags(flag.cliOption);
+    if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
+      continue;
+    }
+    for (const cliFlag of cliFlags) {
+      seenCliFlags.add(cliFlag);
+    }
+    flags.push(flag);
+  }
+  return flags;
+}
+
+const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
+
+function pickOnboardProviderAuthOptionValues(
+  opts: Record<string, unknown>,
+): Partial<Record<string, string | undefined>> {
+  return Object.fromEntries(
+    ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey] as string | undefined]),
+  );
+}
+
+export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
-    .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
-    .option("--reset", "Reset config + credentials + sessions + workspace before running wizard")
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
+    )
+    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
+    .option("--modern", "Use the conversational setup/repair assistant", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
       false,
     )
-    .option("--flow <flow>", "Wizard flow: quickstart|advanced|manual")
-    .option("--mode <mode>", "Wizard mode: local|remote")
+    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
+    .option("--mode <mode>", "Onboard mode: local|remote")
     .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
     .option(
       "--token-provider <id>",
@@ -74,10 +123,14 @@ export function registerOnboardCommand(program: Command) {
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
+    .option(
+      "--secret-input-mode <mode>",
+      "API key persistence mode: plaintext|ref (default: plaintext)",
+    )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
-  for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
+  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
@@ -88,12 +141,18 @@ export function registerOnboardCommand(program: Command) {
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
     )
+    .option("--custom-image-input", "Mark the custom provider model as image-capable")
+    .option("--custom-text-input", "Mark the custom provider model as text-only")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
+    .option(
+      "--gateway-token-ref-env <name>",
+      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
+    )
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
@@ -105,80 +164,96 @@ export function registerOnboardCommand(program: Command) {
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
+    .option("--skip-bootstrap", "Skip creating default agent workspace files")
+    .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
+    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
+    .option("--import-from <provider>", "Migration provider to run during onboarding")
+    .option("--import-source <path>", "Source agent home for --import-from")
+    .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
   command.action(async (opts, commandRuntime) => {
+    const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
+      if (opts.modern) {
+        const { runCrestodian } = await import("../../crestodian/crestodian.js");
+        await runCrestodian({
+          message: opts.nonInteractive ? "overview" : undefined,
+          yes: false,
+          json: Boolean(opts.json),
+          interactive: !opts.nonInteractive,
+        });
+        return;
+      }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
-      const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
-      await onboardCommand(
+      const gatewayPort = parsePort(opts.gatewayPort);
+      const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
+        opts as Record<string, unknown>,
+      );
+      const { setupWizardCommand } = await import("../../commands/onboard.js");
+      await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
-          flow: opts.flow as "quickstart" | "advanced" | "manual" | undefined,
+          flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
           authChoice: opts.authChoice as AuthChoice | undefined,
           tokenProvider: opts.tokenProvider as string | undefined,
           token: opts.token as string | undefined,
           tokenProfileId: opts.tokenProfileId as string | undefined,
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-          anthropicApiKey: opts.anthropicApiKey as string | undefined,
-          openaiApiKey: opts.openaiApiKey as string | undefined,
-          mistralApiKey: opts.mistralApiKey as string | undefined,
-          openrouterApiKey: opts.openrouterApiKey as string | undefined,
-          kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
-          aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
+          secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
+          ...providerAuthOptionValues,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
-          moonshotApiKey: opts.moonshotApiKey as string | undefined,
-          kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
-          geminiApiKey: opts.geminiApiKey as string | undefined,
-          zaiApiKey: opts.zaiApiKey as string | undefined,
-          xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
-          qianfanApiKey: opts.qianfanApiKey as string | undefined,
-          minimaxApiKey: opts.minimaxApiKey as string | undefined,
-          syntheticApiKey: opts.syntheticApiKey as string | undefined,
-          veniceApiKey: opts.veniceApiKey as string | undefined,
-          togetherApiKey: opts.togetherApiKey as string | undefined,
-          huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
-          opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
-          xaiApiKey: opts.xaiApiKey as string | undefined,
-          litellmApiKey: opts.litellmApiKey as string | undefined,
-          volcengineApiKey: opts.volcengineApiKey as string | undefined,
-          byteplusApiKey: opts.byteplusApiKey as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
-          gatewayPort:
-            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-              ? gatewayPort
-              : undefined,
+          customCompatibility: opts.customCompatibility as
+            | "openai"
+            | "openai-responses"
+            | "anthropic"
+            | undefined,
+          customImageInput:
+            opts.customTextInput === true
+              ? false
+              : opts.customImageInput === true
+                ? true
+                : undefined,
+          gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
+          gatewayTokenRefEnv: opts.gatewayTokenRefEnv as string | undefined,
           gatewayPassword: opts.gatewayPassword as string | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
           tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
           reset: Boolean(opts.reset),
+          resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
+          skipBootstrap: Boolean(opts.skipBootstrap),
+          skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),
+          suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
+          skipHooks: Boolean(opts.skipHooks),
           nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
+          importFrom: opts.importFrom as string | undefined,
+          importSource: opts.importSource as string | undefined,
+          importSecrets: Boolean(opts.importSecrets),
           json: Boolean(opts.json),
         },
         defaultRuntime,

@@ -1,148 +1,150 @@
-import type { Stats } from "node:fs";
-import { constants as fsConstants } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
+import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "./file-identity.js";
-import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
+import {
+  ensureDirectoryWithinRoot,
+  findExistingAncestor,
+  writeViaSiblingTempPath,
+} from "@openclaw/fs-safe/advanced";
+import { root as fsSafeRoot, type ReadResult } from "@openclaw/fs-safe/root";
 
-export type SafeOpenErrorCode =
-  | "invalid-path"
-  | "not-found"
-  | "symlink"
-  | "not-file"
-  | "path-mismatch"
-  | "too-large";
+export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
+export {
+  assertAbsolutePathInput,
+  canonicalPathFromExistingAncestor,
+  findExistingAncestor,
+  resolveAbsolutePathForRead,
+  resolveAbsolutePathForWrite,
+  type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
+  type ResolvedAbsolutePath,
+  type ResolvedWritableAbsolutePath,
+} from "@openclaw/fs-safe/advanced";
+export { isPathInside } from "@openclaw/fs-safe/path";
+export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
+export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
+export {
+  appendRegularFile,
+  appendRegularFileSync,
+  readRegularFile,
+  readRegularFileSync,
+  resolveRegularFileAppendFlags,
+  statRegularFile,
+  statRegularFileSync,
+} from "@openclaw/fs-safe/advanced";
+export {
+  openLocalFileSafely,
+  readLocalFileSafely,
+  resolveOpenedFileRealPathForHandle,
+  root,
+  type OpenResult,
+  type ReadResult,
+} from "@openclaw/fs-safe/root";
+export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+export {
+  readSecureFile,
+  type SecureFileReadOptions,
+  type SecureFileReadResult,
+} from "@openclaw/fs-safe/secure-file";
+export {
+  walkDirectory,
+  walkDirectorySync,
+  type WalkDirectoryEntry,
+  type WalkDirectoryOptions,
+  type WalkDirectoryResult,
+} from "@openclaw/fs-safe/walk";
+export { withTimeout } from "@openclaw/fs-safe/advanced";
 
-export class SafeOpenError extends Error {
-  code: SafeOpenErrorCode;
-
-  constructor(code: SafeOpenErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.code = code;
-    this.name = "SafeOpenError";
-  }
-}
-
-export type SafeOpenResult = {
-  handle: FileHandle;
-  realPath: string;
-  stat: Stats;
+export type ExternalFileWriteOptions = {
+  rootDir: string;
+  path: string;
+  write: (tempPath: string) => Promise<void>;
+  fallbackFileName?: string;
+  tempPrefix?: string;
 };
 
-export type SafeLocalReadResult = {
-  buffer: Buffer;
-  realPath: string;
-  stat: Stats;
+export type ExternalFileWriteResult = {
+  path: string;
 };
 
-const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
-
-const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
-
-async function openVerifiedLocalFile(filePath: string): Promise<SafeOpenResult> {
-  let handle: FileHandle;
-  try {
-    handle = await fs.open(filePath, OPEN_READ_FLAGS);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      throw new SafeOpenError("not-found", "file not found");
-    }
-    if (isSymlinkOpenError(err)) {
-      throw new SafeOpenError("symlink", "symlink open blocked", { cause: err });
-    }
-    throw err;
+export async function ensureAbsoluteDirectory(
+  dirPath: string,
+  options?: { scopeLabel?: string; mode?: number },
+): Promise<{ ok: true; path: string } | { ok: false; error: Error }> {
+  const absolutePath = path.resolve(dirPath);
+  const scopeLabel = options?.scopeLabel ?? "directory";
+  const existingAncestor = await findExistingAncestor(absolutePath);
+  if (!existingAncestor) {
+    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
   }
-
-  try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
-    if (lstat.isSymbolicLink()) {
-      throw new SafeOpenError("symlink", "symlink not allowed");
+  if (existingAncestor === absolutePath) {
+    try {
+      const stat = await fs.lstat(absolutePath);
+      if (!stat.isSymbolicLink() && stat.isDirectory()) {
+        return { ok: true, path: absolutePath };
+      }
+    } catch {
+      // Fall through to the uniform invalid-path result below.
     }
-    if (!stat.isFile()) {
-      throw new SafeOpenError("not-file", "not a file");
-    }
-    if (!sameFileIdentity(stat, lstat)) {
-      throw new SafeOpenError("path-mismatch", "path changed during read");
-    }
-
-    const realPath = await fs.realpath(filePath);
-    const realStat = await fs.stat(realPath);
-    if (!sameFileIdentity(stat, realStat)) {
-      throw new SafeOpenError("path-mismatch", "path mismatch");
-    }
-
-    return { handle, realPath, stat };
-  } catch (err) {
-    await handle.close().catch(() => {});
-    if (err instanceof SafeOpenError) {
-      throw err;
-    }
-    if (isNotFoundPathError(err)) {
-      throw new SafeOpenError("not-found", "file not found");
-    }
-    throw err;
+    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
   }
+  const result = await ensureDirectoryWithinRoot({
+    rootDir: existingAncestor,
+    requestedPath: path.relative(existingAncestor, absolutePath),
+    scopeLabel,
+    mode: options?.mode,
+  });
+  if (result.ok) {
+    return result;
+  }
+  return { ok: false, error: new Error(result.error) };
 }
 
-export async function openFileWithinRoot(params: {
+export async function writeExternalFileWithinRoot(
+  options: ExternalFileWriteOptions,
+): Promise<ExternalFileWriteResult> {
+  const targetPath = path.resolve(options.rootDir, options.path);
+  await writeViaSiblingTempPath({
+    rootDir: options.rootDir,
+    targetPath,
+    writeTemp: options.write,
+    fallbackFileName: options.fallbackFileName,
+    tempPrefix: options.tempPrefix,
+  });
+  return { path: targetPath };
+}
+
+/** @deprecated Use root(rootDir).read(relativePath, options). */
+export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
-}): Promise<SafeOpenResult> {
-  let rootReal: string;
-  try {
-    rootReal = await fs.realpath(params.rootDir);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      throw new SafeOpenError("not-found", "root dir not found");
-    }
-    throw err;
-  }
-  const rootWithSep = ensureTrailingSep(rootReal);
-  const resolved = path.resolve(rootWithSep, params.relativePath);
-  if (!isPathInside(rootWithSep, resolved)) {
-    throw new SafeOpenError("invalid-path", "path escapes root");
-  }
-
-  let opened: SafeOpenResult;
-  try {
-    opened = await openVerifiedLocalFile(resolved);
-  } catch (err) {
-    if (err instanceof SafeOpenError) {
-      if (err.code === "not-found") {
-        throw err;
-      }
-      throw new SafeOpenError("invalid-path", "path is not a regular file under root", {
-        cause: err,
-      });
-    }
-    throw err;
-  }
-
-  if (!isPathInside(rootWithSep, opened.realPath)) {
-    await opened.handle.close().catch(() => {});
-    throw new SafeOpenError("invalid-path", "path escapes root");
-  }
-
-  return opened;
+  rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
+  maxBytes?: number;
+}): Promise<ReadResult> {
+  const root = await fsSafeRoot(params.rootDir);
+  return await root.read(params.relativePath, {
+    hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
+    maxBytes: params.maxBytes,
+    nonBlockingRead: params.nonBlockingRead,
+    symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
+  });
 }
 
-export async function readLocalFileSafely(params: {
-  filePath: string;
-  maxBytes?: number;
-}): Promise<SafeLocalReadResult> {
-  const opened = await openVerifiedLocalFile(params.filePath);
-  try {
-    if (params.maxBytes !== undefined && opened.stat.size > params.maxBytes) {
-      throw new SafeOpenError(
-        "too-large",
-        `file exceeds limit of ${params.maxBytes} bytes (got ${opened.stat.size})`,
-      );
-    }
-    const buffer = await opened.handle.readFile();
-    return { buffer, realPath: opened.realPath, stat: opened.stat };
-  } finally {
-    await opened.handle.close().catch(() => {});
-  }
+/** @deprecated Use root(rootDir).write(relativePath, data, options). */
+export async function writeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+}): Promise<void> {
+  const root = await fsSafeRoot(params.rootDir);
+  await root.write(params.relativePath, params.data, {
+    encoding: params.encoding,
+    mkdir: params.mkdir,
+  });
 }

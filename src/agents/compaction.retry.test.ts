@@ -1,19 +1,31 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import * as piCodingAgent from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import * as agentSessions from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retryAsync } from "../infra/retry.js";
 
 // Mock the external generateSummary function
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
+  const actual = await vi.importActual<typeof agentSessions>("openclaw/plugin-sdk/agent-sessions");
   return {
     ...actual,
     generateSummary: vi.fn(),
   };
 });
 
-const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
+type MockGenerateSummaryCompat = (
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  signal?: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+) => Promise<string>;
+const mockGenerateSummaryCompat = mockGenerateSummary as unknown as MockGenerateSummaryCompat;
 
 describe("compaction retry integration", () => {
   beforeEach(() => {
@@ -24,10 +36,30 @@ describe("compaction retry integration", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
-  const testMessages = [
-    { role: "user", content: "Test message" },
-    { role: "assistant", content: "Test response" },
-  ] as unknown as AgentMessage[];
+  const testMessages: AgentMessage[] = [
+    {
+      role: "user",
+      content: "Test message",
+      timestamp: 1,
+    } satisfies UserMessage,
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Test response" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    } satisfies AssistantMessage,
+  ];
 
   const testModel = {
     provider: "anthropic",
@@ -35,7 +67,7 @@ describe("compaction retry integration", () => {
   } as unknown as NonNullable<ExtensionContext["model"]>;
 
   const invokeGenerateSummary = (signal = new AbortController().signal) =>
-    mockGenerateSummary(testMessages, testModel, 1000, "test-api-key", signal);
+    mockGenerateSummaryCompat(testMessages, testModel, 1000, "test-api-key", undefined, signal);
 
   const runSummaryRetry = (options: Parameters<typeof retryAsync>[1]) =>
     retryAsync(() => invokeGenerateSummary(), options);

@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClient } from "../gateway/client.js";
 import {
   ensureExecApprovals,
@@ -19,22 +21,32 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { runBrowserProxyCommand } from "./invoke-browser.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
+import {
+  buildSystemRunApprovalPlan,
+  handleSystemRunInvoke,
+  resolveEffectiveSystemRunExecPolicy,
+} from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
+  ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
+import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
+const execHostEnforced =
+  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
 const execHostFallbackAllowed =
-  process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
+  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
 const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
@@ -53,7 +65,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-export type NodeInvokeRequestPayload = {
+type NodeInvokeRequestPayload = {
   id: string;
   nodeId: string;
   command: string;
@@ -73,7 +85,7 @@ function isCmdExeInvocation(argv: string[]): boolean {
   if (!token) {
     return false;
   }
-  const base = path.win32.basename(token).toLowerCase();
+  const base = normalizeLowercaseStringOrEmpty(path.win32.basename(token));
   return base === "cmd.exe" || base === "cmd";
 }
 
@@ -90,6 +102,14 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
     return { text: raw, truncated: false };
   }
   return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+}
+
+export function decodeCapturedOutputBuffer(params: {
+  buffer: Buffer;
+  platform?: NodeJS.Platform;
+  windowsEncoding?: string | null;
+}): string {
+  return decodeWindowsOutputBuffer(params);
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -126,12 +146,13 @@ async function runCommand(
   timeoutMs: number | undefined,
 ): Promise<RunResult> {
   return await new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let outputLen = 0;
     let truncated = false;
     let timedOut = false;
     let settled = false;
+    const windowsEncoding = resolveWindowsConsoleEncoding();
 
     const child = spawn(argv[0], argv.slice(1), {
       cwd,
@@ -147,12 +168,11 @@ async function runCommand(
       }
       const remaining = OUTPUT_CAP - outputLen;
       const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      const str = slice.toString("utf8");
       outputLen += slice.length;
       if (target === "stdout") {
-        stdout += str;
+        stdoutChunks.push(slice);
       } else {
-        stderr += str;
+        stderrChunks.push(slice);
       }
       if (chunk.length > remaining) {
         truncated = true;
@@ -182,6 +202,14 @@ async function runCommand(
       if (timer) {
         clearTimeout(timer);
       }
+      const stdout = decodeCapturedOutputBuffer({
+        buffer: Buffer.concat(stdoutChunks),
+        windowsEncoding,
+      });
+      const stderr = decodeCapturedOutputBuffer({
+        buffer: Buffer.concat(stderrChunks),
+        windowsEncoding,
+      });
       resolve({
         exitCode,
         timedOut,
@@ -220,7 +248,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
     process.platform === "win32"
       ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
           .split(";")
-          .map((ext) => ext.toLowerCase())
+          .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
   for (const dir of resolveEnvPath(env)) {
     for (const ext of extensions) {
@@ -234,12 +262,12 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
 }
 
 async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
+  const bins = normalizeStringEntries(params.bins);
   const found: Record<string, string> = {};
   for (const bin of bins) {
-    const path = resolveExecutable(bin, env);
-    if (path) {
-      found[bin] = path;
+    const pathLocal = resolveExecutable(bin, env);
+    if (pathLocal) {
+      found[bin] = pathLocal;
     }
   }
   return { bins: found };
@@ -257,20 +285,11 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   return { ...payload, output: text };
 }
 
-async function sendExecFinishedEvent(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  runId: string;
-  cmdText: string;
-  result: {
-    stdout?: string;
-    stderr?: string;
-    error?: string | null;
-    exitCode?: number | null;
-    timedOut?: boolean;
-    success?: boolean;
-  };
-}) {
+async function sendExecFinishedEvent(
+  params: ExecFinishedEventParams & {
+    client: GatewayClient;
+  },
+) {
   const combined = [params.result.stdout, params.result.stderr, params.result.error]
     .filter(Boolean)
     .join("\n");
@@ -281,11 +300,12 @@ async function sendExecFinishedEvent(params: {
       sessionKey: params.sessionKey,
       runId: params.runId,
       host: "node",
-      command: params.cmdText,
+      command: params.commandText,
       exitCode: params.result.exitCode ?? undefined,
       timedOut: params.result.timedOut,
       success: params.result.success,
       output: combined,
+      suppressNotifyOnExit: params.suppressNotifyOnExit,
     }),
   );
 }
@@ -349,7 +369,7 @@ export async function handleInvoke(
   client: GatewayClient,
   skillBins: SkillBinsProvider,
 ) {
-  const command = String(frame.command ?? "");
+  const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();
@@ -363,7 +383,9 @@ export async function handleInvoke(
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
-      const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
+      const code = normalizeLowercaseStringOrEmpty(message).includes("timed out")
+        ? "TIMEOUT"
+        : "INVALID_REQUEST";
       await sendErrorResult(client, frame, code, message);
     }
     return;
@@ -410,10 +432,46 @@ export async function handleInvoke(
     return;
   }
 
-  if (command === "browser.proxy") {
+  try {
+    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
+    if (pluginNodeHostResult !== null) {
+      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
+      return;
+    }
+  } catch (err) {
+    await sendInvalidRequestResult(client, frame, err);
+    return;
+  }
+
+  if (command === "system.run.prepare") {
     try {
-      const payload = await runBrowserProxyCommand(frame.paramsJSON);
-      await sendRawPayloadResult(client, frame, payload);
+      const params = decodeParams<{
+        command?: unknown;
+        rawCommand?: unknown;
+        cwd?: unknown;
+        agentId?: unknown;
+        sessionKey?: unknown;
+      }>(frame.paramsJSON);
+      const prepared = buildSystemRunApprovalPlan(params);
+      if (!prepared.ok) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
+        return;
+      }
+      const { getRuntimeConfig } = await import("../config/config.js");
+      const execPolicy = resolveEffectiveSystemRunExecPolicy({
+        cfg: getRuntimeConfig(),
+        agentId: prepared.plan.agentId ?? undefined,
+        defaultSecurity: resolveExecSecurity(undefined),
+        defaultAsk: resolveExecAsk(undefined),
+        requireSocket: preferMacAppExecHost,
+      });
+      await sendJsonPayloadResult(client, frame, {
+        plan: prepared.plan,
+        execPolicy: {
+          security: execPolicy.security,
+          ask: execPolicy.ask,
+        },
+      });
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
     }
@@ -455,18 +513,23 @@ export async function handleInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
+    sendExecFinishedEvent: async ({ sessionKey, runId, commandText, result }) => {
+      await sendExecFinishedEvent({ client, sessionKey, runId, commandText, result });
     },
     preferMacAppExecHost,
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");
   }
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
+  }
 }
 
 export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
@@ -555,12 +618,20 @@ export function buildNodeInvokeResultParams(
   return params;
 }
 
+export function buildNodeEventParams(
+  event: string,
+  payload: unknown,
+): { event: string; payloadJSON: string | null } {
+  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
+  return {
+    event,
+    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
+  };
+}
+
 async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
   try {
-    await client.request("node.event", {
-      event,
-      payloadJSON: payload ? JSON.stringify(payload) : null,
-    });
+    await client.request("node.event", buildNodeEventParams(event, payload));
   } catch {
     // ignore: node events are best-effort
   }
