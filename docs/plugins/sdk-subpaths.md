@@ -367,7 +367,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/memory-core-host-events` | Deprecated compatibility alias; use `plugin-sdk/memory-host-events` |
     | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
     | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
-    | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers. Exports the memory rerank seam: `MemoryRerankProvider`, `MemoryRerankCandidate`, `MemoryRerankScore`, `registerMemoryRerankProvider`, `listMemoryRerankProviders` |
     | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
     | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
     | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
