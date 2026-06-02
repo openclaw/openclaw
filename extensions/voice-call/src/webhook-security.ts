@@ -215,7 +215,12 @@ function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
   return normalized.size > 0 ? normalized : null;
 }
 
-/** Reconstructs the provider-visible webhook URL used by signature verification. */
+/**
+ * Reconstructs the provider-visible webhook URL used by signature verification.
+ *
+ * Forwarded headers affect HMAC/EdDSA inputs, so they are trusted only when the
+ * deployment opts in through host allowlists, explicit trust, or proxy IP gates.
+ */
 export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlOptions): string {
   const { headers } = ctx;
 
@@ -424,11 +429,11 @@ function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
 }
 
 /**
- * Verify Telnyx webhook signature using Ed25519.
+ * Verifies Telnyx webhook signatures using Ed25519 and signed timestamp/body material.
  *
- * Telnyx signs `timestamp|payload` and provides:
- * - `telnyx-signature-ed25519` (Base64 signature)
- * - `telnyx-timestamp` (Unix seconds)
+ * Successful verification returns a stable request key for replay detection;
+ * development skip mode also emits a deterministic key so local retries follow
+ * the same dedupe path as signed callbacks.
  */
 export function verifyTelnyxWebhook(
   ctx: WebhookContext,
@@ -497,7 +502,12 @@ export function verifyTelnyxWebhook(
   }
 }
 
-/** Verifies Twilio callbacks, including proxy URL reconstruction and replay identity. */
+/**
+ * Verifies Twilio callbacks, including proxy URL reconstruction and replay identity.
+ *
+ * The replay key is derived from signed URL/body/signature material, not
+ * unsigned idempotency headers, so duplicate detection tracks verified input.
+ */
 export function verifyTwilioWebhook(
   ctx: WebhookContext,
   authToken: string,
@@ -772,7 +782,12 @@ function validatePlivoV3Signature(params: {
   return false;
 }
 
-/** Verifies Plivo callbacks, preferring V3 signatures and falling back to V2. */
+/**
+ * Verifies Plivo callbacks, preferring V3 signatures and falling back to V2.
+ *
+ * Replay keys mirror the accepted Plivo canonical string so reordered
+ * query/body parameters resolve to the same verified request identity.
+ */
 export function verifyPlivoWebhook(
   ctx: WebhookContext,
   authToken: string,
