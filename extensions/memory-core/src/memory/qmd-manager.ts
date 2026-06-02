@@ -288,7 +288,7 @@ function isQmdExecutableCommand(command: unknown): boolean {
     return false;
   }
   const normalized = command.replace(/\\/g, "/");
-  const commandName = normalized.split("/").filter(Boolean).at(-1) ?? normalized;
+  const commandName = normalized.split("/").findLast(Boolean) ?? normalized;
   return normalizeMcporterConfigKey(commandName) === "qmd";
 }
 
