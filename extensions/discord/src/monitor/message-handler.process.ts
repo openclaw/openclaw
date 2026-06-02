@@ -1,10 +1,6 @@
 import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
-import {
-  formatReasoningMessage,
-  resolveAckReaction,
-  resolveHumanDelayConfig,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -48,9 +44,14 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
+import {
+  discordTextHasBroadcastMention,
+  discordTextHasTargetedMention,
+  rewriteDiscordKnownMentions,
+} from "../mentions.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
@@ -713,6 +714,17 @@ async function processDiscordMessageInner(
             ) {
               return undefined;
             }
+            // Discord pings only on create, not edits: send a targeted mention fresh, but keep mixed @everyone/@here in place so the create cannot escalate a broadcast.
+            const rewrittenFinal = rewriteDiscordKnownMentions(previewFinalText, {
+              accountId,
+              mentionAliases: resolveDiscordAccount({ cfg, accountId }).config.mentionAliases,
+            });
+            if (
+              discordTextHasTargetedMention(rewrittenFinal) &&
+              !discordTextHasBroadcastMention(rewrittenFinal)
+            ) {
+              return undefined;
+            }
             return {
               content: previewFinalText,
               ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
@@ -971,8 +983,7 @@ async function processDiscordMessageInner(
           : undefined,
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();
-          const formattedText = payload?.text ? formatReasoningMessage(payload.text) : undefined;
-          await draftPreview.pushReasoningProgress(formattedText, {
+          await draftPreview.pushReasoningProgress(payload?.text, {
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },

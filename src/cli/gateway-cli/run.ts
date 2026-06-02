@@ -294,7 +294,7 @@ async function readGatewayStartupConfig(params: {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
-      readConfigFileSnapshotWithPluginMetadata().catch(() => null),
+      readConfigFileSnapshotWithPluginMetadata({ recoverSuspicious: true }).catch(() => null),
     );
   const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};
@@ -329,7 +329,9 @@ export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command
 function isGatewayLockError(err: unknown): err is GatewayLockError {
   return (
     err instanceof GatewayLockError ||
-    (!!err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
+    (Boolean(err) &&
+      typeof err === "object" &&
+      (err as { name?: string }).name === "GatewayLockError")
   );
 }
 
@@ -415,7 +417,11 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
   const now = params.now ?? Date.now;
   const sleep =
-    params.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+    params.sleep ??
+    (async (ms: number) =>
+      await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const probeHealth = params.probeHealth ?? ((probeParams) => probeGatewayHealthz(probeParams));
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS;
@@ -535,7 +541,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
     startupTrace,
   });
-  void maybeLogPendingControlUiBuild(cfg).catch((err) => {
+  void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
   const portOverride = parsePort(opts.port);

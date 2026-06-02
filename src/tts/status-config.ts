@@ -239,7 +239,7 @@ export function resolveStatusTtsSnapshot(params: {
   }
 
   const persona =
-    prefs.tts && Object.prototype.hasOwnProperty.call(prefs.tts, "persona")
+    prefs.tts && Object.hasOwn(prefs.tts, "persona")
       ? normalizeTtsPersonaId(prefs.tts.persona)
       : normalizeTtsPersonaId(raw.persona);
   const provider =

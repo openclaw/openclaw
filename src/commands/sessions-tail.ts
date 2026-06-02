@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -60,6 +62,15 @@ const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
+let followIntervalMsForTests: number | undefined;
+
+export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
+  followIntervalMsForTests = intervalMs;
+}
+
+function resolveFollowIntervalMs(): number {
+  return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
+}
 
 function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
@@ -308,8 +319,16 @@ function readFollowFileState(filePath: string): FollowFileState | null {
   }
 }
 
-function isRunningSession(entry: SessionEntry): boolean {
-  return entry.status === "running" || entry.acp?.state === "running";
+function isRunningSession(selection: TailSelection): boolean {
+  const cfg = getRuntimeConfig();
+  const acpMeta = readAcpSessionMeta({
+    sessionKey: resolveStoredSessionKeyForAgentStore({
+      cfg,
+      agentId: selection.agentId,
+      sessionKey: selection.key,
+    }),
+  });
+  return selection.entry.status === "running" || acpMeta?.state === "running";
 }
 
 function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): number {
@@ -351,7 +370,7 @@ function selectSessionsToTail(selections: TailSelection[], sessionKey?: string):
     return selections.filter((selection) => selection.key === requested);
   }
 
-  const running = selections.filter((selection) => isRunningSession(selection.entry));
+  const running = selections.filter((selection) => isRunningSession(selection));
   if (running.length > 0) {
     return running.toSorted(compareSelectionsByUpdatedAt);
   }
@@ -453,7 +472,7 @@ async function followSelections(
           );
         }
       }
-    }, FOLLOW_INTERVAL_MS);
+    }, resolveFollowIntervalMs());
 
     const stop = () => {
       clearInterval(interval);

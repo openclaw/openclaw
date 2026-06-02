@@ -1,21 +1,35 @@
-import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { qaLabUpTesting } from "../../scripts/qa-lab-up.js";
 
 describe("scripts/qa-lab-up", () => {
-  it("prints help before loading the Docker runtime", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/qa-lab-up.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 2_000,
-      },
-    );
+  it("prints help before loading the Docker runtime", async () => {
+    const loadRuntime = vi.fn(async () => {
+      throw new Error("runtime loaded");
+    });
+    const writeStdout = vi.fn();
 
-    expect(result.status).toBe(0);
-    expect(result.error).toBeUndefined();
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: pnpm qa:lab:up");
+    await expect(
+      qaLabUpTesting.runQaLabUp(["--help"], {
+        loadRuntime,
+        writeStdout,
+      }),
+    ).resolves.toBe(0);
+
+    expect(loadRuntime).not.toHaveBeenCalled();
+    expect(writeStdout).toHaveBeenCalledWith(expect.stringContaining("Usage: pnpm qa:lab:up"));
+  });
+
+  it("loads the Docker runtime only for non-help runs", async () => {
+    const runQaDockerUpCommand = vi.fn(async () => {});
+    const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand }));
+
+    await expect(
+      qaLabUpTesting.runQaLabUp(["--gateway-port", "4100"], { loadRuntime }),
+    ).resolves.toBe(0);
+
+    expect(loadRuntime).toHaveBeenCalledOnce();
+    expect(runQaDockerUpCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayPort: 4100 }),
+    );
   });
 });

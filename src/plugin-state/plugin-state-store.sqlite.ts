@@ -28,6 +28,7 @@ import {
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+let maxPluginStateEntriesPerPluginForTests: number | undefined;
 
 type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
@@ -402,7 +403,8 @@ function enforcePostRegisterLimits(params: {
     pluginId: params.pluginId,
     now: params.now,
   });
-  if (pluginCount <= MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+  const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
+  if (pluginCount <= maxPluginEntries) {
     return;
   }
 
@@ -412,20 +414,24 @@ function enforcePostRegisterLimits(params: {
     namespace: params.namespace,
     protectedKey: params.protectedKey,
     now: params.now,
-    limit: pluginCount - MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+    limit: pluginCount - maxPluginEntries,
   });
   const remainingPluginCount = countLivePluginStateEntries(params.store.db, {
     pluginId: params.pluginId,
     now: params.now,
   });
-  if (remainingPluginCount > MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+  if (remainingPluginCount > maxPluginEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",
-      message: `Plugin state for ${params.pluginId} exceeds the ${MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN} live row limit.`,
+      message: `Plugin state for ${params.pluginId} exceeds the ${maxPluginEntries} live row limit.`,
       path: params.store.path,
     });
   }
+}
+
+function resolveMaxPluginStateEntriesPerPlugin(): number {
+  return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
 export function pluginStateRegister(params: {
@@ -542,6 +548,75 @@ export function pluginStateRegisterIfAbsent(params: {
       "register",
       "PLUGIN_STATE_WRITE_FAILED",
       "Failed to register plugin state entry.",
+    );
+  }
+}
+
+export function pluginStateUpdate(params: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  maxEntries: number;
+  updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  try {
+    return runWriteTransaction(
+      "register",
+      (store) => {
+        const now = Date.now();
+        deleteExpiredPluginStateNamespaceEntries(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          now,
+        });
+        const existing = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now,
+        });
+        const next = params.updateValueJson(
+          existing ? parseStoredJson(existing.value_json, "lookup") : undefined,
+        );
+        if (!next) {
+          return false;
+        }
+        const expiresAt = resolvePluginStateExpiresAtMs({
+          ttlMs: next.ttlMs,
+          now,
+          operation: "register",
+          path: store.path,
+        });
+        upsertPluginStateEntry(
+          store.db,
+          bindPluginStateEntry({
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            key: params.key,
+            valueJson: next.valueJson,
+            createdAt: now,
+            expiresAt,
+          }),
+        );
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          maxEntries: params.maxEntries,
+          now,
+          protectedKey: params.key,
+        });
+        return true;
+      },
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "register",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to update plugin state entry.",
     );
   }
 }
@@ -706,6 +781,10 @@ export function clearPluginStateDatabaseForTests(): void {
     store.db,
     getPluginStateKysely(store.db).deleteFrom("plugin_state_entries"),
   );
+}
+
+export function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
+  maxPluginStateEntriesPerPluginForTests = value;
 }
 
 export function countPluginStateLiveEntries(pluginId: string): number {

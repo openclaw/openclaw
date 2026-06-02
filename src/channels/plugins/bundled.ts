@@ -255,12 +255,12 @@ function loadGeneratedBundledChannelModule(params: {
   metadata: BundledChannelPluginMetadata;
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
 }): unknown {
-  let modulePath = resolveGeneratedBundledChannelModulePath(params);
+  const modulePath = resolveGeneratedBundledChannelModulePath(params);
   if (!modulePath) {
     throw new Error(`missing generated module for bundled channel ${params.metadata.manifest.id}`);
   }
   const scanDir = resolveBundledChannelScanDir(params.rootScope);
-  let boundaryRoot = resolveBundledChannelBoundaryRoot({
+  const boundaryRoot = resolveBundledChannelBoundaryRoot({
     packageRoot: params.rootScope.packageRoot,
     ...(scanDir ? { pluginsDir: scanDir } : {}),
     metadata: params.metadata,

@@ -127,6 +127,32 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
+  it("keeps tool display labels primary for collapsed result rows with action details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:5a:call-5a",
+          name: "skill_workshop",
+          args: { detail: "create" },
+          inputText: '{\n  "detail": "create"\n}',
+          outputText: "Proposal created",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Skill Workshop",
+    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "create",
+    );
+    expect(summaryButton?.textContent).not.toContain("output");
+  });
+
   it("cleans connector copy from collapsed summaries without changing raw details", () => {
     const container = document.createElement("div");
     render(

@@ -157,7 +157,26 @@ function withTinyGitRepo(files: Record<string, string>, test: (cwd: string) => v
   }
 }
 
+function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => void): void {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
+  try {
+    for (const [file, source] of Object.entries(files)) {
+      const absolute = path.join(cwd, file);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, source);
+    }
+    test(cwd);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 describe("scripts/test-projects changed-target routing", () => {
+  beforeAll(() => {
+    buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"]);
+    findUnmatchedExplicitTestTargets(["test/vitest/vitest.shared.config.ts"], process.cwd());
+  });
+
   it("maps changed source files into scoped lane targets", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -676,7 +695,7 @@ describe("scripts/test-projects changed-target routing", () => {
     }
     files["src/runtime.consumer.test.ts"] = `${imports.join("\n")}\nvoid [${refs.join(", ")}];\n`;
 
-    withTinyGitRepo(files, (cwd) => {
+    withTinyFileTree(files, (cwd) => {
       plans = buildVitestRunPlans(
         Array.from({ length: 13 }, (_, index) => `src/runtime-${index}.ts`),
         cwd,
@@ -758,6 +777,33 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes MCP Docker E2E script targets instead of skipping changed tests", () => {
+    const targets = [
+      "scripts/e2e/mcp-channels-docker.sh",
+      "scripts/e2e/mcp-channels-docker-client.ts",
+      "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+      "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+      "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+      "scripts/mcp-code-mode-gateway-e2e.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(resolveChangedTestTargetPlan(targets)).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-observability.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "test/scripts/session-log-mentions.test.ts",
+        "src/agents/agent-bundle-mcp-runtime.test.ts",
+        "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+      ],
+    });
   });
 
   it("includes the isolated tooling shard for broad shell helper targets", () => {
@@ -2050,7 +2096,14 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-codex.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-runtime.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-support.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-tools.config.ts",
+      "test/vitest/vitest.extension-codex-surface.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",

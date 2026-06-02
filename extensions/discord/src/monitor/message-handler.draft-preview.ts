@@ -1,4 +1,4 @@
-import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
+import { EmbeddedBlockChunker, formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -6,6 +6,7 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
+  resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingProgressCommentary,
@@ -256,12 +257,14 @@ export function createDiscordDraftPreviewController(params: {
         );
       }
       const alreadyStarted = progressDraftGate.hasStarted;
+      let progressActive;
       if (shouldStartDiscordProgressDraftNow(line)) {
         await progressDraftGate.startNow();
+        progressActive = progressDraftGate.hasStarted;
       } else {
-        await progressDraftGate.noteWork();
+        progressActive = await progressDraftGate.noteWork();
       }
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
         await renderProgressDraft();
       }
     },
@@ -279,6 +282,13 @@ export function createDiscordDraftPreviewController(params: {
       if (!normalized) {
         return;
       }
+      const displayLine = formatReasoningProgressDisplayLine(
+        normalized,
+        resolveChannelProgressDraftMaxLineChars(params.discordConfig),
+      );
+      if (!displayLine) {
+        return;
+      }
       if (previewToolProgressEnabled && !previewToolProgressSuppressed) {
         const priorIndex =
           lastReasoningProgressLine === undefined
@@ -286,17 +296,16 @@ export function createDiscordDraftPreviewController(params: {
             : previewToolProgressLines.lastIndexOf(lastReasoningProgressLine);
         if (priorIndex >= 0) {
           previewToolProgressLines = [...previewToolProgressLines];
-          previewToolProgressLines[priorIndex] = normalized;
+          previewToolProgressLines[priorIndex] = displayLine;
         } else {
-          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+          previewToolProgressLines = [...previewToolProgressLines, displayLine].slice(
             -resolveChannelProgressDraftMaxLines(params.discordConfig),
           );
         }
-        lastReasoningProgressLine = normalized;
+        lastReasoningProgressLine = displayLine;
       }
-      const alreadyStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      const progressActive = await progressDraftGate.noteWork();
+      if (progressActive && progressDraftGate.hasStarted) {
         await renderProgressDraft();
       }
     },
@@ -464,9 +473,55 @@ export function createDiscordDraftPreviewController(params: {
 
 function normalizeReasoningProgressLine(text: string): string {
   return text
-    .replace(/^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i, "")
+    .replace(
+      /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
+      "",
+    )
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeReasoningProgressInput(text: string): string {
+  const normalized = normalizeReasoningProgressLine(text);
+  const italic = normalized.match(/^_(.*)_$/u);
+  return (italic?.[1] ?? normalized).trim();
+}
+
+function formatReasoningProgressDisplayLine(text: string, maxChars: number): string {
+  const normalizedText = normalizeReasoningProgressInput(text);
+  const formatted = normalizeReasoningProgressLine(formatReasoningMessage(normalizedText));
+  if (!formatted) {
+    return "";
+  }
+  if (Array.from(formatted).length <= maxChars) {
+    return formatted;
+  }
+  const italic = formatted.match(/^_(.*)_$/u);
+  if (!italic) {
+    return compactReasoningProgressDisplayLine(formatted, maxChars);
+  }
+  const body = compactReasoningProgressDisplayLine(italic[1] ?? "", Math.max(1, maxChars - 2));
+  return body ? `_${body}_` : "";
+}
+
+function compactReasoningProgressDisplayLine(text: string, maxChars: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 1) {
+    return "…";
+  }
+  const head = chars
+    .slice(0, maxChars - 1)
+    .join("")
+    .trimEnd();
+  const boundary = head.search(/\s+\S*$/u);
+  if (boundary > Math.floor(maxChars * 0.6)) {
+    return `${head.slice(0, boundary).trimEnd()}…`;
+  }
+  return `${head}…`;
 }
 
 function normalizeCommentaryProgressText(text: string): string {
@@ -511,7 +566,9 @@ function mergeReasoningProgressText(
 }
 
 function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i.test(text);
+  return /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i.test(
+    text,
+  );
 }
 
 function isEmptyDiscordProgressLine(line: string | ChannelProgressDraftLine | undefined): boolean {

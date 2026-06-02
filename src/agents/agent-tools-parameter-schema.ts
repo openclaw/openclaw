@@ -426,7 +426,7 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    if (!Object.hasOwn(record, key)) {
       return undefined;
     }
     current = record[key];

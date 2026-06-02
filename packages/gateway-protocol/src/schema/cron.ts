@@ -75,6 +75,8 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
 ]);
+const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
+const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
   Type.Literal("auth_permanent"),
@@ -215,8 +217,8 @@ export const CronPayloadPatchSchema = Type.Union([
 export const CronFailureAlertSchema = Type.Object(
   {
     after: Type.Optional(Type.Integer({ minimum: 1 })),
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-    to: Type.Optional(Type.String()),
+    channel: Type.Optional(CronAnnounceChannelSchema),
+    to: Type.Optional(NonBlankString),
     cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
     includeSkipped: Type.Optional(Type.Boolean()),
     mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
@@ -227,27 +229,55 @@ export const CronFailureAlertSchema = Type.Object(
 
 export const CronFailureDestinationSchema = Type.Object(
   {
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-    to: Type.Optional(Type.String()),
+    channel: Type.Optional(CronAnnounceChannelSchema),
+    to: Type.Optional(NonBlankString),
     accountId: Type.Optional(NonEmptyString),
     mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
   },
   { additionalProperties: false },
 );
 
+const CronFailureDestinationPatchSchema = Type.Object(
+  {
+    channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+    to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
+    accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    mode: Type.Optional(
+      Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const CronCompletionDestinationSchema = Type.Object(
+  {
+    mode: Type.Literal("webhook"),
+    to: NonBlankString,
+  },
+  { additionalProperties: false },
+);
+
 const CronDeliverySharedProperties = {
-  channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+  channel: Type.Optional(CronAnnounceChannelSchema),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
 };
 
+const CronDeliveryPatchSharedProperties = {
+  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
+  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  bestEffort: Type.Optional(Type.Boolean()),
+  failureDestination: Type.Optional(Type.Union([CronFailureDestinationPatchSchema, Type.Null()])),
+};
+
 const CronDeliveryNoopSchema = Type.Object(
   {
     mode: Type.Literal("none"),
     ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    to: Type.Optional(NonBlankString),
   },
   { additionalProperties: false },
 );
@@ -256,7 +286,8 @@ const CronDeliveryAnnounceSchema = Type.Object(
   {
     mode: Type.Literal("announce"),
     ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    completionDestination: Type.Optional(CronCompletionDestinationSchema),
+    to: Type.Optional(NonBlankString),
   },
   { additionalProperties: false },
 );
@@ -265,7 +296,7 @@ const CronDeliveryWebhookSchema = Type.Object(
   {
     mode: Type.Literal("webhook"),
     ...CronDeliverySharedProperties,
-    to: NonEmptyString,
+    to: NonBlankString,
   },
   { additionalProperties: false },
 );
@@ -281,8 +312,11 @@ export const CronDeliveryPatchSchema = Type.Object(
     mode: Type.Optional(
       Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
     ),
-    ...CronDeliverySharedProperties,
-    to: Type.Optional(Type.String()),
+    ...CronDeliveryPatchSharedProperties,
+    completionDestination: Type.Optional(
+      Type.Union([CronCompletionDestinationSchema, Type.Null()]),
+    ),
+    to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
   },
   { additionalProperties: false },
 );

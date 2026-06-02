@@ -88,7 +88,7 @@ export type SerializedEventPayload = {
 };
 
 export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
-  if (!payload) {
+  if (payload === undefined) {
     return null;
   }
   const json = JSON.stringify(payload);
@@ -479,7 +479,7 @@ export class NodeRegistry {
     }
     const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
-    let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
+    let match: { key: string; event: AuthorizedSystemRunEvent } | null;
     if (params.runId) {
       match = this.matchAuthorizedSystemRunEvent({
         nodeId: params.nodeId,

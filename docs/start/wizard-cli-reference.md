@@ -182,7 +182,7 @@ What you set:
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
   <Accordion title="MiniMax">
-    Config is auto-written. Hosted default is `MiniMax-M2.7`; API-key setup uses
+    Config is auto-written. Hosted default is `MiniMax-M3`; API-key setup uses
     `minimax/...`, and OAuth setup uses `minimax-portal/...`.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
@@ -219,7 +219,7 @@ What you set:
     - `--custom-model-id`
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
-    - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+    - `--custom-compatibility <openai|openai-responses|anthropic>` (optional; default `openai`)
     - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
 
   </Accordion>

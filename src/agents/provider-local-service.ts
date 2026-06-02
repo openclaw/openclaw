@@ -251,12 +251,12 @@ async function startAndWaitForLocalService(params: {
   const child = managed.process;
   managed.lastExit = undefined;
   child.unref();
-  child.once("exit", (code, signal) => {
+  child.once("exit", (code, signalLocal) => {
     log.info(
-      `${provider} local service exited: ${signal ? `signal=${signal}` : `code=${code ?? 0}`}`,
+      `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
     if (managed.process === child) {
-      managed.lastExit = { code, signal };
+      managed.lastExit = { code, signal: signalLocal };
       managed.process = undefined;
     }
   });
@@ -411,7 +411,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
       },
       (error: unknown) => {
         cleanup();
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -420,7 +420,6 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    let timeout: NodeJS.Timeout;
     const cleanup = () => signal?.removeEventListener("abort", onAbort);
     const onDone = () => {
       cleanup();
@@ -431,7 +430,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       cleanup();
       reject(toAbortError(signal));
     };
-    timeout = setTimeout(onDone, ms);
+    const timeout: NodeJS.Timeout = setTimeout(onDone, ms);
     timeout.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -478,7 +477,6 @@ function waitForChildExit(
   }
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    let timeout: NodeJS.Timeout;
     const cleanup = () => {
       clearTimeout(timeout);
       child.off("exit", onExit);
@@ -493,7 +491,7 @@ function waitForChildExit(
       cleanup();
       reject(toAbortError(signal));
     };
-    timeout = setTimeout(finish, timeoutMs);
+    const timeout: NodeJS.Timeout = setTimeout(finish, timeoutMs);
     timeout.unref?.();
     child.once("exit", onExit);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -504,4 +502,18 @@ export function hasLocalServiceProcessExited(
   child: Pick<ChildProcess, "exitCode" | "signalCode">,
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -10,6 +10,7 @@ import {
   pluginStateLookup,
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
+  pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
 import type {
   OpenKeyedStoreOptions,
@@ -38,6 +39,7 @@ export {
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   probePluginStateStore,
+  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -278,6 +280,27 @@ function createKeyedStoreForPluginId<T>(
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
     },
+    async update(key, updateValue, opts) {
+      const normalizedKey = validateKey(key, "register");
+      return pluginStateUpdate({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        maxEntries,
+        updateValueJson: (current) => {
+          const next = updateValue(current as T | undefined);
+          if (next === undefined) {
+            return undefined;
+          }
+          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
+          return {
+            valueJson: params.valueJson,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+          };
+        },
+        ...(env ? { env } : {}),
+      });
+    },
     async lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -351,6 +374,27 @@ function createSyncKeyedStoreForPluginId<T>(
         maxEntries,
         ...(env ? { env } : {}),
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+      });
+    },
+    update(key, updateValue, opts) {
+      const normalizedKey = validateKey(key, "register");
+      return pluginStateUpdate({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        maxEntries,
+        updateValueJson: (current) => {
+          const next = updateValue(current as T | undefined);
+          if (next === undefined) {
+            return undefined;
+          }
+          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
+          return {
+            valueJson: params.valueJson,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+          };
+        },
+        ...(env ? { env } : {}),
       });
     },
     lookup(key) {

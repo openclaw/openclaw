@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -1100,6 +1101,30 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves static assets without synchronous file reads", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+        const readFileSync = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+          throw new Error("readFileSync should not run on Control UI request path");
+        });
+        try {
+          const { res, end, handled } = await runControlUiRequest({
+            url: "/assets/actual.txt",
+            method: "GET",
+            rootPath: tmp,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(responseBody(end)).toBe("inside-ok\n");
+        } finally {
+          readFileSync.mockRestore();
+        }
+      },
+    });
+  });
+
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1223,7 +1248,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled, `expected ${url} to be handled`).toBe(true);
           expect(res.statusCode, `expected ${url} to be served`).toBe(200);
-          expect(res.setHeader).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(res["setHeader"]).toHaveBeenCalledWith("Content-Type", expectedType);
           expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
         }
       },

@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const {
   applyParallelVitestCachePaths,
@@ -107,23 +106,32 @@ const {
   ) => number;
 };
 
-const require = createRequire(import.meta.url);
-const resolveExpectedVitestCliEntry = () => {
-  const vitestPackageJson = require.resolve("vitest/package.json");
-  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+const runVitestModulePath = "../../scripts/run-vitest.mjs";
+const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
+  runVitestModulePath
+)) as unknown as {
+  resolveVitestCliEntry: () => string;
+  resolveVitestNodeArgs: (env: NodeJS.ProcessEnv) => string[];
 };
-const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
-  ["1", "true", "yes", "on"].includes(env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "")
-    ? []
-    : ["--no-maglev"];
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
-  ...resolveExpectedVitestNodeArgs(process.env),
-  resolveExpectedVitestCliEntry(),
+  ...resolveVitestNodeArgs(process.env),
+  resolveVitestCliEntry(),
 ];
 
 describe("test-projects args", () => {
+  beforeAll(() => {
+    for (const target of [
+      "src/gateway/gateway-connection.test-mocks.ts",
+      "extensions/memory-core/src/memory/test-runtime-mocks.ts",
+      "test/helpers/temp-dir.ts",
+      "src/commands/onboard-non-interactive.test-helpers.ts",
+    ]) {
+      buildVitestRunPlans([target]);
+    }
+  });
+
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseTestProjectsArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
       forwardedArgs: ["src/foo.test.ts", "-t", "target"],

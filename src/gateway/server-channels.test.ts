@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  type ChannelGatewayContext,
-  type ChannelId,
-  type ChannelPlugin,
-} from "../channels/plugins/types.js";
+import type { ChannelGatewayContext, ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -872,14 +868,16 @@ describe("server-channels auto restart", () => {
         }),
       },
     };
-    const startAccount = vi.fn(async ({ channelRuntime }: ChannelGatewayContext<TestAccount>) => {
-      channelRuntime?.runtimeContexts.register({
-        channelId: "discord",
-        accountId: DEFAULT_ACCOUNT_ID,
-        capability: "approval.native",
-        context: { token: "tracked" },
-      });
-    });
+    const startAccount = vi.fn(
+      async ({ channelRuntime: channelRuntimeLocal }: ChannelGatewayContext<TestAccount>) => {
+        channelRuntimeLocal?.runtimeContexts.register({
+          channelId: "discord",
+          accountId: DEFAULT_ACCOUNT_ID,
+          capability: "approval.native",
+          context: { token: "tracked" },
+        });
+      },
+    );
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });

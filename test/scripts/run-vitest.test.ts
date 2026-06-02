@@ -1,7 +1,14 @@
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
+  resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
@@ -10,6 +17,7 @@ import {
   resolveRunVitestSpawnEnv,
   resolveTestProjectsDelegationArgs,
   resolveTestProjectsRunnerEnv,
+  resolveTestProjectsRunnerSpawnParams,
   resolveVitestCliEntry,
   resolveVitestNoOutputHeartbeatMs,
   resolveVitestNodeArgs,
@@ -17,6 +25,8 @@ import {
   resolveVitestSpawnParams,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
+
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -55,6 +65,76 @@ describe("scripts/run-vitest", () => {
         "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
       ].join("\n"),
     );
+  });
+
+  it("restores the workspace node_modules link from a hydrated pnpm modules directory", () => {
+    const error = new Error("Cannot find module 'vitest/package.json'");
+    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
+    const symlinks: Array<{ target: string; path: string; type: string }> = [];
+
+    expect(
+      resolveVitestCliEntry({
+        baseDir: "/repo",
+        env: { PNPM_CONFIG_MODULES_DIR: "/runner/openclaw-pnpm-node-modules" },
+        fsImpl: {
+          existsSync: (filePath: string) =>
+            filePath.replaceAll("\\", "/") ===
+            "/runner/openclaw-pnpm-node-modules/vitest/package.json",
+          symlinkSync: (target: string, path: string, type: string) => {
+            symlinks.push({ target, path, type });
+          },
+        },
+        platform: "win32",
+        requireResolve: () => {
+          throw error;
+        },
+      }),
+    ).toBe("/repo/node_modules/vitest/vitest.mjs");
+    expect(symlinks).toEqual([
+      {
+        target: "/runner/openclaw-pnpm-node-modules",
+        path: "/runner/openclaw-pnpm-node-modules/node_modules",
+        type: "junction",
+      },
+      {
+        target: "/runner/openclaw-pnpm-node-modules",
+        path: "/repo/node_modules",
+        type: "junction",
+      },
+    ]);
+  });
+
+  it("self-links hydrated pnpm modules when pnpm lowercases the env key", () => {
+    const symlinks: Array<{ target: string; path: string; type: string }> = [];
+
+    expect(
+      resolveVitestCliEntry({
+        baseDir: "/repo",
+        env: { npm_config_modules_dir: "/runner/openclaw-pnpm-node-modules" },
+        fsImpl: {
+          existsSync: (filePath: string) =>
+            filePath.replaceAll("\\", "/") ===
+            "/runner/openclaw-pnpm-node-modules/vitest/package.json",
+          symlinkSync: (target: string, path: string, type: string) => {
+            symlinks.push({ target, path, type });
+          },
+        },
+        platform: "win32",
+        requireResolve: () => "/runner/openclaw-pnpm-node-modules/vitest/package.json",
+      }),
+    ).toBe("/repo/node_modules/vitest/vitest.mjs");
+    expect(symlinks).toEqual([
+      {
+        target: "/runner/openclaw-pnpm-node-modules",
+        path: "/runner/openclaw-pnpm-node-modules/node_modules",
+        type: "junction",
+      },
+      {
+        target: "/runner/openclaw-pnpm-node-modules",
+        path: "/repo/node_modules",
+        type: "junction",
+      },
+    ]);
   });
 
   it("distinguishes missing Vitest from a completely missing dependency install", () => {
@@ -343,6 +423,39 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("uses a longer default stall watchdog for broad e2e configs", () => {
+    const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "run",
+        "--config",
+        "test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "run",
+        "--config=./test/vitest/vitest.ui-e2e.config.ts",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+    });
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "-c",
+        "/repo/test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+  });
+
   it("does not default implicit interactive runs to the stall watchdog", () => {
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual({
       PATH: "/usr/bin",
@@ -396,6 +509,80 @@ describe("scripts/run-vitest", () => {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
       PATH: "/usr/bin",
     });
+  });
+
+  it("spawns delegated test-project runs in a cleanup-friendly process group", () => {
+    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
+      env: { PATH: "/usr/bin" },
+      detached: true,
+      stdio: "inherit",
+    });
+    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
+      env: { PATH: "/usr/bin" },
+      detached: false,
+      stdio: "inherit",
+    });
+  });
+
+  posixIt("cleans delegated test-project children when the wrapper is signaled", async () => {
+    const fixturePath = nodePath.join(
+      "test",
+      "scripts",
+      `run-vitest-delegated-signal-${process.pid}-${Date.now()}.test.ts`,
+    );
+    const childPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
+    );
+
+    fs.writeFileSync(
+      fixturePath,
+      [
+        'import fs from "node:fs";',
+        'import { it } from "vitest";',
+        'it("waits for wrapper termination", async () => {',
+        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
+        "  await new Promise(() => {});",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const runner = spawn(
+      process.execPath,
+      ["scripts/run-vitest.mjs", fixturePath, "--reporter=verbose"],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
+        },
+        stdio: "ignore",
+      },
+    );
+    let childPid = 0;
+
+    try {
+      await waitFor(() => fs.existsSync(childPidPath), 10_000);
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      expect(Number.isInteger(childPid)).toBe(true);
+      expect(isProcessAlive(childPid)).toBe(true);
+
+      expect(runner.pid).toBeGreaterThan(0);
+      process.kill(runner.pid!, "SIGTERM");
+      const result = await waitForClose(runner);
+
+      expect(result).toEqual({ code: 143, signal: null });
+      await waitFor(() => !isProcessAlive(childPid), 5_000);
+    } finally {
+      if (runner.pid && isProcessAlive(runner.pid)) {
+        process.kill(runner.pid, "SIGKILL");
+      }
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(fixturePath, { force: true });
+      fs.rmSync(childPidPath, { force: true });
+    }
   });
 
   it("spawns vitest in a detached process group on Unix hosts", () => {
@@ -608,3 +795,33 @@ describe("scripts/run-vitest", () => {
     ).toBeNull();
   });
 });
+
+async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
+  return await Promise.race([
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+    delay(timeoutMs).then(() => {
+      throw new Error("timed out waiting for child close");
+    }),
+  ]);
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

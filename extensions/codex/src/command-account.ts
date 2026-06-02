@@ -226,7 +226,7 @@ function resolveActiveProfileId(params: {
     params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
   ].find(
     (profileId): profileId is string =>
-      !!profileId &&
+      typeof profileId === "string" &&
       params.order.includes(profileId) &&
       isActiveProfileCandidate(params, profileId),
   );

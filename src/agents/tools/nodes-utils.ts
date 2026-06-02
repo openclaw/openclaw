@@ -145,7 +145,7 @@ export function resolveNodeIdFromList(
 ): string {
   return resolveNodeIdFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    pickDefaultNode,
   });
 }
 
@@ -165,6 +165,6 @@ export async function resolveNode(
   const nodes = await loadNodes(opts);
   return resolveNodeFromNodeList(nodes, query, {
     allowDefault,
-    pickDefaultNode: pickDefaultNode,
+    pickDefaultNode,
   });
 }

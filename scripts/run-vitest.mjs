@@ -19,11 +19,16 @@ const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
 export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
 export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 60_000;
+export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const LONG_RUNNING_VITEST_CONFIGS = new Set([
+  "test/vitest/vitest.e2e.config.ts",
+  "test/vitest/vitest.ui-e2e.config.ts",
+]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/openclaw-e2e-instance.test.ts",
@@ -124,11 +129,86 @@ export function resolveMissingVitestDependencyMessage(baseDir = repoRoot, fsImpl
   ].join("\n");
 }
 
+function resolvePathFromBase(value, baseDir) {
+  return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
+}
+
+function resolvePnpmModulesDir(env) {
+  return env.PNPM_CONFIG_MODULES_DIR?.trim() || env.npm_config_modules_dir?.trim() || "";
+}
+
+function resolveHydratedVitestPackageJson({ baseDir, env, fsImpl }) {
+  const modulesDir = resolvePnpmModulesDir(env);
+  if (!modulesDir) {
+    return null;
+  }
+  const packageJsonPath = path.join(
+    resolvePathFromBase(modulesDir, baseDir),
+    "vitest",
+    "package.json",
+  );
+  return fsImpl.existsSync(packageJsonPath) ? packageJsonPath : null;
+}
+
+function ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform }) {
+  if (platform !== "win32") {
+    return true;
+  }
+  const selfLinkPath = path.join(hydratedNodeModulesPath, "node_modules");
+  if (fsImpl.existsSync(selfLinkPath)) {
+    return true;
+  }
+  try {
+    fsImpl.symlinkSync(hydratedNodeModulesPath, selfLinkPath, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveHydratedVitestCliEntry({ baseDir, env, fsImpl, platform }) {
+  const hydratedVitestPackageJson = resolveHydratedVitestPackageJson({ baseDir, env, fsImpl });
+  if (!hydratedVitestPackageJson) {
+    return null;
+  }
+  const hydratedNodeModulesPath = path.dirname(path.dirname(hydratedVitestPackageJson));
+  if (!ensureHydratedNodeModulesSelfLink({ hydratedNodeModulesPath, fsImpl, platform })) {
+    return null;
+  }
+  const nodeModulesPath = path.join(baseDir, "node_modules");
+  if (fsImpl.existsSync(nodeModulesPath)) {
+    const workspaceVitestCliEntry = path.join(nodeModulesPath, "vitest", "vitest.mjs");
+    return fsImpl.existsSync(workspaceVitestCliEntry) ? workspaceVitestCliEntry : null;
+  }
+  try {
+    fsImpl.symlinkSync(
+      hydratedNodeModulesPath,
+      nodeModulesPath,
+      platform === "win32" ? "junction" : "dir",
+    );
+  } catch {
+    return null;
+  }
+  return path.join(nodeModulesPath, "vitest", "vitest.mjs");
+}
+
 export function resolveVitestCliEntry({
   baseDir = repoRoot,
+  env = process.env,
   fsImpl = fs,
+  platform = process.platform,
   requireResolve = require.resolve.bind(require),
 } = {}) {
+  const hydratedVitestCliEntry = resolveHydratedVitestCliEntry({
+    baseDir,
+    env,
+    fsImpl,
+    platform,
+  });
+  if (hydratedVitestCliEntry) {
+    return hydratedVitestCliEntry;
+  }
+
   let vitestPackageJson;
   try {
     vitestPackageJson = requireResolve("vitest/package.json");
@@ -230,20 +310,53 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   if (explicitMode !== "run" && !isTruthyEnvValue(env.CI)) {
     return env;
   }
+  const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
   const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
   const timeoutMs = hasTimeout
     ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
-    : DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS;
+    : defaultTimeoutMs;
   const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...env,
-    ...(!hasTimeout
-      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS) }
-      : {}),
+    ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
       : {}),
   };
+}
+
+export function resolveDefaultVitestNoOutputTimeoutMs(argv = []) {
+  const config = resolveVitestConfigArg(argv);
+  if (config !== null && isLongRunningVitestConfig(config)) {
+    return DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS;
+  }
+  return DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS;
+}
+
+function resolveVitestConfigArg(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      return null;
+    }
+    if (arg === "--config" || arg === "-c") {
+      return argv[index + 1] ?? null;
+    }
+    if (arg.startsWith("--config=")) {
+      return arg.slice("--config=".length);
+    }
+  }
+  return null;
+}
+
+function isLongRunningVitestConfig(config) {
+  const normalized = path.normalize(config).replaceAll(path.sep, "/").replace(/^\.\//u, "");
+  for (const candidate of LONG_RUNNING_VITEST_CONFIGS) {
+    if (normalized === candidate || normalized.endsWith(`/${candidate}`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
@@ -391,8 +504,7 @@ function hasExplicitDisabledRunFlag(argv) {
 }
 
 function hasSeparateVitestOptionValueArg(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (const arg of argv) {
     if (arg === "--") {
       return false;
     }
@@ -714,11 +826,22 @@ export function resolveTestProjectsRunnerEnv(env) {
   return resolveVitestSpawnEnv(env);
 }
 
-function spawnTestProjectsRunner(argv, env) {
-  return spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+export function resolveTestProjectsRunnerSpawnParams(env, platform = process.platform) {
+  return {
     env: resolveTestProjectsRunnerEnv(env),
+    detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: "inherit",
+  };
+}
+
+function spawnTestProjectsRunner(argv, env) {
+  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+    ...resolveTestProjectsRunnerSpawnParams(env),
   });
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+  });
+  return { child, teardown };
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -740,8 +863,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const child = spawnTestProjectsRunner(delegatedArgs, env);
+    const { child, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
     child.on("exit", (code, signal) => {
+      teardown();
       if (signal) {
         process.kill(process.pid, signal);
         return;
@@ -749,6 +873,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       process.exit(code ?? 1);
     });
     child.on("error", (error) => {
+      teardown();
       console.error(error);
       process.exit(1);
     });

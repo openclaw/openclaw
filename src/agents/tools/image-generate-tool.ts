@@ -70,6 +70,7 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
@@ -80,6 +81,7 @@ import {
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -617,6 +619,7 @@ async function loadReferenceImages(params: {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
+            ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -1018,7 +1021,9 @@ export function createImageGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id,
       });
-      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
+      const shouldDetach = Boolean(
+        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+      );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({

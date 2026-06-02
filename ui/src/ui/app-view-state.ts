@@ -11,6 +11,7 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -74,6 +75,7 @@ export type AppViewState = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  chatError: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
@@ -127,7 +129,7 @@ export type AppViewState = {
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
   chatSessionPickerOpen: boolean;
-  chatSessionPickerSurface: "desktop" | "mobile" | null;
+  chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
   chatSessionPickerQuery: string;
   chatSessionPickerAppliedQuery: string;
   chatSessionPickerLoading: boolean;
@@ -552,4 +554,4 @@ export type AppViewState = {
     handleWebPushSubscribe: () => Promise<void>;
     handleWebPushUnsubscribe: () => Promise<void>;
     handleWebPushTest: () => Promise<void>;
-  };
+  } & SkillWorkshopState;

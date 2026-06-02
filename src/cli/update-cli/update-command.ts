@@ -88,12 +88,15 @@ import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runne
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "../../plugins/official-external-install-records.js";
+import {
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
@@ -261,7 +264,7 @@ function normalizeChannelConfigMap(value: unknown): Record<string, unknown> | nu
 
 function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string, unknown> | null {
   const channels = normalizeChannelConfigMap(value);
-  if (!channels || Object.prototype.hasOwnProperty.call(channels, "$include")) {
+  if (!channels || Object.hasOwn(channels, "$include")) {
     return null;
   }
   return channels;
@@ -2714,6 +2717,35 @@ export function resolvePostCoreUpdateChildStdio(
   return platform === "win32" ? "pipe" : "inherit";
 }
 
+function preparePostCorePluginInstallRecordsForFreshProcess(params: {
+  records: Record<string, PluginInstallRecord>;
+  targetVersion: string | null;
+}): Record<string, PluginInstallRecord> {
+  if (!params.targetVersion) {
+    return params.records;
+  }
+  const runtimeComparison = compareSemverStrings(VERSION, params.targetVersion);
+  if (runtimeComparison === null || runtimeComparison <= 0) {
+    return params.records;
+  }
+  let changed = false;
+  const next: Record<string, PluginInstallRecord> = {};
+  for (const [pluginId, record] of Object.entries(params.records)) {
+    const installedVersion = record.resolvedVersion ?? record.version;
+    const comparison = installedVersion
+      ? compareSemverStrings(installedVersion, params.targetVersion)
+      : null;
+    if (record.source !== "npm" || comparison === null || comparison <= 0) {
+      next[pluginId] = record;
+      continue;
+    }
+    const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
+    next[pluginId] = rest;
+    changed = true;
+  }
+  return changed ? next : params.records;
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
@@ -2748,8 +2780,16 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   const sourceConfigPath = path.join(resultDir, "source-config.json");
   const postCoreHostVersion = await readPackageVersion(params.root);
 
+  const pluginInstallRecords = preparePostCorePluginInstallRecordsForFreshProcess({
+    records: params.pluginInstallRecords,
+    targetVersion: postCoreHostVersion,
+  });
+
   try {
-    await writePostCorePluginInstallRecordsFile(installRecordsPath, params.pluginInstallRecords);
+    if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
+      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
+    }
+    await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     const childStdio = resolvePostCoreUpdateChildStdio();
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
@@ -3518,16 +3558,40 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         : undefined,
     );
     postUpdateConfigSnapshot = restoredConfig.snapshot;
-    postCorePluginUpdate = await runPostCorePluginUpdate({
-      root: postUpdateRoot,
-      channel,
-      configSnapshot: postUpdateConfigSnapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts,
-      timeoutMs: updateStepTimeoutMs,
-      pluginInstallRecords: preUpdatePluginInstallRecords,
-    });
+    // Current-process post-core convergence still reports the pre-update
+    // VERSION. During downgrades, pin compatibility checks to the installed
+    // target so incompatible newer plugins are disabled before restart.
+    const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+    const versionComparison =
+      postUpdateInstalledVersion && VERSION
+        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+        : null;
+    const compatibilityDowngradeTarget =
+      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    if (compatibilityDowngradeTarget) {
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+    }
+    try {
+      postCorePluginUpdate = await runPostCorePluginUpdate({
+        root: postUpdateRoot,
+        channel,
+        configSnapshot: postUpdateConfigSnapshot,
+        configChanged: restoredConfig.changed,
+        restoredAuthoredChannels: restoredConfig.authoredChannels,
+        opts,
+        timeoutMs: updateStepTimeoutMs,
+        pluginInstallRecords: preUpdatePluginInstallRecords,
+      });
+    } finally {
+      if (compatibilityDowngradeTarget) {
+        if (previousCompatibilityHostVersion === undefined) {
+          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+        } else {
+          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+        }
+      }
+    }
   }
 
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
@@ -3558,7 +3622,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   let restartScriptPath: string | null = null;
-  let refreshGatewayServiceEnv = false;
+  let refreshGatewayServiceEnvLocal = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayPort = resolveUpdatedGatewayRestartPort({
     config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
@@ -3587,7 +3651,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           serviceEnv: gatewayServiceEnv,
         });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
-        refreshGatewayServiceEnv = true;
+        refreshGatewayServiceEnvLocal = true;
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
@@ -3610,7 +3674,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     shouldRestart,
     result: resultWithPostUpdate,
     opts,
-    refreshServiceEnv: refreshGatewayServiceEnv,
+    refreshServiceEnv: refreshGatewayServiceEnvLocal,
     serviceEnv: gatewayServiceEnv,
     gatewayPort,
     restartScriptPath,

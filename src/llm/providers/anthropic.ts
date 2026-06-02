@@ -5,7 +5,12 @@ import type {
   MessageCreateParamsStreaming,
   MessageParam,
   RawMessageStreamEvent,
+  TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -930,19 +935,19 @@ function createClient(
 function buildParams(
   model: Model<"anthropic-messages">,
   context: Context,
-  isOAuthToken: boolean,
+  isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const params: MessageCreateParamsStreaming = {
     model: model.id,
-    messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
+    messages: convertMessages(context.messages, model, isOAuthTokenResult, cacheControl),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
   };
 
   // For OAuth tokens, we MUST include Claude Code identity
-  if (isOAuthToken) {
+  if (isOAuthTokenResult) {
     params.system = [
       {
         type: "text",
@@ -951,21 +956,10 @@ function buildParams(
       },
     ];
     if (context.systemPrompt) {
-      params.system.push({
-        type: "text",
-        text: sanitizeSurrogates(context.systemPrompt),
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
-      });
+      params.system.push(...buildSystemPromptBlocks(context.systemPrompt, cacheControl));
     }
   } else if (context.systemPrompt) {
-    // Add cache control to system prompt for non-OAuth tokens
-    params.system = [
-      {
-        type: "text",
-        text: sanitizeSurrogates(context.systemPrompt),
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
-      },
-    ];
+    params.system = buildSystemPromptBlocks(context.systemPrompt, cacheControl);
   }
 
   // Temperature is incompatible with extended thinking (adaptive or budget-based).
@@ -981,7 +975,7 @@ function buildParams(
     const compat = getAnthropicCompat(model);
     params.tools = convertTools(
       context.tools,
-      isOAuthToken,
+      isOAuthTokenResult,
       compat.supportsEagerToolInputStreaming,
       compat.supportsCacheControlOnTools ? cacheControl : undefined,
     );
@@ -1045,7 +1039,7 @@ function normalizeToolCallId(id: string): string {
 function convertMessages(
   messages: Message[],
   model: Model<"anthropic-messages">,
-  isOAuthToken: boolean,
+  isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
 ): MessageParam[] {
   const params: MessageParam[] = [];
@@ -1142,7 +1136,7 @@ function convertMessages(
           blocks.push({
             type: "tool_use",
             id: block.id,
-            name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
+            name: isOAuthTokenValue ? toClaudeCodeName(block.name) : block.name,
             input: block.arguments ?? {},
           });
         }
@@ -1220,16 +1214,53 @@ function convertMessages(
   return params;
 }
 
+function buildSystemPromptBlocks(
+  systemPrompt: string,
+  cacheControl: CacheControlEphemeral | undefined,
+): TextBlockParam[] {
+  if (!cacheControl) {
+    return [
+      { type: "text", text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) },
+    ];
+  }
+
+  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  if (!split) {
+    return [
+      {
+        type: "text",
+        text: sanitizeSurrogates(systemPrompt),
+        cache_control: cacheControl,
+      },
+    ];
+  }
+
+  const blocks: TextBlockParam[] = [];
+  if (split.stablePrefix) {
+    blocks.push({
+      type: "text",
+      text: sanitizeSurrogates(split.stablePrefix),
+      cache_control: cacheControl,
+    });
+  }
+  if (split.dynamicSuffix) {
+    blocks.push({ type: "text", text: sanitizeSurrogates(split.dynamicSuffix) });
+  }
+  return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
+}
+
 function shouldUseFineGrainedToolStreamingBeta(
   model: Model<"anthropic-messages">,
   context: Context,
 ): boolean {
-  return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
+  return (
+    Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
+  );
 }
 
 function convertTools(
   tools: Tool[],
-  isOAuthToken: boolean,
+  isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming: boolean,
   cacheControl?: CacheControlEphemeral,
 ): Anthropic.Messages.Tool[] {
@@ -1241,7 +1272,7 @@ function convertTools(
     const schema = tool.parameters as { properties?: unknown; required?: string[] };
 
     return {
-      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      name: isOAuthTokenLocal ? toClaudeCodeName(tool.name) : tool.name,
       description: tool.description,
       ...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
       input_schema: {

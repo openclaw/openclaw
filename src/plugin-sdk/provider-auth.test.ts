@@ -1,7 +1,80 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
+type FallbackStoreCaseResult = {
+  profileIds: string[];
+  resolvedKey: string | undefined;
+  resolveApiKeyCalls: unknown[][];
+};
+
+async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
+  vi.resetModules();
+
+  const primaryStore: AuthProfileStore = {
+    version: 1,
+    profiles: {},
+  };
+  const fallbackStore: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "fallback-key",
+      },
+    },
+  };
+  const resolveApiKeyForProfile = vi.fn(
+    async (params: { store: AuthProfileStore; profileId: string }) => {
+      const profile = params.store.profiles[params.profileId];
+      return profile?.type === "api_key" && profile.key
+        ? {
+            apiKey: profile.key,
+            provider: profile.provider,
+            profileId: params.profileId,
+            profileType: profile.type,
+          }
+        : null;
+    },
+  );
+
+  vi.doMock("../agents/agent-scope-config.js", () => ({
+    resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
+  }));
+  vi.doMock("../agents/auth-profiles/oauth.js", () => ({
+    resolveApiKeyForProfile,
+  }));
+  vi.doMock("../agents/auth-profiles/order.js", () => ({
+    resolveAuthProfileOrder: ({ provider, store }: { provider: string; store: AuthProfileStore }) =>
+      Object.entries(store.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId),
+  }));
+  vi.doMock("../agents/auth-profiles/store.js", () => ({
+    ensureAuthProfileStore: vi.fn(() => primaryStore),
+    ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
+    loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
+    loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
+    updateAuthProfileStoreWithLock: vi.fn(),
+  }));
+
+  const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
+    await import("./provider-auth.js");
+
+  return {
+    profileIds: listUsableProviderAuthProfileIds({ provider: "openai" }).profileIds,
+    resolvedKey: await resolveProviderAuthProfileApiKey({ provider: "openai" }),
+    resolveApiKeyCalls: resolveApiKeyForProfile.mock.calls,
+  };
+}
+
 describe("provider auth profile helpers", () => {
+  let fallbackStoreCase: FallbackStoreCaseResult;
+
+  beforeAll(async () => {
+    fallbackStoreCase = await runFallbackStoreCase();
+  });
+
   afterEach(() => {
     vi.doUnmock("../agents/agent-scope-config.js");
     vi.doUnmock("../agents/auth-profiles/external-cli-discovery.js");
@@ -11,79 +84,20 @@ describe("provider auth profile helpers", () => {
     vi.resetModules();
   });
 
-  it("resolves API keys from the fallback store that supplied usable profile ids", async () => {
-    vi.resetModules();
-
-    const primaryStore: AuthProfileStore = {
-      version: 1,
-      profiles: {},
-    };
-    const fallbackStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "fallback-key",
-        },
-      },
-    };
-    const resolveApiKeyForProfile = vi.fn(
-      async (params: { store: AuthProfileStore; profileId: string }) => {
-        const profile = params.store.profiles[params.profileId];
-        return profile?.type === "api_key" && profile.key
-          ? {
-              apiKey: profile.key,
-              provider: profile.provider,
-              profileId: params.profileId,
-              profileType: profile.type,
-            }
-          : null;
-      },
-    );
-
-    vi.doMock("../agents/agent-scope-config.js", () => ({
-      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-    }));
-    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
-      resolveApiKeyForProfile,
-    }));
-    vi.doMock("../agents/auth-profiles/order.js", () => ({
-      resolveAuthProfileOrder: ({
-        provider,
-        store,
-      }: {
-        provider: string;
-        store: AuthProfileStore;
-      }) =>
-        Object.entries(store.profiles)
-          .filter(([, profile]) => profile.provider === provider)
-          .map(([profileId]) => profileId),
-    }));
-    vi.doMock("../agents/auth-profiles/store.js", () => ({
-      ensureAuthProfileStore: vi.fn(() => primaryStore),
-      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
-      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
-      updateAuthProfileStoreWithLock: vi.fn(),
-    }));
-
-    const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
-      await import("./provider-auth.js");
-
-    expect(listUsableProviderAuthProfileIds({ provider: "openai" }).profileIds).toEqual([
-      "openai:default",
-    ]);
-    await expect(resolveProviderAuthProfileApiKey({ provider: "openai" })).resolves.toBe(
-      "fallback-key",
-    );
-    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+  it("resolves API keys from the fallback store that supplied usable profile ids", () => {
+    expect(fallbackStoreCase.profileIds).toEqual(["openai:default"]);
+    expect(fallbackStoreCase.resolvedKey).toBe("fallback-key");
+    expect(fallbackStoreCase.resolveApiKeyCalls).toContainEqual([
       expect.objectContaining({
         agentDir: "/tmp/openclaw-agent",
         profileId: "openai:default",
-        store: fallbackStore,
+        store: expect.objectContaining({
+          profiles: expect.objectContaining({
+            "openai:default": expect.objectContaining({ key: "fallback-key" }),
+          }),
+        }),
       }),
-    );
+    ]);
   });
 
   it("only discovers external CLI auth when provider resolution opts in", async () => {

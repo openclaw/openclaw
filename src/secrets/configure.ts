@@ -110,7 +110,7 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
     return false;
   }
   const providers = config.secrets.providers;
-  if (!Object.prototype.hasOwnProperty.call(providers, providerAlias)) {
+  if (!Object.hasOwn(providers, providerAlias)) {
     return false;
   }
   delete providers[providerAlias];

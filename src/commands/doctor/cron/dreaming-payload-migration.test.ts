@@ -7,6 +7,11 @@ import {
 const DREAMING_TOKEN = "__openclaw_memory_core_short_term_promotion_dream__";
 const DREAMING_TAG = "[managed-by=memory-core.short-term-promotion]";
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 function staleDreamingJob() {
   return {
     id: "job-1",
@@ -76,7 +81,7 @@ describe("migrateLegacyDreamingPayloadShape", () => {
     const jobs = [job];
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result.rewrittenCount).toBe(1);
-    expect((jobs[0]?.payload as Record<string, unknown>).lightContext).toBe(true);
+    expect((jobs[0].payload as Record<string, unknown>).lightContext).toBe(true);
   });
 
   it("normalizes delivery to mode=none when omitted on an isolated dreaming job", () => {
@@ -99,7 +104,7 @@ describe("migrateLegacyDreamingPayloadShape", () => {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "good morning" },
     } as Record<string, unknown>;
-    const snapshot = JSON.parse(JSON.stringify(unrelated)) as Record<string, unknown>;
+    const snapshot = jsonRoundTrip(unrelated);
     const jobs = [unrelated];
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result).toEqual({ changed: false, rewrittenCount: 0 });

@@ -713,6 +713,45 @@ describe("monitorDiscordProvider", () => {
     }
   });
 
+  it("treats out-of-range running ACP activity timestamps as stale on probe timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10 * 60 * 1000);
+      getAcpSessionStatusMock.mockImplementation(
+        ({ signal }: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          }),
+      );
+
+      await monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      });
+
+      const probePromise = getHealthProbe()({
+        cfg: baseConfig(),
+        accountId: "default",
+        sessionKey: "agent:codex:acp:timeout-invalid-activity",
+        binding: {} as never,
+        session: {
+          acp: {
+            state: "running",
+            lastActivityAt: Number.MAX_SAFE_INTEGER,
+          },
+        } as never,
+      });
+
+      await vi.advanceTimersByTimeAsync(8_100);
+      await expect(probePromise).resolves.toEqual({
+        status: "stale",
+        reason: "status-timeout-running-stale",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to legacy missing-session message classification", async () => {
     getAcpSessionStatusMock.mockRejectedValue(new Error("ACP session metadata missing"));
 

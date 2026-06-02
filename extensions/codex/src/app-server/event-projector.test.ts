@@ -35,7 +35,9 @@ const tinyPngBase64 =
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function assistantMessage(text: string, timestamp: number) {
@@ -314,6 +316,29 @@ describe("CodexAppServerEventProjector", () => {
       total: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("streams final-answer assistant deltas into partial replies", async () => {
+    const { onPartialReply, projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "msg-final",
+          phase: "final_answer",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
+
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
   });
 
   it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
@@ -1627,6 +1652,81 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("fails closed when a native tool call finishes without a matching result", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(await createParams(), { trajectoryRecorder });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-denied",
+          command: "node scripts/report.js --publish",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-denied",
+          text: "The requested publish command was denied before execution.",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(String(result.promptError)).toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage.toolCallId).toBe("cmd-denied");
+    expect(toolResultMessage.toolName).toBe("bash");
+    expect(toolResultMessage.isError).toBe(true);
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    expect(JSON.stringify(toolResultContent)).toContain("matching tool.result");
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-denied",
+      toolCallId: "cmd-denied",
+      name: "bash",
+      arguments: {
+        command: "node scripts/report.js --publish",
+        cwd: "/workspace",
+      },
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-denied",
+      toolCallId: "cmd-denied",
+      name: "bash",
+      status: "failed",
+      isError: true,
+      result: { status: "failed", reason: "missing_tool_result" },
+      output: expect.stringContaining("without a matching tool.result"),
+    });
+  });
+
   it("uses streamed command output when final command snapshots omit aggregated output", async () => {
     const onAgentEvent = vi.fn();
     const trajectoryRecorder = {
@@ -2122,6 +2222,44 @@ describe("CodexAppServerEventProjector", () => {
     expect(context.runId).toBe("run-1");
     expect(context.toolName).toBe("bash");
     expect(context.toolCallId).toBe("cmd-observed");
+  });
+
+  it("omits after_tool_call startedAt when native duration is out of range", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-huge-duration",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.result).toEqual({
+      status: "completed",
+      exitCode: 0,
+      durationMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(event).not.toHaveProperty("durationMs");
   });
 
   it("does not duplicate native items already covered by PostToolUse relay", async () => {

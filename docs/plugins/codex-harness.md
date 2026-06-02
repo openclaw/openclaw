@@ -393,6 +393,9 @@ In `tools.exec.mode: "auto"`, OpenClaw does not preserve legacy unsafe Codex
 legacy `plugins.entries.codex.config.appServer.mode: "guardian"` preset still
 works, but `tools.exec.mode: "auto"` is the normalized OpenClaw surface.
 
+For the mode-level comparison with host exec approvals and ACPX permissions,
+see [Permission modes](/tools/permission-modes).
+
 For every app-server field, auth order, environment isolation, discovery, and
 timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference).
 
@@ -523,7 +526,7 @@ Supported top-level Codex plugin fields:
 | -------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
 | `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. |
 | `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.              |
-| `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.           |
+| `codexPlugins`             | disabled       | Native Codex plugin/app support for configured first-party Codex plugins.                |
 
 Supported `appServer` fields:
 
@@ -655,6 +658,11 @@ For migration eligibility, app inventory, destructive action policy,
 elicitations, and native plugin diagnostics, see
 [Native Codex plugins](/plugins/codex-native-plugins).
 
+OpenAI-side app and plugin access is controlled by the signed-in Codex account
+and, for Business and Enterprise/Edu workspaces, workspace app controls. See
+[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
+for OpenAI's account and workspace-control overview.
+
 ## Computer Use
 
 Computer Use is covered in its own setup guide:
@@ -779,6 +787,7 @@ provider refs stay on their normal provider path in `auto` mode.
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Model providers](/concepts/model-providers)
 - [OpenAI provider](/providers/openai)
+- [OpenAI Codex help](https://help.openai.com/en/collections/14937394-codex)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Plugin hooks](/plugins/hooks)
 - [Diagnostics export](/gateway/diagnostics)

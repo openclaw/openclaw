@@ -21,8 +21,6 @@ import type {
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
-  let pendingEventChain: Promise<void> | null = null;
-
   const scheduleEvent = (
     evt: EmbeddedAgentSubscribeEvent,
     handler: () => void | Promise<void>,
@@ -33,42 +31,41 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return handler();
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-        return;
       }
     };
 
-    if (!pendingEventChain) {
+    if (!ctx.state.pendingEventChain) {
       const result = run();
       if (!isPromiseLike<void>(result)) {
         return;
       }
       const task = result
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
         })
         .finally(() => {
-          if (pendingEventChain === task) {
-            pendingEventChain = null;
+          if (ctx.state.pendingEventChain === task) {
+            ctx.state.pendingEventChain = null;
           }
         });
       if (!options?.detach) {
-        pendingEventChain = task;
+        ctx.state.pendingEventChain = task;
       }
       return;
     }
 
-    const task = pendingEventChain
+    const task = ctx.state.pendingEventChain
       .then(() => run())
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
       })
       .finally(() => {
-        if (pendingEventChain === task) {
-          pendingEventChain = null;
+        if (ctx.state.pendingEventChain === task) {
+          ctx.state.pendingEventChain = null;
         }
       });
     if (!options?.detach) {
-      pendingEventChain = task;
+      ctx.state.pendingEventChain = task;
     }
   };
 
@@ -134,11 +131,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "agent_end":
         scheduleEvent(evt, () => {
-          return handleAgentEnd(ctx);
+          return handleAgentEnd(ctx, evt as never);
         });
-        return;
       default:
-        return;
     }
   };
 }

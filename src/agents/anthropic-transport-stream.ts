@@ -534,9 +534,20 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
-function resolveAnthropicMessagesUrl(baseUrl?: string): string {
-  const normalized = (baseUrl?.trim() || "https://api.anthropic.com").replace(/\/+$/, "");
+const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+
+export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+  return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
+}
+
+export function resolveAnthropicMessagesUrl(baseUrl?: string): string {
+  const normalized = resolveAnthropicBaseUrl(baseUrl).replace(/\/+$/, "");
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
+}
+
+function withEffectiveAnthropicBaseUrl(model: AnthropicTransportModel): AnthropicTransportModel {
+  const baseUrl = resolveAnthropicBaseUrl(model.baseUrl);
+  return baseUrl === model.baseUrl ? model : { ...model, baseUrl };
 }
 
 function createAbortError(signal: AbortSignal): Error {
@@ -593,7 +604,7 @@ function readAnthropicSseChunk(
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -617,10 +628,12 @@ async function* parseAnthropicSseBody(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   try {
     while (true) {
       const { done, value } = await readAnthropicSseChunk(reader, signal);
       if (done) {
+        completed = true;
         break;
       }
       buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
@@ -651,6 +664,9 @@ async function* parseAnthropicSseBody(
       }
     }
   } finally {
+    if (!completed) {
+      await reader.cancel(signal?.reason).catch(() => undefined);
+    }
     reader.releaseLock();
   }
 }
@@ -933,7 +949,7 @@ function resolveAnthropicTransportOptions(
 
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
-    const model = rawModel as AnthropicTransportModel;
+    const model = withEffectiveAnthropicBaseUrl(rawModel as AnthropicTransportModel);
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
@@ -1398,4 +1414,18 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     })();
     return eventStream as ReturnType<StreamFn>;
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

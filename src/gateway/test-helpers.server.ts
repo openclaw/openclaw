@@ -459,6 +459,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   const scope = options?.scope ?? "test";
   if (scope === "suite") {
     beforeAll(async () => {
+      vi.useRealTimers();
       if (activeSuiteHookScopeCount === 0) {
         await setupGatewayTestHome();
         await resetGatewayTestState({ uniqueConfigRoot: false });
@@ -466,6 +467,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       activeSuiteHookScopeCount += 1;
     });
     beforeEach(async () => {
+      vi.useRealTimers();
       if (activeSuiteGatewayServerCount > 0) {
         await resetGatewayTestRuntimeOnly();
         return;
@@ -489,6 +491,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   }
 
   beforeEach(async () => {
+    vi.useRealTimers();
     await setupGatewayTestHome();
     await resetGatewayTestState({ uniqueConfigRoot: false });
   }, 60_000);
@@ -553,7 +556,6 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   timeoutMs = 10_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
     function cleanup() {
       clearTimeout(timer);
       ws.off("message", handler);
@@ -570,7 +572,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
         resolve(obj);
       }
     }
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       cleanup();
       reject(new Error("timeout"));
     }, timeoutMs);
@@ -1183,7 +1185,9 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
         return events;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error("timeout waiting for system event");
 }

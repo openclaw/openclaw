@@ -90,7 +90,7 @@ function fixPathEncoding(
       log?.debug?.(`Decoding path with mixed encoding: ${result}`);
 
       // Step 1: 将八进制转义转换为字节
-      let decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
+      const decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
         String.fromCharCode(Number.parseInt(octal, 8)),
       );
 
@@ -303,12 +303,12 @@ export async function executeSendQueue(
         try {
           const result = await Promise.race([
             sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
-            new Promise<{ channel: string; error: string }>((resolve) =>
+            new Promise<{ channel: string; error: string }>((resolve) => {
               setTimeout(
                 () => resolve({ channel: "qqbot", error: "语音发送超时，已跳过" }),
                 voiceTimeout,
-              ),
-            ),
+              );
+            }),
           ]);
           if (result.error) {
             log?.error(`${prefix} sendVoice error: ${result.error}`);

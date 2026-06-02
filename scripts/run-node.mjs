@@ -96,7 +96,7 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -344,7 +344,7 @@ const listBuiltBundledPluginEntries = (deps) => {
 
 const listBuiltBundledPluginRuntimeOverlayDirs = (deps) => {
   const distExtensionsRoot = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions");
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
   } catch {
@@ -377,7 +377,7 @@ const listRuntimeOverlaySourcePaths = (sourceDir, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -452,7 +452,7 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
     return [];
   }
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-  let dirents = [];
+  let dirents;
   try {
     dirents = deps.fs.readdirSync(pluginSdkDir, { withFileTypes: true });
   } catch {
@@ -473,10 +473,23 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
 };
 
 const listRequiredStaticExtensionAssetOutputs = (deps) => {
+  if (deps.env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS === "0") {
+    return [];
+  }
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const runtimeRoot = resolveRuntimePostBuildRuntimeRoot(deps);
+  const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
+  const hasRuntimeOverlay = deps.fs.existsSync(runtimeExtensionsRoot);
   return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
     .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
-    .map((asset) => path.join(distRoot, normalizePath(asset.dest).replace(/^dist\//u, "")))
+    .flatMap((asset) => {
+      const relativeOutput = normalizePath(asset.dest).replace(/^dist\//u, "");
+      const outputs = [path.join(distRoot, relativeOutput)];
+      if (hasRuntimeOverlay) {
+        outputs.push(path.join(runtimeRoot, relativeOutput));
+      }
+      return outputs;
+    })
     .toSorted((left, right) => left.localeCompare(right));
 };
 
@@ -667,7 +680,10 @@ const parsePositiveIntegerEnv = (env, name, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -838,7 +854,7 @@ const parsePositiveInteger = (value) => {
 };
 
 const listRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
   } catch {
@@ -910,8 +926,6 @@ const resolveRunNodeDiagnosticArgs = (deps) => {
 
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
-  let onSigInt;
-  let onSigTerm;
 
   const cleanupSignals = () => {
     if (onSigInt) {
@@ -934,10 +948,10 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
     }
   };
 
-  onSigInt = () => {
+  const onSigInt = () => {
     forwardSignal("SIGINT");
   };
-  onSigTerm = () => {
+  const onSigTerm = () => {
     forwardSignal("SIGTERM");
   };
 
@@ -1147,7 +1161,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
     DEFAULT_BUILD_LOCK_STALE_MS,
   );
   const startedAt = Date.now();
-  let loggedWait = false;
+  let waitLogBudget = 1;
+  const consumeWaitLog = () => waitLogBudget-- > 0;
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -1201,9 +1216,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
       if (removeStaleBuildLock(deps, lockDir, staleMs)) {
         continue;
       }
-      if (!loggedWait) {
+      if (consumeWaitLog()) {
         logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
-        loggedWait = true;
       }
       await sleep(pollMs);
     }
@@ -1531,8 +1545,10 @@ export async function runNodeMain(params = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
     .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
+    .catch(
+      /** @param {unknown} err */ (err) => {
+        console.error(err);
+        process.exit(1);
+      },
+    );
 }

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -237,17 +238,27 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return normalized.slice(0, 120);
 }
 
-function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
-  for (let i = cards.length - 1; i >= 0; i--) {
-    const card = cards[i];
-    if (!card) {
-      continue;
-    }
-    if (card.id === id || (card.name === name && !card.outputText)) {
+function findFirstUnmatchedCard(
+  cards: ToolCard[],
+  id: string,
+  name: string,
+  fallbackMatchedCards: WeakSet<ToolCard>,
+): ToolCard | undefined {
+  let nameOnlyCandidate: ToolCard | undefined;
+  for (const card of cards) {
+    if (card.id === id) {
       return card;
     }
+    if (
+      !nameOnlyCandidate &&
+      card.name === name &&
+      card.outputText === undefined &&
+      !fallbackMatchedCards.has(card)
+    ) {
+      nameOnlyCandidate = card;
+    }
   }
-  return undefined;
+  return nameOnlyCandidate;
 }
 
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
@@ -255,6 +266,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
+  const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
 
   for (let index = 0; index < content.length; index++) {
@@ -279,11 +291,12 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
-      const existing = findLatestCard(cards, cardId, name);
+      const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
+        fallbackMatchedCards.add(existing);
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {
@@ -326,6 +339,26 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     });
   }
 
+  return cards;
+}
+
+const toolCardsByMessage = new WeakMap<object, Map<string, ToolCard[]>>();
+
+export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolCard[] {
+  if (!message || typeof message !== "object") {
+    return extractToolCards(message, prefix);
+  }
+  let byPrefix = toolCardsByMessage.get(message);
+  if (!byPrefix) {
+    byPrefix = new Map();
+    toolCardsByMessage.set(message, byPrefix);
+  }
+  const cached = byPrefix.get(prefix);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards(message, prefix);
+  byPrefix.set(prefix, cards);
   return cards;
 }
 
@@ -571,6 +604,29 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
+export function resolveCollapsedToolSummaryParts(params: {
+  card: ToolCard;
+  displayLabel: string;
+  displayDetail: string | undefined;
+  isError: boolean;
+}): { label: string; name?: string } {
+  if (params.isError) {
+    return { label: t("chat.toolCards.toolError"), name: params.displayLabel };
+  }
+
+  const displayDetail = params.displayDetail?.trim();
+  if (displayDetail) {
+    return { label: params.displayLabel, name: displayDetail };
+  }
+
+  return {
+    label:
+      typeof params.card.args === "string"
+        ? (resolveCollapsedToolDetail(params.card, undefined) ?? params.displayLabel)
+        : params.displayLabel,
+  };
+}
+
 export function renderToolCard(
   card: ToolCard,
   opts: {
@@ -584,12 +640,14 @@ export function renderToolCard(
     allowExternalEmbedUrls?: boolean;
   },
 ) {
-  const hasOutput = Boolean(card.outputText?.trim());
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isError = isToolCardError(card);
-  const collapsedDetail = isError ? undefined : resolveCollapsedToolDetail(card, display.detail);
-  const previewLabel = isError ? "Tool error" : (collapsedDetail ?? display.label);
-  const previewName = isError ? display.label : collapsedDetail && hasOutput ? "output" : undefined;
+  const summary = resolveCollapsedToolSummaryParts({
+    card,
+    displayLabel: display.label,
+    displayDetail: display.detail,
+    isError,
+  });
 
   return html`
     <div
@@ -598,9 +656,9 @@ export function renderToolCard(
         : ""}"
     >
       ${renderCollapsedToolSummary({
-        label: previewLabel,
+        label: summary.label,
         icon: icons[display.icon],
-        name: previewName,
+        name: summary.name,
         expanded: opts.expanded,
         isError,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),

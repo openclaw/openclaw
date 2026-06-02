@@ -8,7 +8,6 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
@@ -384,6 +383,63 @@ function mergeReplyDirectiveResults(
   };
 }
 
+function parseFullStreamingReplyText(text: string): string {
+  return parseReplyDirectives(splitTrailingDirective(text).text).text;
+}
+
+function containsCompleteMediaDirectiveLine(text: string): boolean {
+  return /(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(text);
+}
+
+function resolveIncrementalStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousRawText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  shouldUsePhaseAwareBlockReply: boolean;
+}): string | undefined {
+  if (
+    params.evtType === "text_end" ||
+    !params.parsedStreamDirectives ||
+    params.parsedStreamDirectives.isSilent ||
+    hasReplyDirectiveMetadata(params.parsedStreamDirectives) ||
+    containsCompleteMediaDirectiveLine(params.visibleDelta) ||
+    params.parsedStreamDirectives.text !== params.visibleDelta
+  ) {
+    return undefined;
+  }
+
+  if (
+    !params.shouldUsePhaseAwareBlockReply &&
+    params.previousCleaned === params.previousRawText.trim()
+  ) {
+    return params.next;
+  }
+
+  const cleanedCandidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
+  return cleanedCandidate === params.next ? cleanedCandidate : undefined;
+}
+
+function resolveStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousRawText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  shouldUsePhaseAwareBlockReply: boolean;
+}): string {
+  if (!params.parsedStreamDirectives) {
+    return params.evtType === "text_delta"
+      ? params.previousCleaned
+      : parseFullStreamingReplyText(params.next);
+  }
+
+  return resolveIncrementalStreamingReplyText(params) ?? parseFullStreamingReplyText(params.next);
+}
+
 export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
@@ -671,12 +727,20 @@ export function handleMessageUpdate(
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
-    const cleanedText = parseReplyDirectives(splitTrailingDirective(next).text).text;
+    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+    const cleanedText = resolveStreamingReplyText({
+      evtType,
+      next,
+      previousRawText: ctx.state.lastStreamedAssistant ?? "",
+      previousCleaned,
+      visibleDelta,
+      parsedStreamDirectives,
+      shouldUsePhaseAwareBlockReply,
+    });
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
-    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
-    let shouldEmit = false;
+    let shouldEmit;
     let deltaText = "";
     let replace = false;
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
@@ -719,19 +783,8 @@ export function handleMessageUpdate(
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        stream: "assistant",
-        data,
-      });
-      void ctx.params.onAgentEvent?.({
-        stream: "assistant",
-        data,
-      });
+      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
       ctx.state.emittedAssistantUpdate = true;
-      if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
-        void ctx.params.onPartialReply(data);
-      }
     }
   }
 
@@ -754,7 +807,7 @@ export function handleMessageUpdate(
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
       .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true }))
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
   }
@@ -813,8 +866,8 @@ export function handleMessageEnd(
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
     : null;
-  let cleanedText = parsedText?.text ?? "";
-  let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const cleanedText = parsedText?.text ?? "";
+  const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
@@ -871,15 +924,7 @@ export function handleMessageEnd(
       mediaUrls,
       phase: assistantPhase,
     });
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "assistant",
-      data,
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    ctx.emitAssistantStreamData(data);
     ctx.state.emittedAssistantUpdate = true;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
@@ -925,18 +970,20 @@ export function handleMessageEnd(
       return;
     }
     const {
-      text: cleanedText,
-      mediaUrls,
+      text: cleanedTextLocal,
+      mediaUrls: mediaUrlsLocal,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
+    if (
+      hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
+    ) {
       ctx.emitBlockReply({
-        text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        text: cleanedTextLocal,
+        mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
         audioAsVoice,
         replyToId,
         replyToTag,
@@ -965,7 +1012,7 @@ export function handleMessageEnd(
         final: true,
       });
       if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-        void flushBlockReplyBufferResult.catch((err) => {
+        void flushBlockReplyBufferResult.catch((err: unknown) => {
           ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
         });
       }

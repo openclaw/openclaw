@@ -83,7 +83,7 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  let warningThreshold = asPositiveInt(
+  const warningThreshold = asPositiveInt(
     config?.warningThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
   );

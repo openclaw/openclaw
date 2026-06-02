@@ -506,14 +506,7 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let {
-    analysisOk,
-    allowlistMatches,
-    allowlistSatisfied,
-    segments,
-    segmentAllowlistEntries,
-    segmentSatisfiedBy,
-  } = evaluateSystemRunAllowlist({
+  const allowlistEvaluation = evaluateSystemRunAllowlist({
     shellCommand: parsed.shellPayload,
     argv: parsed.argv,
     approvals,
@@ -526,6 +519,9 @@ async function evaluateSystemRunPolicyPhase(
     skillBins: bins,
     autoAllowSkills,
   });
+  const { allowlistMatches, segments, segmentAllowlistEntries, segmentSatisfiedBy } =
+    allowlistEvaluation;
+  let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;

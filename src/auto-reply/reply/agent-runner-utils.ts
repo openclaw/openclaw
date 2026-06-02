@@ -32,6 +32,7 @@ import {
   resolveEnforceFinalTagWithResolver,
 } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -152,6 +153,7 @@ export function buildThreadingToolContext(params: {
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
+        ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
         TransportThreadId: sessionCtx.TransportThreadId,
@@ -159,10 +161,13 @@ export function buildThreadingToolContext(params: {
       },
       hasRepliedRef,
     }) ?? {};
+  const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
-    currentMessageId: context.currentMessageId ?? currentMessageId,
+    // Some providers expose only thread resources as reply targets; explicit
+    // `undefined` means the adapter rejected the generic message-id fallback.
+    currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
   };
 }
 
@@ -222,6 +227,7 @@ function buildEmbeddedContextFromTemplate(params: {
       config,
       hasRepliedRef: params.hasRepliedRef,
     }),
+    currentInboundAudio: hasInboundAudio(params.sessionCtx),
   };
 }
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTrajectoryPointerFilePath } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { sessionsTailCommand } from "./sessions-tail.js";
+import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -65,7 +65,9 @@ async function waitForRuntimeOutput(
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error(`Timed out waiting for output containing ${pattern}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
   }
 }
 
@@ -76,6 +78,7 @@ describe("sessionsTailCommand", () => {
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
+    setSessionsTailFollowIntervalMsForTests(10);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
@@ -100,6 +103,7 @@ describe("sessionsTailCommand", () => {
   });
 
   afterEach(() => {
+    setSessionsTailFollowIntervalMsForTests();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {

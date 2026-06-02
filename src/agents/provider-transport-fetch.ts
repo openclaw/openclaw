@@ -25,6 +25,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
+import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
 import {
   ensureModelProviderLocalService,
   type ProviderLocalServiceLease,
@@ -219,6 +220,39 @@ function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
   }
 }
 
+function isJsonContentType(contentType: string): boolean {
+  return /\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType);
+}
+
+function isOpenAISdkStreamContentType(contentType: string): boolean {
+  return /\btext\/event-stream\b/i.test(contentType) || isJsonContentType(contentType);
+}
+
+async function assertOpenAISdkStreamContentType(params: {
+  response: Response;
+  model: Model;
+  release: () => Promise<void>;
+  localServiceLease?: ProviderLocalServiceLease;
+}): Promise<void> {
+  const contentType = params.response.headers.get("content-type") ?? "";
+  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+    return;
+  }
+  const body = await readResponseTextLimited(params.response).catch(() => "");
+  await params.release().catch(() => undefined);
+  params.localServiceLease?.release();
+  const hint =
+    "OpenAI-compatible streamed responses must be text/event-stream or JSON; got " +
+    `${contentType || "missing content-type"}. Check the provider baseUrl; ` +
+    "OpenAI-compatible APIs commonly require a /v1 path prefix.";
+  throw new ProviderHttpError(`${params.model.provider}/${params.model.id}: ${hint}`, {
+    status: params.response.status,
+    code: "invalid_provider_content_type",
+    type: "invalid_response",
+    body,
+  });
+}
+
 async function requestBodyHasStreamTrue(
   request: Request | undefined,
   init: RequestInit | undefined,
@@ -370,6 +404,12 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
+const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
+  (held) => {
+    void held.finalize();
+  },
+);
+
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -386,12 +426,15 @@ function buildManagedResponse(
   const source = response.body;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let released = false;
+  const cleanupRegistrationToken = {};
   const finalize = async () => {
     if (released) {
       return;
     }
     released = true;
+    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
     try {
+      await reader?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     } finally {
       finalizeLocalServiceLease();
@@ -424,6 +467,9 @@ function buildManagedResponse(
       }
     },
   });
+  // Stream consumers should cancel deterministically; this catches abandoned
+  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
+  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
@@ -706,6 +752,14 @@ export function buildGuardedModelFetch(
         status: response.status,
         statusText: response.statusText,
         headers,
+      });
+    }
+    if (synthesizeJsonAsSse && options?.sanitizeSse !== false) {
+      await assertOpenAISdkStreamContentType({
+        response,
+        model,
+        release: result.release,
+        localServiceLease,
       });
     }
     response = buildManagedResponse(

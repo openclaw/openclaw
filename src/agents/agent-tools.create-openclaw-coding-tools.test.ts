@@ -371,6 +371,81 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("preserves runtime-allowed message through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      runtimeToolAllowlist: ["message"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves forced message through local model lean filtering without runtime allowlist", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      forceMessageTool: true,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves message-tool-only replies through local model lean filtering without runtime allowlist", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
   it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
     for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
       const tools = createOpenClawCodingTools({
@@ -687,7 +762,7 @@ describe("createOpenClawCodingTools", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig });
     expect(toolNameList(defaultTools)).toContain("exec");
     expect(toolNameList(defaultTools)).toContain("process");
-    expect(toolNameList(defaultTools)).not.toContain("apply_patch");
+    expect(toolNameList(defaultTools)).toContain("apply_patch");
 
     const openAiTools = createOpenClawCodingTools({
       config: testConfig,
@@ -755,7 +830,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("provides top-level object schemas for all tools", () => {
@@ -800,7 +875,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("apply_patch")).toBe(true);
   });
 
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {

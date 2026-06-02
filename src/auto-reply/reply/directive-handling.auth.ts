@@ -16,6 +16,7 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 
@@ -42,10 +43,11 @@ function formatExpirationLabel(
   formatUntil: (timestampMs: number) => string,
   compactExpiredPrefix = " expired",
 ) {
-  if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0) {
+  const timestampMs = asDateTimestampMs(expires);
+  if (timestampMs === undefined || timestampMs <= 0) {
     return "";
   }
-  return expires <= now ? compactExpiredPrefix : ` exp ${formatUntil(expires)}`;
+  return timestampMs <= now ? compactExpiredPrefix : ` exp ${formatUntil(timestampMs)}`;
 }
 
 function formatFlagsSuffix(flags: string[]) {
