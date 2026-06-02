@@ -26,6 +26,9 @@ const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
 const pendingAgentRunErrors = new Map<string, PendingAgentRunError>();
 const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
+// Tracks active waiter counts for leak assertions and diagnostics without
+// changing delivery; event subscriptions remain per-waiter so abort cleanup is
+// scoped to the caller that registered it.
 const agentRunWaiterCounts = new Map<string, number>();
 let agentRunListenerStarted = false;
 
@@ -54,6 +57,8 @@ function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
   pruneAgentRunCache(entry.ts);
   const existing = agentRunCache.get(entry.runId);
   if (existing && shouldPreserveTerminalSnapshot(existing, entry)) {
+    // Keep the older terminal cause but refresh liveness so the TTL reflects
+    // the latest event; this avoids turning retries into weaker cache entries.
     agentRunCache.set(entry.runId, {
       ...existing,
       ts: entry.ts,
@@ -302,6 +307,12 @@ function addAgentRunWaiter(runId: string): () => void {
   };
 }
 
+/**
+ * Waits for a Gateway-visible agent lifecycle terminal snapshot.
+ *
+ * The returned snapshot may come from the shared terminal cache unless
+ * `ignoreCachedSnapshot` asks for only future lifecycle events.
+ */
 export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
