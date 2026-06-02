@@ -622,6 +622,10 @@ export function createSessionActions(context: SessionActionContext) {
               : (state.activeChatRunId ?? state.pendingChatRunId ?? null),
           ].filter((runId) => runId !== null);
     if (runIds.length === 0) {
+      // Clear stale optimistic submit state that can survive past the
+      // tracked run ids — otherwise the next normal prompt is blocked
+      // with "agent is busy" while both ids are already clear (issue #86199).
+      state.pendingOptimisticUserMessage = false;
       chatLog.addSystem("no active run", { coalesceConsecutive: true });
       tui.requestRender();
       return;

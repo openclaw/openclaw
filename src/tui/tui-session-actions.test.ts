@@ -995,6 +995,37 @@ describe("tui session actions", () => {
     expect(requestRender).toHaveBeenCalledOnce();
   });
 
+  it("clears stale optimistic submit state when both run ids are gone (regression for #86199)", async () => {
+    // When the user pressed Esc to abort, the backend run was cancelled but
+    // pendingOptimisticUserMessage stayed true.  The next Esc reported
+    // "no active run" (both ids null) but never cleared the stale flag, so
+    // the next normal prompt was blocked with "agent is busy".
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: null,
+      pendingOptimisticUserMessage: true,
+    });
+
+    const { abortActive } = createTestSessionActions({
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+      state,
+    });
+
+    await abortActive();
+
+    // Must clear the stale flag so the next prompt isn't blocked.
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(addSystem).toHaveBeenCalledWith("no active run", {
+      coalesceConsecutive: true,
+    });
+  });
+
   it("does not abort local post-turn maintenance while finishing context", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const addSystem = vi.fn();
