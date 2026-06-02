@@ -40,7 +40,10 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { createMattermostDraftStream } from "./draft-stream.js";
+import {
+  createMattermostDraftPreviewBoundaryController,
+  createMattermostDraftStream,
+} from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -320,7 +323,7 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     discardPending: noopAsync,
     seal: noopAsync,
     stop: noopAsync,
-    forceNewMessage: () => {},
+    forceNewMessage: noopAsync,
   };
 }
 
@@ -1744,6 +1747,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               warn: logVerboseMessage,
             })
           : createDisabledMattermostDraftStream();
+        const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
+          enabled: draftPreviewEnabled && account.streamingMode === "block",
+          forceNewMessage: async () => {
+            await draftStream.forceNewMessage();
+          },
+        });
         let lastPartialText = "";
         const progressDraft = createChannelProgressDraftCompositor({
           entry: account.config,
@@ -1813,6 +1822,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
           lastPartialText = cleaned;
           draftStream.update(cleaned);
+          previewBoundaryController.noteUpdate();
         };
 
         const deliveryBarrier = createMattermostReplyDeliveryBarrier({
@@ -1992,7 +2002,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           onObservedReplyDelivery: draftToolProgressEnabled
                             ? () => draftStream.clear()
                             : undefined,
-                          disableBlockStreaming: true,
+                          disableBlockStreaming: draftPreviewEnabled
+                            ? true
+                            : typeof account.blockStreaming === "boolean"
+                              ? !account.blockStreaming
+                              : undefined,
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }
                             : {}),
@@ -2002,19 +2016,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               updateDraftFromPartial(payloadResult.text);
                             }
                           },
-                          onAssistantMessageStart: () => {
+                          onAssistantMessageStart: async () => {
+                            const boundarySettled = previewBoundaryController.noteBoundary();
                             lastPartialText = "";
                             progressDraft.resetReasoningProgress();
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
                             }
+                            await boundarySettled;
                           },
-                          onReasoningEnd: () => {
+                          onReasoningEnd: async () => {
+                            const boundarySettled = previewBoundaryController.noteBoundary();
                             lastPartialText = "";
                             progressDraft.resetReasoningProgress();
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
                             }
+                            await boundarySettled;
                           },
                           onReasoningStream: async (payloadResult) => {
                             if (account.streamingMode === "progress") {
@@ -2026,9 +2044,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             }
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
+                              previewBoundaryController.noteUpdate();
                             }
                           },
                           onToolStart: async (payloadValue) => {
+                            if (payloadValue.phase !== "update") {
+                              await previewBoundaryController.noteBoundary();
+                            }
                             if (!draftToolProgressEnabled) {
                               return;
                             }
@@ -2049,6 +2071,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               ),
                               { startImmediately: true },
                             );
+                            previewBoundaryController.noteUpdate();
                           },
                           onItemEvent: async (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
@@ -2069,6 +2092,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               }),
                               { startImmediately: true },
                             );
+                            previewBoundaryController.noteUpdate();
                           },
                         },
                       }),
