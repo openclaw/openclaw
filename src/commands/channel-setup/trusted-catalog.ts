@@ -85,7 +85,6 @@ function resolveRejectedCatalogLookup(
   rejected: ChannelPluginCatalogEntry[],
 ): TrustedCatalogLookupExclusions {
   const excludePluginRefs: NonNullable<TrustedCatalogLookupExclusions["excludePluginRefs"]> =
-    rejected.flatMap((entry) =>
       entry.pluginId?.trim()
         ? [
             {
