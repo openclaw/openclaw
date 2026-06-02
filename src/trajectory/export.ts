@@ -599,11 +599,48 @@ function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedact
   return next;
 }
 
+function uniqueRedactedObjectKey(key: string, usedKeys: Set<string>): string {
+  if (!usedKeys.has(key)) {
+    usedKeys.add(key);
+    return key;
+  }
+  let index = 2;
+  while (usedKeys.has(`${key}#${index}`)) {
+    index += 1;
+  }
+  const unique = `${key}#${index}`;
+  usedKeys.add(unique);
+  return unique;
+}
+
+function redactTrajectoryExportObjectKeys(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTrajectoryExportObjectKeys(entry, redaction));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const usedKeys = new Set<string>();
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
+    next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
+      entry,
+      redaction,
+    );
+  }
+  return next;
+}
+
 function redactTrajectoryExportValue(
   value: unknown,
   redaction: TrajectoryExportRedaction,
 ): unknown {
-  return sanitizeTrajectoryExportValue(redactLocalPathValues(value, redaction));
+  const redactedValue = sanitizeTrajectoryExportValue(redactLocalPathValues(value, redaction));
+  return redactTrajectoryExportObjectKeys(redactedValue, redaction);
 }
 
 function redactEventForExport(

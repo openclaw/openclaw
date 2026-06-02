@@ -417,7 +417,7 @@ describe("exportTrajectoryBundle", () => {
       "utf8",
     );
 
-    await exportTrajectoryBundle({
+    const bundle = await exportTrajectoryBundle({
       outputDir,
       sessionFile,
       sessionId: "session-1",
@@ -434,6 +434,8 @@ describe("exportTrajectoryBundle", () => {
     for (const secret of rawSecrets) {
       expect(exportedBundleText).not.toContain(secret);
     }
+    expect(JSON.stringify(bundle.events)).not.toContain(rawSecrets[5]);
+    expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
   });
 
   it("rejects oversized runtime trajectory files", async () => {
