@@ -2,7 +2,10 @@ import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookEntry, HookSource } from "./types.js";
 
-export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
+export type HookEnableStateReason =
+  | "disabled in config"
+  | "workspace hook (disabled by default)"
+  | "hook disabled by default (opt-in)";
 
 type HookEnableState = {
   enabled: boolean;
@@ -13,6 +16,11 @@ type HookSourcePolicy = {
   precedence: number;
   trustedLocalCode: boolean;
   defaultEnableMode: "default-on" | "explicit-opt-in";
+  // Whether a hook's own frontmatter may override its default-enable mode.
+  // Only safe for sources whose code ships with (or is installed into) the
+  // binary; workspace hooks are untrusted local code and must stay explicit
+  // opt-in regardless of what their HOOK.md declares.
+  allowMetadataEnableOverride: boolean;
   canOverride: HookSource[];
   canBeOverriddenBy: HookSource[];
 };
@@ -28,6 +36,7 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
     precedence: 10,
     trustedLocalCode: true,
     defaultEnableMode: "default-on",
+    allowMetadataEnableOverride: true,
     canOverride: ["openclaw-bundled"],
     canBeOverriddenBy: ["openclaw-managed", "openclaw-plugin"],
   },
@@ -35,6 +44,7 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
     precedence: 20,
     trustedLocalCode: true,
     defaultEnableMode: "default-on",
+    allowMetadataEnableOverride: true,
     canOverride: ["openclaw-bundled", "openclaw-plugin"],
     canBeOverriddenBy: ["openclaw-managed"],
   },
@@ -42,6 +52,7 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
     precedence: 30,
     trustedLocalCode: true,
     defaultEnableMode: "default-on",
+    allowMetadataEnableOverride: true,
     canOverride: ["openclaw-bundled", "openclaw-managed", "openclaw-plugin"],
     canBeOverriddenBy: ["openclaw-managed"],
   },
@@ -49,6 +60,7 @@ const HOOK_SOURCE_POLICIES: Record<HookSource, HookSourcePolicy> = {
     precedence: 40,
     trustedLocalCode: true,
     defaultEnableMode: "explicit-opt-in",
+    allowMetadataEnableOverride: false,
     canOverride: ["openclaw-workspace"],
     canBeOverriddenBy: ["openclaw-workspace"],
   },
@@ -90,8 +102,16 @@ export function resolveHookEnableState(params: {
   }
 
   const sourcePolicy = getHookSourcePolicy(entry.hook.source);
-  if (sourcePolicy.defaultEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
-    return { enabled: false, reason: "workspace hook (disabled by default)" };
+  const effectiveEnableMode =
+    sourcePolicy.allowMetadataEnableOverride && entry.metadata?.defaultEnableMode
+      ? entry.metadata.defaultEnableMode
+      : sourcePolicy.defaultEnableMode;
+  if (effectiveEnableMode === "explicit-opt-in" && hookConfig?.enabled !== true) {
+    const reason: HookEnableStateReason =
+      entry.hook.source === "openclaw-workspace"
+        ? "workspace hook (disabled by default)"
+        : "hook disabled by default (opt-in)";
+    return { enabled: false, reason };
   }
 
   return { enabled: true };
