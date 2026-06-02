@@ -1601,6 +1601,15 @@ export async function runAgentTurnWithFallback(params: {
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
     if (!params.opts?.onBlockReply) {
+      // Compaction notices are delivered via the active turn's block-reply
+      // stream.  When compaction fires outside a streaming reply turn (e.g.
+      // proactive maxHistoryShare-triggered compaction or subagent-completion
+      // auto-announce), there is no wired onBlockReply and the notice must
+      // be silently skipped.  Log at default level so operators can see that
+      // compaction did occur even when the user-facing notice was suppressed.
+      agentTurnTimingLog.warn(
+        `compaction ${phase} notice skipped (no active streaming turn to deliver through)`,
+      );
       return;
     }
     const text =
