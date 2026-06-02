@@ -7,6 +7,11 @@ import type { EmbeddedAgentRunResult } from "../types.js";
 
 type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
+/**
+ * Merges media emitted by tools into the channel payloads produced by the
+ * assistant turn. The first non-reasoning reply owns the media so text and
+ * attachments stay together; metadata is preserved for delivery bookkeeping.
+ */
 export function mergeAttemptToolMediaPayloads(params: {
   payloads?: EmbeddedRunPayload[];
   toolMediaUrls?: string[];
@@ -29,6 +34,9 @@ export function mergeAttemptToolMediaPayloads(params: {
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror
     ) {
+      // Message-tool-only source replies are transcript mirrors of a send that
+      // already happened elsewhere; attaching generated media here would create
+      // a duplicate channel delivery.
       return payloads;
     }
     const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));
