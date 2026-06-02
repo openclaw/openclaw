@@ -68,6 +68,65 @@ describe("harness context engine lifecycle", () => {
     expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
   });
 
+  it("forwards isHeartbeat:true to afterTurn when provided", async () => {
+    const afterTurn = vi.fn(async () => {});
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [textMessage("assistant", "answer", 1)],
+      prePromptMessageCount: 0,
+      isHeartbeat: true,
+      warn: () => {},
+    });
+    const calls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const params = calls[0]?.[0] as { isHeartbeat?: boolean } | undefined;
+    expect(params?.isHeartbeat).toBe(true);
+  });
+
+  it("forwards isHeartbeat:false to afterTurn when provided", async () => {
+    const afterTurn = vi.fn(async () => {});
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [textMessage("assistant", "answer", 1)],
+      prePromptMessageCount: 0,
+      isHeartbeat: false,
+      warn: () => {},
+    });
+    const calls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const params = calls[0]?.[0] as { isHeartbeat?: boolean } | undefined;
+    expect(params?.isHeartbeat).toBe(false);
+  });
+
+  it("omits isHeartbeat from afterTurn when not provided", async () => {
+    const afterTurn = vi.fn(async () => {});
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [textMessage("assistant", "answer", 1)],
+      prePromptMessageCount: 0,
+      warn: () => {},
+    });
+    const calls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const params = calls[0]?.[0] as { isHeartbeat?: boolean } | undefined;
+    expect(params).not.toHaveProperty("isHeartbeat");
+  });
+
   it("keeps hidden runtime-context custom messages out of afterTurn hooks", async () => {
     const beforePromptUser = textMessage("user", "old ask", 1);
     const beforePromptRuntimeContext = runtimeContextMessage("old hidden context", 2);
