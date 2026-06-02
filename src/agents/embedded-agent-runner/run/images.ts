@@ -112,6 +112,11 @@ function isOpenClawCliImageCachePath(filePath: string): boolean {
   });
 }
 
+/**
+ * Rebuilds the model image array in the same order the prompt saw them:
+ * existing inline images and offloaded attachments follow `imageOrder`, then
+ * explicit prompt path/media refs are appended after attachment-owned images.
+ */
 export function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   existingImages?: ImageContent[];
@@ -241,6 +246,11 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
   return uris;
 }
 
+/**
+ * Separates image refs that came from attachment boilerplate from refs the user
+ * actually typed into the prompt. Attachment refs are already represented by
+ * existing/offloaded image content and should not be loaded a second time.
+ */
 export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
@@ -513,12 +523,7 @@ export async function loadImageFromRef(
   }
 }
 
-/**
- * Checks if a model supports image input based on its input capabilities.
- *
- * @param model The model object with input capability array
- * @returns True if the model supports image input
- */
+/** Returns whether the resolved model advertises native image input support. */
 export function modelSupportsImages(model: { input?: string[] }): boolean {
   return model.input?.includes("image") ?? false;
 }
