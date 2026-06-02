@@ -3,15 +3,19 @@ import {
   type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
 
+/** Terminal status stored for the attempt trajectory. */
 export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
+/** Error reason for turns that ended without user-visible delivery or progress. */
 export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
+/** Terminal trajectory result with an optional non-deliverable failure reason. */
 export type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };
 
+/** Inputs used to classify whether the attempt delivered anything terminal. */
 export type ResolveAttemptTrajectoryTerminalParams = {
   promptError?: unknown;
   aborted: boolean;
@@ -42,6 +46,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   lastAssistantStopReason?: string;
 };
 
+/** Adds safe visible fallback text unless the last assistant state was error-like. */
 export function resolveTerminalAssistantTexts(params: {
   assistantTexts: string[];
   lastAssistantStopReason?: string;
@@ -82,6 +87,7 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
+/** Classifies the attempt's final trajectory status from delivery/progress evidence. */
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
@@ -105,6 +111,8 @@ export function resolveAttemptTrajectoryTerminal(
     params.lastToolError !== undefined ||
     hasAsyncStartedToolActivity(params.toolMetas);
 
+  // A terminal tool-use stop with no committed delivery is a failed turn even
+  // when the assistant narrated intent, because no final result reached users.
   if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {
     return {
       status: "error",

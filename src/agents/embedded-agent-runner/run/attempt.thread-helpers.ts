@@ -2,8 +2,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
+/** Custom transcript marker recording when cache-TTL pruning was touched. */
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
+/** Combines hook-provided system context around the base prompt. */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
@@ -25,6 +27,7 @@ export function composeSystemPromptWithHookContext(params: {
   });
 }
 
+/** Returns the workspace dir to expose to spawned subagents under sandbox limits. */
 export function resolveAttemptSpawnWorkspaceDir(params: {
   sandbox?: {
     enabled?: boolean;
@@ -37,6 +40,7 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
     : undefined;
 }
 
+/** Decides whether this attempt may append the cache-TTL transcript marker. */
 function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
@@ -55,6 +59,7 @@ function shouldAppendAttemptCacheTtl(params: {
   );
 }
 
+/** Appends cache-TTL metadata after a clean non-compaction attempt. */
 export function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
     appendCustomEntry?: (customType: string, data: unknown) => void;
@@ -71,6 +76,8 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   if (!shouldAppendAttemptCacheTtl(params)) {
     return false;
   }
+  // Writing the marker after compaction would sit between compacted history and
+  // the next prompt, which breaks the compaction guard's last-entry checks.
   params.sessionManager.appendCustomEntry?.(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
     timestamp: params.now ?? Date.now(),
     provider: params.provider,
@@ -79,6 +86,7 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   return true;
 }
 
+/** Decides whether a completed bootstrap turn is safe to persist. */
 export function shouldPersistCompletedBootstrapTurn(params: {
   shouldRecordCompletedBootstrapTurn: boolean;
   promptError: unknown;
