@@ -397,11 +397,26 @@ export function formatWikiLink(params: {
   renderMode: "native" | "obsidian";
   relativePath: string;
   title: string;
+  /** Path of the output file containing this link, relative to vault root. */
+  fromPath?: string;
 }): string {
   const withoutExtension = params.relativePath.replace(/\.md$/i, "");
-  return params.renderMode === "obsidian"
-    ? `[[${withoutExtension}|${params.title}]]`
-    : `[${params.title}](${params.relativePath})`;
+  if (params.renderMode === "obsidian") {
+    return `[[${withoutExtension}|${params.title}]]`;
+  }
+  const linkTarget = params.fromPath
+    ? relativeLink(params.relativePath, params.fromPath)
+    : params.relativePath;
+  return `[${params.title}](${linkTarget})`;
+}
+
+function relativeLink(targetPath: string, fromPath: string): string {
+  const fromDir = path.posix.dirname(fromPath);
+  if (fromDir === ".") {
+    return targetPath;
+  }
+  const relative = path.posix.relative(fromDir, targetPath);
+  return relative || path.posix.basename(targetPath);
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
