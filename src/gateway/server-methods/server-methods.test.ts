@@ -624,6 +624,42 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not return a transient abort snapshot before the timeout grace expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-transient-abort-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      // Emit an aborted end without endedAt — a transient/correctable abort that
+      // the retry grace should keep from becoming terminal too early.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 100, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).toBeNull();
+
+      // The grace timer should still record the snapshot so a later wait
+      // (after the grace expires) returns the cached terminal result.
+      await vi.advanceTimersByTimeAsync(15_000);
+      const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expect(cached).not.toBeNull();
+      expect(cached?.status).toBe("timeout");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
