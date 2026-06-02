@@ -23,7 +23,8 @@ import { resolveConfigDir } from "../utils.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
-export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
+/** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
+export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
@@ -123,21 +124,16 @@ function sanitizeFilename(name: string): string {
   return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
 }
 
-/**
- * Extract original filename from path if it matches the embedded format.
- * Pattern: {original}---{uuid}.{ext} → returns "{original}.{ext}"
- * Falls back to basename if no pattern match, or "file.bin" if empty.
- */
+/** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
 export function extractOriginalFilename(filePath: string): string {
   const basename = basenameFromAnyPath(filePath);
   if (!basename) {
     return "file.bin";
-  } // Fallback for empty input
+  }
 
   const ext = extnameFromAnyPath(basename);
   const nameWithoutExt = path.basename(basename, ext);
 
-  // Check for ---{uuid} pattern (36 chars: 8-4-4-4-12 with hyphens)
   const match = nameWithoutExt.match(
     /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
   );
@@ -145,7 +141,7 @@ export function extractOriginalFilename(filePath: string): string {
     return `${match[1]}${ext}`;
   }
 
-  return basename; // Fallback: use as-is
+  return basename;
 }
 
 /** Returns the configured absolute media-store root without creating it. */
