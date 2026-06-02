@@ -24,6 +24,7 @@ function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: true,
+    platformIncompatible: false,
     modelVisible: true,
     userInvocable: true,
     commandVisible: true,
@@ -46,6 +47,7 @@ describe("doctor skills", () => {
     const unavailable = createSkill({
       name: "missing-bin",
       eligible: false,
+      platformIncompatible: false,
       modelVisible: false,
       commandVisible: false,
       missing: { bins: ["tool"], anyBins: [], env: [], config: [], os: [] },
@@ -66,6 +68,7 @@ describe("doctor skills", () => {
       createSkill({
         name: "places",
         eligible: false,
+        platformIncompatible: false,
         missing: {
           bins: ["goplaces"],
           anyBins: [],
@@ -94,6 +97,7 @@ describe("doctor skills", () => {
       name: "github",
       skillKey: "github",
       eligible: true,
+      platformIncompatible: false,
       missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
     });
     const discovery: GhConfigDiscoveryInput = {
@@ -114,6 +118,7 @@ describe("doctor skills", () => {
       name: "github",
       skillKey: "github",
       eligible: false,
+      platformIncompatible: false,
       missing: { bins: ["gh"], anyBins: [], env: [], config: [], os: [] },
     });
     const discovery: GhConfigDiscoveryInput = {
@@ -130,6 +135,7 @@ describe("doctor skills", () => {
       name: "github",
       skillKey: "github",
       eligible: false,
+      platformIncompatible: false,
       disabled: true,
       missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
     });
@@ -147,6 +153,7 @@ describe("doctor skills", () => {
       name: "github",
       skillKey: "github",
       eligible: true,
+      platformIncompatible: false,
       blockedByAgentFilter: true,
       missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
     });
@@ -164,6 +171,7 @@ describe("doctor skills", () => {
       name: "github",
       skillKey: "github",
       eligible: true,
+      platformIncompatible: false,
       missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
     });
     const discovery: GhConfigDiscoveryInput = {

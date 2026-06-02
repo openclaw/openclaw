@@ -43,6 +43,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: false,
+    platformIncompatible: false,
     modelVisible: false,
     userInvocable: true,
     commandVisible: false,

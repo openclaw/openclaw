@@ -59,6 +59,13 @@ export type SkillStatusEntry = {
   blockedByAllowlist: boolean;
   blockedByAgentFilter: boolean;
   eligible: boolean;
+  /**
+   * True when the skill declares an OS requirement that does not include the
+   * current platform (e.g. a macOS-only skill on Linux/Windows). Such skills are
+   * inapplicable by design rather than broken installs, so callers can surface
+   * them separately from genuine "missing requirements".
+   */
+  platformIncompatible: boolean;
   modelVisible: boolean;
   userInvocable: boolean;
   commandVisible: boolean;
@@ -279,6 +286,11 @@ function buildSkillStatus(
       isConfigSatisfied,
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  // Resolve platform incompatibility through the shared requirement evaluator's
+  // `missing.os` (which already accounts for remote macOS node eligibility)
+  // rather than a local-only process.platform check, so a macOS-only skill a
+  // remote node can satisfy is not flagged incompatible.
+  const platformIncompatible = missing.os.length > 0;
   const availableToAgent = eligible && !blockedByAgentFilter;
   const userInvocable = indexed.userInvocable;
 
@@ -309,6 +321,7 @@ function buildSkillStatus(
     blockedByAllowlist,
     blockedByAgentFilter,
     eligible,
+    platformIncompatible,
     modelVisible: availableToAgent && indexed.promptVisible,
     userInvocable,
     commandVisible: availableToAgent && userInvocable,
