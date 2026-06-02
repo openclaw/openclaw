@@ -1,5 +1,9 @@
 import { log } from "../logger.js";
 
+/**
+ * Minimal active-session surface needed to steer a running attempt and observe
+ * whether the queued user message reached the transcript.
+ */
 export type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
@@ -7,6 +11,7 @@ export type EmbeddedAgentActiveSessionSteerTarget = {
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
+/** Default wait for a steered user message to appear in the active transcript. */
 export const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
@@ -103,6 +108,11 @@ export async function cancelQueuedSteeringMessage(
   return true;
 }
 
+/**
+ * Sends a steering message and resolves only after the matching user
+ * `message_end` event appears. If the run ends or times out first, the pending
+ * queue entry is removed so an abandoned steer does not leak into a later turn.
+ */
 export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -189,6 +199,10 @@ export async function steerAndWaitForTranscriptCommit(
   });
 }
 
+/**
+ * Steers the active session directly or waits for transcript commitment when a
+ * caller needs delivery proof before returning.
+ */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
