@@ -404,11 +404,12 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   const currentVersion = readInstallRecordIdentityVersion(params.currentRecord);
   const legacyVersion = readInstallRecordIdentityVersion(params.legacyRecord);
   const sameVersion = Boolean(currentVersion && legacyVersion && currentVersion === legacyVersion);
+  const currentNpmName = readInstallRecordNpmName(params.currentRecord);
+  const legacyNpmName = readInstallRecordNpmName(params.legacyRecord);
   const sameNpmPackage =
     params.currentRecord.source === "npm" &&
     params.legacyRecord.source === "npm" &&
-    readInstallRecordNpmName(params.currentRecord) ===
-      readInstallRecordNpmName(params.legacyRecord);
+    Boolean(currentNpmName && legacyNpmName && currentNpmName === legacyNpmName);
   return Boolean(
     (sameVersion && sameNpmPackage) ||
     (params.legacyRecord.resolvedSpec &&
