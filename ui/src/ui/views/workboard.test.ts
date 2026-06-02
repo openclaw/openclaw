@@ -618,6 +618,52 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]).toMatchObject({ status: "scheduled", updatedAt: 2 });
   });
 
+  it("does not queue status-control moves while a card is busy", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.busyCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Busy move",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const request = vi.fn();
+    const props = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    };
+    const container = document.createElement("div");
+
+    render(renderWorkboard(props), container);
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect?.disabled).toBe(true);
+
+    moveSelect!.value = "blocked";
+    moveSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    const dispatched = moveSelect!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+
+    expect(dispatched).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(state.cards[0]).toMatchObject({ status: "todo", updatedAt: 1 });
+  });
+
   it("offers start controls when a linked session no longer exists", () => {
     const host = {};
     const state = getWorkboardState(host);

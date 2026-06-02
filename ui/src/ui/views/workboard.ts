@@ -305,7 +305,7 @@ function moveCardToStatus(
   status: WorkboardStatus,
   state: WorkboardUiState,
 ) {
-  if (status === card.status) {
+  if (status === card.status || state.busyCardId === card.id || !props.connected || !props.client) {
     return;
   }
   void moveWorkboardCard({
