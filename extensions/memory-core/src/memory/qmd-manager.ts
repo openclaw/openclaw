@@ -22,8 +22,10 @@ import {
   buildSessionEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
+  isSessionArchiveArtifactName,
   isQmdScopeAllowed,
   listSessionFilesForAgent,
+  parseCanonicalSessionSyncTargetFromPath,
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
   runCliCommand,
@@ -54,12 +56,21 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
+import {
+  attachQmdSessionArtifactHit,
+  copyQmdSessionArtifactHit,
+  refreshQmdSessionArtifactDocIds,
+  replaceQmdSessionArtifactMappings,
+  resolveQmdSessionArtifactIdentity,
+  type QmdSessionArtifactMapping,
+} from "../qmd-session-artifacts.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 import {
   recordMemoryWatchEventPath,
@@ -239,6 +250,14 @@ type CollectionRoot = {
   kind: MemorySource;
 };
 
+type DocLocation = {
+  abs: string;
+  collection: string;
+  collectionRelativePath: string;
+  rel: string;
+  source: MemorySource;
+};
+
 type SessionExporterConfig = {
   dir: string;
   retentionMs?: number;
@@ -345,10 +364,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
-  private readonly docPathCache = new Map<
-    string,
-    { rel: string; abs: string; source: MemorySource }
-  >();
+  private readonly docPathCache = new Map<string, DocLocation>();
   private readonly exportedSessionState = new Map<
     string,
     {
@@ -1298,14 +1314,27 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (score < minScore) {
         continue;
       }
-      results.push({
+      const result = {
         path: doc.rel,
         startLine: lines.startLine,
         endLine: lines.endLine,
         score,
         snippet,
         source: doc.source,
-      });
+      } satisfies MemorySearchResult;
+      const artifactIdentity =
+        doc.source === "sessions"
+          ? resolveQmdSessionArtifactIdentity({
+              artifactPath: doc.collectionRelativePath,
+              collection: doc.collection,
+              docid: entry.docid?.trim() || undefined,
+              indexPath: this.indexPath,
+              searchPath: doc.rel,
+            })
+          : null;
+      results.push(
+        artifactIdentity ? attachQmdSessionArtifactHit(result, artifactIdentity) : result,
+      );
     }
     opts?.onDebug?.({
       backend: "qmd",
@@ -1543,6 +1572,9 @@ export class QmdMemoryManager implements MemorySearchManager {
           await this.exportSessions();
         }
         await this.runQmdUpdateWithRetry(reason);
+        if (this.sessionExporter) {
+          this.refreshSessionArtifactDocIds();
+        }
         this.dirty = false;
       });
       if (this.closed) {
@@ -2353,6 +2385,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const files = await listSessionFilesForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
+    const artifactMappings: QmdSessionArtifactMapping[] = [];
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
@@ -2367,6 +2400,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
       const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
+      const identity = this.buildSessionArtifactMapping(sessionFile, targetName, target);
+      if (identity) {
+        artifactMappings.push(identity);
+      }
       const state = this.exportedSessionState.get(sessionFile);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
         await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
@@ -2394,6 +2431,56 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!tracked.has(sessionFile) || !isPathInside(exportDir, state.target)) {
         this.exportedSessionState.delete(sessionFile);
       }
+    }
+    replaceQmdSessionArtifactMappings({
+      collection: this.sessionExporter.collectionName,
+      indexPath: this.indexPath,
+      mappings: artifactMappings,
+    });
+  }
+
+  private buildSessionArtifactMapping(
+    sessionFile: string,
+    artifactPath: string,
+    target: string,
+  ): QmdSessionArtifactMapping | null {
+    if (!this.sessionExporter) {
+      return null;
+    }
+    const identity = parseCanonicalSessionSyncTargetFromPath(sessionFile);
+    if (!identity?.agentId) {
+      return null;
+    }
+    return {
+      agentId: identity.agentId,
+      archived: isSessionArchiveArtifactName(path.basename(sessionFile)),
+      artifactPath,
+      collection: this.sessionExporter.collectionName,
+      memoryKey: formatSessionTranscriptMemoryHitKey({
+        agentId: identity.agentId,
+        sessionId: identity.sessionId,
+      }),
+      searchPath: this.buildSearchPath(
+        this.sessionExporter.collectionName,
+        artifactPath,
+        path.relative(this.workspaceDir, target),
+        target,
+      ),
+      sessionId: identity.sessionId,
+    };
+  }
+
+  private refreshSessionArtifactDocIds(): void {
+    if (!this.sessionExporter) {
+      return;
+    }
+    try {
+      refreshQmdSessionArtifactDocIds({
+        collection: this.sessionExporter.collectionName,
+        indexPath: this.indexPath,
+      });
+    } catch (err) {
+      log.warn(`failed to refresh qmd session artifact identity docids: ${String(err)}`);
     }
   }
 
@@ -2427,7 +2514,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async resolveDocLocation(
     docid?: string,
     hints?: { preferredCollection?: string; preferredFile?: string },
-  ): Promise<{ rel: string; abs: string; source: MemorySource } | null> {
+  ): Promise<DocLocation | null> {
     const normalizedHints = this.normalizeDocHints(hints);
     if (!docid) {
       return this.resolveDocLocationFromHints(normalizedHints);
@@ -2473,7 +2560,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private resolveDocLocationFromHints(hints: {
     preferredCollection?: string;
     preferredFile?: string;
-  }): { rel: string; abs: string; source: MemorySource } | null {
+  }): DocLocation | null {
     if (!hints.preferredCollection || !hints.preferredFile) {
       return null;
     }
@@ -2497,7 +2584,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private resolveIndexedDocLocationFromHint(
     collection: string,
     preferredFile: string,
-  ): { rel: string; abs: string; source: MemorySource } | null {
+  ): DocLocation | null {
     const trimmedCollection = collection.trim();
     const trimmedFile = preferredFile.trim();
     if (!trimmedCollection || !trimmedFile) {
@@ -2599,7 +2686,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private pickDocLocation(
     rows: Array<{ collection: string; path: string }>,
     hints?: { preferredCollection?: string; preferredFile?: string },
-  ): { rel: string; abs: string; source: MemorySource } | null {
+  ): DocLocation | null {
     if (hints?.preferredCollection) {
       for (const row of rows) {
         if (row.collection !== hints.preferredCollection) {
@@ -2794,10 +2881,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     return isQmdScopeAllowed(this.qmd.scope, sessionKey);
   }
 
-  private toDocLocation(
-    collection: string,
-    collectionRelativePath: string,
-  ): { rel: string; abs: string; source: MemorySource } | null {
+  private toDocLocation(collection: string, collectionRelativePath: string): DocLocation | null {
     const rootEntry = this.collectionRoots.get(collection);
     if (!rootEntry) {
       return null;
@@ -2811,7 +2895,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       relativeToWorkspace,
       absPath,
     );
-    return { rel: relPath, abs: absPath, source: rootEntry.kind };
+    return {
+      rel: relPath,
+      abs: absPath,
+      collection,
+      collectionRelativePath: normalizedRelative,
+      source: rootEntry.kind,
+    };
   }
 
   private buildSearchPath(
@@ -2950,7 +3040,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         remaining -= snippet.length;
       } else {
         const trimmed = snippet.slice(0, Math.max(0, remaining));
-        clamped.push({ ...entry, snippet: trimmed });
+        clamped.push(copyQmdSessionArtifactHit(entry, { ...entry, snippet: trimmed }));
         break;
       }
     }
