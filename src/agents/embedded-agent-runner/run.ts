@@ -623,6 +623,16 @@ export async function runEmbeddedAgent(
         modelId,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...((params.messageChannel ?? params.messageProvider)
+          ? { turnSourceChannel: params.messageChannel ?? params.messageProvider }
+          : {}),
+        ...((params.currentChannelId ?? params.messageTo)
+          ? { turnSourceTo: params.currentChannelId ?? params.messageTo }
+          : {}),
+        ...(params.agentAccountId ? { turnSourceAccountId: params.agentAccountId } : {}),
+        ...((params.currentThreadTs ?? params.messageThreadId)
+          ? { turnSourceThreadId: params.currentThreadTs ?? params.messageThreadId }
+          : {}),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
         notifyExecutionPhase("before_agent_reply", { provider, model: modelId });

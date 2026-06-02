@@ -676,6 +676,8 @@ describe("POST /tools/invoke", () => {
       port: sharedPort,
       headers: {
         ...gatewayAuthHeaders(),
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-account-id": "bot-1",
         "x-openclaw-message-to": "channel:24514",
         "x-openclaw-thread-id": "thread-24514",
       },
@@ -688,6 +690,11 @@ describe("POST /tools/invoke", () => {
       agentTo: "channel:24514",
       agentThreadId: "thread-24514",
     });
+    const hookCtx = firstHookCallArg().ctx;
+    expect(hookCtx?.turnSourceChannel).toBe("telegram");
+    expect(hookCtx?.turnSourceAccountId).toBe("bot-1");
+    expect(hookCtx?.turnSourceTo).toBe("channel:24514");
+    expect(hookCtx?.turnSourceThreadId).toBe("thread-24514");
   });
 
   it("denies sessions_send via HTTP gateway", async () => {
