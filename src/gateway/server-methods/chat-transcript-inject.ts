@@ -26,6 +26,7 @@ export type GatewayInjectedTtsSupplementMarker = {
   textSha256: string;
 };
 
+/** Builds the assistant content blocks while preserving caller-supplied media block ordering. */
 function resolveInjectedAssistantContent(params: {
   message: string;
   label?: string;
@@ -87,6 +88,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     label: params.label,
     content: params.content,
   });
+  // Use the shared transcript appender so injected rows advance the same parentId chain as model rows.
   const messageBody: AppendMessageArg & Record<string, unknown> = {
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
@@ -104,6 +106,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    // TTS supplements and abort notices are transcript-side metadata, not model response fields.
     ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.abortMeta
       ? {
@@ -124,6 +127,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       useRawWhenLinear: true,
       config: params.config,
     });
+    // Notify history/SSE consumers only after the append produced the stored message id.
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),

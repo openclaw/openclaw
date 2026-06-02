@@ -69,12 +69,14 @@ function findCasePreservingPeerDescriptor(
   return CASE_PRESERVING_PEERS.find((d) => d.channel === c && d.peerKinds.has(k));
 }
 
+/** True when a folded legacy alias must be proven before merging with the canonical key. */
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
   const ref = parseRawSessionConversationRef(sessionKey);
   const descriptor = findCasePreservingPeerDescriptor(ref?.channel, ref?.kind);
   return descriptor?.span === "tail";
 }
 
+/** Canonicalizes peer IDs unless the owning channel registered them as opaque/case-sensitive. */
 export function normalizeSessionPeerId(params: {
   channel: string | undefined | null;
   peerKind?: string | null;
@@ -202,6 +204,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
     writeNormalizedSessionKeyCache(raw, normalized);
     return normalized;
   }
+  // Preserve opaque peer spans first, then lowercase structural key syntax around them.
   const spans = collectCasePreservedSpans(raw)
     .filter((span) => span.end > span.start)
     .toSorted((a, b) => a.start - b.start);
@@ -250,6 +253,7 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+/** Matches cron run keys after agent scoping is stripped and canonicalized. */
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -258,6 +262,7 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
 }
 
+/** Matches any cron-owned session key, scoped or legacy unscoped. */
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -266,6 +271,7 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
+/** Matches subagent keys in both current agent-scoped and legacy unscoped forms. */
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
@@ -278,6 +284,7 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("subagent:") === true;
 }
 
+/** Counts nested subagent ownership markers for depth sorting and display. */
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
   const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
@@ -286,6 +293,7 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
   return raw.split(":subagent:").length - 1;
 }
 
+/** Matches ACP session keys in both current agent-scoped and legacy unscoped forms. */
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
@@ -299,6 +307,7 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
 }
 
+/** Splits the last structural `:thread:` suffix without lowercasing opaque IDs. */
 export function parseThreadSessionSuffix(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {
@@ -320,6 +329,7 @@ export function parseThreadSessionSuffix(
   return { baseSessionKey, threadId };
 }
 
+/** Parses channel/group conversation refs while preserving the raw provider-owned id tail. */
 export function parseRawSessionConversationRef(
   sessionKey: string | undefined | null,
 ): RawSessionConversationRef | null {
@@ -351,6 +361,7 @@ export function parseRawSessionConversationRef(
   return { channel, kind, rawId, prefix };
 }
 
+/** Returns the parent key only when the input has a non-empty thread suffix. */
 export function resolveThreadParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {

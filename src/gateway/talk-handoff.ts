@@ -103,6 +103,10 @@ type TalkHandoffRoomState = {
 
 const handoffs = new Map<string, TalkHandoffRecord>();
 
+/**
+ * Creates a short-lived Talk room handoff and returns the only plaintext token
+ * the caller can use to join or mutate that room.
+ */
 export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffCreateResult {
   pruneExpiredTalkHandoffs();
   const rawCreatedAt = Date.now();
@@ -146,11 +150,16 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
   return { ...toPublicTalkHandoffRecord(record), token };
 }
 
+/** Returns a live handoff record after pruning expired records from the in-memory registry. */
 export function getTalkHandoff(id: string): TalkHandoffRecord | undefined {
   pruneExpiredTalkHandoffs();
   return handoffs.get(id);
 }
 
+/**
+ * Authenticates a client into a handoff room and reports any displaced client
+ * events separately so callers can notify old and new connections differently.
+ */
 export function joinTalkHandoff(
   id: string,
   token: string,
@@ -181,6 +190,7 @@ export function joinTalkHandoff(
   };
 }
 
+/** Starts or adopts the active Talk turn for a token-authenticated handoff room. */
 export function startTalkHandoffTurn(
   id: string,
   token: string,
@@ -207,6 +217,7 @@ export function startTalkHandoffTurn(
   };
 }
 
+/** Ends the active Talk turn while preserving stale-turn errors from the controller. */
 export function endTalkHandoffTurn(
   id: string,
   token: string,
@@ -232,6 +243,7 @@ export function endTalkHandoffTurn(
   };
 }
 
+/** Cancels the active Talk turn with a room-scoped reason payload for observers. */
 export function cancelTalkHandoffTurn(
   id: string,
   token: string,
@@ -257,6 +269,7 @@ export function cancelTalkHandoffTurn(
   };
 }
 
+/** Closes a handoff room and returns the final event that active clients should receive. */
 export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   pruneExpiredTalkHandoffs();
   const record = handoffs.get(id);
@@ -277,6 +290,7 @@ export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   };
 }
 
+/** Verifies the caller-provided room token against the stored hash without exposing the token. */
 export function verifyTalkHandoffToken(record: TalkHandoffRecord, token: string): boolean {
   return record.tokenHash === hashTalkHandoffToken(token);
 }
@@ -299,6 +313,8 @@ function pruneExpiredTalkHandoffs(now = Date.now()): void {
   }
   for (const [id, record] of handoffs) {
     if (!isFutureDateTimestampMs(record.expiresAt, { nowMs: validNow })) {
+      // Emit a final room event before deletion so pollers do not silently lose
+      // the reason an otherwise valid handoff disappeared.
       appendTalkHandoffRoomEvent(record, {
         type: "session.closed",
         payload: { reason: "expired", handoffId: id, roomId: record.roomId },
@@ -357,6 +373,8 @@ function resolveTalkHandoffAccess(
     return { ok: false, reason: "not_found" };
   }
   if (!isFutureDateTimestampMs(record.expiresAt)) {
+    // Access checks also own lazy expiry cleanup; callers can treat "expired"
+    // as a terminal room state without separately revoking the handoff.
     appendTalkHandoffRoomEvent(record, {
       type: "session.closed",
       payload: { reason: "expired", handoffId: id, roomId: record.roomId },
@@ -378,6 +396,8 @@ function appendTalkHandoffRoomEvent(record: TalkHandoffRecord, input: TalkEventI
 function joinTalkHandoffRoom(record: TalkHandoffRecord, clientId: string | undefined): TalkEvent[] {
   const events: TalkEvent[] = [];
   if (record.room.activeClientId && record.room.activeClientId !== clientId) {
+    // A Talk handoff has one active room client. Replacement is explicit so the
+    // server can deliver the close notice to the old connection only.
     events.push(
       appendTalkHandoffRoomEvent(record, {
         type: "session.replaced",

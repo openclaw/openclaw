@@ -1,11 +1,9 @@
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 /**
- * Normalize optional gateway URL-input hostname allowlists.
- *
- * Semantics are intentionally:
- * - missing / empty / whitespace-only list => no hostname allowlist restriction
- * - deny-all URL fetching => use the corresponding `allowUrl: false` switch
+ * Normalize optional gateway URL-input hostname allowlists for OpenAI-compatible requests.
+ * Missing or whitespace-only lists mean unrestricted hostnames; callers that
+ * need deny-all URL fetching must use the owning `allowUrl: false` switch.
  */
 export function normalizeInputHostnameAllowlist(
   values: string[] | undefined,

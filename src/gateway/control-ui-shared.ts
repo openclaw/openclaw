@@ -6,6 +6,7 @@ import {
 
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
+/** Normalize configured Control UI mount paths to an empty root or slash-prefixed path. */
 export function normalizeControlUiBasePath(basePath?: string): string {
   if (!basePath) {
     return "";
@@ -26,12 +27,17 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   return normalized;
 }
 
+/** Build the Control UI avatar endpoint URL for an agent under the active base path. */
 export function buildControlUiAvatarUrl(basePath: string, agentId: string): string {
   return basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/${agentId}`
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;
 }
 
+/**
+ * Resolve an assistant avatar value into either a safe external/data URL, a
+ * Control UI avatar endpoint, or the original symbolic avatar text.
+ */
 export function resolveAssistantAvatarUrl(params: {
   avatar?: string | null;
   agentId?: string | null;
@@ -65,4 +71,5 @@ export function resolveAssistantAvatarUrl(params: {
   return avatar;
 }
 
+/** Prefix owned by the Control UI avatar handler. */
 export { CONTROL_UI_AVATAR_PREFIX };

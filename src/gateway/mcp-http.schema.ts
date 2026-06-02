@@ -5,6 +5,7 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
+/** Tool descriptor shape returned by MCP `tools/list` for Gateway loopback tools. */
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
@@ -19,6 +20,7 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
+/** Reads a non-empty loopback tool name without letting hostile getters break sibling tools. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -55,6 +57,9 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
+  // MCP clients expect one object schema per tool. Collapse simple unions into
+  // a permissive object while keeping fields required only when every variant
+  // requires them.
   const mergedProps: Record<string, unknown> = {};
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
@@ -136,6 +141,7 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
   return typeof value === "boolean" || isRecord(value);
 }
 
+/** Projects Gateway-scoped tools into MCP-compatible schema entries. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

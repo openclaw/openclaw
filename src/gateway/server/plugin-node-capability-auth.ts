@@ -12,6 +12,7 @@ import {
 } from "../plugin-node-capability.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
+/** Authorizes a plugin node-capability request using gateway auth first, then leased capability tokens. */
 export async function authorizePluginNodeCapabilityRequest(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
@@ -35,6 +36,8 @@ export async function authorizePluginNodeCapabilityRequest(params: {
     rateLimiter,
   } = params;
   if (malformedScopedPath) {
+    // Scoped capability paths are bearer-like credentials; malformed scoped
+    // paths fail closed instead of falling back to unscoped route auth.
     return { ok: false, reason: "unauthorized" };
   }
 

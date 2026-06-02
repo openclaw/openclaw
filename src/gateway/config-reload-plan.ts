@@ -8,6 +8,7 @@ import { isPlainObject } from "../utils.js";
 
 export type ChannelKind = ChannelId;
 
+/** Reload decision returned for a batch of changed config paths. */
 export type GatewayReloadPlan = {
   changedPaths: string[];
   restartGateway: boolean;
@@ -157,6 +158,8 @@ function listReloadRules(): ReloadRule[] {
   if (cachedReloadRules) {
     return cachedReloadRules;
   }
+  // Dynamic plugin/channel rules sit between built-in specific rules and the
+  // broad tail fallbacks so integrations can narrow their own reload behavior.
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
   const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) =>
     (plugin.reload?.configPrefixes ?? [])
@@ -230,6 +233,7 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
+/** Resolve reload metadata for schema display and config editing surfaces. */
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
   if (isPluginInstallTimestampPath(path)) {
     return { kind: "none" };
@@ -257,6 +261,7 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   return isPlainObject(installs) ? installs : {};
 }
 
+/** List legacy plugin install timestamp paths that changed between two configs. */
 export function listPluginInstallTimestampMetadataPaths(
   prevConfig: unknown,
   nextConfig: unknown,
@@ -282,6 +287,7 @@ export function listPluginInstallTimestampMetadataPaths(
   return paths;
 }
 
+/** List legacy plugin install records added or removed between two configs. */
 export function listPluginInstallWholeRecordPaths(
   prevConfig: unknown,
   nextConfig: unknown,
@@ -302,6 +308,10 @@ export function listPluginInstallWholeRecordPaths(
   return paths;
 }
 
+/**
+ * Build the runtime reload plan for changed config paths, separating full
+ * restart reasons from hot-reload actions and explicit no-op metadata paths.
+ */
 export function buildGatewayReloadPlan(
   changedPaths: string[],
   options: GatewayReloadPlanOptions = {},

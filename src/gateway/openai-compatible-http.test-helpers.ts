@@ -1,6 +1,10 @@
 type StartGatewayServer = typeof import("./server.js").startGatewayServer;
 type GatewayServerOptions = NonNullable<Parameters<StartGatewayServer>[1]>;
 
+/**
+ * Start the shared OpenAI-compatible test server with the Control UI disabled,
+ * keeping models, embeddings, and chat route tests on the same auth defaults.
+ */
 export async function startOpenAiCompatGatewayServer(options: {
   startGatewayServer: StartGatewayServer;
   port: number;

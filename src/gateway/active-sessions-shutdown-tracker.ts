@@ -1,18 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-// Module-level tracker of sessions that have received `session_start` but not
-// yet a paired `session_end`. The close handler drains this set on gateway
-// shutdown / restart so downstream `session_end` plugins (e.g. claude-mem)
-// can finalize sessions that were active when the process stopped, instead
-// of leaving ghost rows in `active` state across restarts (see #57790).
-//
-// Membership is keyed by `sessionId`. The existing session lifecycle paths
-// (`emitGatewaySessionStartPluginHook` /
-// `emitGatewaySessionEndPluginHook` in `session-reset-service.ts`) call into
-// this tracker so a session that has already been finalized by replace /
-// reset / delete / compaction is forgotten before the shutdown drain ever
-// runs. That is what keeps the shutdown finalizer from double-firing.
-
+/**
+ * Session state retained between `session_start` and `session_end` so shutdown
+ * can emit a final typed end event for still-active sessions.
+ */
 export type ActiveSessionForShutdown = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -24,6 +15,11 @@ export type ActiveSessionForShutdown = {
 
 const trackedSessions = new Map<string, ActiveSessionForShutdown>();
 
+/**
+ * Marks a session as needing shutdown finalization. Membership is keyed by
+ * `sessionId`, so reset/delete/compaction can forget exactly the session that
+ * already received its paired `session_end`.
+ */
 export function noteActiveSessionForShutdown(entry: ActiveSessionForShutdown): void {
   if (!entry.sessionId) {
     return;
@@ -31,6 +27,11 @@ export function noteActiveSessionForShutdown(entry: ActiveSessionForShutdown): v
   trackedSessions.set(entry.sessionId, entry);
 }
 
+/**
+ * Removes a session from the shutdown drain set after a normal lifecycle end.
+ * This prevents reset/delete/compaction from double-firing `session_end` when
+ * the process later exits.
+ */
 export function forgetActiveSessionForShutdown(sessionId: string | undefined): void {
   if (!sessionId) {
     return;
@@ -38,10 +39,17 @@ export function forgetActiveSessionForShutdown(sessionId: string | undefined): v
   trackedSessions.delete(sessionId);
 }
 
+/**
+ * Returns a snapshot of sessions that started but have not yet ended. The
+ * shutdown drain consumes this list and clears entries as it emits hooks.
+ */
 export function listActiveSessionsForShutdown(): ActiveSessionForShutdown[] {
   return Array.from(trackedSessions.values());
 }
 
+/**
+ * Clears process-local shutdown tracking between tests or runtime resets.
+ */
 export function clearActiveSessionsForShutdownTracker(): void {
   trackedSessions.clear();
 }

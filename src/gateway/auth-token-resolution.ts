@@ -7,17 +7,27 @@ import {
 } from "./resolve-configured-secret-input-string.js";
 
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
+/** Controls whether OPENCLAW_GATEWAY_TOKEN may backfill missing or unresolved config. */
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
 
+/**
+ * Resolves the Gateway auth token for install/status/doctor call sites.
+ * Precedence is explicit token, plaintext config, SecretRef, then optional env
+ * fallback; unresolved SecretRefs stay visible so callers can decide whether an
+ * env token is acceptable or whether the operator must fix the SecretRef.
+ */
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  /** CLI or call-site supplied token; whitespace-only values are ignored. */
   explicitToken?: string;
+  /** Defaults to "always"; install paths use stricter modes to avoid persisting env fallbacks. */
   envFallback?: GatewayAuthTokenEnvFallback;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<{
   token?: string;
   source?: GatewayAuthTokenResolutionSource;
+  /** True when gateway.auth.token was configured as a SecretRef or env template. */
   secretRefConfigured: boolean;
   unresolvedRefReason?: string;
 }> {

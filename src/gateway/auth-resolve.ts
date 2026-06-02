@@ -20,8 +20,11 @@ export type ResolvedGatewayAuthModeSource =
 /** Fully resolved Gateway auth policy before startup validates required secrets. */
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
+  /** Source that selected mode; useful for diagnostics and install policy. */
   modeSource?: ResolvedGatewayAuthModeSource;
+  /** Resolved plaintext token, excluding unresolved SecretRef config values. */
   token?: string;
+  /** Resolved plaintext password, excluding unresolved SecretRef config values. */
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
@@ -35,9 +38,13 @@ export type EffectiveSharedGatewayAuth = {
 
 /** Resolve Gateway auth mode, credentials, trusted-proxy policy, and Tailscale allowance. */
 export function resolveGatewayAuth(params: {
+  /** Persisted Gateway auth config. SecretRefs are treated as unresolved here. */
   authConfig?: GatewayAuthConfig | null;
+  /** Sparse runtime overlay used by startup and tests without mutating config. */
   authOverride?: GatewayAuthConfig | null;
+  /** Env map used for OPENCLAW_GATEWAY_TOKEN/PASSWORD fallback reads. */
   env?: NodeJS.ProcessEnv;
+  /** Tailscale serve can allow tokenless access unless stricter auth is selected. */
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
   const baseAuthConfig = params.authConfig ?? {};
@@ -119,7 +126,10 @@ export function resolveGatewayAuth(params: {
   };
 }
 
-/** Return the effective token/password secret for clients that cannot model every auth mode. */
+/**
+ * Returns the active token/password secret for clients that cannot model every
+ * auth mode. Non-shared modes return null instead of leaking stale credentials.
+ */
 export function resolveEffectiveSharedGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
   authOverride?: GatewayAuthConfig | null;

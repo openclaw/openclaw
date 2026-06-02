@@ -19,6 +19,11 @@ import type {
   StatefulBindingTargetSessionResult,
 } from "./stateful-target-drivers.js";
 
+/**
+ * Resolves an ACP session key back to the stateful target descriptor used by
+ * native commands. Runtime metadata wins, configured binding records provide
+ * labels, and ACP-shaped keys remain resettable after metadata is cleared.
+ */
 function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -67,6 +72,11 @@ function toAcpStatefulBindingTargetDescriptor(params: {
   };
 }
 
+/**
+ * Validates that the configured ACP binding is available before a stateful
+ * target can accept work. The lifecycle helper owns process startup and auth
+ * recovery; the driver only adapts the configured binding record.
+ */
 async function ensureAcpTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
@@ -89,6 +99,10 @@ async function ensureAcpTargetReady(params: {
   });
 }
 
+/**
+ * Opens or reuses the ACP session for a configured binding target. The session
+ * helper remains the single owner for key allocation and persistent metadata.
+ */
 async function ensureAcpTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
@@ -107,6 +121,11 @@ async function ensureAcpTargetSession(params: {
   });
 }
 
+/**
+ * Resets the resolved ACP session without re-resolving channel bindings. Native
+ * command callers have already selected the target; gateway reset remains the
+ * authority for replacing the session entry in place.
+ */
 async function resetAcpTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

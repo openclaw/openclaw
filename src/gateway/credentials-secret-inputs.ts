@@ -22,6 +22,7 @@ import {
 
 type GatewayCredentialSecretInputOptions = {
   config: OpenClawConfig;
+  /** Explicit CLI/caller credentials bypass SecretRef materialization entirely. */
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
@@ -162,6 +163,7 @@ function canGatewaySecretInputPathWin(params: {
   }
   // Inject one path at a time so normal credential precedence decides whether
   // that secret ref is on the active auth path without resolving real secrets.
+  // The sentinel is intentionally impossible as a real credential source.
   assignResolvedGatewaySecretInput({
     config: probeConfig,
     path: params.path,
@@ -189,7 +191,11 @@ function canGatewaySecretInputPathWin(params: {
   }
 }
 
-/** Test whether resolving a configured secret-ref path could affect selected credentials. */
+/**
+ * Tests whether a configured Gateway SecretRef path can affect selected auth.
+ * Doctor uses this to avoid executing inactive exec SecretRefs while still
+ * warning about refs on the credential path that would actually be used.
+ */
 export function gatewaySecretInputPathCanWin(
   params: GatewayCredentialSecretInputOptions & { path: SupportedGatewaySecretInputPath },
 ): boolean {
@@ -306,7 +312,10 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
   }
 }
 
-/** Resolve Gateway credentials after materializing winning configured secret refs. */
+/**
+ * Resolves Gateway credentials after materializing only SecretRefs that can win
+ * under the same precedence rules used by raw config/env credential selection.
+ */
 export async function resolveGatewayCredentialsWithSecretInputs(
   params: GatewayCredentialSecretInputOptions,
 ): Promise<{ token?: string; password?: string }> {

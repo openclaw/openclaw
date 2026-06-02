@@ -1,6 +1,7 @@
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 
+/** Error envelope shared by OpenAI-compatible HTTP routes. */
 export type OpenAiCompatError = {
   status: number;
   error: {
@@ -23,6 +24,8 @@ const ERROR_TYPE_BY_REASON: Partial<Record<FailoverReason, string>> = {
   timeout: "api_error",
 };
 
+// Provider server faults and timeouts should not leak raw 500/408 semantics to
+// OpenAI-compatible clients; keep them in the upstream-failure bucket.
 function statusForReason(reason: FailoverReason, status: number | undefined): number {
   if (reason === "server_error") {
     return status && status >= 400 && status < 500 ? status : 502;
@@ -50,6 +53,11 @@ function messageForReason(params: {
   return params.rawError?.trim() || params.message.trim() || "request failed";
 }
 
+/**
+ * Map internal provider failover errors onto the OpenAI-compatible error shape.
+ * Unknown reasons return undefined so route handlers can fall back to their
+ * generic 500 behavior without inventing unsupported OpenAI error types.
+ */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   const described = describeFailoverError(err);
   const reason = described.reason;
@@ -76,6 +84,7 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   };
 }
 
+/** Validate OpenAI sampling parameters before routing them to provider adapters. */
 export function validateOpenAiSamplingParams(params: {
   temperature?: unknown;
   topP?: unknown;

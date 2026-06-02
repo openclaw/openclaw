@@ -1,5 +1,6 @@
 import type { OutputItem } from "./open-responses.schema.js";
 
+/** Build an assistant message item in the OpenAI Responses output shape. */
 export function createAssistantOutputItem(params: {
   id: string;
   text: string;
@@ -16,6 +17,10 @@ export function createAssistantOutputItem(params: {
   };
 }
 
+/**
+ * Build a function_call output item while preserving the exact serialized
+ * arguments string expected by Responses clients and stream deltas.
+ */
 export function createFunctionCallOutputItem(params: {
   id: string;
   callId: string;

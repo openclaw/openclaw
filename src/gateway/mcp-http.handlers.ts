@@ -23,6 +23,8 @@ type McpTextContent = {
 function normalizeToolCallContent(result: unknown): McpTextContent[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
+    // MCP clients expect an array of content blocks; Gateway tools may still
+    // return plain strings or partial block-like objects from older helpers.
     return content.map((block: { type?: string; text?: string }) => ({
       type: (block.type ?? "text") as "text",
       text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
@@ -36,6 +38,10 @@ function normalizeToolCallContent(result: unknown): McpTextContent[] {
   ];
 }
 
+/**
+ * Handles one MCP JSON-RPC message for the loopback HTTP server.
+ * Notifications intentionally return null so batch handling can omit replies.
+ */
 export async function handleMcpJsonRpc(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
@@ -48,6 +54,8 @@ export async function handleMcpJsonRpc(params: {
   switch (method) {
     case "initialize": {
       const clientVersion = (methodParams?.protocolVersion as string) ?? "";
+      // Prefer the client's requested protocol when supported; otherwise use
+      // our first advertised version as the stable server default.
       const negotiated =
         MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS.find((version) => version === clientVersion) ??
         MCP_LOOPBACK_SUPPORTED_PROTOCOL_VERSIONS[0];
@@ -80,6 +88,9 @@ export async function handleMcpJsonRpc(params: {
           isError: true,
         });
       }
+      // Schema visibility is the authorization boundary for loopback tools:
+      // anything omitted from tools/list must remain uncallable even if the
+      // executable object is present in the scoped runtime snapshot.
       const tool = params.tools.find(
         (candidate) => readMcpLoopbackToolName(candidate) === toolName,
       );
@@ -91,6 +102,8 @@ export async function handleMcpJsonRpc(params: {
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       try {
+        // Reuse the Gateway before-tool hook so MCP calls follow the same
+        // policy, parameter rewrite, and abort semantics as normal tool calls.
         const hookResult = await runBeforeToolCallHook({
           toolName,
           params: toolArgs,

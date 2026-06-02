@@ -27,7 +27,8 @@ function normalizeSuppressedControlReplyFragment(text: string): string {
 }
 
 /**
- * Return true when a chat-visible reply is exactly an internal control token.
+ * Return true when a chat-visible reply is exactly an internal control token
+ * that must be hidden from transcripts, projections, and persisted chat output.
  */
 export function isSuppressedControlReplyText(text: string): boolean {
   const normalized = text.trim();
@@ -35,7 +36,8 @@ export function isSuppressedControlReplyText(text: string): boolean {
 }
 
 /**
- * Return true when streamed assistant text looks like the leading fragment of a control token.
+ * Return true when streamed assistant text looks like the leading fragment of a
+ * control token, allowing live projections to wait before showing partial text.
  */
 export function isSuppressedControlReplyLeadFragment(text: string): boolean {
   const trimmed = text.trim();

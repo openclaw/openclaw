@@ -38,6 +38,7 @@ function extractComparableText(message: unknown): string | undefined {
   if (!joined) {
     return undefined;
   }
+  // User messages may include channel metadata prefixes that the CLI never saw.
   const visible = role === "user" ? stripInboundMetadata(joined) : joined;
   const normalized = visible.replace(/\s+/g, " ").trim();
   return normalized || undefined;
@@ -116,6 +117,7 @@ function isEquivalentImportedMessage(existing: unknown, imported: unknown): bool
   const existingTimestamp = resolveComparableTimestamp(existing);
   const importedTimestamp = resolveComparableTimestamp(imported);
   if (existingTimestamp === undefined || importedTimestamp === undefined) {
+    // Text+role equality is enough when either side lacks CLI/import timestamp metadata.
     return true;
   }
 
@@ -134,6 +136,7 @@ function compareHistoryMessages(
   return a.order - b.order;
 }
 
+/** Merges imported CLI transcript messages into local history without duplicating mirrored turns. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];
@@ -147,6 +150,7 @@ export function mergeImportedChatHistoryMessages(params: {
     if (merged.some((existing) => isEquivalentImportedMessage(existing.message, imported))) {
       continue;
     }
+    // Preserve stable append order for messages with equal or missing timestamps.
     merged.push({ message: imported, order: nextOrder });
     nextOrder += 1;
   }

@@ -68,6 +68,11 @@ export type GatewayRequestContextParams = {
   unavailableGatewayMethods: ReadonlySet<string>;
 };
 
+/**
+ * Builds the shared handler context used by Gateway RPC methods.
+ * Most fields are live references so config reloads and runtime swaps can
+ * update behavior without recreating every registered method closure.
+ */
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {
@@ -127,6 +132,8 @@ export function createGatewayRequestContext(
         if (!hasApprovalScope(gatewayClient)) {
           continue;
         }
+        // Approval routing may target a subset for a specific record, but the
+        // scope gate always runs first so non-approval clients never see it.
         if (opts.filter && !opts.filter(gatewayClient, opts.record)) {
           continue;
         }
@@ -143,6 +150,8 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
+        // Keep the socket open so callers can rotate or revoke one device
+        // credential while buffered RPCs fail through the invalidation flag.
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }

@@ -142,12 +142,16 @@ function broadcastToOwner(
   connId: string,
   event: TalkTranscriptionRelayEvent,
 ): void {
+  // Relay events are connection-owned: a browser stream must not leak partial
+  // transcripts or audio activity to other Gateway clients.
   context.broadcastToConnIds(TRANSCRIPTION_EVENT, event, new Set([connId]), { dropIfSlow: true });
 }
 
 function ensureTranscriptionTurn(session: TranscriptionRelaySession): string {
   const turn = session.talk.ensureTurn();
   if (turn.event) {
+    // The STT provider can report speech before browser audio is explicitly
+    // forwarded, so turn creation also owns the user-visible speechStart event.
     broadcastToOwner(session.context, session.connId, {
       transcriptionSessionId: session.id,
       type: "speechStart",
@@ -164,6 +168,8 @@ function closeTranscriptionSession(
   if (session.closed) {
     return;
   }
+  // Close is idempotent because provider callbacks, explicit stop, and expiry
+  // timers can race while all need exactly one final session.closed event.
   session.closed = true;
   transcriptionSessions.delete(session.id);
   clearTimeout(session.cleanupTimer);
@@ -213,9 +219,12 @@ function enforceTranscriptionSessionLimits(connId: string): void {
   }
 }
 
+/** Creates a connection-owned Gateway relay session for browser-to-provider transcription audio. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
 ): TalkTranscriptionRelaySessionResult {
+  // Browser relay currently accepts only Twilio-style 8 kHz mu-law audio; keep
+  // provider config honest before exposing a session id clients can stream to.
   enforceTranscriptionSessionLimits(params.connId);
   assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
@@ -274,6 +283,8 @@ export function createTalkTranscriptionRelaySession(
       );
       const relay = relayRef.current;
       if (relay) {
+        // Provider final transcripts end the Talk turn, but the relay payload
+        // remains a transcript event so existing room clients stay on one feed.
         const ended = relay.talk.endTurn({ turnId, payload: {} });
         if (ended.ok) {
           broadcastToOwner(relay.context, relay.connId, {
@@ -326,6 +337,8 @@ export function createTalkTranscriptionRelaySession(
       emit({ transcriptionSessionId, type: "ready" }, { type: "session.ready", payload: null });
     })
     .catch((error: unknown) => {
+      // Surface connect failures through both the relay event and Talk event
+      // streams before closing so clients do not wait on a never-ready room.
       emit(
         {
           transcriptionSessionId,
@@ -372,6 +385,8 @@ function getTranscriptionSession(
     nowMs > expiresAtMs
   ) {
     if (session) {
+      // A stale or cross-connection lookup consumes the expired session so the
+      // registry cannot be used as a long-lived session-id oracle.
       closeTranscriptionSession(session, "completed");
     }
     throw new Error("Unknown transcription Talk session");
@@ -379,6 +394,7 @@ function getTranscriptionSession(
   return session;
 }
 
+/** Forwards one base64 browser audio frame into the owning STT provider session. */
 export function sendTalkTranscriptionRelayAudio(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -403,6 +419,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
   });
 }
 
+/** Commits any active relay turn, closes the provider session, and emits a final close event. */
 export function stopTalkTranscriptionRelaySession(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -425,6 +442,7 @@ export function stopTalkTranscriptionRelaySession(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Cancels the current transcription turn and closes the relay session for the owner connection. */
 export function cancelTalkTranscriptionRelayTurn(params: {
   transcriptionSessionId: string;
   connId: string;

@@ -21,6 +21,11 @@ type GatewayRuntimeServiceLogger = {
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
 };
+
+/**
+ * Timer handles produced by post-ready maintenance startup and later adopted
+ * into mutable gateway state for normal shutdown cleanup.
+ */
 export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
 >;
@@ -46,6 +51,8 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   if (!maintenance) {
     return;
   }
+  // The scheduler can lose the race with shutdown after maintenance allocates
+  // intervals. Clear every returned handle before the closing gateway forgets it.
   clearInterval(maintenance.tickInterval);
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);

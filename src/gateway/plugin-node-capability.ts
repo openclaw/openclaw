@@ -23,6 +23,7 @@ export type PluginNodeCapabilityClient = {
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
 };
 
+/** Indexes advertised node-capability surfaces, keeping the shortest lease TTL per surface. */
 export function indexPluginNodeCapabilitySurfaces(
   surfaces: readonly PluginNodeCapabilitySurface[],
 ): Record<string, PluginNodeCapabilitySurface> {
@@ -71,10 +72,12 @@ function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurf
   return scopeKey ? `${normalizedSurface}\0${scopeKey}` : normalizedSurface;
 }
 
+/** Resolves a node-capability lease TTL, using the default when plugins omit one. */
 export function resolvePluginNodeCapabilityTtlMs(surface: PluginNodeCapabilitySurface) {
   return asPositiveSafeInteger(surface.ttlMs) ?? DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS;
 }
 
+/** Computes the absolute expiry time for a freshly minted node-capability lease. */
 export function resolvePluginNodeCapabilityExpiresAtMs(
   surface: PluginNodeCapabilitySurface,
   nowMs: number = Date.now(),
@@ -82,10 +85,12 @@ export function resolvePluginNodeCapabilityExpiresAtMs(
   return resolveExpiresAtMsFromDurationMs(resolvePluginNodeCapabilityTtlMs(surface), { nowMs });
 }
 
+/** Mints an unguessable token used in scoped plugin node-capability URLs. */
 export function mintPluginNodeCapabilityToken(): string {
   return randomBytes(18).toString("base64url");
 }
 
+/** Builds a host URL scoped with a node-capability token path segment. */
 export function buildPluginNodeCapabilityScopedHostUrl(
   baseUrl: string,
   capability: string,
@@ -107,6 +112,7 @@ export function buildPluginNodeCapabilityScopedHostUrl(
   }
 }
 
+/** Replaces the capability token inside an existing scoped host URL. */
 export function replacePluginNodeCapabilityInScopedHostUrl(
   scopedUrl: string,
   capability: string,
@@ -140,6 +146,7 @@ export function replacePluginNodeCapabilityInScopedHostUrl(
   }
 }
 
+/** Extracts and rewrites a node-capability scoped URL back to the plugin route path. */
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,
 ): NormalizedPluginNodeCapabilityUrl {
@@ -199,6 +206,7 @@ export function normalizePluginNodeCapabilityScopedUrl(
   };
 }
 
+/** Stores an active node-capability lease on a Gateway client. */
 export function setClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
@@ -218,6 +226,7 @@ export function setClientPluginNodeCapability(params: {
   };
 }
 
+/** Refreshes a client's scoped surface URL and lease token for a plugin node capability. */
 export function refreshClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
@@ -265,6 +274,7 @@ export function refreshClientPluginNodeCapability(params: {
   };
 }
 
+/** Validates and extends a client's active node-capability lease. */
 export function hasAuthorizedPluginNodeCapability(params: {
   clients: Iterable<PluginNodeCapabilityClient>;
   surface: PluginNodeCapabilitySurface;

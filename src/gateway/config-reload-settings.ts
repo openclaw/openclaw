@@ -11,6 +11,7 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   debounceMs: 300,
 };
 
+/** Normalize Gateway reload config, keeping invalid mode/debounce values on safe defaults. */
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
   const mode =

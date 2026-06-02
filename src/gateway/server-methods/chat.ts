@@ -921,6 +921,7 @@ function stripDisallowedChatControlChars(message: string): string {
   return output;
 }
 
+/** Normalizes user chat input while preserving printable whitespace accepted by chat.send. */
 export function sanitizeChatSendMessageInput(
   message: string,
 ): { ok: true; message: string } | { ok: false; error: string } {
@@ -1364,6 +1365,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
     if (!preview) {
       continue;
     }
+    // Tool calls produce canvas previews; history displays attach them to the related assistant row.
     pending.push({
       preview,
       rawText: text ?? null,
@@ -1388,6 +1390,7 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   return changed ? next : messages;
 }
 
+/** Builds a compact chat-history row that preserves role/seq identity for oversized entries. */
 export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
@@ -1424,6 +1427,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
   };
 }
 
+/** Replaces individual oversized history entries before final response-size trimming. */
 export function replaceOversizedChatHistoryMessages(params: {
   messages: unknown[];
   maxSingleMessageBytes: number;
@@ -1443,6 +1447,7 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
+/** Enforces the final chat-history byte budget while keeping the newest useful row when possible. */
 export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
   placeholderCount: number;
@@ -2109,6 +2114,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     };
   }
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
+  // Only live controller-backed runs have partial text buffers to persist after abort.
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
@@ -2128,6 +2134,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const endedAt = Date.now();
   const stopReason = params.stopReason ?? "rpc";
+  // Pre-registered agent runs can be aborted before their controller exists; mark dedupe state.
   for (const { runId, sessionKey, payload } of authorizedPendingAgentRuns) {
     writePreRegisteredAgentAbort({
       context: params.context,
@@ -2337,6 +2344,7 @@ function isChatHistoryAssistantMessage(message: unknown): boolean {
   return asOptionalRecord(message)?.role === "assistant";
 }
 
+/** Removes stale subagent announce prompts and their stale assistant echoes from fresh sessions. */
 export function dropPreSessionStartAnnouncePairs(
   messages: unknown[],
   sessionStartedAt: number | undefined,

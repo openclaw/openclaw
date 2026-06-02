@@ -8,6 +8,11 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 
+/**
+ * Raw attachment shape accepted by Gateway chat entrypoints.
+ * content must be base64 when present; MIME and filename are hints that are
+ * validated against sniffed bytes before model/runtime delivery.
+ */
 export type ChatAttachment = {
   type?: string;
   mimeType?: string;
@@ -15,12 +20,20 @@ export type ChatAttachment = {
   content?: unknown;
 };
 
+/**
+ * Inline image block passed to model runtimes that accept native image inputs.
+ * Large images and all non-image files use media refs instead.
+ */
 export type ChatImageContent = {
   type: "image";
   data: string;
   mimeType: string;
 };
 
+/**
+ * Disk-backed attachment reference surfaced to agent runtimes as media:// URLs.
+ * The path is retained for host tools while message text carries only mediaRef.
+ */
 export type OffloadedRef = {
   mediaRef: string;
   id: string;
@@ -56,8 +69,14 @@ type SavedMedia = {
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
+/** Default per-attachment upload ceiling when agent config has no media limit. */
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+/**
+ * Resolves the per-agent inbound attachment ceiling in bytes.
+ * Invalid or absent config falls back to the product default rather than
+ * disabling the upload guard.
+ */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =
@@ -73,6 +92,10 @@ type UnsupportedAttachmentReason =
   | "unsupported-non-image"
   | "non-image-too-large-for-sandbox";
 
+/**
+ * Signals caller-actionable attachment rejection, such as unsupported file
+ * kind or image input on a text-only entrypoint.
+ */
 export class UnsupportedAttachmentError extends Error {
   readonly reason: UnsupportedAttachmentReason;
   constructor(reason: UnsupportedAttachmentReason, message: string) {
@@ -82,6 +105,10 @@ export class UnsupportedAttachmentError extends Error {
   }
 }
 
+/**
+ * Wraps failures after validation when an accepted attachment cannot be saved
+ * into the inbound media store.
+ */
 export class MediaOffloadError extends Error {
   override readonly cause: unknown;
   constructor(message: string, options?: ErrorOptions) {
@@ -120,6 +147,8 @@ function resolveAttachmentMime(params: {
   providedMime?: string;
   labelMime?: string;
 }): string {
+  // Generic containers are useful fallback signals, but they must not let a
+  // caller-provided image hint turn a zip/octet payload into inline image input.
   const trustedProvidedMime = shouldIgnoreImageMimeHint({
     sniffedMime: params.sniffedMime,
     hintedMime: params.providedMime,
@@ -151,6 +180,9 @@ function isValidBase64(value: string): boolean {
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
+  // Buffer.from silently skips some invalid base64 characters. Compare the
+  // decoded byte count against the preflight estimate before the payload is
+  // saved or sent to model input.
   if (Math.abs(buffer.byteLength - estimatedBytes) > 3) {
     throw new Error(
       `attachment ${label}: base64 contains invalid characters ` +
@@ -180,6 +212,8 @@ function assertSavedMedia(value: unknown, label: string): SavedMedia {
   if (id.length === 0) {
     throw new Error(`attachment ${label}: saveMediaBuffer returned an empty media ID`);
   }
+  // saveMediaBuffer owns the storage root. Reject path-like IDs so media://
+  // references cannot escape the inbound media namespace if the store changes.
   if (id.includes("/") || id.includes("\\") || id.includes("\0")) {
     throw new Error(
       `attachment ${label}: saveMediaBuffer returned an unsafe media ID ` +
@@ -211,6 +245,8 @@ function normalizeAttachment(
 
   let base64 = content.trim();
   if (opts.stripDataUrlPrefix) {
+    // Chat clients commonly send data URLs. Strip only the wrapper here so the
+    // same base64 validator covers raw and data-URL attachment payloads.
     const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
     if (dataUrlMatch) {
       base64 = dataUrlMatch[1];
@@ -235,6 +271,10 @@ function validateAttachmentBase64OrThrow(
   return sizeBytes;
 }
 
+/**
+ * Converts client attachments into native image blocks and/or inbound media
+ * references while preserving image order for prompt construction.
+ */
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
@@ -360,6 +400,8 @@ export async function parseMessageWithAttachments(
         shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
 
       if (!shouldOffload) {
+        // Preserve small images as native model inputs. imageOrder keeps their
+        // relative position next to later offloaded image refs for prompt order.
         images.push({ type: "image", data: b64, mimeType: finalMime });
         imageOrder.push("inline");
         continue;
@@ -390,6 +432,8 @@ export async function parseMessageWithAttachments(
 
       const mediaRef = `media://inbound/${savedMedia.id}`;
       if (isImage) {
+        // Text-only image offload still needs a prompt-visible placeholder;
+        // non-image files are exposed through offloadedRefs/tool context only.
         updatedMessage += `\n[media attached: ${mediaRef}]`;
       }
       log?.info?.(
@@ -415,6 +459,8 @@ export async function parseMessageWithAttachments(
     }
   } catch (err) {
     if (savedMediaIds.length > 0) {
+      // Treat parsing as all-or-nothing. A later invalid attachment must not
+      // leave earlier offloaded media reachable without a successful message.
       await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
     }
     throw err;
@@ -428,6 +474,10 @@ export async function parseMessageWithAttachments(
   };
 }
 
+/**
+ * Classifies an attachment before full parsing using the same MIME precedence
+ * as parseMessageWithAttachments.
+ */
 export async function resolveChatAttachmentLooksLikeImage(
   attachment: ChatAttachment,
   index = 0,

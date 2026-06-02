@@ -5,6 +5,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 
+/** Selects operator-facing detail for unresolved SecretRef diagnostics. */
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
 type ConfiguredSecretInputSource =
   | "config"
@@ -29,6 +30,11 @@ function buildUnresolvedReason(params: {
   return `${params.path} SecretRef is unresolved (${params.refLabel}).`;
 }
 
+/**
+ * Resolves a config field that may be plaintext, an env-template string, or a
+ * SecretRef object while preserving unresolved reasons for callers that can
+ * continue with warnings.
+ */
 export async function resolveConfiguredSecretInputString(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -88,6 +94,11 @@ export async function resolveConfiguredSecretInputString(params: {
   }
 }
 
+/**
+ * Resolves a config secret input with caller-owned fallback metadata.
+ * Fallbacks remain distinguishable from config and SecretRef values so install,
+ * status, and plugin SDK paths can avoid persisting accidental env-only secrets.
+ */
 export async function resolveConfiguredSecretInputWithFallback(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -126,6 +137,8 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     return { secretRefConfigured: false };
   }
 
+  // A SecretRef-backed field may still use a caller fallback, but the result
+  // keeps secretRefConfigured=true so operators can see config still needs work.
   const resolved = await resolveConfiguredSecretInputString({
     config: params.config,
     env: params.env,
@@ -157,6 +170,10 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   };
 }
 
+/**
+ * Requires SecretRef-backed resolution only; plaintext config deliberately
+ * returns undefined so callers can patch just the SecretRef value in place.
+ */
 export async function resolveRequiredConfiguredSecretRefInputString(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

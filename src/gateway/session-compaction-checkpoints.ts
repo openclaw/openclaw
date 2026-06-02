@@ -21,9 +21,12 @@ import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
+/** Max transcript tail bytes scanned to recover a stable pre-compaction leaf id. */
 export const MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES = 64 * 1024 * 1024;
+/** Max retained checkpoint transcript bytes per session before older artifacts are trimmed. */
 export const MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
 
+/** Stable identity captured before compaction so branch/restore can fork from the right leaf. */
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
   sessionFile?: string;
@@ -73,6 +76,7 @@ function trimSessionCheckpoints(
     }
     const checkpointBytes = checkpointSnapshotBytes(checkpoint, snapshotBytesByPath);
     const keepNewestCheckpoint = keptNewestFirst.length === 0;
+    // Always keep the newest checkpoint, even if its artifact alone exceeds the byte budget.
     if (
       keepNewestCheckpoint ||
       retainedBytes + checkpointBytes <= MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION
@@ -117,6 +121,7 @@ async function statCheckpointSnapshotBytes(
   return bytesByPath;
 }
 
+/** Maps compaction trigger state into the persisted checkpoint reason enum. */
 export function resolveSessionCompactionCheckpointReason(params: {
   trigger?: "budget" | "overflow" | "manual";
   timedOut?: boolean;
@@ -327,6 +332,7 @@ export async function readSessionLeafIdFromTranscriptAsync(
   return null;
 }
 
+/** Forks a checkpoint transcript through the stored leaf without rereading full session state. */
 export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceFile: string;
   sourceLeafId?: string;
@@ -372,6 +378,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   try {
     await fs.mkdir(sessionDir, { recursive: true });
     const lines = [JSON.stringify(header)];
+    // Write a fresh session header, then copy only message entries from the source branch.
     for (const entry of forkEntries) {
       if ((entry as { type?: unknown }).type !== "session") {
         lines.push(JSON.stringify(entry));
@@ -423,6 +430,7 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   };
 }
 
+/** Removes a retained legacy checkpoint transcript when its metadata is discarded. */
 export async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
@@ -488,6 +496,7 @@ export async function persistSessionCompactionCheckpoint(params: {
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();
   const postSessionFile = params.postSessionFile?.trim();
   const postSourceLeafId = params.postLeafId?.trim() || params.postEntryId?.trim();
+  // Modern checkpoints fork from the compacted successor transcript; legacy snapshots are optional.
   if (!snapshotSessionFile && (!postSessionFile || !postSourceLeafId)) {
     log.warn("skipping compaction checkpoint persist: missing stable fork source", {
       sessionKey: params.sessionKey,
@@ -542,6 +551,7 @@ export async function persistSessionCompactionCheckpoint(params: {
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
     const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
+    // Trim while holding the store mutation so list/get never observes over-budget metadata.
     trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
     store[target.canonicalKey] = {
       ...existing,
@@ -566,12 +576,14 @@ export async function persistSessionCompactionCheckpoint(params: {
   return checkpoint;
 }
 
+/** Lists checkpoints newest-first for RPC/UI callers. */
 export function listSessionCompactionCheckpoints(
   entry: Pick<SessionEntry, "compactionCheckpoints"> | undefined,
 ): SessionCompactionCheckpoint[] {
   return sessionStoreCheckpoints(entry).toSorted((a, b) => b.createdAt - a.createdAt);
 }
 
+/** Looks up a persisted checkpoint by id after applying the same ordering as list. */
 export function getSessionCompactionCheckpoint(params: {
   entry: Pick<SessionEntry, "compactionCheckpoints"> | undefined;
   checkpointId: string;

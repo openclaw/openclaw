@@ -15,6 +15,10 @@ export type GatewayServerLiveState = GatewayServerMutableState & {
   gatewayMethods: string[];
 };
 
+/**
+ * Combines close/reload handles with runtime snapshots that can change after
+ * startup, such as hook config, cron state, plugin services, and method lists.
+ */
 export function createGatewayServerLiveState(params: {
   hooksConfig: HooksConfigResolved | null;
   hookClientIpConfig: HookClientIpConfig;

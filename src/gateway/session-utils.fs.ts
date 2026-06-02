@@ -121,6 +121,11 @@ async function yieldTranscriptScan(): Promise<void> {
   });
 }
 
+/**
+ * Adds OpenClaw-owned metadata to a transcript message without replacing
+ * provider-authored fields. Readers use this for sequence numbers, record ids,
+ * compaction markers, and timing data that the UI and Gateway RPCs consume.
+ */
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
@@ -144,6 +149,11 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+/**
+ * Reads every message record for a session from the first existing transcript
+ * candidate. Synchronous callers use this for small/local paths; async indexed
+ * readers below are preferred when a full transcript can be large.
+ */
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -187,6 +197,10 @@ type TailTranscriptRecord = {
   record: Record<string, unknown>;
 };
 
+/**
+ * Normalizes recent-message read limits to keep tail scans bounded even when a
+ * caller passes a large or partial option set.
+ */
 function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessagesOptions>) {
   const maxMessages = resolveNonNegativeIntegerOption(opts?.maxMessages, 0);
   const maxBytes = resolveIntegerOption(opts?.maxBytes, RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES, {
@@ -198,6 +212,11 @@ function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessa
   return { maxMessages, maxBytes, maxLines };
 }
 
+/**
+ * Reads the tail of a transcript and returns up to `maxMessages` parsed
+ * messages. It scans from the end so channel previews and prompt contexts avoid
+ * loading full transcripts for long sessions.
+ */
 export function readRecentSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -546,6 +565,11 @@ export function visitSessionMessages(
   return messages.length;
 }
 
+/**
+ * Counts parsed message records while caching by transcript mtime/size. The
+ * cache is intentionally file-local metadata only, so transcript rewrites and
+ * archive rotations invalidate counts naturally.
+ */
 export function readSessionMessageCount(
   sessionId: string,
   storePath: string | undefined,
@@ -572,6 +596,10 @@ export function readSessionMessageCount(
   return count;
 }
 
+/**
+ * Async transcript reader used by Gateway RPCs and hooks. `full` mode uses the
+ * transcript index; `recent` mode delegates to the bounded tail scanner.
+ */
 export async function readSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -590,6 +618,11 @@ export async function readSessionMessagesAsync(
   return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
 }
 
+/**
+ * Resolves one transcript message by provider/OpenClaw record id without
+ * parsing oversized lines. Oversized matches report sequence metadata so UI
+ * callers can show that the record exists without materializing it.
+ */
 export async function readSessionMessageByIdAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -615,6 +648,10 @@ export async function readSessionMessageByIdAsync(
   return { message, seq: entry.seq, oversized: false, found: true };
 }
 
+/**
+ * Visits indexed transcript messages in sequence order. This keeps full scans
+ * on the async index path and lets callers choose whether to reuse the cache.
+ */
 export async function visitSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -639,6 +676,10 @@ export async function visitSessionMessagesAsync(
   return index.entries.length;
 }
 
+/**
+ * Async message count using the transcript index and the same mtime/size cache
+ * as the synchronous count path.
+ */
 export async function readSessionMessageCountAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -666,6 +707,11 @@ export async function readSessionMessageCountAsync(
   return count;
 }
 
+/**
+ * Reads recent messages and annotates them with absolute sequence numbers. The
+ * total count lets consumers distinguish "first returned message" from "first
+ * transcript message".
+ */
 export function readRecentSessionMessagesWithStats(
   sessionId: string,
   storePath: string | undefined,
@@ -681,6 +727,9 @@ export function readRecentSessionMessagesWithStats(
   return { messages: messagesWithSeq, totalMessages };
 }
 
+/**
+ * Async bounded tail reader for recent transcript messages.
+ */
 export async function readRecentSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -713,6 +762,9 @@ export async function readRecentSessionMessagesAsync(
   return parseRecentTranscriptTailMessages(lines, maxMessages);
 }
 
+/**
+ * Async recent-message reader with total-count and absolute sequence metadata.
+ */
 export async function readRecentSessionMessagesWithStatsAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -728,6 +780,10 @@ export async function readRecentSessionMessagesWithStatsAsync(
   return { messages: messagesWithSeq, totalMessages };
 }
 
+/**
+ * Reads raw recent transcript lines for diagnostic and transcript-history
+ * callers that need line text instead of parsed message objects.
+ */
 export function readRecentSessionTranscriptLines(params: {
   sessionId: string;
   storePath: string | undefined;
@@ -818,6 +874,11 @@ export {
   resolveSessionTranscriptCandidates,
 } from "./session-transcript-files.fs.js";
 
+/**
+ * Keeps the newest suffix of an array whose JSON encoding fits `maxBytes`.
+ * Transcript and preview callers use this to preserve recent context while
+ * respecting Gateway payload limits.
+ */
 export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,
@@ -844,6 +905,11 @@ type TranscriptMessage = {
   provenance?: unknown;
 };
 
+/**
+ * Extracts lightweight title fields from transcript head/tail chunks. The cache
+ * is keyed by file metadata and inter-session filtering so session lists can
+ * render titles without reparsing unchanged transcripts.
+ */
 export function readSessionTitleFieldsFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -916,6 +982,10 @@ export function readSessionTitleFieldsFromTranscript(
   }
 }
 
+/**
+ * Async title-field extractor for Gateway list/search surfaces that cannot
+ * block on synchronous file reads.
+ */
 export async function readSessionTitleFieldsFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1079,6 +1149,10 @@ function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | nul
   return null;
 }
 
+/**
+ * Reads the first user-authored message from a transcript candidate. Search and
+ * title code use this as a fallback when richer title fields are unavailable.
+ */
 export function readFirstUserMessageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1477,6 +1551,11 @@ function extractAggregateUsageFromTranscriptChunk(
   );
 }
 
+/**
+ * Aggregates the latest usage snapshot from the full transcript. This captures
+ * explicit usage records and transcript-derived estimates when providers do not
+ * emit fresh token totals.
+ */
 export function readLatestSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1498,6 +1577,10 @@ export function readLatestSessionUsageFromTranscript(
   });
 }
 
+/**
+ * Async full-transcript usage reader for RPC paths that should not block on
+ * large synchronous file reads.
+ */
 export async function readLatestSessionUsageFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1526,6 +1609,10 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   }
 }
 
+/**
+ * Reads and aggregates usage from only the recent tail of a transcript. Callers
+ * use this when full transcript reads are too expensive for list/search refreshes.
+ */
 export async function readRecentSessionUsageFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1554,6 +1641,10 @@ export async function readRecentSessionUsageFromTranscriptAsync(
   }
 }
 
+/**
+ * Reads the most recent usage-like record from a bounded transcript tail
+ * without aggregating older records.
+ */
 export async function readLatestRecentSessionUsageFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1582,6 +1673,10 @@ export async function readLatestRecentSessionUsageFromTranscriptAsync(
   }
 }
 
+/**
+ * Synchronous bounded-tail usage reader for local callers that need an
+ * aggregate snapshot without loading the full transcript.
+ */
 export function readRecentSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1806,6 +1901,10 @@ function readRecentMessagesFromTranscript(
   }
 }
 
+/**
+ * Builds compact UI preview items from the newest transcript messages. It
+ * bounds both item count and text length so session list rows stay cheap.
+ */
 export function readSessionPreviewItemsFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1823,6 +1922,8 @@ export function readSessionPreviewItemsFromTranscript(
   const boundedItems = Math.max(1, Math.min(maxItems, 50));
   const boundedChars = Math.max(20, Math.min(maxChars, 2000));
 
+  // Try progressively larger tail windows so normal sessions return quickly,
+  // while sparse transcripts still have a chance to produce preview items.
   for (const readSize of PREVIEW_READ_SIZES) {
     const messages = readRecentMessagesFromTranscript(filePath, boundedItems, readSize);
     if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {

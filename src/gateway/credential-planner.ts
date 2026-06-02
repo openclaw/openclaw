@@ -131,6 +131,8 @@ export function createGatewayCredentialPlan(params: {
   const localTokenCanWin =
     authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
+  // Password can win only for explicit password/trusted-proxy modes, or when no
+  // token candidate exists in the implicit mode-selection path.
   const passwordCanWin =
     authMode === "password" ||
     authMode === "trusted-proxy" ||
@@ -145,6 +147,8 @@ export function createGatewayCredentialPlan(params: {
   const remoteUrlConfigured = Boolean(trimToUndefined(remote?.url));
   const tailscaleRemoteExposure =
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
+  // Remote credential surfaces activate for explicit remote config or Tailscale
+  // exposure, even when gateway.mode remains local.
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
   // Remote credentials may borrow local auth credentials only when the remote
   // surface exists but no explicit remote/env candidate can satisfy the mode.

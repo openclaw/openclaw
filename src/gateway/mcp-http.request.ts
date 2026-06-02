@@ -80,6 +80,10 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+/**
+ * Validates the MCP loopback HTTP envelope before JSON-RPC parsing and returns
+ * the owner/non-owner token scope that downstream tool resolution must use.
+ */
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -165,6 +169,7 @@ export function validateMcpLoopbackRequest(params: {
   return { senderIsOwner };
 }
 
+/** Reads a bounded JSON-RPC request body from the loopback HTTP stream. */
 export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -188,6 +193,8 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
     const onData = (chunk: Buffer) => {
       received += chunk.length;
       if (received > MAX_MCP_BODY_BYTES) {
+        // Pause the stream once the cap is crossed; callers inspect the stable
+        // error code while the retained error listener absorbs late socket errors.
         req.pause();
         rejectOnce(createMcpHttpBodyTooLargeError(), { keepErrorListener: true });
         return;
@@ -227,6 +234,7 @@ export function isMcpHttpBodyTooLargeError(
   );
 }
 
+/** Projects loopback HTTP headers into the scoped Gateway tool-resolution context. */
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,

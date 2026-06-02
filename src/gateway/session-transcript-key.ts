@@ -49,14 +49,24 @@ function sessionKeyMatchesTranscriptPath(params: {
     entry.sessionId,
     target.storePath,
     entry.sessionFile,
+    // Compare against the normalized agent id used by transcript candidate
+    // generation so per-agent and combined stores resolve the same paths.
     sessionAgentId,
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }
 
+/**
+ * Clears process-local transcript-key lookup cache between tests.
+ */
 export function clearSessionTranscriptKeyCacheForTests(): void {
   TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
+/**
+ * Resolves a transcript file path back to the Gateway session key that owns it.
+ * Event consumers use this to turn file-change notifications into session
+ * updates without scanning unrelated session state on every repeat event.
+ */
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
   const targetPath = resolveTranscriptPathForComparison(sessionFile);
   if (!targetPath) {
@@ -130,6 +140,9 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
       (a, b) => b.updatedAt - a.updatedAt,
     );
     const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
+    // Duplicate keys for the same session id are reduced through the preferred
+    // key resolver. Different session ids sharing a transcript path are only
+    // safe when one has a strictly newer update timestamp.
     const resolvedKey =
       resolvedMatches.length === 1
         ? freshestMatch?.key

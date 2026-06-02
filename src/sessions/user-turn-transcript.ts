@@ -34,6 +34,7 @@ type PersistedUserTurnMediaFields = {
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 
+/** Canonical user-turn payload before it is appended to a session transcript. */
 export type UserTurnInput = {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
@@ -45,6 +46,7 @@ export type UserTurnInput = {
 
 type UserTurnTranscriptUpdateMode = "inline" | "none";
 
+/** Last-chance transcript hook; returning a non-user message suppresses the persisted turn. */
 export type UserTurnBeforeMessageWrite = (params: {
   message: PersistedUserTurnMessage;
   agentId?: string;
@@ -109,6 +111,10 @@ type UserTurnTranscriptTargetResolver =
 
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
+/**
+ * Coordinates one user turn between runtime-owned persistence and Gateway fallback persistence.
+ * Runtime paths mark ownership as they append; fallback waits when ownership is still pending.
+ */
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
@@ -228,6 +234,7 @@ function resolveTranscriptMediaType(params: {
   return params.explicitType ?? mimeTypeFromFilePath(params.mediaPath ?? params.mediaUrl);
 }
 
+/** Rebuilds transcript media inputs from persisted transcript fields for replay/import callers. */
 export function buildPersistedUserTurnMediaInputsFromFields(
   fields: PersistedUserTurnMediaFieldSource | null | undefined,
 ): PersistedUserTurnMediaInput[] {
@@ -334,6 +341,7 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
+  // Prepared metadata carries transcript-only fields; blocked hook markers must stay untouched.
   return {
     ...(params.runtimeMessage as unknown as Record<string, unknown>),
     ...(params.preparedMessage as unknown as Record<string, unknown>),
@@ -364,6 +372,7 @@ function applyBeforeMessageWriteToUserTurn(
   if (nextMessage?.role !== "user") {
     return undefined;
   }
+  // Hooks may redact or replace content, but provenance/idempotency stay attached to this turn.
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
@@ -397,6 +406,7 @@ export async function appendUserTurnTranscriptMessage(
     ...(params.config ? { config: params.config } : {}),
     message: resolvedMessage,
     idempotencyLookup: "scan",
+    // Run the hook only after idempotency lookup so duplicate replays reuse the stored turn.
     prepareMessageAfterIdempotencyCheck: (message) =>
       applyBeforeMessageWriteToUserTurn(message, params),
   });
@@ -407,6 +417,7 @@ export async function appendUserTurnTranscriptMessage(
   switch (params.updateMode ?? "inline") {
     case "inline":
       if (appended.appended) {
+        // Inline mode is the live UI path; idempotent no-op appends should not rebroadcast.
         emitSessionTranscriptUpdate({
           sessionFile: params.transcriptPath,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -523,6 +534,7 @@ export function createUserTurnTranscriptRecorder(
           );
         } catch (error) {
           handlePersistenceError(error);
+          // Fall back to the admitted text-only message if late media staging fails.
           return message;
         }
       })();
@@ -574,6 +586,7 @@ export function createUserTurnTranscriptRecorder(
       if (!target) {
         return undefined;
       }
+      // The approved path may supply a fresher target after channel/session admission.
       const updateMode = options.updateMode ?? params.updateMode ?? "inline";
       const result = isUserTurnTranscriptFileTarget(target)
         ? await appendUserTurnTranscriptMessage({

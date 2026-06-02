@@ -8,6 +8,11 @@ export type DirectChildSessionEntry = {
   entry: SessionEntry;
 };
 
+/**
+ * Checks whether a store entry is a direct child of a parent session. Both
+ * `spawnedBy` and `parentSessionKey` are accepted because older and newer
+ * session creation paths record lineage under different fields.
+ */
 export function isDirectChildSessionEntry(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
@@ -23,6 +28,11 @@ export function isDirectChildSessionEntry(params: {
   );
 }
 
+/**
+ * Finds direct children across the combined Gateway session store. Parent reset
+ * and delete cleanup use this instead of one agent store so ACP children spawned
+ * under another agent are still closed.
+ */
 export function findDirectChildSessionsForParent(params: {
   cfg: OpenClawConfig;
   parentKey: string;

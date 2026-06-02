@@ -2,6 +2,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
+/** Chat/history row plus role metadata used to build OpenAI-compatible agent prompts. */
 export type ConversationEntry = {
   role: "user" | "assistant" | "tool";
   entry: HistoryEntry;
@@ -19,6 +20,8 @@ function safeBody(body: unknown): string {
 
 function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
   const body = safeBody(entry.entry.body);
+  // Internal stream-error placeholders are user-visible fallback text, not real
+  // assistant history; keep them out of model prompts.
   if (
     entry.role === "assistant" &&
     entry.internalStreamError === true &&
@@ -32,6 +35,7 @@ function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
   };
 }
 
+/** Build the model prompt text from conversation entries, preserving prior turns as context. */
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
   if (entries.length === 0) {
     return "";

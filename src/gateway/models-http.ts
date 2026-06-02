@@ -34,6 +34,7 @@ type OpenAiModelObject = {
   permission: [];
 };
 
+/** Projects an OpenClaw agent model id into the OpenAI /v1/models envelope. */
 function toOpenAiModel(id: string): OpenAiModelObject {
   return {
     id,
@@ -59,9 +60,12 @@ async function authorizeRequest(
   });
 }
 
+/** Lists the OpenAI-compatible model ids that route to configured agents. */
 function loadAgentModelIds(): string[] {
   const cfg = getRuntimeConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  // Keep both generic aliases and concrete agent ids so OpenAI clients can use
+  // either "openclaw" defaults or stable "openclaw/<agentId>" routing.
   const ids = new Set<string>([OPENCLAW_MODEL_ID, OPENCLAW_DEFAULT_MODEL_ID]);
   ids.add(`openclaw/${defaultAgentId}`);
   for (const agentId of listAgentIds(cfg)) {
@@ -71,9 +75,11 @@ function loadAgentModelIds(): string[] {
 }
 
 function resolveRequestPath(req: IncomingMessage): string {
+  // Use a fixed URL base so malformed Host headers cannot affect route matching.
   return new URL(req.url ?? "/", "http://localhost").pathname;
 }
 
+/** Handles the OpenAI-compatible /v1/models list and lookup endpoints. */
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -124,6 +130,8 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
+  // Validate the decoded id before checking membership so malformed agent ids
+  // get a 400 while well-formed but unavailable model ids get a 404.
   if (decodedId !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(decodedId)) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;

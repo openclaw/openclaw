@@ -13,6 +13,7 @@ export type PluginRoutePathContext = {
   rawNormalizedPath: string;
 };
 
+/** Normalizes protected plugin prefixes to the same lowercase slash form used for path candidates. */
 function normalizeProtectedPrefix(prefix: string): string {
   const collapsed = normalizeLowercaseStringOrEmpty(prefix).replace(/\/{2,}/g, "/");
   if (collapsed.length <= 1) {
@@ -21,6 +22,7 @@ function normalizeProtectedPrefix(prefix: string): string {
   return collapsed.replace(/\/+$/, "");
 }
 
+/** Matches exact prefixes plus encoded slash continuations that still target the same route family. */
 export function prefixMatchPath(pathname: string, prefix: string): boolean {
   return (
     pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
@@ -30,6 +32,7 @@ export function prefixMatchPath(pathname: string, prefix: string): boolean {
 const NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES =
   PROTECTED_PLUGIN_ROUTE_PREFIXES.map(normalizeProtectedPrefix);
 
+/** Returns true when any decoded path candidate reaches a reserved Gateway-owned plugin prefix. */
 export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathContext): boolean {
   if (
     context.candidates.some((candidate) =>
@@ -48,6 +51,7 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
   );
 }
 
+/** Builds the canonical path candidate set used by plugin route matching and auth checks. */
 export function resolvePluginRoutePathContext(pathname: string): PluginRoutePathContext {
   const canonical = canonicalizePathForSecurity(pathname);
   return {

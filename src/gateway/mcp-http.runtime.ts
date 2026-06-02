@@ -32,9 +32,11 @@ type McpLoopbackScopeParams = {
   senderIsOwner: boolean | undefined;
 };
 
-export function resolveMcpLoopbackScopedTools(
-  params: McpLoopbackScopeParams,
-): { agentId: string | undefined; tools: McpLoopbackTool[] } {
+/** Resolves Gateway tools available to the MCP loopback surface for one request scope. */
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
+  agentId: string | undefined;
+  tools: McpLoopbackTool[];
+} {
   const scoped = resolveGatewayScopedTools({
     ...params,
     surface: "loopback",
@@ -46,10 +48,14 @@ export function resolveMcpLoopbackScopedTools(
   };
 }
 
+/** Caches loopback tool catalogs for identical request scopes within one config snapshot. */
 export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
+    // Tool visibility depends on session, channel, account, inbound event, and
+    // owner mode. Keep each axis in the cache key so one caller's catalog cannot
+    // bleed into another caller's MCP tools/list response.
     const cacheKey = [
       params.sessionKey,
       params.messageProvider ?? "",
@@ -67,6 +73,8 @@ export class McpLoopbackToolCache {
       return cached;
     }
 
+    // The config object reference is the snapshot boundary; a hot reload gets a
+    // new object and forces fresh tool/schema projection without global polling.
     const next = resolveMcpLoopbackScopedTools(params);
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,

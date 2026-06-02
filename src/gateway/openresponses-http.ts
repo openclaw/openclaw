@@ -1,11 +1,3 @@
-/**
- * OpenResponses HTTP Handler
- *
- * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
- *
- * @see https://www.open-responses.com/
- */
-
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
@@ -95,6 +87,7 @@ type ResponseSessionEntry = ResponseSessionScope & {
 
 const responseSessionMap = new Map<string, ResponseSessionEntry>();
 
+/** Normalizes previous_response_id scope before storing or matching continuation state. */
 function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
   const authSubject = scope.authSubject.trim();
   const requestedSessionKey = scope.requestedSessionKey?.trim();
@@ -111,6 +104,8 @@ function resolveResponseSessionAuthSubject(params: {
 }): string {
   const bearer = getBearerToken(params.req);
   if (bearer) {
+    // Partition continuation state by bearer without retaining the raw
+    // credential in the in-memory previous_response_id map.
     return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
   }
   if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
@@ -250,6 +245,8 @@ function resolveResponsesLimits(
   const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+    // A single Responses request can mix file and image URLs, so URL fetches
+    // share one cap across all input part types.
     maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
@@ -315,6 +312,8 @@ function applyToolChoice(params: {
     }
     const constraint: ToolChoiceConstraint = { type: "function", name: targetName };
     return {
+      // Hide non-selected tools from the agent and add a prompt constraint so
+      // model-side selection matches the requested OpenResponses tool choice.
       tools: matched,
       extraSystemPrompt: toolChoiceConstraintPrompt(constraint),
       constraint,
@@ -433,6 +432,7 @@ async function runResponsesAgentCommand(params: {
   );
 }
 
+/** Handles OpenResponses-compatible /v1/responses requests and owns response-session continuity. */
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

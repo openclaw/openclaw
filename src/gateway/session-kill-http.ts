@@ -22,6 +22,8 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadSessionEntry } from "./session-utils.js";
 
+// Remote callers can only kill a child run by proving the parent/requester
+// session that controls it; local direct requests use admin scope instead.
 const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
 
 type SessionKeyPathResolution =
@@ -29,6 +31,7 @@ type SessionKeyPathResolution =
   | { matched: true; sessionKey: string }
   | { error: "invalid-session-key"; matched: true };
 
+/** Resolves /sessions/:sessionKey/kill without consulting Host headers. */
 function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
   if (!match) {
@@ -45,6 +48,7 @@ function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   }
 }
 
+/** Handles POST /sessions/:sessionKey/kill for admin and requester-owned kills. */
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -56,6 +60,7 @@ export async function handleSessionKillHttpRequest(
   },
 ): Promise<boolean> {
   const cfg = getRuntimeConfig();
+  // Use a fixed URL base so malformed Host headers cannot affect route matching.
   const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
   if (!sessionKeyResolution.matched) {
@@ -103,6 +108,9 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
+  // Remote requester kills only need abort/write authority because
+  // subagent-control enforces ownership; local admin kills require delete/admin
+  // authority and intentionally bypass requester ownership checks.
   const requiredOperatorMethod =
     requesterSessionKey && !allowLocalAdminKill ? "sessions.abort" : "sessions.delete";
   const scopeAuth = authorizeOperatorScopesForMethod(requiredOperatorMethod, requestedScopes);
@@ -125,6 +133,8 @@ export async function handleSessionKillHttpRequest(
 
   let killed = false;
   if (!allowLocalAdminKill && requesterSessionKey) {
+    // Requester-owned kills use the latest subagent run row for the canonical
+    // child session, then delegate ownership enforcement to subagent-control.
     const runEntry = getLatestSubagentRunByChildSessionKey(canonicalKey);
     if (runEntry) {
       const result = await killControlledSubagentRun({

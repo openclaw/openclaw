@@ -31,8 +31,14 @@ export type GatewayServerMutableState = {
   lifecycleUnsub: (() => void) | null;
 };
 
+/**
+ * Creates the lifecycle handles that close/reload code can always call safely,
+ * even before the corresponding subsystem has started.
+ */
 export function createGatewayServerMutableState(): GatewayServerMutableState {
   const noopInterval = () => {
+    // Use unref'd inert timers instead of null for always-present interval
+    // handles so shutdown code can clear them without guarding startup order.
     const timer = setInterval(() => {}, 1 << 30);
     timer.unref?.();
     return timer;

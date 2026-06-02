@@ -18,6 +18,10 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
+/**
+ * Canonical session-key lookup result used by Gateway RPC handlers and
+ * embedded agent tools before they read or mutate session state.
+ */
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
@@ -64,6 +68,8 @@ function isResolvedSessionKeyVisible(params: {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
     return true;
   }
+  // Exact key resolution still respects spawnedBy scoping. Use the shared list
+  // filter without a page limit so older child sessions remain addressable.
   return filterAndSortSessionEntries({
     cfg: params.cfg,
     store: params.store,
@@ -79,6 +85,8 @@ function findVisibleSessionIdMatches(params: {
   sessionId: string;
 }): Array<[string, SessionEntry]> {
   const now = Date.now();
+  // sessionId lookups need raw store entries for speed and ambiguity detection,
+  // but visibility rules still mirror the dashboard/session list filters.
   const entries = filterAndSortSessionEntries({
     cfg: params.cfg,
     store: params.store,
@@ -90,6 +98,11 @@ function findVisibleSessionIdMatches(params: {
   );
 }
 
+/**
+ * Resolves a caller-provided key, sessionId, or human label to the canonical
+ * stored session key, applying agent scope, visibility filters, and legacy key
+ * migration before returning a key to downstream session readers.
+ */
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
@@ -143,6 +156,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (!legacyKey) {
       return noSessionFoundResult(key);
     }
+    // Key callers may still pass older aliases. Canonicalize the store first so
+    // later reads, deletes, and embedded tools all converge on one key spelling.
     await updateSessionStore(target.storePath, (s) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
       if (!s[primaryKey] && s[legacyKey]) {
@@ -203,6 +218,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+  // Labels are user-facing and may collide. Reuse the list projection with
+  // limit 2 so the resolver can distinguish no-match, unique, and ambiguous.
   const list = listSessionsFromStore({
     cfg,
     storePath,

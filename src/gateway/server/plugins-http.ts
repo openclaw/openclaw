@@ -37,6 +37,8 @@ function resolvePluginRoutePathContextForRequest(
   providedPathContext: PluginRoutePathContext | undefined,
 ): PluginRoutePathContext {
   if (providedPathContext) {
+    // Reuse upstream canonicalization so auth checks and runtime dispatch see
+    // the same decoded path candidates.
     return providedPathContext;
   }
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -85,6 +87,7 @@ function getMissingPluginRouteRuntimeContext(
   return context.gatewayRequestOperatorScopes === undefined ? "caller scope context" : undefined;
 }
 
+/** Builds the Gateway runtime scope exposed while a plugin HTTP route runs. */
 function createPluginRouteRuntimeScope(params: {
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
@@ -136,6 +139,7 @@ export type PluginHttpUpgradeHandler = (
   dispatchContext?: PluginRouteDispatchContext,
 ) => Promise<boolean>;
 
+/** Creates the HTTP request dispatcher for registered plugin routes. */
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   getRouteRegistry?: () => PluginRegistry;
@@ -192,11 +196,15 @@ export function createGatewayPluginRequestHandler(params: {
           async () => route.handler(req, res),
         );
         if (handled !== false) {
+          // A route owns the response unless it explicitly returns false,
+          // allowing lower-priority matches to try the same path.
           return true;
         }
       } catch (err) {
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
         if (!res.headersSent) {
+          // Plugin handlers own their responses; synthesize a plain 500 only
+          // when the route failed before writing headers.
           res.statusCode = 500;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.end("Internal Server Error");
@@ -208,6 +216,7 @@ export function createGatewayPluginRequestHandler(params: {
   };
 }
 
+/** Creates the WebSocket/upgrade dispatcher for registered plugin routes. */
 export function createGatewayPluginUpgradeHandler(params: {
   registry: PluginRegistry;
   getRouteRegistry?: () => PluginRegistry;

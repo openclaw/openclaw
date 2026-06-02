@@ -20,6 +20,10 @@ function capLiveAssistantBuffer(text: string): string {
   return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
+/**
+ * Merge assistant full-text and delta updates into the live buffer while
+ * tolerating providers that resend a shorter prefix or switch between modes.
+ */
 export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
@@ -43,6 +47,7 @@ export function resolveMergedAssistantText(params: {
   return capLiveAssistantBuffer(previousText);
 }
 
+/** Strip internal context/directive markup from live assistant text and deltas. */
 export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
   text: string;
   delta: string;
@@ -56,6 +61,10 @@ export function normalizeLiveAssistantEventText(params: { text: string; delta?: 
   };
 }
 
+/**
+ * Project buffered assistant text into chat-visible live output, suppressing
+ * control tokens and their lead fragments until they resolve.
+ */
 export function projectLiveAssistantBufferedText(
   rawText: string,
   options?: { suppressLeadFragments?: boolean },
@@ -85,6 +94,7 @@ export function projectLiveAssistantBufferedText(
   return { text, suppress: false, pendingLeadFragment: false };
 }
 
+/** Return true for commentary-phase assistant events that live chat should hide. */
 export function shouldSuppressAssistantEventForLiveChat(data: unknown): boolean {
   return resolveAssistantEventPhase(data) === "commentary";
 }

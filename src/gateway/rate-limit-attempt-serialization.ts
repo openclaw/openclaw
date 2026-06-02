@@ -10,6 +10,7 @@ function buildSerializationKey(ip: string | undefined, scope: string | undefined
   return `${normalizeScope(scope)}:${normalizeRateLimitClientIp(ip)}`;
 }
 
+/** Serialize rate-limit-sensitive auth attempts for one normalized IP/scope bucket. */
 export async function withSerializedRateLimitAttempt<T>(params: {
   ip: string | undefined;
   scope: string | undefined;
@@ -21,6 +22,8 @@ export async function withSerializedRateLimitAttempt<T>(params: {
   const current = new Promise<void>((resolve) => {
     releaseCurrent = resolve;
   });
+  // Chain behind the previous tail but keep the current promise as the new
+  // tail so later attempts wait for this run even when earlier attempts fail.
   const tail = previous.catch(() => {}).then(() => current);
   pendingAttempts.set(key, tail);
 
@@ -29,6 +32,8 @@ export async function withSerializedRateLimitAttempt<T>(params: {
     return await params.run();
   } finally {
     releaseCurrent();
+    // Only the active tail may clean up the key; newer queued attempts replace
+    // it before this run finishes.
     if (pendingAttempts.get(key) === tail) {
       pendingAttempts.delete(key);
     }

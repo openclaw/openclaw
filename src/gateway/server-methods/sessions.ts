@@ -200,6 +200,7 @@ type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
 
+/** Lazily loads heavy session runtime helpers only for methods that need runtime mutation. */
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
@@ -283,6 +284,7 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
   return status === "started";
 }
 
+/** Emits the compact session row update consumed by Control UI and session subscribers. */
 function emitSessionsChanged(
   context: Pick<
     GatewayRequestContext,
@@ -380,6 +382,7 @@ function emitSessionsChanged(
   );
 }
 
+/** Emits operation progress for long-running session mutations such as compaction/restore. */
 function emitSessionOperation(
   context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
   payload: Omit<SessionOperationEvent, "ts">,
@@ -399,6 +402,7 @@ function emitSessionOperation(
   );
 }
 
+/** Blocks webchat-scoped clients from mutating stored sessions outside chat.send. */
 function rejectWebchatSessionMutation(params: {
   action: "patch" | "delete" | "compact" | "restore";
   client: GatewayClient | null;
@@ -467,6 +471,7 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
+/** Resolves the transcript file/leaf that a checkpoint fork should copy from. */
 function resolveCheckpointForkSource(
   checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
@@ -502,6 +507,7 @@ function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean
   return sessionKey === resolveAgentMainSessionKey({ cfg, agentId: parsed.agentId });
 }
 
+/** Creates an agent main session on first send while preserving sessions.create side effects. */
 async function createAgentMainSessionForSend(params: {
   req: GatewayRequestHandlerOptions["req"];
   canonicalKey: string;
@@ -575,6 +581,7 @@ async function createAgentMainSessionForSend(params: {
   };
 }
 
+/** Ensures a session transcript exists before runtime helpers append or fork records. */
 function ensureSessionTranscriptFile(params: {
   sessionId: string;
   storePath: string;
@@ -613,6 +620,7 @@ function ensureSessionTranscriptFile(params: {
   }
 }
 
+/** Picks the visible key needed to abort an active run even when callers used an alias. */
 function resolveAbortSessionKey(params: {
   context: Pick<GatewayRequestContext, "chatAbortControllers">;
   requestedKey: string;
@@ -665,6 +673,7 @@ function sessionKeyBelongsToAgent(
   return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
 }
 
+/** Maps an agent-scoped abort request to the stored key only when the agent owns it. */
 function resolveScopedAbortKey(params: {
   cfg: OpenClawConfig;
   key: string | undefined;
@@ -694,6 +703,7 @@ function resolveScopedAbortKey(params: {
   });
 }
 
+/** Resolves the subscriber channel for per-agent global-session message fanout. */
 function resolveSessionMessageSubscriptionKey(params: {
   canonicalKey: string;
   agentId?: string;
@@ -714,6 +724,7 @@ type RequestedGlobalAgentIdResolution =
   | { ok: true; agentId?: string }
   | { ok: false; error: ReturnType<typeof errorShape> };
 
+/** Validates explicit or key-derived agent routing for global session operations. */
 function resolveRequestedGlobalAgentId(
   cfg: OpenClawConfig,
   key: string,
@@ -765,6 +776,7 @@ function resolveRequestedGlobalAgentId(
   };
 }
 
+/** Interrupts visible active runs before steering, covering Gateway and embedded-agent trackers. */
 async function interruptSessionRunIfActive(params: {
   req: GatewayRequestHandlerOptions["req"];
   context: GatewayRequestContext;

@@ -6,14 +6,17 @@ type McpLoopbackRuntime = {
 
 let activeRuntime: McpLoopbackRuntime | undefined;
 
+/** Returns a snapshot of the currently running MCP loopback server, if any. */
 export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
   return activeRuntime ? { ...activeRuntime } : undefined;
 }
 
+/** Publishes the active MCP loopback server tokens for local agent-runner preparation. */
 export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
   activeRuntime = { ...runtime };
 }
 
+/** Selects the bearer token that matches the caller's owner/non-owner tool scope. */
 export function resolveMcpLoopbackBearerToken(
   runtime: McpLoopbackRuntime,
   senderIsOwner: boolean,
@@ -21,12 +24,14 @@ export function resolveMcpLoopbackBearerToken(
   return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
 }
 
+/** Clears the active runtime only for the server instance that owns the supplied token. */
 export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {
   if (activeRuntime?.ownerToken === ownerToken) {
     activeRuntime = undefined;
   }
 }
 
+/** Builds the local MCP server config with environment placeholders filled by the runner. */
 export function createMcpLoopbackServerConfig(port: number) {
   return {
     mcpServers: {

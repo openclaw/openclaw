@@ -95,6 +95,7 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Handles `/sessions/:key/history` JSON and SSE reads for the Gateway HTTP server. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -153,6 +154,7 @@ export async function handleSessionHistoryHttpRequest(
   const limit = resolveLimit(req);
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  // First pages can use a bounded indexed tail; cursor pages need full ordering before slicing.
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
@@ -183,6 +185,7 @@ export async function handleSessionHistoryHttpRequest(
   const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
+    // JSON callers get the same projection shape as the initial SSE `history` event.
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -192,6 +195,7 @@ export async function handleSessionHistoryHttpRequest(
 
   const transcriptCandidates = entry?.sessionId
     ? new Set(
+        // Archive/reset flows may move the active transcript; listen to every current candidate.
         resolveSessionTranscriptCandidates(
           entry.sessionId,
           target.storePath,
@@ -249,6 +253,7 @@ export async function handleSessionHistoryHttpRequest(
   };
 
   const queueStreamWork = (work: () => Promise<void>) => {
+    // Serialize async writes so reauth, refresh, and message events cannot interleave bytes.
     streamQueue = streamQueue
       .then(async () => {
         if (cleanedUp || res.writableEnded) {
@@ -266,6 +271,7 @@ export async function handleSessionHistoryHttpRequest(
   };
 
   const isStreamStillAuthorized = async (): Promise<boolean> => {
+    // Long-lived SSE streams re-check current auth/config before every heartbeat or event.
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       req,
@@ -320,6 +326,7 @@ export async function handleSessionHistoryHttpRequest(
       }
       if (update.message !== undefined) {
         if (limit === undefined && cursor === undefined) {
+          // Unbounded streams can emit a single message; paginated streams need page refreshes.
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
             messageId: update.messageId,

@@ -56,6 +56,9 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   const fieldJSON = JSON.stringify({ [name]: value });
   const keyJSON = JSON.stringify(name);
   const prefix = `{${keyJSON}:`;
+  // Reuse JSON.stringify for escaping, then splice the single field into the
+  // already-open event frame so large broadcasts don't allocate wrapper objects
+  // once per connected client.
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
 }
 
@@ -92,6 +95,10 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   return required.some((scope) => scopes.includes(scope));
 }
 
+/**
+ * Creates broadcast helpers that enforce per-event scopes, outbound-buffer
+ * limits, and per-client sequence numbers for Gateway websocket events.
+ */
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
@@ -130,6 +137,8 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       | undefined;
     const getFrameBase = () => {
       if (!frameBase) {
+        // The event, payload, and stateVersion are identical for every eligible
+        // recipient; only the seq fragment differs for non-targeted broadcasts.
         frameBase = {
           eventJSON: JSON.stringify(event),
           payloadFragment: serializeFrameField("payload", payload),
@@ -163,6 +172,8 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       if (slow && opts?.dropIfSlow) {
         if (!isTargeted) {
+          // Global broadcasts advance seq even when dropped so clients can
+          // detect gaps and refresh state. Targeted sends intentionally omit seq.
           clientSeq.set(c, nextSeq);
         }
         continue;

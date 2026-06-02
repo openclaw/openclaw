@@ -5,6 +5,7 @@ import { normalizeSecretInputString, resolveSecretInputRef } from "../config/typ
 const GATEWAY_ENV_TOKEN = "OPENCLAW_GATEWAY_TOKEN";
 const GATEWAY_SERVICE_KIND = "gateway";
 
+/** Warning payload used when local env token precedence can diverge from service config. */
 export type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
   title: string;
@@ -14,6 +15,7 @@ export type GatewayAuthTokenSourceConflict = {
   diagnostic: string;
 };
 
+/** Detect when OPENCLAW_GATEWAY_TOKEN can make local clients use a different token source. */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -27,6 +29,8 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     return null;
   }
 
+  // Remote gateways and the managed gateway service have their own credential
+  // precedence; this warning is only for local clients versus local service.
   if (params.cfg.gateway?.mode === "remote") {
     return null;
   }

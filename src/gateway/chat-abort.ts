@@ -12,6 +12,7 @@ import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
+/** Tracks the active abort/controller state for one chat or agent run. */
 export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
@@ -51,6 +52,7 @@ type RegisteredChatAbortController = {
   cleanup: () => void;
 };
 
+/** Returns true for user text that should be treated as a stop/abort command. */
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
 }
@@ -64,6 +66,7 @@ function createChatAbortSignalReason(stopReason: string | undefined): Error | un
   return reason;
 }
 
+/** Computes the bounded expiry timestamp for chat.send abort-controller entries. */
 export function resolveChatRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
@@ -93,6 +96,7 @@ export function resolveChatRunExpiresAtMs(params: {
   return Math.min(max, Math.max(min, target));
 }
 
+/** Computes agent-run expiry without extending past the requested timeout plus grace. */
 export function resolveAgentRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
@@ -108,6 +112,7 @@ export function resolveAgentRunExpiresAtMs(params: {
   });
 }
 
+/** Registers a run abort controller and returns a cleanup hook scoped to that controller. */
 export function registerChatAbortController(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   runId: string;
@@ -127,6 +132,7 @@ export function registerChatAbortController(params: {
   const controller = new AbortController();
   const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
+    // Only the creator's controller may delete the map entry; replacement runs own their cleanup.
     if (entry?.controller === controller) {
       params.chatAbortControllers.delete(params.runId);
     }
@@ -261,6 +267,7 @@ export function resolveInFlightRunSnapshot(params: {
   return { runId: best.runId, text: projected.suppress ? "" : projected.text };
 }
 
+/** Drops buffered partial text when keeping it would exceed the chat.history response budget. */
 export function boundInFlightRunSnapshotForChatHistory(params: {
   snapshot: { runId: string; text: string } | undefined;
   messages: unknown[];
@@ -280,6 +287,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   return { runId: params.snapshot.runId, text: "" };
 }
 
+/** Minimal operations needed to abort a run and clean all Gateway run state. */
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
@@ -296,6 +304,7 @@ export type ChatAbortOps = {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
+/** Adapter shape for callers that keep abort state inside a composed chat-run state object. */
 export type TrackedChatRunAbortOps = {
   chatAbortControllers: ChatAbortOps["chatAbortControllers"];
   chatRunBuffers: ChatAbortOps["chatRunBuffers"];
@@ -309,6 +318,7 @@ export type TrackedChatRunAbortOps = {
   nodeSendToSession: ChatAbortOps["nodeSendToSession"];
 };
 
+/** Aborts a tracked chat run using the composed chat-run state adapter. */
 export function abortTrackedChatRunById(
   ops: TrackedChatRunAbortOps,
   params: Parameters<typeof abortChatRunById>[1],
@@ -382,6 +392,7 @@ function broadcastChatAborted(
       : undefined,
   };
   ops.broadcast("chat", payload);
+  // Global sessions also deliver to the agent-scoped node channel clients subscribed to.
   for (const deliverySessionKey of resolveChatAbortDeliverySessionKeys(
     ops,
     sessionKey,
@@ -396,6 +407,7 @@ function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   return cfg ? resolveDefaultAgentId(cfg) : undefined;
 }
 
+/** Aborts one active run, clears live buffers, emits aborted chat/lifecycle events, and forgets seq state. */
 export function abortChatRunById(
   ops: ChatAbortOps,
   params: {
@@ -453,6 +465,7 @@ export function abortChatRunById(
   return { aborted: true };
 }
 
+/** Updates provider ids on an already-registered run after provider resolution finishes. */
 export function updateChatRunProvider(
   chatAbortControllers: Map<string, ChatAbortControllerEntry>,
   params: {
@@ -470,6 +483,7 @@ export function updateChatRunProvider(
   return true;
 }
 
+/** Aborts all active runs currently associated with a provider or auth provider id. */
 export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {

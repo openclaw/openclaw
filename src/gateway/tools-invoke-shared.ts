@@ -18,6 +18,7 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
+/** Raw request shape accepted by HTTP /tools/invoke and RPC tools.invoke. */
 export type ToolsInvokeInput = {
   tool?: unknown;
   name?: unknown;
@@ -66,6 +67,8 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
   if (!process.env.VITEST) {
     return [];
   }
+  // Tests disable memory by default to avoid implicit plugin startup; return
+  // explicit reasons so failed tool probes explain the exact config gate.
   const reasons: string[] = [];
   const plugins = cfg.plugins;
   const slotRaw = plugins?.slots?.memory;
@@ -94,6 +97,9 @@ function mergeActionIntoArgsIfSupported(params: {
   if (!action || args.action !== undefined) {
     return args;
   }
+  // Legacy HTTP callers can send action out-of-band. Only merge it when the
+  // target schema declares an action field, so tools without that contract do
+  // not receive surprising extra input.
   const schemaObj = toolSchema as { properties?: Record<string, unknown> } | null;
   const hasAction = Boolean(
     schemaObj &&
@@ -143,6 +149,11 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   return "core";
 }
 
+/**
+ * Invokes a Gateway tool through the shared HTTP/RPC path.
+ * The returned outcome keeps transport status, approval state, and tool source
+ * separate so callers can project it into their protocol-specific envelope.
+ */
 export async function invokeGatewayTool(params: {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;
@@ -208,6 +219,8 @@ export async function invokeGatewayTool(params: {
       gatewayRequestedTools,
     });
 
+  // Core tool ids should not force plugin discovery; if policy only exposes the
+  // tool through normal Gateway resolution, retry with plugin tools enabled.
   let { agentId, tools } = resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools } = resolveTools(false));
@@ -245,6 +258,8 @@ export async function invokeGatewayTool(params: {
       action,
       args,
     });
+    // The same before-tool hook mediates HTTP/RPC invokes and agent tool calls,
+    // preserving approval prompts, parameter rewrites, and loop detection.
     const hookResult = await runBeforeToolCallHook({
       toolName,
       params: toolArgs,

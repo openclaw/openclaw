@@ -46,6 +46,11 @@ function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value:
   candidates.push(normalized);
 }
 
+/**
+ * Builds every normalized path observed while repeatedly decoding a request path.
+ * Security callers check all candidates because an intermediate decoded form can
+ * reveal a protected prefix before the final canonical path resolves dot segments.
+ */
 export function buildCanonicalPathCandidates(
   pathname: string,
   maxDecodePasses = MAX_PATH_DECODE_PASSES,
@@ -93,6 +98,7 @@ export function buildCanonicalPathCandidates(
   };
 }
 
+/** Returns the final normalized path after bounded repeated decoding. */
 export function canonicalizePathVariant(pathname: string): string {
   const { candidates } = buildCanonicalPathCandidates(pathname);
   return candidates[candidates.length - 1] ?? "/";
@@ -107,6 +113,10 @@ function prefixMatch(pathname: string, prefix: string): boolean {
   );
 }
 
+/**
+ * Canonicalizes a request path for auth decisions and reports whether decoding
+ * was incomplete or malformed so callers can fail closed at protected prefixes.
+ */
 export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
   const { candidates, decodePasses, decodePassLimitReached, malformedEncoding } =
     buildCanonicalPathCandidates(pathname);
@@ -133,6 +143,10 @@ function getNormalizedPrefixes(prefixes: readonly string[]): readonly string[] {
   return normalized;
 }
 
+/**
+ * Checks a path against protected prefixes using every decoded candidate and
+ * fails closed when encoding cannot be fully resolved.
+ */
 export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly string[]): boolean {
   const canonical = canonicalizePathForSecurity(pathname);
   const normalizedPrefixes = getNormalizedPrefixes(prefixes);
@@ -153,8 +167,10 @@ export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly s
   return normalizedPrefixes.some((prefix) => prefixMatch(canonical.rawNormalizedPath, prefix));
 }
 
+/** Plugin HTTP routes under this prefix require Gateway auth even through encoded path variants. */
 export const PROTECTED_PLUGIN_ROUTE_PREFIXES = ["/api/channels"] as const;
 
+/** Returns whether a request path targets a protected plugin HTTP route. */
 export function isProtectedPluginRoutePath(pathname: string): boolean {
   return isPathProtectedByPrefixes(pathname, PROTECTED_PLUGIN_ROUTE_PREFIXES);
 }

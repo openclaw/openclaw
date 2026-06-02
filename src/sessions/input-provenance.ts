@@ -17,6 +17,11 @@ export type InputProvenance = {
   sourceTool?: string;
 };
 
+/**
+ * Literal marker prepended to model-visible text that came from another
+ * session or internal tool. Consumers also use this marker to hide or filter
+ * inter-session prompts from direct-user transcript views.
+ */
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 export const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
@@ -33,6 +38,10 @@ function isInputProvenanceKind(value: unknown): value is InputProvenanceKind {
   );
 }
 
+/**
+ * Normalizes untrusted provenance metadata from transcript records, tool
+ * payloads, and agent handoffs into the closed provenance shape.
+ */
 export function normalizeInputProvenance(value: unknown): InputProvenance | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -50,6 +59,11 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
   };
 }
 
+/**
+ * Attaches provenance to a user message only when it does not already carry
+ * valid provenance. This preserves the original source marker across nested
+ * forwarding paths.
+ */
 export function applyInputProvenanceToUserMessage(
   message: AgentMessage,
   inputProvenance: InputProvenance | undefined,
@@ -70,6 +84,9 @@ export function applyInputProvenanceToUserMessage(
   } as unknown as AgentMessage;
 }
 
+/**
+ * Checks whether metadata marks content as an inter-session handoff.
+ */
 export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
 }
@@ -98,6 +115,11 @@ export function shouldPreserveUserFacingSessionStateForInputProvenance(value: un
   return sourceTool ? USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS.has(sourceTool) : false;
 }
 
+/**
+ * Detects user-role transcript messages that are not direct user input. Title,
+ * replay, and memory readers use this to avoid treating inter-session handoffs
+ * as the user's own instruction.
+ */
 export function hasInterSessionUserProvenance(
   message: { role?: unknown; provenance?: unknown } | undefined,
 ): boolean {
@@ -107,6 +129,10 @@ export function hasInterSessionUserProvenance(
   return isInterSessionInputProvenance(message.provenance);
 }
 
+/**
+ * Builds the model-visible envelope that explains inter-session provenance and
+ * carries compact source fields for audit/debugging.
+ */
 export function buildInterSessionPromptPrefix(
   inputProvenance: InputProvenance | undefined,
 ): string {
@@ -161,6 +187,8 @@ export function annotateInterSessionPromptText(
   if (text === prefix || text.startsWith(`${prefix}\n`)) {
     return text;
   }
+  // Keep exactly one generated marker at the front. Prompt decorators may have
+  // already moved or copied text that contains a literal marker.
   const body = removeFirstInterSessionPromptPrefix(text);
   return `${prefix}\n${body}`;
 }

@@ -99,6 +99,8 @@ export async function waitForEventLoopReady(
       timer = setTimeout(() => {
         timer = null;
         checks += 1;
+        // Timer drift is the readiness signal: high drift means the process is
+        // still starved, so require consecutive low-drift checks before IO.
         const driftMs = Math.max(0, Date.now() - scheduledAt - delayMs);
         maxDriftMs = Math.max(maxDriftMs, driftMs);
         if (driftMs > driftThresholdMs) {

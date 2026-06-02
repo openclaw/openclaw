@@ -8,6 +8,7 @@ import {
 
 type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
 
+/** Checks one registered plugin route against every canonical path candidate. */
 export function doesPluginRouteMatchPath(
   route: PluginHttpRouteEntry,
   context: PluginRoutePathContext,
@@ -19,6 +20,7 @@ export function doesPluginRouteMatchPath(
   return context.candidates.some((candidate) => candidate === routeCanonicalPath);
 }
 
+/** Returns matching plugin HTTP routes with exact routes before longest-prefix fallbacks. */
 export function findMatchingPluginHttpRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
@@ -44,6 +46,7 @@ export function findMatchingPluginHttpRoutes(
   return [...exactMatches, ...prefixMatches];
 }
 
+/** Resolves the first registered plugin HTTP route for a request path. */
 export function findRegisteredPluginHttpRoute(
   registry: PluginRegistry,
   pathname: string,
@@ -52,6 +55,7 @@ export function findRegisteredPluginHttpRoute(
   return findMatchingPluginHttpRoutes(registry, pathContext)[0];
 }
 
+/** Fast predicate for callers that only need to know whether a plugin owns the path. */
 export function isRegisteredPluginHttpRoutePath(
   registry: PluginRegistry,
   pathname: string,

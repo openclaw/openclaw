@@ -26,6 +26,8 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
       }
       const senderLabel = extractInboundSenderLabel(text);
       if (senderLabel) {
+        // Preserve sender attribution before stripping the visible envelope so
+        // projections can show who spoke without leaking inbound metadata text.
         return senderLabel;
       }
     }
@@ -49,6 +51,8 @@ function stripEnvelopeFromContentWithRole(
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
+    // Assistant/tool rows may carry internal metadata, but only user rows use
+    // the external sender envelope grammar.
     const stripped = stripUserEnvelope
       ? stripUserEnvelopeForDisplay(entry.text)
       : stripInternalMetadataForDisplay(entry.text);
@@ -64,6 +68,10 @@ function stripEnvelopeFromContentWithRole(
   return { content: next, changed };
 }
 
+/**
+ * Returns a display-safe message copy with user envelopes and internal
+ * metadata removed from string or text-block content.
+ */
 export function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
@@ -107,6 +115,10 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+/**
+ * Applies stripEnvelopeFromMessage across a message list while preserving the
+ * original array identity when no entry changes.
+ */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;

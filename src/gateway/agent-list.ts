@@ -48,6 +48,7 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
     : sorted;
 }
 
+/** Build the lightweight agent list shared by status commands and local Gateway summaries. */
 export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;
@@ -73,6 +74,8 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
       .map((entry) => (entry?.id ? normalizeAgentId(entry.id) : ""))
       .filter(Boolean),
   );
+  // An explicit configured agent list is authoritative; disk-discovered agents
+  // only appear when the config leaves the agent set open.
   const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
   let agentIds = listConfiguredAgentIds(cfg).filter((id) =>
     allowedIds ? allowedIds.has(id) : true,

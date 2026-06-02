@@ -12,10 +12,12 @@ export type PluginNodeCapabilityRoute = PluginHttpRouteEntry & {
   nodeCapability: PluginNodeCapabilitySurface;
 };
 
+/** Narrows plugin HTTP routes to those that declare a node-capability surface. */
 function hasNodeCapabilityRoute(route: PluginHttpRouteEntry): route is PluginNodeCapabilityRoute {
   return Boolean(route.nodeCapability?.surface?.trim());
 }
 
+/** Normalizes a route-declared node capability and scopes it to the owning plugin when possible. */
 function resolvePluginNodeCapabilityRouteSurface(
   route: PluginNodeCapabilityRoute,
 ): PluginNodeCapabilitySurface {
@@ -28,6 +30,7 @@ function resolvePluginNodeCapabilityRouteSurface(
   };
 }
 
+/** Returns matching plugin routes that require node-capability leasing for the path. */
 export function findMatchingPluginNodeCapabilityRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
@@ -41,6 +44,7 @@ export function findMatchingPluginNodeCapabilityRoutes(
     );
 }
 
+/** Resolves the highest-priority node-capability route for a request path. */
 export function findMatchingPluginNodeCapabilityRoute(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
@@ -48,10 +52,12 @@ export function findMatchingPluginNodeCapabilityRoute(
   return findMatchingPluginNodeCapabilityRoutes(registry, context)[0];
 }
 
+/** Lists unique node-capability surface names advertised by plugin HTTP routes. */
 export function listPluginNodeCapabilitySurfaces(registry: PluginRegistry): string[] {
   return listPluginNodeCapabilities(registry).map((entry) => entry.surface);
 }
 
+/** Lists unique plugin node-capability leases, keeping the shortest TTL per surface. */
 export function listPluginNodeCapabilities(
   registry: PluginRegistry,
 ): PluginNodeCapabilitySurface[] {

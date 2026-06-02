@@ -47,6 +47,7 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
 };
 
+/** Expands a requested visible page into a raw transcript tail window for projection loss. */
 export function resolveSessionHistoryTailReadOptions(limit: number): {
   maxMessages: number;
   maxLines: number;
@@ -124,10 +125,12 @@ function paginateSessionMessages(
   return buildPaginatedSessionHistory({
     messages: paginatedMessages,
     hasMore: start > 0,
+    // Cursors point at the first currently returned seq, so the next page ends before it.
     ...(start > 0 && typeof firstSeq === "number" ? { nextCursor: String(firstSeq) } : {}),
   });
 }
 
+/** Projects raw transcript entries into the public session-history page shape. */
 export function buildSessionHistorySnapshot(params: {
   rawMessages: unknown[];
   maxChars?: number;
@@ -148,6 +151,7 @@ export function buildSessionHistorySnapshot(params: {
     params.totalRawMessages > params.rawMessages.length &&
     history.messages.length > 0
   ) {
+    // Tail reads can omit older raw lines even when projection produced a short visible page.
     const firstSeq = resolveMessageSeq(history.messages[0]);
     history.hasMore = true;
     if (typeof firstSeq === "number") {
@@ -164,6 +168,7 @@ export function buildSessionHistorySnapshot(params: {
   };
 }
 
+/** Keeps HTTP session-history SSE clients in sync without rereading on simple append events. */
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
@@ -172,6 +177,7 @@ export class SessionHistorySseState {
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
 
+  /** Seeds SSE state from the same raw snapshot used for the initial HTTP response. */
   static fromRawSnapshot(params: {
     target: SessionHistoryTranscriptTarget;
     rawMessages: unknown[];
@@ -222,6 +228,7 @@ export class SessionHistorySseState {
     return this.sentHistory;
   }
 
+  /** Applies an inline transcript append; returns null when the client needs no event. */
   appendInlineMessage(update: {
     message: unknown;
     messageId?: string;
@@ -233,6 +240,7 @@ export class SessionHistorySseState {
     const carriedSeq = asPositiveSafeInteger(update.messageSeq);
     if (carriedSeq !== undefined) {
       if (carriedSeq <= this.rawTranscriptSeq) {
+        // Out-of-order or duplicate seq means this SSE stream no longer owns a simple append.
         return { shouldRefresh: true };
       }
       this.rawTranscriptSeq = carriedSeq;
@@ -251,6 +259,7 @@ export class SessionHistorySseState {
     if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (addedMessages.length > 1) {
+        // Projection split one raw entry into multiple visible entries; refresh preserves order.
         this.sentHistory = buildPaginatedSessionHistory({
           messages: projectedMessages,
           hasMore: false,
@@ -259,13 +268,15 @@ export class SessionHistorySseState {
       }
       const projectedMessage = addedMessages[0];
       if (projectedMessage !== undefined) {
-        const emittedMessage: SessionHistoryMessage =
+        // Mirrors and synthetic projections may drop seq metadata; restore the append seq.
+        const needsAppendSeq =
           isMessageToolMirrorMessage(projectedMessage) ||
-          resolveMessageSeq(projectedMessage) === undefined
-            ? (attachOpenClawTranscriptMeta(projectedMessage, {
-                seq: this.rawTranscriptSeq,
-              }) as SessionHistoryMessage)
-            : projectedMessage;
+          resolveMessageSeq(projectedMessage) === undefined;
+        const emittedMessage: SessionHistoryMessage = needsAppendSeq
+          ? (attachOpenClawTranscriptMeta(projectedMessage, {
+              seq: this.rawTranscriptSeq,
+            }) as SessionHistoryMessage)
+          : projectedMessage;
         const nextMessages = [...this.sentHistory.messages, emittedMessage];
         this.sentHistory = buildPaginatedSessionHistory({
           messages: nextMessages,
@@ -282,6 +293,7 @@ export class SessionHistorySseState {
     );
     if (!sanitizedMessage) {
       if (projectedMessages.length < this.sentHistory.messages.length) {
+        // Sanitization removed visible content and changed the page; force a full replacement.
         this.sentHistory = buildPaginatedSessionHistory({
           messages: projectedMessages,
           hasMore: false,
@@ -309,6 +321,7 @@ export class SessionHistorySseState {
     };
   }
 
+  /** Re-reads the transcript and replaces this SSE stream's page state. */
   async refreshAsync(): Promise<PaginatedSessionHistory> {
     const rawSnapshot = await this.readRawSnapshotAsync();
     const snapshot = this.buildSnapshot(rawSnapshot);
@@ -334,6 +347,7 @@ export class SessionHistorySseState {
 
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
     if (this.cursor === undefined && typeof this.limit === "number") {
+      // Initial tail pages can use indexed stats; cursor pages need full history ordering.
       const snapshot = await readRecentSessionMessagesWithStatsAsync(
         this.target.sessionId,
         this.target.storePath,

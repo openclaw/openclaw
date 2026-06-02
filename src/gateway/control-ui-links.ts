@@ -5,6 +5,10 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { isValidIPv4 } from "./net.js";
 
+/**
+ * Resolve the user-visible HTTP and WebSocket URLs for the configured Control UI bind mode.
+ * The result is display/bootstrap data only; server bind authority still comes from Gateway config.
+ */
 export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";

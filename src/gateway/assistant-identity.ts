@@ -17,6 +17,7 @@ const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 2_000_000;
 const MAX_ASSISTANT_EMOJI = 16;
 
+/** Fallback assistant presentation used when config and agent identity provide no usable fields. */
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   agentId: "main",
   name: "Assistant",
@@ -81,6 +82,7 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+/** Resolve the assistant identity shown by Gateway/UI surfaces for a specific agent. */
 export function resolveAssistantIdentity(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -97,6 +99,8 @@ export function resolveAssistantIdentity(params: {
   const uiName = coerceIdentityValue(configAssistant?.name, MAX_ASSISTANT_NAME);
   const agentName = coerceIdentityValue(agentIdentity?.name, MAX_ASSISTANT_NAME);
   const fileName = coerceIdentityValue(fileIdentity?.name, MAX_ASSISTANT_NAME);
+  // The default agent lets global UI branding win; named agents keep their own
+  // identity ahead of global branding so multi-agent surfaces stay distinct.
   const name =
     (isDefaultAgent ? (uiName ?? agentName ?? fileName) : (agentName ?? fileName ?? uiName)) ??
     DEFAULT_ASSISTANT_IDENTITY.name;

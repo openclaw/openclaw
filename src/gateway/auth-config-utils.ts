@@ -21,7 +21,10 @@ type GatewayAuthSecretRefResolutionParams = {
   hasTokenCandidate: boolean;
 };
 
-/** Check whether a local Gateway auth input is configured directly or through defaults. */
+/**
+ * Checks whether a local Gateway auth field is configured directly, through an
+ * env template, or through SecretRef defaults.
+ */
 export function hasConfiguredGatewayAuthSecretInput(
   cfg: OpenClawConfig,
   path: GatewayAuthSecretInputPath,
@@ -98,7 +101,11 @@ async function resolveGatewayAuthSecretRefValue(params: {
   return value;
 }
 
-/** Resolve the Gateway auth token ref only when token auth can use it. */
+/**
+ * Resolves the Gateway auth token SecretRef only when token auth can use it.
+ * This keeps password/trusted-proxy startup from requiring unrelated token
+ * providers.
+ */
 export async function resolveGatewayTokenSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
@@ -110,7 +117,10 @@ export async function resolveGatewayTokenSecretRefValue(
   });
 }
 
-/** Resolve the Gateway auth password ref only when password auth can use it. */
+/**
+ * Resolves the Gateway auth password SecretRef only when password auth can use
+ * it. Token and no-auth modes intentionally leave password refs unresolved.
+ */
 export async function resolveGatewayPasswordSecretRefValue(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<string | undefined> {
@@ -158,7 +168,11 @@ async function resolveGatewayPasswordSecretRef(params: {
   });
 }
 
-/** Materialize active local Gateway auth secret refs on a cloned config. */
+/**
+ * Materializes active local Gateway auth SecretRefs on a cloned config.
+ * The original config is preserved so startup can inject resolved credentials
+ * into runtime auth without rewriting persisted SecretRef-backed settings.
+ */
 export async function materializeGatewayAuthSecretRefs(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<OpenClawConfig> {

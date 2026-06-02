@@ -15,6 +15,11 @@ async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
   });
 }
 
+/**
+ * Bind the Gateway HTTP server with the startup retry policy used by runtime state.
+ * EADDRINUSE becomes a gateway lock error after retries so callers report a
+ * product-level singleton conflict instead of a raw Node listen failure.
+ */
 export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;

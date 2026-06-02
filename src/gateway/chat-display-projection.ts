@@ -32,6 +32,7 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
+/** Resolves the display text budget for chat history projections. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -79,6 +80,7 @@ function sanitizeChatHistoryContentBlock(
   const preserveExactToolPayload =
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  // Tool payloads stay exact enough for replay/debug; display text still loses directive tags.
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     if (preserveExactToolPayload) {
@@ -117,6 +119,7 @@ function sanitizeChatHistoryContentBlock(
     changed ||= res.truncated;
   }
   if ("thinkingSignature" in entry) {
+    // Reasoning signatures are model/provider internals and should not leak to chat displays.
     delete entry.thinkingSignature;
     changed = true;
   }
@@ -162,6 +165,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
   }
+  // When phased text exists, display only the final answer phase in history views.
   const filtered = content.filter((block) => {
     if (!block || typeof block !== "object") {
       return true;
@@ -192,6 +196,7 @@ function projectAssistantTextFromMixedToolContent(
     return null;
   }
 
+  // Mixed tool transcripts can contain display text plus tool internals; keep only visible text.
   const textBlocks: unknown[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
@@ -1183,6 +1188,7 @@ function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {
+      // ACP runtimes may echo the same final text before Gateway injects a stopped-run row.
       changed = true;
       continue;
     }
@@ -1191,11 +1197,13 @@ function filterVisibleProjectedHistoryMessages(
   return changed ? visible : messages;
 }
 
+/** Projects raw transcript messages into the public Gateway chat-history display shape. */
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
+  // Mirror in-chat message sends before visibility filtering so user-visible replies survive.
   const mirrored = mirrorMessageToolVisibleReplies(source);
   const merged = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
@@ -1220,6 +1228,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
   return messages.slice(-Math.floor(maxMessages));
 }
 
+/** Projects chat history and returns only the newest display rows when requested. */
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
@@ -1230,6 +1239,7 @@ export function projectRecentChatDisplayMessages(
   );
 }
 
+/** Projects one raw transcript message, returning undefined when it has no displayable row. */
 export function projectChatDisplayMessage(
   message: unknown,
   options?: { maxChars?: number; stripEnvelope?: boolean },

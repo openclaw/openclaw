@@ -14,6 +14,7 @@ import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 
+/** Handles protocol-neutral HTTP tool invocation for Gateway/OpenAI-compatible callers. */
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -66,7 +67,8 @@ export async function handleToolsInvokeHttpRequest(
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
 
-  // Resolve message channel/account hints (optional headers) for policy inheritance.
+  // Carry optional channel/account hints into the shared invoker so tool policy
+  // inheritance matches the request's original delivery context.
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );

@@ -1,6 +1,12 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * In-process transcript mutation notification consumed by Gateway websocket
+ * fanout, session history, and transcript index refresh paths. `sessionFile` is
+ * required because archive and append events can be resolved from the file path
+ * even when the session key is not provided.
+ */
 export type SessionTranscriptUpdate = {
   sessionFile: string;
   sessionKey?: string;
@@ -14,6 +20,11 @@ type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
 
+/**
+ * Registers a transcript update listener and returns its unsubscribe function.
+ * The bus is process-local; callers that install long-lived listeners should
+ * unregister them during teardown.
+ */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
   SESSION_TRANSCRIPT_LISTENERS.add(listener);
   return () => {
@@ -21,6 +32,11 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
   };
 }
 
+/**
+ * Emits a normalized transcript update. String inputs are shorthand for a file
+ * path-only mutation, and object inputs preserve optional session/message
+ * metadata for websocket subscribers.
+ */
 export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
   const normalized =
     typeof update === "string"
@@ -38,6 +54,8 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
     return;
   }
   const messageSeq = asPositiveSafeInteger(normalized.messageSeq);
+  // Normalize before fanout so listeners can treat blank strings and invalid
+  // sequence numbers as absent rather than repeating validation work.
   const nextUpdate: SessionTranscriptUpdate = {
     sessionFile: trimmed,
     ...(normalizeOptionalString(normalized.sessionKey)

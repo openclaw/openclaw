@@ -47,6 +47,7 @@ function resolveClaudeProjectsDir(homeDir?: string): string {
   return path.join(resolveHistoryHomeDir(homeDir), CLAUDE_PROJECTS_RELATIVE_DIR);
 }
 
+/** Resolves the Claude CLI session id from current and legacy session-store binding fields. */
 export function resolveClaudeCliBindingSessionId(
   entry: SessionEntry | undefined,
 ): string | undefined {
@@ -120,9 +121,11 @@ function normalizeClaudeCliContent(
       const id = normalizeOptionalString(block.id) ?? "";
       const name = normalizeOptionalString(block.name) ?? "";
       if (id && name) {
+        // Claude writes tool results without names; remember names by tool_use id.
         toolNameRegistry.set(id, name);
       }
       if (block.input !== undefined && block.arguments === undefined) {
+        // Gateway display code expects Anthropic tool calls as `toolcall.arguments`.
         block.arguments = cloneJsonValue(block.input);
       }
       block.type = "toolcall";
@@ -204,6 +207,7 @@ function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): Trans
       continue;
     }
 
+    // Rebuild Gateway-style assistant messages where tool call and result blocks share one turn.
     coalesced.push({
       ...current,
       content: [...callBlocks.map(cloneJsonValue), ...resultBlocks.map(cloneJsonValue)],
@@ -213,6 +217,7 @@ function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): Trans
   return coalesced;
 }
 
+/** Converts one Claude CLI JSONL entry into OpenClaw's transcript message shape. */
 function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
@@ -272,6 +277,7 @@ function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
+/** Locates a Claude CLI project transcript by session id without allowing path traversal. */
 export function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
@@ -303,6 +309,7 @@ export function resolveClaudeCliSessionFilePath(params: {
     const candidate = path.resolve(projectDir, `${sessionId}.jsonl`);
     const resolvedProjectDir = path.resolve(projectDir);
     if (!candidate.startsWith(`${resolvedProjectDir}${path.sep}`)) {
+      // Keep lookup constrained to each Claude project directory even for odd ids.
       continue;
     }
     if (fs.existsSync(candidate)) {
@@ -312,6 +319,7 @@ export function resolveClaudeCliSessionFilePath(params: {
   return undefined;
 }
 
+/** Reads and normalizes Claude CLI JSONL transcript messages for Gateway history import. */
 export function readClaudeCliSessionMessages(params: {
   cliSessionId: string;
   homeDir?: string;
@@ -391,6 +399,7 @@ function extractSummaryText(entry: ClaudeCliProjectEntry): string | undefined {
   return typeof summary === "string" && summary.trim() ? summary.trim() : undefined;
 }
 
+/** Reads the last post-compaction summary plus recent turns for non-Claude fallback prompts. */
 export function readClaudeCliFallbackSeed(params: {
   cliSessionId: string;
   homeDir?: string;
@@ -434,6 +443,7 @@ export function readClaudeCliFallbackSeed(params: {
       lastSummary = pendingSummary;
       pendingSummary = undefined;
       lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;
+      // After a compact boundary, only later turns belong in the fallback recency window.
       windowedTurns = [];
       toolNameRegistry.clear();
       continue;

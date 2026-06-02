@@ -9,6 +9,11 @@ const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message
 
 type ParsedTranscriptRecord = Record<string, unknown>;
 
+/**
+ * Parsed transcript record plus byte metadata. Message readers use `offset` and
+ * `byteLength` to detect and describe oversized records without reparsing the
+ * full line.
+ */
 export type IndexedTranscriptEntry = {
   seq: number;
   id?: string;
@@ -40,6 +45,10 @@ type CacheEntry = {
   index: SessionTranscriptIndex;
 };
 
+/**
+ * Options for transcript index reads. `skip` bypasses cache reuse when a caller
+ * needs an uncached scan of the current file.
+ */
 type ReadSessionTranscriptIndexOptions = {
   cache?: "reuse" | "skip";
 };
@@ -119,6 +128,9 @@ function setCachedIndex(filePath: string, entry: CacheEntry): void {
   }
 }
 
+/**
+ * Clears cached and in-flight index builds between tests or runtime reset paths.
+ */
 export function clearSessionTranscriptIndexCache(): void {
   transcriptIndexCache.clear();
   transcriptIndexBuilds.clear();
@@ -136,6 +148,11 @@ function isTreeTranscriptRecord(record: ParsedTranscriptRecord): boolean {
   return record.type !== "session" && typeof record.id === "string" && "parentId" in record;
 }
 
+/**
+ * Builds a placeholder record for lines too large to parse safely. The prefix
+ * scan preserves id/parent/timestamp metadata so lookup and tree pruning still
+ * work without materializing the full message payload.
+ */
 function buildOversizedIndexedRawEntry(params: {
   line: string;
   offset: number;
@@ -214,6 +231,11 @@ async function visitTranscriptJsonLines(
   }
 }
 
+/**
+ * Reconstructs the active transcript branch from parent links. A cycle means
+ * the tree is corrupt, so the index returns no active tree entries instead of
+ * exposing an arbitrary partial branch.
+ */
 function buildActiveTreeEntries(params: {
   byId: Map<string, IndexedRawEntry>;
   leafId?: string;
@@ -255,6 +277,11 @@ function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry
   return entries;
 }
 
+/**
+ * Builds the transcript index in one streaming pass. Tree-shaped transcripts
+ * expose only the active leaf branch; linear transcripts expose visible records
+ * in file order.
+ */
 async function buildSessionTranscriptIndex(
   filePath: string,
   stat: fs.Stats,
@@ -323,6 +350,11 @@ async function buildSessionTranscriptIndex(
   };
 }
 
+/**
+ * Reads or builds the cached transcript index for a file. Cache entries are
+ * invalidated by mtime/size, and concurrent readers for the same file version
+ * share a single in-flight build.
+ */
 export async function readSessionTranscriptIndex(
   filePath: string,
   opts: ReadSessionTranscriptIndexOptions = {},

@@ -8,6 +8,8 @@ type GatewayInstallAuthMode = NonNullable<NonNullable<OpenClawConfig["gateway"]>
 function hasExplicitGatewayInstallAuthMode(
   mode: GatewayInstallAuthMode | undefined,
 ): boolean | undefined {
+  // Return undefined only when install must infer the auth family from durable
+  // credentials; explicit non-token modes opt out of token creation.
   if (mode === "token") {
     return true;
   }
@@ -32,6 +34,7 @@ function hasDurableGatewayPasswordEnvForInstall(
   );
 }
 
+/** Decide whether service install should create/require a durable Gateway token. */
 export function shouldRequireGatewayTokenForInstall(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,

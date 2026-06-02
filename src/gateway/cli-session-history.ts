@@ -21,6 +21,7 @@ export {
 };
 export type { ClaudeCliFallbackSeed };
 
+/** Adds bound CLI-session transcript history to Gateway chat history when provider ownership matches. */
 export function augmentChatHistoryWithCliSessionImports(params: {
   entry: SessionEntry | undefined;
   provider?: string;
@@ -39,6 +40,7 @@ export function augmentChatHistoryWithCliSessionImports(params: {
     normalizedProvider !== ANTHROPIC_PROVIDER &&
     params.localMessages.length > 0
   ) {
+    // Keep non-Claude local history authoritative once a provider-specific transcript exists.
     return params.localMessages;
   }
 

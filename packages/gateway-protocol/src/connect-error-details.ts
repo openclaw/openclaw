@@ -50,6 +50,7 @@ export const ConnectErrorDetailCodes = {
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
+/** Stable connect-error detail codes carried in gateway handshake failures. */
 export type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
@@ -60,6 +61,7 @@ export const ConnectPairingRequiredReasons = {
   METADATA_UPGRADE: "metadata-upgrade",
 } as const;
 
+/** Pairing state that explains why a gateway connection must pause for approval. */
 export type ConnectPairingRequiredReason =
   (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
 
@@ -75,6 +77,7 @@ export type ConnectErrorRecoveryAdvice = {
   recommendedNextStep?: ConnectRecoveryNextStep;
 };
 
+/** Structured pairing failure payload shared by Gateway, clients, and UI recovery flows. */
 export type PairingConnectErrorDetails = {
   code: typeof ConnectErrorDetailCodes.PAIRING_REQUIRED;
   reason?: ConnectPairingRequiredReason;
@@ -152,6 +155,7 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
   "metadata-upgrade": "device metadata change pending approval",
 };
 
+/** Map gateway auth failure reasons to protocol-stable connect error codes. */
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
@@ -191,6 +195,7 @@ export function resolveAuthConnectErrorDetailCode(
   }
 }
 
+/** Map device-auth verifier failure reasons to protocol-stable connect error codes. */
 export function resolveDeviceAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
@@ -212,6 +217,7 @@ export function resolveDeviceAuthConnectErrorDetailCode(
   }
 }
 
+/** Read a detail code from an untrusted connect error details payload. */
 export function readConnectErrorDetailCode(details: unknown): string | null {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return null;
@@ -220,6 +226,7 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   return typeof code === "string" && code.trim().length > 0 ? code : null;
 }
 
+/** Read supported recovery advice fields from untrusted connect error details. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return {};
@@ -249,6 +256,7 @@ function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredRe
     : undefined;
 }
 
+/** Normalize pairing request ids accepted in details payloads and close reasons. */
 export function normalizePairingConnectRequestId(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
@@ -287,6 +295,7 @@ function createPairingConnectErrorDetails(params: {
   };
 }
 
+/** Return the human-readable approval requirement for a pairing reason. */
 export function describePairingConnectRequirement(
   reason: ConnectPairingRequiredReason | undefined,
 ): string {
@@ -295,6 +304,7 @@ export function describePairingConnectRequirement(
     : "device approval is required";
 }
 
+/** Build the canonical connect error message for a pairing-required failure. */
 export function buildPairingConnectErrorMessage(
   reason: ConnectPairingRequiredReason | undefined,
 ): string {
@@ -319,6 +329,7 @@ export function buildPairingConnectRecoveryTitle(
     : "Gateway pairing approval required.";
 }
 
+/** Build sanitized pairing-required details for connect failure payloads. */
 export function buildPairingConnectErrorDetails(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
@@ -356,6 +367,7 @@ export function buildPairingConnectErrorDetails(params: {
   });
 }
 
+/** Build a close reason string that legacy clients can still parse. */
 export function buildPairingConnectCloseReason(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
@@ -365,6 +377,7 @@ export function buildPairingConnectCloseReason(params: {
   return requestId ? `${message} (requestId: ${requestId})` : message;
 }
 
+/** Parse pairing-required details from an untrusted connect error payload. */
 export function readPairingConnectErrorDetails(
   details: unknown,
 ): PairingConnectErrorDetails | null {
@@ -417,6 +430,7 @@ export function readPairingConnectErrorDetails(
   });
 }
 
+/** Return only the pairing fields needed by older pairing-required consumers. */
 export function readConnectPairingRequiredDetails(
   details: unknown,
 ): ConnectPairingRequiredDetails | null {
@@ -430,6 +444,7 @@ export function readConnectPairingRequiredDetails(
   };
 }
 
+/** Parse legacy pairing-required information from a formatted error message. */
 export function readConnectPairingRequiredMessage(
   message: string | null | undefined,
 ): ConnectPairingRequiredDetails | null {
@@ -462,6 +477,7 @@ export function readConnectPairingRequiredMessage(
   };
 }
 
+/** Format pairing-required details for user-facing connect error messages. */
 export function formatConnectPairingRequiredMessage(details: unknown): string {
   const pairing = readPairingConnectErrorDetails(details);
   const base =
@@ -471,6 +487,7 @@ export function formatConnectPairingRequiredMessage(details: unknown): string {
   return pairing?.requestId ? `${base} (requestId: ${pairing.requestId})` : base;
 }
 
+/** Format connect errors using protocol-aware details when available. */
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
   if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);

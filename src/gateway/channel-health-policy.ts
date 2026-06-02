@@ -32,6 +32,7 @@ export type ChannelHealthEvaluation = {
   reason: ChannelHealthEvaluationReason;
 };
 
+/** Inputs shared by channel health monitor, CLI health, and readiness probes. */
 export type ChannelHealthPolicy = {
   channelId: ChannelId;
   now: number;
@@ -51,6 +52,7 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
+/** Classify a channel runtime snapshot without mutating channel or monitor state. */
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
@@ -101,6 +103,8 @@ export function evaluateChannelHealth(
   }
   if (snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;
+    // Startup grace wins before disconnected/stale checks so newly restarted
+    // clients can connect without immediate monitor/readiness churn.
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
     }
@@ -127,6 +131,7 @@ export function evaluateChannelHealth(
   return { healthy: true, reason: "healthy" };
 }
 
+/** Convert a failed health classification into the restart reason used by monitors. */
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,

@@ -8,6 +8,10 @@ type ControlUiRequestClassification =
 
 const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
 
+/**
+ * Classify a request before the Control UI handler serves static assets or SPA fallback.
+ * Root-mounted UI must yield gateway/plugin/API paths so those owners can answer first.
+ */
 export function classifyControlUiRequest(params: {
   basePath: string;
   pathname: string;
@@ -32,6 +36,8 @@ export function classifyControlUiRequest(params: {
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       return { kind: "not-control-ui" };
     }
+    // Non-read methods are never SPA fallback candidates; leave them to API or
+    // plugin handlers so write attempts cannot be hidden behind index.html.
     if (!isReadHttpMethod(method)) {
       return { kind: "not-control-ui" };
     }

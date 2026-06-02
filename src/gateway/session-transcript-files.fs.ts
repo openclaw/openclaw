@@ -69,6 +69,12 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
+/**
+ * Returns every plausible transcript path for a session, ordered from the
+ * caller-provided file toward generated and legacy locations. Reset and hook
+ * code rely on this order to prefer the live transcript while still finding
+ * stale/custom paths that need archival.
+ */
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -125,6 +131,11 @@ export function resolveSessionTranscriptCandidates(
   return uniqueStrings(candidates);
 }
 
+/**
+ * Renames a transcript file with an archive suffix and emits the in-process
+ * transcript update event. The event keeps memory/session-history consumers in
+ * sync because archive renames are not discovered by directory watches.
+ */
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
@@ -142,6 +153,11 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   return archived;
 }
 
+/**
+ * Archives all known transcript files for a session and returns only archive
+ * paths. Use `archiveSessionTranscriptsDetailed` when callers must preserve the
+ * source-to-archive mapping for lifecycle hook payloads.
+ */
 export function archiveSessionTranscripts(opts: {
   sessionId: string;
   storePath: string | undefined;
@@ -158,6 +174,11 @@ export function archiveSessionTranscripts(opts: {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
 
+/**
+ * Archives all existing transcript candidates for a session. Candidate failures
+ * are isolated through `onArchiveError` so one stale path does not prevent other
+ * transcripts from being archived.
+ */
 export function archiveSessionTranscriptsDetailed(opts: {
   sessionId: string;
   storePath: string | undefined;
@@ -208,6 +229,11 @@ export function archiveSessionTranscriptsDetailed(opts: {
   return archived;
 }
 
+/**
+ * Chooses the transcript path that should be sent with `session_end`. Archived
+ * paths win after reset/delete; otherwise the first existing live candidate is
+ * returned so shutdown hooks can still reference active transcripts.
+ */
 export function resolveStableSessionEndTranscript(params: {
   sessionId: string;
   storePath: string | undefined;
@@ -247,6 +273,11 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
+/**
+ * Removes archived transcript files older than the supplied retention window.
+ * Only filenames with a valid archive timestamp for the requested reason are
+ * counted, so unrelated files in the same directories are ignored.
+ */
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   olderThanMs: number;

@@ -113,6 +113,7 @@ type ResolvedOpenAiChatCompletionsLimits = {
   images: InputImageLimits;
 };
 
+/** Resolves Chat Completions request and image-ingest limits from Gateway config. */
 function resolveOpenAiChatCompletionsLimits(
   config: GatewayHttpChatCompletionsConfig | undefined,
 ): ResolvedOpenAiChatCompletionsLimits {
@@ -247,6 +248,8 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
     }
     const constraint: ToolChoiceConstraint = { type: "function", name: targetName };
     return {
+      // Keep the agent's visible tool list aligned with OpenAI's forced
+      // function choice, then verify a structured call after the run.
       tools: matched,
       extraSystemPrompt: toolChoiceConstraintPrompt(constraint),
       constraint,
@@ -351,6 +354,8 @@ function writeAssistantToolCallsIncrementalChunks(
     });
 
     for (const argsDelta of splitArgumentsForStreaming(call.arguments)) {
+      // Stream function arguments as deltas after the call shell, matching the
+      // Chat Completions tool-call grammar consumed by OpenAI clients.
       writeSse(res, {
         id: params.runId,
         object: "chat.completion.chunk",
@@ -575,6 +580,7 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
   return { activeTurnIndex: -1, activeUserMessageIndex: -1, urls: [] };
 }
 
+/** Resolves image_url parts from the active user turn and enforces image budgets. */
 async function resolveImagesForRequest(
   activeTurnContext: Pick<ActiveTurnContext, "urls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
@@ -619,6 +625,7 @@ export const testOnlyOpenAiHttp = {
 };
 export { testOnlyOpenAiHttp as __testOnlyOpenAiHttp };
 
+/** Converts OpenAI chat messages into the internal agent prompt and system prompt. */
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeUserMessageIndex: number,
@@ -760,6 +767,8 @@ function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
   if (hasNonzeroUsage(primary)) {
     return primary;
   }
+  // Some providers only publish aggregate usage after the final call; prefer it
+  // when the run-level usage field is missing or all zero.
   const fallback = normalizeUsage(agentMeta?.lastCallUsage);
   if (hasNonzeroUsage(fallback)) {
     return fallback;
@@ -860,6 +869,7 @@ function resolveErrorMessage(err: unknown): string {
   return String(err);
 }
 
+/** Handles OpenAI-compatible /v1/chat/completions requests for Gateway agents. */
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

@@ -10,6 +10,7 @@ export type {
   GatewayClientStartReadinessOptions,
 } from "../../packages/gateway-client/src/readiness.js";
 
+/** Start a Gateway client only after the shared event-loop readiness probe succeeds. */
 export function startGatewayClientWhenEventLoopReady(
   client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},

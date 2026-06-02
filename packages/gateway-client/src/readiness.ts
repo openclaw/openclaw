@@ -32,6 +32,8 @@ function resolveGatewayClientStartReadinessTimeoutMs(
     return options.timeoutMs;
   }
   const clientOptions = options.clientOptions ?? {};
+  // Use the same timeout precedence as connect-challenge setup so readiness
+  // waiting cannot outlive or undercut the client's own handshake watchdog.
   const timeoutOverride =
     typeof clientOptions.connectChallengeTimeoutMs === "number" &&
     Number.isFinite(clientOptions.connectChallengeTimeoutMs)
@@ -55,6 +57,7 @@ export async function startGatewayClientWithReadinessWait(
     maxWaitMs: resolveGatewayClientStartReadinessTimeoutMs(options),
     signal: options.signal,
   });
+  // A late abort after the probe resolves should still prevent client start.
   if (readiness.ready && !readiness.aborted && options.signal?.aborted !== true) {
     client.start();
   }

@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 
+/**
+ * Applies gateway config to process command lanes used by agents, subagents,
+ * and cron-triggered work.
+ */
 export function applyGatewayLaneConcurrency(cfg: OpenClawConfig) {
   const cronMaxConcurrentRuns = resolveCronMaxConcurrentRuns(cfg.cron);
   setCommandLaneConcurrency(CommandLane.Cron, cronMaxConcurrentRuns);

@@ -68,6 +68,9 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
       abort();
     }
   };
+  // Abort tool execution when the client disconnects before sending a full
+  // request or before receiving the response; normal completed responses keep
+  // the signal open for handlers that finish exactly as the socket closes.
   req.once("close", abortIfRequestIncomplete);
   res.once("close", abortIfResponseStillOpen);
   if (req.destroyed && !req.complete) {
@@ -82,6 +85,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   };
 }
 
+/** Starts a Gateway-local MCP HTTP loopback server and publishes its bearer tokens. */
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -128,6 +132,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         });
         const responses: object[] = [];
         for (const message of messages) {
+          // Notifications return null and are intentionally omitted from JSON-RPC
+          // batch responses while still sharing request-scope tool resolution.
           const response = await handleMcpJsonRpc({
             message,
             tools: scopedTools.tools,
@@ -225,6 +231,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   return server;
 }
 
+/** Returns the active MCP loopback singleton, starting it once when needed. */
 export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
   if (activeMcpLoopbackServer) {
     return activeMcpLoopbackServer;
@@ -242,6 +249,7 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServ
   return activeMcpLoopbackServerPromise;
 }
 
+/** Closes the active or currently-starting MCP loopback server if one exists. */
 export async function closeMcpLoopbackServer(): Promise<void> {
   const server =
     activeMcpLoopbackServer ??

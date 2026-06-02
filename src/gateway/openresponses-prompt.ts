@@ -22,6 +22,10 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
+/**
+ * Convert Responses input into the single agent prompt plus optional system
+ * overlay used by the Gateway OpenResponses compatibility endpoint.
+ */
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
@@ -58,7 +62,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         entry: { sender: `Tool:${item.call_id}`, body: item.output },
       });
     }
-    // Skip reasoning and item_reference for prompt building (Phase 1)
+    // Reasoning and item_reference entries do not add user-visible prompt text.
   }
 
   const message = buildAgentMessageFromConversationEntries(conversationEntries);

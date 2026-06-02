@@ -32,6 +32,7 @@ function hasScriptSrcAttribute(openTag: string): boolean {
   );
 }
 
+/** Build the Control UI CSP header, optionally allowing known inline boot scripts by hash. */
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptSrc = hashes?.length

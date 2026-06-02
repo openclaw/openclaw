@@ -1,10 +1,12 @@
 import type { ResolvedGatewayAuth } from "./auth.js";
 
+/** Published token placeholders that must never be accepted as live Gateway auth. */
 export const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
   "change-me-now",
 ] as const;
 
+/** Published password placeholders that must never be accepted as live Gateway auth. */
 export const KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS = ["change-me-to-a-strong-password"] as const;
 
 /**
@@ -23,6 +25,7 @@ const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set(
   KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS,
 );
 
+/** Reject resolved Gateway token/password credentials that match public example sentinels. */
 export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth): void {
   if (auth.mode === "token") {
     const token = auth.token?.trim() ?? "";

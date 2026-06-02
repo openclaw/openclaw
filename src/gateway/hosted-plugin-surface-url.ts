@@ -61,6 +61,11 @@ const parseForwardedHost = (value: HostSource | HostSource[]) => {
   return raw?.split(",")[0]?.trim();
 };
 
+/**
+ * Resolve the externally visible Gateway origin used for hosted plugin surfaces.
+ * Explicit host overrides win; forwarded/request hosts can contribute public
+ * ports, while loopback/local addresses are only fallbacks.
+ */
 export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlParams) {
   const port = params.port;
   if (!port) {
@@ -74,6 +79,8 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
   const forwardedHostRaw = parseForwardedHost(params.forwardedHost);
   const parsedForwardedHost = parseHostHeader(forwardedHostRaw);
   const parsedRequestHost = parseHostHeader(params.requestHost);
+  // Once a stronger public host is present, reject weaker loopback fallbacks so
+  // plugin surface URLs do not accidentally advertise localhost to remote clients.
   const requestHost = normalizeHost(parsedRequestHost.host, Boolean(override));
   const forwardedHost = normalizeHost(parsedForwardedHost.host, Boolean(override));
   const advertisedHost = forwardedHost ? parsedForwardedHost : parsedRequestHost;

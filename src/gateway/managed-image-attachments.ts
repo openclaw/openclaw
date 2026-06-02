@@ -35,6 +35,7 @@ const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
 const DATA_URL_RE = /^data:/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 
+/** Default guardrails for Gateway-managed outgoing image storage and serving. */
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxBytes: 12 * 1024 * 1024,
   maxWidth: 4096,
@@ -42,6 +43,7 @@ export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxPixels: 20_000_000,
 } as const;
 
+/** Effective byte, dimension, and pixel limits applied before images become chat blocks. */
 export type ManagedImageAttachmentLimits = {
   maxBytes: number;
   maxWidth: number;
@@ -111,6 +113,7 @@ function buildSessionManagedOutgoingAttachmentIndexCacheKey(
   return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
 }
 
+/** Merge optional managed-image limit config with the Gateway defaults. */
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
@@ -396,6 +399,7 @@ async function deleteOrphanManagedImageFiles(params: {
   return deletedFileCount;
 }
 
+/** Delete stale managed outgoing image records and unreferenced stored originals. */
 export async function cleanupManagedOutgoingImageRecords(params?: {
   stateDir?: string;
   nowMs?: number;
@@ -464,6 +468,8 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       continue;
     }
 
+    // History records live only while their message still references the
+    // managed URL; transient records age out when they never become history.
     let shouldDelete;
     if (
       forceDeleteSessionRecords &&
@@ -679,6 +685,8 @@ async function getSessionManagedOutgoingAttachmentIndex(
     return null;
   }
 
+  // Transcript reads are expensive during cleanup, so cache by file identity
+  // and invalidate on mtime/size changes instead of trusting session keys alone.
   let transcriptStat: { transcriptPath: string; mtimeMs: number; size: number } | null = null;
   const transcriptPath = typeof entry?.sessionFile === "string" ? entry.sessionFile.trim() : "";
   if (transcriptPath) {
@@ -748,6 +756,7 @@ async function recordMatchesTranscriptMessage(
   );
 }
 
+/** Promote managed outgoing image blocks from transient storage to message history. */
 export async function attachManagedOutgoingImagesToMessage(params: {
   messageId: string;
   blocks?: readonly Record<string, unknown>[];
@@ -783,6 +792,7 @@ export async function attachManagedOutgoingImagesToMessage(params: {
   );
 }
 
+/** Ingest outgoing image sources into managed storage and return safe chat image blocks. */
 export async function createManagedOutgoingImageBlocks(params: {
   sessionKey: string;
   agentId?: string;
@@ -820,6 +830,8 @@ export async function createManagedOutgoingImageBlocks(params: {
       if (parsedDataUrl.kind === "image-data-url") {
         validateManagedImageBuffer(parsedDataUrl.buffer, alt, limits);
       }
+      // Local and remote sources are copied into state-dir storage so chat
+      // blocks do not leak filesystem paths, signed URLs, or upstream hosts.
       let savedOriginal =
         parsedDataUrl.kind === "image-data-url"
           ? await saveMediaBuffer(
@@ -973,6 +985,7 @@ function safeAttachmentFilename(value: string | null) {
   return base || fallback;
 }
 
+/** Serve a managed outgoing image after Gateway auth, scope, owner, and transcript checks. */
 export async function handleManagedOutgoingImageHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

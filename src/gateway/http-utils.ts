@@ -31,7 +31,9 @@ export {
   type GatewayHttpRequestAuthCheckResult,
 } from "./http-auth-utils.js";
 
+/** OpenAI-compatible model id that maps to the default OpenClaw agent. */
 export const OPENCLAW_MODEL_ID = "openclaw";
+/** Alias for the default OpenClaw agent's default model route. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
 function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
@@ -58,6 +60,8 @@ export function resolveAgentIdFromModel(
     return resolveDefaultAgentId(cfg);
   }
 
+  // OpenAI-compatible routes encode the agent in the model field so clients can
+  // select an agent without a custom header.
   const m =
     raw.match(/^openclaw[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
     raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
@@ -68,6 +72,10 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/**
+ * Resolves the optional x-openclaw-model override for OpenAI-compatible routes
+ * after the request model has selected an agent.
+ */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
   agentId: string;
@@ -75,6 +83,8 @@ export async function resolveOpenAiCompatModelOverride(params: {
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
   const requestModel = params.model?.trim();
   if (requestModel && !resolveAgentIdFromModel(requestModel)) {
+    // The OpenAI model field selects an OpenClaw agent here; provider/model
+    // selection belongs in x-openclaw-model after the agent is known.
     return {
       errorMessage: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
     };
@@ -104,6 +114,8 @@ export async function resolveOpenAiCompatModelOverride(params: {
     return { errorMessage: "Invalid `x-openclaw-model`." };
   }
 
+  // x-openclaw-model is accepted only when it is visible to the resolved agent,
+  // matching the model picker instead of trusting arbitrary provider/model ids.
   const catalog = await loadGatewayModelCatalog();
   const policy = createModelVisibilityPolicy({
     cfg,
@@ -124,11 +136,17 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+/**
+ * Resolves the target agent from Gateway-native headers first, then from the
+ * OpenAI-compatible model id, and finally from the configured default agent.
+ */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
 }): string {
   const cfg = getRuntimeConfig();
+  // Header selection wins over model-encoded selection so Gateway-native
+  // clients can keep model ids for provider routing.
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     return fromHeader;
@@ -156,12 +174,16 @@ function resolveSessionKey(params: {
 
 export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
+  /** OpenAI-compatible model field, which may encode an OpenClaw agent id. */
   model: string | undefined;
   user?: string | undefined;
+  /** Stable namespace used when deriving implicit main session keys. */
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
+  // Keep agent, session, and message-channel resolution together so OpenAI and
+  // Responses surfaces build identical Gateway routing context.
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
     req: params.req,

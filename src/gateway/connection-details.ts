@@ -18,6 +18,10 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
+/**
+ * Build the Gateway target shown to CLI callers, applying CLI/env/config
+ * precedence and rejecting insecure remote ws:// URLs before connection attempts.
+ */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;

@@ -6,12 +6,14 @@ export type ChatRunEntry = {
   clientRunId: string;
 };
 
+/** Buffered agent event metadata waiting for enough recipients or text state to flush. */
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
+/** FIFO registry that maps a runtime session id to one or more client-visible chat runs. */
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunEntry) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
@@ -20,6 +22,7 @@ export type ChatRunRegistry = {
   clear: () => void;
 };
 
+/** Creates the per-session chat-run queue used to correlate runtime callbacks to RPC runs. */
 export function createChatRunRegistry(): ChatRunRegistry {
   const chatRunSessions = new Map<string, ChatRunEntry[]>();
 
@@ -89,6 +92,7 @@ export type ChatRunState = {
   clear: () => void;
 };
 
+/** Creates the in-memory chat streaming state shared by Gateway chat handlers. */
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
@@ -108,6 +112,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.delete(runId);
     deltaLastBroadcastLen.delete(runId);
     deltaLastBroadcastText.delete(runId);
+    // Agent event buffers use suffixed keys for assistant/thinking streams owned by the same run.
     for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
       agentDeltaSentAt.delete(key);
       bufferedAgentEvents.delete(key);
@@ -143,12 +148,14 @@ export function createChatRunState(): ChatRunState {
   };
 }
 
+/** Tracks temporary connection recipients for run-scoped tool events. */
 export type ToolEventRecipientRegistry = {
   add: (runId: string, connId: string) => void;
   get: (runId: string) => ReadonlySet<string> | undefined;
   markFinal: (runId: string) => void;
 };
 
+/** Tracks connections subscribed to coarse session list/update events. */
 export type SessionEventSubscriberRegistry = {
   subscribe: (connId: string) => void;
   unsubscribe: (connId: string) => void;
@@ -156,6 +163,7 @@ export type SessionEventSubscriberRegistry = {
   clear: () => void;
 };
 
+/** Tracks per-session message subscribers with reverse indexes for disconnect cleanup. */
 export type SessionMessageSubscriberRegistry = {
   subscribe: (connId: string, sessionKey: string) => void;
   unsubscribe: (connId: string, sessionKey: string) => void;
@@ -173,6 +181,7 @@ type ToolRecipientEntry = {
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
+/** Creates a connection set for broadcast-only session lifecycle/list events. */
 export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -199,6 +208,7 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
   };
 }
 
+/** Creates a two-way subscription index for session-scoped transcript message events. */
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
@@ -251,6 +261,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!sessionKeys) {
         return;
       }
+      // Walk the reverse index so disconnect cleanup removes the connection from every session set.
       for (const sessionKey of sessionKeys) {
         const connIds = sessionToConnIds.get(sessionKey);
         if (!connIds) {
@@ -277,6 +288,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
   };
 }
 
+/** Creates run-scoped tool-event recipients with TTL and short final-event grace cleanup. */
 export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
 
