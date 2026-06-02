@@ -745,6 +745,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.plugins": "Allow /plugins",
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
+  "commands.showRuntimeStatusOnReset": "Show Runtime Status on Reset",
   "commands.useAccessGroups": "Use Access Groups",
   "commands.ownerAllowFrom": "Command Owners",
   "commands.ownerDisplay": "Owner ID Display",

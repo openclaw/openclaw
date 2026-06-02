@@ -443,6 +443,7 @@ function mockSessionResetSuccess(params: {
   reason: "new" | "reset";
   key?: string;
   sessionId?: string;
+  entry?: Record<string, unknown>;
 }) {
   const key = params.key ?? "agent:main:main";
   const sessionId = params.sessionId ?? "reset-session-id";
@@ -454,7 +455,7 @@ function mockSessionResetSuccess(params: {
       return {
         ok: true,
         key,
-        entry: { sessionId },
+        entry: { sessionId, ...params.entry },
       };
     },
   );
@@ -4563,6 +4564,46 @@ describe("gateway agent handler", () => {
       payloads?: Array<{ text?: string }>;
     };
     expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
+  });
+
+  it("can include runtime status in bare gateway /new replies", async () => {
+    mocks.loadConfigReturn = {
+      commands: { showRuntimeStatusOnReset: true },
+      providers: { default: "openai" },
+      models: { default: "gpt-4.1" },
+    };
+    mockSessionResetSuccess({
+      reason: "new",
+      entry: {
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        thinkingLevel: "high",
+      },
+    });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "/new",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-new-status",
+      },
+      {
+        reqId: "4-new-status",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mockCallArg(respond)).toBe(true);
+    const result = expectRecordFields(mockCallArg(respond, 0, 1), {}).result as {
+      payloads?: Array<{ text?: string }>;
+    };
+    expect(result.payloads?.[0]?.text).toBe(
+      "✅ New session started.\nModel: anthropic/claude-sonnet-4-6\nThink: high",
+    );
   });
 
   it("dedupes bare /reset retries after returning the terminal ack", async () => {
