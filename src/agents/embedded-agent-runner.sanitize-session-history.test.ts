@@ -79,9 +79,23 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
   );
-  const githubCopilotReplay = await vi.importActual<
-    typeof import("../../extensions/github-copilot/replay-policy.js")
-  >("../../extensions/github-copilot/replay-policy.js");
+  const stripCopilotThinking = (message: AgentMessage): AgentMessage => {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      return message;
+    }
+    const content = message.content.filter((block) => {
+      const type = (block as { type?: unknown }).type;
+      return type !== "thinking" && type !== "redacted_thinking";
+    });
+    if (content.length === message.content.length) {
+      return message;
+    }
+    return {
+      ...message,
+      content:
+        content.length > 0 ? content : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
+    } as AgentMessage;
+  };
   return {
     ...actual,
     sanitizeProviderReplayHistoryWithPlugin: vi.fn(
@@ -112,7 +126,14 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           ];
         }
         if (provider === "github-copilot") {
-          return githubCopilotReplay.sanitizeGithubCopilotReplayHistory(context as never);
+          const modelId = ((context as { modelId?: string | null }).modelId ?? "").toLowerCase();
+          if (!modelId.includes("claude")) {
+            return context.messages;
+          }
+          const messages = context.messages.map(stripCopilotThinking);
+          return messages.some((message, index) => message !== context.messages[index])
+            ? messages
+            : context.messages;
         }
         return context.messages;
       },
