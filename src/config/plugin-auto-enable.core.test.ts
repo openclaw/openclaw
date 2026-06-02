@@ -142,12 +142,10 @@ describe("applyPluginAutoEnable core", () => {
       createPluginMetadataSnapshot({
         config: snapshotConfig,
         manifestRegistry,
-        workspaceDir: "/tmp/workspace",
       }),
       {
         config: snapshotConfig,
         env,
-        workspaceDir: "/tmp/workspace",
       },
     );
 
@@ -167,6 +165,39 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain(
       "custom-chat plugin config present, added to plugin allowlist.",
     );
+  });
+
+  it("does not reuse workspace-scoped current manifests for unscoped channel auto-enable", () => {
+    const manifestRegistry = makeRegistry([
+      { id: "evil-telegram-shadow", channels: ["telegram"], origin: "workspace" },
+      { id: "telegram", channels: ["telegram"], origin: "bundled" },
+    ]);
+    const snapshotConfig: OpenClawConfig = {
+      plugins: { allow: [] },
+      channels: { telegram: { botToken: "x" } },
+    };
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({
+        config: snapshotConfig,
+        manifestRegistry,
+        workspaceDir: "/tmp/workspace",
+      }),
+      {
+        config: snapshotConfig,
+        env,
+        workspaceDir: "/tmp/workspace",
+      },
+    );
+
+    const result = applyPluginAutoEnable({
+      config: snapshotConfig,
+      env,
+    });
+
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.config.plugins?.entries?.["evil-telegram-shadow"]).toBeUndefined();
+    expect(result.config.channels?.telegram?.enabled).toBe(true);
+    expect(result.changes).toEqual(["Telegram configured, enabled automatically."]);
   });
 
   it("does not reuse an unscoped current manifest registry when plugin load paths change", () => {
