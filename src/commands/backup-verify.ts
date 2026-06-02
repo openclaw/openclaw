@@ -377,6 +377,7 @@ export async function backupVerifyCommand(
   const entries = rawEntries.map((entry) => ({
     raw: entry.path,
     normalized: normalizeArchivePath(entry.path, "Archive entry"),
+    isLink: entry.type === "Link",
   }));
   const hardlinkTargets = rawEntries
     .filter((entry) => entry.type === "Link" && entry.linkpath)
@@ -389,6 +390,13 @@ export async function backupVerifyCommand(
       ),
     }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
+  // Hardlink targets must resolve to a real archived file. Excluding Link
+  // entries keeps a corrupt/malicious self-referential or link-to-link hardlink
+  // from satisfying the integrity check by pointing at another link rather than
+  // a payload file.
+  const payloadEntrySet = new Set(
+    entries.filter((entry) => !entry.isLink).map((entry) => entry.normalized),
+  );
 
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
   if (manifestMatches.length !== 1) {
@@ -406,7 +414,7 @@ export async function backupVerifyCommand(
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
-  verifyHardlinkTargetsAgainstArchiveEntries(hardlinkTargets, normalizedEntrySet);
+  verifyHardlinkTargetsAgainstArchiveEntries(hardlinkTargets, payloadEntrySet);
 
   const result: BackupVerifyResult = {
     ok: true,
