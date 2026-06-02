@@ -126,10 +126,9 @@ export function mergeForcedEmbeddedAttemptToolsAllow(
     return toolsAllow;
   }
   if (toolsAllow.length === 0) {
-    return ["message"];
+    return toolsAllow;
   }
-  const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
-  return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
+  return toolsAllow;
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(

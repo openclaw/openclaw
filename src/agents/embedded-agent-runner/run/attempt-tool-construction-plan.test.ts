@@ -46,29 +46,26 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ).toEqual(["exec", "read"]);
   });
 
-  it("keeps forced message tool through explicit runtime allowlists", () => {
+  it("does not widen explicit runtime allowlists with forced message", () => {
     const tools = [{ name: "music_generate" }, { name: "message" }];
     const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(["music_generate"], {
       forceMessageTool: true,
     });
 
-    expect(toolsAllow).toEqual(["music_generate", "message"]);
+    expect(toolsAllow).toEqual(["music_generate"]);
     expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
       "music_generate",
-      "message",
     ]);
   });
 
-  it("materializes forced message tool through empty runtime allowlists", () => {
+  it("keeps empty runtime allowlists closed even when message delivery is forced", () => {
     const tools = [{ name: "music_generate" }, { name: "message" }];
     const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
       forceMessageTool: true,
     });
 
-    expect(toolsAllow).toEqual(["message"]);
-    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
-      "message",
-    ]);
+    expect(toolsAllow).toEqual([]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([]);
   });
 
   it("normalizes explicit toolsAllow entries before filtering", () => {
@@ -199,18 +196,17 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     });
   });
 
-  it("constructs message tool for forced message delivery on explicit no-tools runs", () => {
+  it("does not construct message tool for forced message delivery on explicit no-tools runs", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [], forceMessageTool: true }),
       {
-        constructTools: true,
-        includeCoreTools: true,
-        runtimeToolAllowlist: ["message"],
+        constructTools: false,
+        includeCoreTools: false,
         coding: {
           includeBaseCodingTools: false,
           includeShellTools: false,
           includeChannelTools: false,
-          includeOpenClawTools: true,
+          includeOpenClawTools: false,
           includePluginTools: false,
         },
       },
@@ -235,7 +231,7 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
-  it("materializes OpenClaw tools when a plugin-only allowlist forces message", () => {
+  it("does not widen plugin-only allowlists when message delivery is forced", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({
         toolsAllow: ["memory_search"],
@@ -243,13 +239,13 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
       }),
       {
         constructTools: true,
-        includeCoreTools: true,
-        runtimeToolAllowlist: ["memory_search", "message"],
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["memory_search"],
         coding: {
           includeBaseCodingTools: false,
           includeShellTools: false,
           includeChannelTools: true,
-          includeOpenClawTools: true,
+          includeOpenClawTools: false,
           includePluginTools: true,
         },
       },

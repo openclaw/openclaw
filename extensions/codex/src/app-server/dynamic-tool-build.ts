@@ -349,21 +349,11 @@ export function includeForcedCodexDynamicToolAllow(
   toolsAllow: string[] | undefined,
   params: EmbeddedRunAttemptParams,
 ): string[] | undefined {
+  void params;
   if (toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow)) {
     return toolsAllow;
   }
-  const forcedToolNames = shouldForceMessageTool(params) ? ["message"] : [];
-  if (forcedToolNames.length === 0) {
-    return toolsAllow;
-  }
-  if (toolsAllow.length === 0) {
-    return forcedToolNames;
-  }
-  const normalized = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
-  const missingToolNames = forcedToolNames.filter(
-    (toolName) => !normalized.has(normalizeCodexDynamicToolName(toolName)),
-  );
-  return missingToolNames.length === 0 ? toolsAllow : [...toolsAllow, ...missingToolNames];
+  return toolsAllow;
 }
 
 export function shouldEnableCodexAppServerNativeToolSurface(

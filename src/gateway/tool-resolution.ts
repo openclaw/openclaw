@@ -23,6 +23,11 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  applyTurnSurfacePolicyToTools,
+  compileTurnSurfacePolicy,
+  filterTurnSurfaceRequestedTools,
+} from "../agents/turn-surface-policy.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,6 +56,7 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
+  toolsAllow?: string[];
 }) {
   const {
     agentId,
@@ -66,21 +72,32 @@ export function resolveGatewayScopedTools(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
+  const turnSurfacePolicy = compileTurnSurfacePolicy({
+    toolsAllow: params.toolsAllow,
+    excludeToolNames: params.excludeToolNames,
+  });
+  const policyFilteredGatewayRequestedTools = filterTurnSurfaceRequestedTools(
+    gatewayRequestedTools,
+    turnSurfacePolicy,
+  );
   const messageProvider = params.messageProvider?.trim().toLowerCase();
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
     params.sourceReplyDeliveryMode ??
     (params.inboundEventKind === "room_event" && messageProvider !== "webchat"
       ? "message_tool_only"
       : undefined);
-  const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
+  const runtimeAlsoAllow =
+    sourceReplyDeliveryMode === "message_tool_only"
+      ? filterTurnSurfaceRequestedTools(["message"], turnSurfacePolicy)
+      : [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
-    ...gatewayRequestedTools,
+    ...policyFilteredGatewayRequestedTools,
     ...runtimeAlsoAllow,
   ]);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
     ...(providerProfileAlsoAllow ?? []),
-    ...gatewayRequestedTools,
+    ...policyFilteredGatewayRequestedTools,
     ...runtimeAlsoAllow,
   ]);
   const groupPolicy = resolveGroupToolPolicy({
@@ -126,6 +143,10 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
+    turnSurfacePolicy.excludeToolNames.length > 0
+      ? { deny: turnSurfacePolicy.excludeToolNames }
+      : undefined,
+    excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
@@ -141,7 +162,9 @@ export function resolveGatewayScopedTools(params: {
     groupPolicy,
     subagentPolicy,
     inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+    policyFilteredGatewayRequestedTools.length > 0
+      ? { allow: policyFilteredGatewayRequestedTools }
+      : undefined,
   ].some(hasRestrictiveAllowPolicy);
 
   const allTools = createOpenClawTools({
@@ -172,7 +195,9 @@ export function resolveGatewayScopedTools(params: {
       groupPolicy,
       subagentPolicy,
       inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+      policyFilteredGatewayRequestedTools.length > 0
+        ? { allow: policyFilteredGatewayRequestedTools }
+        : undefined,
     ]),
     pluginToolDenylist: explicitDenylist,
     inheritedToolAllowlist,
@@ -206,9 +231,13 @@ export function resolveGatewayScopedTools(params: {
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+    ...turnSurfacePolicy.excludeToolNames,
     ...excludedToolNames,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const tools = applyTurnSurfacePolicyToTools(
+    policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
+    turnSurfacePolicy,
+  );
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
   }

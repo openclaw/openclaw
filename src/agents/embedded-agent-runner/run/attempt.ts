@@ -213,6 +213,10 @@ import {
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import {
+  applyTurnSurfacePolicyToTools,
+  compileTurnSurfacePolicy,
+} from "../../turn-surface-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -293,7 +297,6 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import {
   applyEmbeddedAttemptToolsAllow,
-  mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
@@ -1096,14 +1099,14 @@ export async function runEmbeddedAttempt(
       });
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
-    const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
-      params.toolsAllow,
-      {
-        forceMessageTool:
-          params.forceMessageTool === true ||
-          params.sourceReplyDeliveryMode === "message_tool_only",
-      },
-    );
+    const turnSurfacePolicy = compileTurnSurfacePolicy({
+      toolsAllow: params.toolsAllow,
+      forcedRuntimeToolNames:
+        params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only"
+          ? ["message"]
+          : [],
+    });
+    const toolsAllowWithForcedRuntimeTools = turnSurfacePolicy.toolsAllow;
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
@@ -1245,9 +1248,12 @@ export async function runEmbeddedAttempt(
             },
           });
           corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
-          const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
-            toolMeta: (tool) => getPluginToolMeta(tool),
-          });
+          const filteredTools = applyTurnSurfacePolicyToTools(
+            applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
+              toolMeta: (tool) => getPluginToolMeta(tool),
+            }),
+            turnSurfacePolicy,
+          );
           corePluginToolStages.mark("attempt:tools-allow");
           return filteredTools;
         })();
@@ -1426,7 +1432,7 @@ export async function runEmbeddedAttempt(
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
+      toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
     const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
@@ -1448,7 +1454,7 @@ export async function runEmbeddedAttempt(
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.disableTools || isRawModelRun,
-      toolsAllow: params.toolsAllow,
+      toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
@@ -1535,7 +1541,10 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
-    const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
+    const uncompactedEffectiveTools = applyTurnSurfacePolicyToTools(
+      [...uncompactedToolSchemaProjection.tools],
+      turnSurfacePolicy,
+    );
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -1605,7 +1614,11 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
-    effectiveTools = [...toolSearchSchemaProjection.tools];
+    toolSearchCatalogApplied = true;
+    effectiveTools = applyTurnSurfacePolicyToTools(
+      [...toolSearchSchemaProjection.tools],
+      turnSurfacePolicy,
+    );
     if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(

@@ -1303,24 +1303,23 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["Nested done."]);
   });
 
-  it("keeps forced message dynamic tool when toolsAllow omits it", () => {
+  it("does not widen scoped Codex dynamic toolsAllow with forced message", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["music_generate"];
+    params.toolsAllow = ["finance_research"];
 
     const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, [
       createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
+      createRuntimeDynamicTool("finance_research"),
     ]);
 
-    expect(dynamicToolNames).toContain("message");
-    expect(dynamicToolNames).toContain("music_generate");
+    expect(dynamicToolNames).toEqual(["finance_research"]);
   });
 
-  it("keeps forced message dynamic tool when toolsAllow is empty", () => {
+  it("keeps empty Codex dynamic toolsAllow closed when message delivery is forced", () => {
     const tools = [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
@@ -1335,7 +1334,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
 
-    expect(dynamicToolNames).toEqual(["message"]);
+    expect(dynamicToolNames).toEqual([]);
   });
 
   it("keeps forced heartbeat registration inside narrow toolsAllow policy", () => {

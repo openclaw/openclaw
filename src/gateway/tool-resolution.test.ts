@@ -67,4 +67,33 @@ describe("resolveGatewayScopedTools", () => {
 
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
+
+  it("does not force message through a scoped internal-finance surface", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:-100123",
+      messageProvider: "telegram",
+      inboundEventKind: "room_event",
+      sourceReplyDeliveryMode: "message_tool_only",
+      surface: "loopback",
+      toolsAllow: ["finance_research"],
+    });
+
+    expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
+  });
+
+  it("does not treat gateway requested tools as scoped surface authority", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:-100123",
+      messageProvider: "telegram",
+      inboundEventKind: "user_request",
+      surface: "loopback",
+      gatewayRequestedTools: ["web_search", "message"],
+      toolsAllow: ["finance_research"],
+    });
+
+    expect(result.tools.some((tool) => tool.name === "web_search")).toBe(false);
+    expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
+  });
 });
