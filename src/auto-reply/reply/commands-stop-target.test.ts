@@ -207,8 +207,38 @@ describe("handleStopCommand target fallback", () => {
     );
   });
 
-  it("requires Telegram stop commands to be replies", async () => {
+  it("keeps bare Telegram stop commands targeting the current session", async () => {
     const params = buildStopParams();
+    delete params.ctx.ReplyToId;
+    params.sessionStore = {
+      "agent:target:telegram:direct:123": {
+        sessionId: "target-session-id",
+        updatedAt: Date.now(),
+      },
+    };
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚙️ Agent was aborted." },
+    });
+    expect(abortSessionRunTargetMock).toHaveBeenCalledWith({
+      key: "agent:target:telegram:direct:123",
+      sessionId: undefined,
+    });
+    expect(persistAbortTargetEntryMock).toHaveBeenCalled();
+    expect(createInternalHookEventMock).toHaveBeenCalled();
+    expect(stopSubagentsForRequesterMock).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      requesterSessionKey: "agent:target:telegram:direct:123",
+    });
+  });
+
+  it("requires Telegram cancel commands to be replies", async () => {
+    const params = buildStopParams();
+    params.command.commandBodyNormalized = "/cancel";
+    params.command.rawBodyNormalized = "/cancel";
     delete params.ctx.ReplyToId;
 
     const result = await handleStopCommand(params, true);

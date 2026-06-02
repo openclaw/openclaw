@@ -175,7 +175,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     return null;
   }
   const replyToId = normalizeOptionalString(params.ctx.ReplyToId);
-  if (isTelegramReplyScopedStop && !replyToId) {
+  if (isTelegramReplyScopedStop && commandBody === "/cancel" && !replyToId) {
     return {
       shouldContinue: false,
       reply: { text: "Reply to a message with /stop or /cancel to stop work for that message." },
