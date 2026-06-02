@@ -7,38 +7,42 @@ import {
 
 describe("native hook relay CLI", () => {
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(1_000);
+    const invokeBridge = vi.fn(async () => {
+      throw new Error("native hook relay bridge not found");
+    });
     const callGateway = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
-      {
-        provider: "codex",
-        relayId: "relay-1",
-        generation: "generation-1",
-        event: "pre_tool_use",
-        timeout: "1234",
-      },
-      {
-        stdin: createReadableTextStream(
-          JSON.stringify({
-            hook_event_name: "PreToolUse",
-            tool_name: "Bash",
-            tool_input: { command: "pnpm test" },
-          }),
-        ),
-        stdout,
-        stderr,
-        callGateway: callGateway as never,
-      },
-    );
+    try {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          timeout: "1234",
+        },
+        {
+          stdin: createReadableTextStream(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "pnpm test" },
+            }),
+          ),
+          stdout,
+          stderr,
+          invokeBridge: invokeBridge as never,
+          callGateway: callGateway as never,
+        },
+      );
 
-    expect(exitCode).toBe(0);
-    expect(stdout.text()).toBe("");
-    expect(stderr.text()).toBe("");
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "nativeHook.invoke",
-      params: {
+      expect(exitCode).toBe(0);
+      expect(stdout.text()).toBe("");
+      expect(stderr.text()).toBe("");
+      expect(invokeBridge).toHaveBeenCalledWith({
         provider: "codex",
         relayId: "relay-1",
         generation: "generation-1",
@@ -48,10 +52,68 @@ describe("native hook relay CLI", () => {
           tool_name: "Bash",
           tool_input: { command: "pnpm test" },
         },
-      },
-      timeoutMs: 1234,
-      scopes: ["operator.admin"],
+        registrationTimeoutMs: 984,
+        timeoutMs: 1234,
+      });
+      expect(callGateway).toHaveBeenCalledWith({
+        method: "nativeHook.invoke",
+        params: {
+          provider: "codex",
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          rawPayload: {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "pnpm test" },
+          },
+        },
+        timeoutMs: 1234,
+        scopes: ["operator.admin"],
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("reserves remaining timeout for the gateway relay after direct bridge wait", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(10_000).mockReturnValueOnce(14_000);
+    const invokeBridge = vi.fn(async () => {
+      throw new Error("native hook relay bridge not found");
     });
+    const callGateway = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+
+    try {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-1",
+          generation: "generation-1",
+          event: "pre_tool_use",
+          timeout: "5000",
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          invokeBridge: invokeBridge as never,
+          callGateway: callGateway as never,
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(invokeBridge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          registrationTimeoutMs: 4000,
+          timeoutMs: 5000,
+        }),
+      );
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 1000,
+        }),
+      );
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("renders provider-compatible stdout, stderr, and exit code from the gateway response", async () => {

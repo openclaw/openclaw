@@ -10,6 +10,9 @@ import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
+const MAX_NATIVE_HOOK_GATEWAY_FALLBACK_RESERVE_MS = 1_000;
+const MIN_NATIVE_HOOK_GATEWAY_FALLBACK_RESERVE_MS = 250;
+const NATIVE_HOOK_GATEWAY_FALLBACK_RESERVE_RATIO = 0.2;
 
 export type NativeHookRelayCliOptions = {
   provider?: string;
@@ -58,14 +61,16 @@ export async function runNativeHookRelayCli(
     return 1;
   }
 
+  let bridgeStartedAtMs = 0;
   try {
+    bridgeStartedAtMs = Date.now();
     const response = await invokeBridge({
       provider,
       relayId,
       generation,
       event,
       rawPayload,
-      registrationTimeoutMs: 100,
+      registrationTimeoutMs: computeBridgeRegistrationTimeoutMs(timeoutMs),
       timeoutMs,
     });
     writeText(stdout, response.stdout);
@@ -86,30 +91,41 @@ export async function runNativeHookRelayCli(
     }
     // Fall through to the gateway path for embedded/local gateway cases and
     // older registrations that predate the direct relay bridge.
+    const remainingTimeoutMs = Math.max(1, timeoutMs - (Date.now() - bridgeStartedAtMs));
+    try {
+      const response = await callGatewayFn<NativeHookRelayProcessResponse>({
+        method: "nativeHook.invoke",
+        params: { provider, relayId, generation, event, rawPayload },
+        timeoutMs: remainingTimeoutMs,
+        scopes: [ADMIN_SCOPE],
+      });
+      writeText(stdout, response.stdout);
+      writeText(stderr, response.stderr);
+      return response.exitCode;
+    } catch (gatewayError) {
+      writeText(stderr, formatRelayCliError("native hook relay unavailable", gatewayError));
+      const response = renderNativeHookRelayUnavailableResponse({
+        provider,
+        event,
+        preToolUseUnavailable: opts.preToolUseUnavailable,
+        message: "Native hook relay unavailable",
+      });
+      writeText(stdout, response.stdout);
+      writeText(stderr, response.stderr);
+      return response.exitCode;
+    }
   }
+}
 
-  try {
-    const response = await callGatewayFn<NativeHookRelayProcessResponse>({
-      method: "nativeHook.invoke",
-      params: { provider, relayId, generation, event, rawPayload },
-      timeoutMs,
-      scopes: [ADMIN_SCOPE],
-    });
-    writeText(stdout, response.stdout);
-    writeText(stderr, response.stderr);
-    return response.exitCode;
-  } catch (error) {
-    writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-    const response = renderNativeHookRelayUnavailableResponse({
-      provider,
-      event,
-      preToolUseUnavailable: opts.preToolUseUnavailable,
-      message: "Native hook relay unavailable",
-    });
-    writeText(stdout, response.stdout);
-    writeText(stderr, response.stderr);
-    return response.exitCode;
-  }
+function computeBridgeRegistrationTimeoutMs(timeoutMs: number): number {
+  const fallbackReserveMs = Math.min(
+    MAX_NATIVE_HOOK_GATEWAY_FALLBACK_RESERVE_MS,
+    Math.max(
+      MIN_NATIVE_HOOK_GATEWAY_FALLBACK_RESERVE_MS,
+      Math.floor(timeoutMs * NATIVE_HOOK_GATEWAY_FALLBACK_RESERVE_RATIO),
+    ),
+  );
+  return Math.max(1, timeoutMs - fallbackReserveMs);
 }
 
 function readRequiredOption(value: string | undefined, name: string): string {
