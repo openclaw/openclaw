@@ -455,6 +455,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       // Strip text from media blocks — caption goes on the final TTS voice note
       visiblePayload = { ...visiblePayload, text: undefined };
     }
+    if (kind === "tool" && params.suppressBlockUserDelivery) {
+      // Tool results carrying media drop their text so the caption is not
+      // duplicated by the final TTS voice note. Text-only tool results stay
+      // intact — they are progress/status, not the final caption content.
+      // Uses media-only check (not the broader block check) to preserve text
+      // on interactive/approval tool results that have no media.
+      const hasMedia = resolveSendableOutboundReplyParts(visiblePayload).hasMedia;
+      if (hasMedia) {
+        visiblePayload = { ...visiblePayload, text: undefined };
+      }
+    }
 
     const ttsPayload = await maybeApplyAcpTts({
       payload: visiblePayload,

@@ -2123,5 +2123,72 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
+
+  it("strips text from tool-result media when captioned final TTS is active", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onToolResult?.({
+        text: "tool caption",
+        mediaUrls: ["https://example.com/tool-image.png"],
+      });
+      return { text: "final" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    const delivered = dispatcher.sendToolResult.mock.calls[0][0];
+    expect(delivered.mediaUrls).toEqual(["https://example.com/tool-image.png"]);
+    expect(delivered.text).toBeUndefined();
+  });
+
+  it("preserves text-only tool results when captioned final TTS is active", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onToolResult?.({ text: "Searching..." });
+      return { text: "final" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    const delivered = dispatcher.sendToolResult.mock.calls[0][0];
+    expect(delivered.text).toBe("Searching...");
+  });
+
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

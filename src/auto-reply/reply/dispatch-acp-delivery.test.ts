@@ -1123,9 +1123,71 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0];
+    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0].payload;
     expect(routedPayload.mediaUrls).toEqual(["https://example.com/image.png"]);
     expect(routedPayload.text).toBeUndefined();
+  });
+
+  it("strips text from tool-result media when suppressBlockUserDelivery is set", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "tool",
+      {
+        text: "tool caption",
+        mediaUrls: ["https://example.com/tool-image.png"],
+      },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0].payload;
+    expect(routedPayload.mediaUrls).toEqual(["https://example.com/tool-image.png"]);
+    expect(routedPayload.text).toBeUndefined();
+  });
+
+  it("preserves text-only tool results when suppressBlockUserDelivery is set", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "tool",
+      { text: "Searching..." },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0].payload;
+    expect(routedPayload.text).toBe("Searching...");
   });
 
   it("suppresses text-only blocks when suppressBlockUserDelivery is set", async () => {
