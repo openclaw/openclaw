@@ -113,6 +113,7 @@ import {
   getMemoryCapabilityRegistration,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  listMemoryRerankProviders,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -286,6 +287,9 @@ type CachedPluginState = {
   interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
+  // Exclusive single-slot reranker; restored alongside the other memory-state fields so a
+  // warm cache-restore on gateway restart does not silently drop a registered reranker.
+  memoryRerankProvider: ReturnType<typeof listMemoryRerankProviders>[number] | undefined;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
@@ -1775,6 +1779,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           capability: cached.state.memoryCapability,
           corpusSupplements: cached.state.memoryCorpusSupplements,
           promptSupplements: cached.state.memoryPromptSupplements,
+          rerankProvider: cached.state.memoryRerankProvider,
         });
         activatePluginRegistry(
           cached.state.registry,
@@ -2688,6 +2693,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
+      const previousMemoryRerankProvider = listMemoryRerankProviders()[0];
 
       const beforeRegister = performance.now();
       let registerFailed = false;
@@ -2708,6 +2714,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             capability: previousMemoryCapability,
             corpusSupplements: previousMemoryCorpusSupplements,
             promptSupplements: previousMemoryPromptSupplements,
+            rerankProvider: previousMemoryRerankProvider,
           });
         }
         registry.plugins.push(record);
@@ -2724,6 +2731,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           capability: previousMemoryCapability,
           corpusSupplements: previousMemoryCorpusSupplements,
           promptSupplements: previousMemoryPromptSupplements,
+          rerankProvider: previousMemoryRerankProvider,
         });
         recordPluginError({
           logger,
@@ -2795,6 +2803,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           interactiveHandlers: listPluginInteractiveHandlers(),
           memoryCapability: getMemoryCapabilityRegistration(),
           memoryCorpusSupplements: listMemoryCorpusSupplements(),
+          memoryRerankProvider: listMemoryRerankProviders()[0],
           registry,
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),

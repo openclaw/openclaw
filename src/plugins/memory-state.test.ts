@@ -53,10 +53,12 @@ function expectClearedMemoryState() {
 }
 
 function createMemoryStateSnapshot() {
+  // Mirror exactly what the plugin loader captures/restores for a warm cache hit.
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
     promptSupplements: listMemoryPromptSupplements(),
+    rerankProvider: listMemoryRerankProviders()[0],
   };
 }
 
@@ -372,5 +374,18 @@ describe("memory plugin state", () => {
     registerMemoryRerankProvider("plugin-a", { rerank: async () => [] });
     clearMemoryPluginState();
     expect(listMemoryRerankProviders()).toHaveLength(0);
+  });
+
+  it("restoreMemoryPluginState carries the rerank slot through a snapshot round-trip", () => {
+    // Regression guard: the loader cache snapshot/restore must not drop a registered
+    // reranker on a warm gateway restart.
+    registerMemoryRerankProvider("plugin-a", { rerank: async () => [] });
+    const snapshot = createMemoryStateSnapshot();
+
+    resetMemoryPluginState();
+    expect(listMemoryRerankProviders()).toHaveLength(0);
+
+    restoreMemoryPluginState(snapshot);
+    expect(listMemoryRerankProviders().map((r) => r.pluginId)).toEqual(["plugin-a"]);
   });
 });
