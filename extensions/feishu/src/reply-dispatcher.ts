@@ -234,6 +234,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const renderMode = account.config?.renderMode ?? "auto";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
   const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
+  const streamingSearchFallbackEnabled = account.config?.streamingSearchFallback === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -422,6 +423,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             streamingClosedForReply = true;
           }
         }
+        if (contentVisible && streamingSearchFallbackEnabled && text.trim()) {
+          await sendSearchableStreamingFallback(text);
+        }
       }
     } finally {
       resetStreamingState();
@@ -480,6 +484,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     if (paramsLocal.infoKind === "final") {
       deliveredFinalTexts.add(paramsLocal.text);
+    }
+  };
+
+  const sendSearchableStreamingFallback = async (text: string) => {
+    try {
+      await sendChunkedTextReply({
+        text,
+        useCard: false,
+        sendChunk: async ({ chunk }) => {
+          await sendMessageFeishu({
+            cfg,
+            to: chatId,
+            text: chunk,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            allowTopLevelReplyFallback,
+            accountId,
+          });
+        },
+      });
+    } catch (error) {
+      params.runtime.error?.(
+        `feishu[${account.accountId}]: streaming searchable text fallback failed: ${String(error)}`,
+      );
     }
   };
 

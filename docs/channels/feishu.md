@@ -279,12 +279,15 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
     feishu: {
       streaming: true, // enable streaming card output (default: true)
       blockStreaming: true, // opt into completed-block streaming
+      streamingSearchFallback: false, // also send final plain text for Feishu search (default: false)
     },
   },
 }
 ```
 
 Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
+
+Feishu conversation search may only index the initial interactive card content, so completed streaming card text may not appear in "search conversation content" results. Set `streamingSearchFallback: true` to also send the final streamed reply as a plain text message after the card closes. This makes the content searchable, but users will see an additional final text message.
 
 ### Quota optimization
 
@@ -582,6 +585,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
 | `channels.feishu.streaming`                              | Streaming card output                                                            | `true`                               |
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
+| `channels.feishu.streamingSearchFallback`                | Send final streamed text as a searchable plain text fallback                     | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                        | `true`                               |

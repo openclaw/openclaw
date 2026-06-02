@@ -671,6 +671,41 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("sends searchable plain-text fallback after streaming close when enabled", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        streamingSearchFallback: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+    await options.deliver({ text: "```ts\nconst searchableKeyword = 1\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        to: "oc_chat",
+        text: "```ts\nconst searchableKeyword = 1\n```",
+        replyToMessageId: "om_parent",
+        replyInThread: true,
+      }),
+    );
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("closes streaming with block text when final reply is missing", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),

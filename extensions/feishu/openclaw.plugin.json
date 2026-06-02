@@ -171,6 +171,7 @@
           },
           "streaming": { "type": "boolean" },
           "blockStreaming": { "type": "boolean" },
+          "streamingSearchFallback": { "type": "boolean" },
           "replyInThread": {
             "type": "string",
             "enum": ["disabled", "enabled"]
@@ -208,6 +209,7 @@
       },
       "streaming": { "type": "boolean" },
       "blockStreaming": { "type": "boolean" },
+      "streamingSearchFallback": { "type": "boolean" },
       "replyInThread": {
         "type": "string",
         "enum": ["disabled", "enabled"]
