@@ -47,6 +47,7 @@ import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diag
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
+import type { MemorySearchConfig } from "./types.tools.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
