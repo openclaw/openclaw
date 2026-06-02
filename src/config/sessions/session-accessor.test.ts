@@ -270,18 +270,21 @@ describe("session accessor file-backed seam", () => {
   it("cleans scoped lifecycle entries and unreferenced transcript artifacts", async () => {
     const nowMs = Date.now();
     const oldDate = new Date(nowMs - 600_000);
-    const removedTranscriptPath = path.join(tempDir, "removed-lifecycle.jsonl");
-    const customTranscriptPath = path.join(tempDir, "custom-lifecycle-old.jsonl");
-    const freshDefaultTranscriptPath = path.join(tempDir, "custom-lifecycle.jsonl");
-    const freshTranscriptPath = path.join(tempDir, "fresh-lifecycle.jsonl");
-    const referencedTranscriptPath = path.join(tempDir, "referenced.jsonl");
-    const orphanTranscriptPath = path.join(tempDir, "orphan-lifecycle.jsonl");
-    const siblingDir = `${tempDir}-sibling-sessions`;
+    const lifecycleSessionsDir = path.join(tempDir, "state", "agents", "main", "sessions");
+    const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
+    const removedTranscriptPath = path.join(lifecycleSessionsDir, "removed-lifecycle.jsonl");
+    const customTranscriptPath = path.join(lifecycleSessionsDir, "custom-lifecycle-old.jsonl");
+    const freshDefaultTranscriptPath = path.join(lifecycleSessionsDir, "custom-lifecycle.jsonl");
+    const freshTranscriptPath = path.join(lifecycleSessionsDir, "fresh-lifecycle.jsonl");
+    const referencedTranscriptPath = path.join(lifecycleSessionsDir, "referenced.jsonl");
+    const orphanTranscriptPath = path.join(lifecycleSessionsDir, "orphan-lifecycle.jsonl");
+    const siblingDir = path.join(tempDir, "state", "agents", "sibling", "sessions");
     const siblingTranscriptPath = path.join(siblingDir, "sibling-lifecycle.jsonl");
+    fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
     fs.mkdirSync(siblingDir, { recursive: true });
 
     fs.writeFileSync(
-      storePath,
+      lifecycleStorePath,
       JSON.stringify({
         "agent:main:lifecycle-cleanup-removed": {
           sessionId: "removed-lifecycle",
@@ -324,7 +327,7 @@ describe("session accessor file-backed seam", () => {
     fs.utimesSync(orphanTranscriptPath, oldDate, oldDate);
 
     const result = await cleanupSessionLifecycleArtifacts({
-      storePath,
+      storePath: lifecycleStorePath,
       sessionKeySegmentPrefix: "lifecycle-cleanup-",
       transcriptContentMarker: "lifecycle-marker-",
       orphanTranscriptMinAgeMs: 300_000,
@@ -332,14 +335,14 @@ describe("session accessor file-backed seam", () => {
     });
 
     expect(result).toEqual({ removedEntries: 3, archivedTranscriptArtifacts: 3 });
-    const loaded = loadSessionStore(storePath, { skipCache: true });
+    const loaded = loadSessionStore(lifecycleStorePath, { skipCache: true });
     expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-removed");
     expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-custom");
     expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-sibling");
     expect(loaded).toHaveProperty("agent:main:lifecycle-cleanup-fresh");
     expect(loaded).toHaveProperty("agent:main:telegram:group:lifecycle-cleanup-room");
     expect(loaded).toHaveProperty("agent:main:regular");
-    const files = fs.readdirSync(tempDir);
+    const files = fs.readdirSync(lifecycleSessionsDir);
     expect(
       files.filter((file) => file.startsWith("removed-lifecycle.jsonl.deleted.")),
     ).toHaveLength(1);
