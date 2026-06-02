@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import type { ExtensionContext } from "./sessions/index.js";
 
 const mocks = vi.hoisted(() => ({
   hookRunner: undefined as
@@ -96,6 +97,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
 let createOpenClawCodingTools: typeof import("./agent-tools.js").createOpenClawCodingTools;
+const testExtensionContext = {} as ExtensionContext;
 
 function installResolveExecEnvHook(result: Record<string, string>) {
   mocks.hookRunner = {
@@ -227,11 +229,17 @@ describe("exec resolve_exec_env hook wiring", () => {
       channelId: "chat-1",
     });
 
-    await definition.execute("call-before", {
-      command: "echo ok",
-      env: { EXISTING: "request" },
-      yieldMs: 120_000,
-    });
+    await definition.execute(
+      "call-before",
+      {
+        command: "echo ok",
+        env: { EXISTING: "request" },
+        yieldMs: 120_000,
+      },
+      undefined,
+      undefined,
+      testExtensionContext,
+    );
 
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
       EXISTING: "request",
@@ -269,11 +277,17 @@ describe("exec resolve_exec_env hook wiring", () => {
       channelId: "chat-1",
     });
 
-    await definition.execute("call-lazy", {
-      command: "echo ok",
-      env: { REQUEST_SAFE: "request" },
-      yieldMs: 120_000,
-    });
+    await definition.execute(
+      "call-lazy",
+      {
+        command: "echo ok",
+        env: { REQUEST_SAFE: "request" },
+        yieldMs: 120_000,
+      },
+      undefined,
+      undefined,
+      testExtensionContext,
+    );
 
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
       LAZY_PLUGIN_SAFE: "yes",
@@ -310,10 +324,16 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    await definition.execute("call-host-rewrite", {
-      command: "echo ok",
-      env: { REQUEST_SAFE: "request" },
-    });
+    await definition.execute(
+      "call-host-rewrite",
+      {
+        command: "echo ok",
+        env: { REQUEST_SAFE: "request" },
+      },
+      undefined,
+      undefined,
+      testExtensionContext,
+    );
 
     expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(2);
     expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenNthCalledWith(
@@ -353,12 +373,18 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    await definition.execute("call-host-sanitize", {
-      command: "echo ok",
-      host: "node",
-      env: { REQUEST_SAFE: "request" },
-      yieldMs: 120_000,
-    });
+    await definition.execute(
+      "call-host-sanitize",
+      {
+        command: "echo ok",
+        host: "node",
+        env: { REQUEST_SAFE: "request" },
+        yieldMs: 120_000,
+      },
+      undefined,
+      undefined,
+      testExtensionContext,
+    );
 
     expect(mocks.hookRunner.runResolveExecEnv).not.toHaveBeenCalled();
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
