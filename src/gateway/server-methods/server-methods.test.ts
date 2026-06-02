@@ -587,6 +587,43 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("surfaces pending timeout diagnostics when outer timeout fires before timeout grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 400 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 400,
+          endedAt: 500,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.startedAt).toBe(400);
+      expect(result?.endedAt).toBe(500);
+      expect(result?.timeoutPhase).toBe("provider");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
