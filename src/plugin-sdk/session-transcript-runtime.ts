@@ -1,9 +1,16 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import {
+  appendTranscriptMessage,
   loadTranscriptEvents,
+  publishTranscriptUpdate,
   resolveSessionTranscriptRuntimeTarget,
+  resolveSessionTranscriptTarget as resolveSessionTranscriptStorageTarget,
+  type TranscriptMessageAppendOptions,
+  type TranscriptMessageAppendResult,
+  type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
+import { runSessionTranscriptAppendTransaction } from "../config/sessions/transcript-append.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
@@ -34,6 +41,35 @@ export type SessionTranscriptReadParams = {
   sessionKey: string;
   storePath?: string;
   threadId?: string | number;
+};
+
+export type SessionTranscriptTargetParams = SessionTranscriptReadParams & {
+  /**
+   * Optional active transcript artifact target. Use this when the caller is
+   * already operating on a concrete transcript file and needs all scoped
+   * operations to bind to that same target.
+   */
+  sessionFile?: string;
+};
+
+export type SessionTranscriptTarget = SessionTranscriptIdentity & {
+  targetKind: "active-session-file" | "runtime-session";
+};
+
+export type SessionTranscriptAppendMessageParams<TMessage> = SessionTranscriptTargetParams &
+  TranscriptMessageAppendOptions<TMessage>;
+
+export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
+  config?: TranscriptMessageAppendOptions<unknown>["config"];
+};
+
+export type SessionTranscriptWriteLockContext = {
+  appendMessage: <TMessage>(
+    options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+  publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
+  readEvents: () => Promise<SessionTranscriptEvent[]>;
+  target: SessionTranscriptTarget;
 };
 
 export type SessionTranscriptMemoryHitKeyParams = {
@@ -117,12 +153,77 @@ export async function resolveSessionTranscriptIdentity(
 }
 
 /**
+ * Resolves the public target for transcript operations without exposing the
+ * current storage path as identity.
+ */
+export async function resolveSessionTranscriptTarget(
+  params: SessionTranscriptTargetParams,
+): Promise<SessionTranscriptTarget> {
+  const target = await resolveSessionTranscriptStorageTarget(params);
+  return projectPublicTarget(target);
+}
+
+/**
  * Reads transcript events by public session identity instead of file path.
  */
 export async function readSessionTranscriptEvents(
-  params: SessionTranscriptReadParams,
+  params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptEvent[]> {
   return await loadTranscriptEvents(params);
+}
+
+/**
+ * Appends a transcript message by scoped transcript target.
+ */
+export async function appendSessionTranscriptMessageByIdentity<TMessage>(
+  params: SessionTranscriptAppendMessageParams<TMessage>,
+): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
+  return await appendTranscriptMessage(params, params);
+}
+
+/**
+ * Publishes a transcript update by scoped transcript target.
+ */
+export async function publishSessionTranscriptUpdateByIdentity(
+  params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },
+): Promise<void> {
+  await publishTranscriptUpdate(params, params.update);
+}
+
+/**
+ * Runs transcript work under the write lock for the resolved scoped target.
+ */
+export async function withSessionTranscriptWriteLock<T>(
+  params: SessionTranscriptWriteLockParams,
+  run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
+): Promise<T> {
+  const storageTarget = await resolveSessionTranscriptStorageTarget(params);
+  const target = projectPublicTarget(storageTarget);
+  const boundScope = {
+    ...params,
+    sessionFile: storageTarget.sessionFile,
+  };
+  return await runSessionTranscriptAppendTransaction(
+    {
+      config: params.config,
+      transcriptPath: storageTarget.sessionFile,
+    },
+    (transaction) =>
+      run({
+        target,
+        readEvents: () => readSessionTranscriptEvents(boundScope),
+        appendMessage: (options) =>
+          transaction.appendMessage({
+            ...options,
+            sessionId: params.sessionId,
+          }),
+        publishUpdate: (update) =>
+          publishSessionTranscriptUpdateByIdentity({
+            ...boundScope,
+            update,
+          }),
+      }),
+  );
 }
 
 /**
@@ -148,4 +249,20 @@ export function resolveSessionTranscriptMemoryHitKeyToSessionKeys(
     return deduped;
   }
   return params.includeSyntheticFallback === false ? [] : [syntheticSessionKey(identity)];
+}
+
+function projectPublicTarget(target: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  targetKind: SessionTranscriptTarget["targetKind"];
+}): SessionTranscriptTarget {
+  const agentId = normalizeAgentId(target.agentId);
+  return {
+    agentId,
+    memoryKey: formatSessionTranscriptMemoryHitKey({ agentId, sessionId: target.sessionId }),
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    targetKind: target.targetKind,
+  };
 }

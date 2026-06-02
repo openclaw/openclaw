@@ -79,6 +79,7 @@ export type SessionTranscriptRuntimeTarget = {
   sessionFile: string;
   sessionId: string;
   sessionKey: string;
+  targetKind: "active-session-file" | "runtime-session";
 };
 
 export type SessionEntryUpdateOptions = {
@@ -196,10 +197,14 @@ export async function updateSessionEntry(
 export async function loadTranscriptEvents(
   scope: SessionTranscriptAccessScope,
 ): Promise<TranscriptEvent[]> {
-  const transcript = await resolveTranscriptAccess(scope);
+  const transcript = await resolveSessionTranscriptTarget(scope);
   const events: TranscriptEvent[] = [];
   for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-    events.push(JSON.parse(line) as TranscriptEvent);
+    try {
+      events.push(JSON.parse(line) as TranscriptEvent);
+    } catch {
+      continue;
+    }
   }
   return events;
 }
@@ -209,7 +214,7 @@ export async function appendTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
 ): Promise<void> {
-  const transcript = await resolveTranscriptAccess(scope);
+  const transcript = await resolveSessionTranscriptTarget(scope);
   await appendSessionTranscriptEvent({
     event,
     transcriptPath: transcript.sessionFile,
@@ -262,6 +267,30 @@ export async function publishTranscriptUpdate(
 }
 
 /**
+ * Resolves the current storage target for a transcript access scope. A supplied
+ * sessionFile is an explicit active artifact target; otherwise the target is
+ * resolved from the runtime session identity.
+ */
+export async function resolveSessionTranscriptTarget(
+  scope: SessionTranscriptAccessScope,
+): Promise<SessionTranscriptRuntimeTarget> {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  if (scope.sessionFile?.trim()) {
+    return {
+      agentId,
+      sessionFile: scope.sessionFile,
+      sessionId: scope.sessionId,
+      sessionKey: scope.sessionKey,
+      targetKind: "active-session-file",
+    };
+  }
+  return await resolveSessionTranscriptRuntimeTarget(scope);
+}
+
+/**
  * Resolves the current file-backed target for a storage-neutral runtime
  * transcript scope. Callers use the scope as identity; sessionFile is returned
  * only for current file-backed implementation details such as locks/events.
@@ -303,6 +332,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
       sessionFile: resolved.sessionFile,
       sessionId: scope.sessionId,
       sessionKey,
+      targetKind: "runtime-session",
     };
   }
   const resolved = await resolveSessionTranscriptFile({
@@ -319,6 +349,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
     sessionFile: resolved.sessionFile,
     sessionId: scope.sessionId,
     sessionKey,
+    targetKind: "runtime-session",
   };
 }
 
@@ -345,13 +376,13 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
 async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{
   sessionFile: string;
 }> {
-  if (scope.sessionFile?.trim()) {
-    return { sessionFile: scope.sessionFile };
-  }
   if (!scope.sessionId) {
+    if (scope.sessionFile?.trim()) {
+      return { sessionFile: scope.sessionFile };
+    }
     throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
   }
-  return await resolveSessionTranscriptRuntimeTarget({
+  return await resolveSessionTranscriptTarget({
     ...scope,
     sessionId: scope.sessionId,
   });

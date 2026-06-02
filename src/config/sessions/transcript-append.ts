@@ -227,7 +227,7 @@ async function withTranscriptAppendQueue<T>(
   }
 }
 
-type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
+export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
   message: TMessage;
   now?: number;
@@ -241,10 +241,17 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   config?: OpenClawConfig;
 };
 
-type AppendSessionTranscriptMessageResult<TMessage> = {
+export type AppendSessionTranscriptMessageResult<TMessage> = {
   messageId: string;
   message: TMessage;
   appended: boolean;
+};
+
+export type SessionTranscriptAppendTransactionContext = {
+  appendEvent: (event: unknown) => Promise<void>;
+  appendMessage: <TMessage>(
+    params: Omit<AppendSessionTranscriptMessageParams<TMessage>, "config" | "transcriptPath">,
+  ) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 };
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
@@ -282,6 +289,38 @@ export async function appendSessionTranscriptMessage<TMessage>(
   }
   return await withTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
+  );
+}
+
+export async function runSessionTranscriptAppendTransaction<T>(
+  params: Pick<AppendSessionTranscriptMessageParams, "config" | "transcriptPath">,
+  run: (context: SessionTranscriptAppendTransactionContext) => Promise<T> | T,
+): Promise<T> {
+  const runTransaction = async (): Promise<T> =>
+    await run({
+      appendEvent: (event) =>
+        appendSessionTranscriptEventLocked({
+          config: params.config,
+          event,
+          transcriptPath: params.transcriptPath,
+        }),
+      appendMessage: (messageParams) =>
+        appendSessionTranscriptMessageLocked({
+          ...messageParams,
+          config: params.config,
+          transcriptPath: params.transcriptPath,
+        }),
+    });
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    return await activeLockRunner(() =>
+      withTranscriptAppendQueue(params.transcriptPath, runTransaction),
+    );
+  }
+  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, runTransaction),
   );
 }
 
