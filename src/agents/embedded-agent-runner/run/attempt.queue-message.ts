@@ -7,6 +7,7 @@ export type EmbeddedAgentActiveSessionSteerTarget = {
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
+/** Default wait for a queued steering message to appear in transcript events. */
 export const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
@@ -103,6 +104,7 @@ export async function cancelQueuedSteeringMessage(
   return true;
 }
 
+/** Steers a message and resolves only after the matching user message_end is observed. */
 export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -166,6 +168,8 @@ export async function steerAndWaitForTranscriptCommit(
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
+        // Auto-retry/compaction reuses the same queued steering message after
+        // agent_end, so cancel only if no continuation event arrives first.
         if (terminalTimer) {
           clearTimeout(terminalTimer);
           terminalTimer = undefined;
@@ -189,6 +193,7 @@ export async function steerAndWaitForTranscriptCommit(
   });
 }
 
+/** Steers immediately or waits for transcript commit when delivery confirmation is requested. */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,

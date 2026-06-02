@@ -7,6 +7,7 @@ import type { EmbeddedAgentRunResult } from "../types.js";
 
 type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
+/** Merges media emitted by tools into the user-visible embedded-run payload list. */
 export function mergeAttemptToolMediaPayloads(params: {
   payloads?: EmbeddedRunPayload[];
   toolMediaUrls?: string[];
@@ -29,6 +30,8 @@ export function mergeAttemptToolMediaPayloads(params: {
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror
     ) {
+      // The message tool already delivered this source reply externally; do not
+      // attach generated media to its transcript mirror and send it again.
       return payloads;
     }
     const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));

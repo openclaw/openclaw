@@ -7,6 +7,7 @@ export type OrphanedTrailingUserPromptMergeParams = {
   leafMessage: { content?: unknown };
 };
 
+/** Result of folding an active-turn user leaf into the next inbound prompt. */
 export type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
@@ -20,6 +21,7 @@ export type OrphanedTrailingUserPromptMergeResult = {
 
 export type MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
+/** Runtime hook for resolving provider-hostile transcript tails before retrying. */
 export type MessageMergeStrategy = {
   id: MessageMergeStrategyId;
   mergeOrphanedTrailingUserPrompt: (
@@ -37,6 +39,7 @@ const defaultMessageMergeStrategy: MessageMergeStrategy = {
 
 let activeMessageMergeStrategy = defaultMessageMergeStrategy;
 
+/** Returns the currently installed message merge strategy. */
 export function resolveMessageMergeStrategy(): MessageMergeStrategy {
   return activeMessageMergeStrategy;
 }
@@ -49,6 +52,7 @@ function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => voi
   };
 }
 
+/** Installs a temporary message merge strategy and returns a restore callback. */
 export function registerMessageMergeStrategyForTest(strategy: MessageMergeStrategy): () => void {
   return registerMessageMergeStrategy(strategy);
 }

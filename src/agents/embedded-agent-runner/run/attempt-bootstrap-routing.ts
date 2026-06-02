@@ -28,6 +28,7 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
+/** Maps a resolved bootstrap mode onto the context channels used by an attempt. */
 export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
 }): Pick<
@@ -60,6 +61,7 @@ function resolveAttemptBootstrapRouting(
   };
 }
 
+/** Returns true when hook-provided bootstrap files contain usable bootstrap text. */
 export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
   return (
     files?.some(
@@ -72,6 +74,7 @@ export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[
   );
 }
 
+/** Resolves workspace bootstrap routing from durable pending state plus hook files. */
 export async function resolveAttemptWorkspaceBootstrapRouting(
   params: AttemptWorkspaceBootstrapRoutingInput,
 ): Promise<AttemptBootstrapRouting> {
