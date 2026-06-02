@@ -79,6 +79,25 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
+  /**
+   * Turn-level NO_REPLY suppression (substrate-leak fix).
+   *
+   * When enabled (default true), `block`-kind payloads are BUFFERED at enqueue time
+   * and held until the `final` payload arrives. At final-arrival:
+   *   - if final is exact NO_REPLY → drop the entire buffer + drop final (no delivery)
+   *   - otherwise                  → flush buffer in order, then deliver final
+   *
+   * This is the only correct shape for "reasoning-block-first-then-NO_REPLY-second"
+   * suppression: a pre-final flag-check cannot work because the flag is unset at the
+   * moment the reasoning block enqueues.
+   *
+   * Tool-kind payloads bypass the buffer (they are between the model and tool-runs,
+   * not user-visible chat). Setting this option false restores legacy
+   * "deliver-each-block-immediately" behavior for callers who need it.
+   *
+   * @see substrate-leak forensic 2026-05-24 session cf23b629
+   */
+  enableTurnLevelNoReplySuppression?: boolean;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -153,32 +172,24 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: 0,
   };
 
+  // Turn-level NO_REPLY suppression: buffer block-kind payloads until final arrives.
+  // See ReplyDispatcherOptions.enableTurnLevelNoReplySuppression for full rationale.
+  const enableTurnLevelSuppression = options.enableTurnLevelNoReplySuppression ?? true;
+  // Buffer of block payloads enqueued before final lands. Flushed (or dropped) at final.
+  const bufferedBlocks: ReplyPayload[] = [];
+
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
     pending: () => pending,
     waitForIdle: () => sendChain,
   });
 
-  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
-    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
-    const normalized = normalizeReplyPayloadInternal(payload, {
-      responsePrefix: options.responsePrefix,
-      responsePrefixContext: options.responsePrefixContext,
-      responsePrefixContextProvider: options.responsePrefixContextProvider,
-      transformReplyPayload: options.transformReplyPayload,
-      onHeartbeatStrip: options.onHeartbeatStrip,
-      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
-    });
-    if (!normalized) {
-      if (kind === "final" && originalWasExactSilent) {
-        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
-          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
-          surface: options.silentReplyContext?.surface,
-          conversationType: options.silentReplyContext?.conversationType,
-        });
-      }
-      return false;
-    }
+  /**
+   * Push a normalized payload onto the serialized send chain.
+   * Returns true and bumps queued/pending counters; caller is responsible for
+   * the upstream "did anything actually get queued" boolean.
+   */
+  const dispatchNormalized = (kind: ReplyDispatchKind, normalized: ReplyPayload): void => {
     queuedCounts[kind] += 1;
     pending += 1;
 
@@ -226,7 +237,139 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           void options.onIdle?.();
         }
       });
+  };
+
+  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
+
+    // ── Turn-level NO_REPLY suppression (buffer-until-final) ─────────────────
+    //
+    // The substrate-leak shape is:
+    //   1. enqueue(block, "reasoning text")   ← in current model output
+    //   2. enqueue(tool,  {tool-output})       ← model called a tool
+    //   3. enqueue(block, "more reasoning")    ← post-tool reasoning
+    //   4. enqueue(final, "NO_REPLY")          ← model's final answer
+    //
+    // A flag-on-NO_REPLY approach can't catch (1) or (3) because the flag is
+    // unset at the moment those blocks enqueue. The correct fix is to defer
+    // block-kind delivery until final arrives, then decide.
+    //
+    // Tool-kind is NOT buffered — it must flow to the agent loop so the model
+    // can keep running. Final-kind is the trigger for flush-or-drop.
+
+    if (enableTurnLevelSuppression && kind === "block") {
+      // Normalize NOW so transformReplyPayload / heartbeat-strip / response-prefix
+      // semantics still happen at enqueue-time-ordering. If normalization drops
+      // it (e.g. empty text, or transformer returned null), record the skip and
+      // do nothing — same as legacy behavior.
+      const normalized = normalizeReplyPayloadInternal(payload, {
+        responsePrefix: options.responsePrefix,
+        responsePrefixContext: options.responsePrefixContext,
+        responsePrefixContextProvider: options.responsePrefixContextProvider,
+        transformReplyPayload: options.transformReplyPayload,
+        onHeartbeatStrip: options.onHeartbeatStrip,
+        onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+      });
+      if (!normalized) {
+        return false;
+      }
+      bufferedBlocks.push(normalized);
+      return true;
+    }
+
+    if (enableTurnLevelSuppression && kind === "final") {
+      if (originalWasExactSilent) {
+        // Drop everything buffered (the leak) and drop the final itself.
+        const droppedCount = bufferedBlocks.length;
+        if (droppedCount > 0) {
+          silentReplyLogger.debug(
+            "turn-level NO_REPLY suppression: dropping buffered block(s) before final NO_REPLY",
+            {
+              droppedBlockCount: droppedCount,
+              hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+              surface: options.silentReplyContext?.surface,
+              conversationType: options.silentReplyContext?.conversationType,
+            },
+          );
+          // Emit onSkip for each dropped block so channels (e.g. Telegram) get a
+          // signal that text was intentionally suppressed.
+          for (const dropped of bufferedBlocks) {
+            options.onSkip?.(dropped, { kind: "block", reason: "silent" });
+          }
+          bufferedBlocks.length = 0;
+        }
+        // Now route the NO_REPLY final through the legacy normalize path so its
+        // existing handling (onSkip + debug log) still fires. normalize-reply
+        // already drops exact-silent text, so deliver() is never called.
+        const normalized = normalizeReplyPayloadInternal(payload, {
+          responsePrefix: options.responsePrefix,
+          responsePrefixContext: options.responsePrefixContext,
+          responsePrefixContextProvider: options.responsePrefixContextProvider,
+          transformReplyPayload: options.transformReplyPayload,
+          onHeartbeatStrip: options.onHeartbeatStrip,
+          onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+        });
+        if (!normalized) {
+          silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
+            hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+            surface: options.silentReplyContext?.surface,
+            conversationType: options.silentReplyContext?.conversationType,
+          });
+        }
+        return false;
+      }
+
+      // Final is a real reply — flush buffered blocks, then deliver final.
+      for (const buffered of bufferedBlocks) {
+        dispatchNormalized("block", buffered);
+      }
+      bufferedBlocks.length = 0;
+      // Fall through to legacy final-normalize path below.
+    }
+
+    const normalized = normalizeReplyPayloadInternal(payload, {
+      responsePrefix: options.responsePrefix,
+      responsePrefixContext: options.responsePrefixContext,
+      responsePrefixContextProvider: options.responsePrefixContextProvider,
+      transformReplyPayload: options.transformReplyPayload,
+      onHeartbeatStrip: options.onHeartbeatStrip,
+      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+    });
+    if (!normalized) {
+      if (kind === "final" && originalWasExactSilent) {
+        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
+          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+          surface: options.silentReplyContext?.surface,
+          conversationType: options.silentReplyContext?.conversationType,
+        });
+      }
+      return false;
+    }
+
+    dispatchNormalized(kind, normalized);
     return true;
+  };
+
+  /**
+   * Defensive flush of any blocks that were buffered but never paired with a
+   * final. In a well-behaved turn `final` always arrives, but if the model
+   * stream tears down without emitting a final block, those buffered blocks
+   * would otherwise be dropped silently. Flush them on markComplete so the
+   * user still sees the reasoning that was already on its way.
+   */
+  const flushBufferedBlocksOnComplete = () => {
+    if (bufferedBlocks.length === 0) {
+      return;
+    }
+    silentReplyLogger.debug("flushing buffered blocks at markComplete (no final arrived)", {
+      bufferedBlockCount: bufferedBlocks.length,
+      hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+      surface: options.silentReplyContext?.surface,
+    });
+    for (const buffered of bufferedBlocks) {
+      dispatchNormalized("block", buffered);
+    }
+    bufferedBlocks.length = 0;
   };
 
   const markComplete = () => {
@@ -234,6 +377,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       return;
     }
     completeCalled = true;
+    // Defensive: flush any buffered blocks that never saw a paired final.
+    flushBufferedBlocksOnComplete();
     // If no replies were enqueued (pending is still 1 = just the reservation),
     // schedule clearing the reservation after current microtasks complete.
     // This gives any in-flight enqueue() calls a chance to increment pending.
