@@ -332,4 +332,37 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
     expect(mocks.nodeHostParams[0]?.requestedEnv).not.toHaveProperty("GATEWAY_PLUGIN_SAFE");
   });
+
+  it("lets before_tool_call rewrite host when no resolve_exec_env hook is registered", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
+      runResolveExecEnv: vi.fn(),
+      runBeforeToolCall: vi.fn(async (event: { params: Record<string, unknown> }) => ({
+        params: { ...event.params, host: "gateway" },
+      })),
+    };
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:chat-1",
+    });
+    const [definition] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:telegram:chat-1",
+    });
+
+    await definition.execute("call-host-sanitize", {
+      command: "echo ok",
+      host: "node",
+      env: { REQUEST_SAFE: "request" },
+      yieldMs: 120_000,
+    });
+
+    expect(mocks.hookRunner.runResolveExecEnv).not.toHaveBeenCalled();
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      REQUEST_SAFE: "request",
+    });
+  });
 });
