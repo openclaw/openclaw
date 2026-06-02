@@ -396,12 +396,20 @@ function extractWikiLinks(markdown: string): string[] {
 export function formatWikiLink(params: {
   renderMode: "native" | "obsidian";
   relativePath: string;
+  sourceRelativeTo?: string;
   title: string;
 }): string {
   const withoutExtension = params.relativePath.replace(/\.md$/i, "");
-  return params.renderMode === "obsidian"
-    ? `[[${withoutExtension}|${params.title}]]`
-    : `[${params.title}](${params.relativePath})`;
+  if (params.renderMode === "obsidian") {
+    return `[[${withoutExtension}|${params.title}]]`;
+  }
+  const linkTarget = params.sourceRelativeTo
+    ? path
+        .relative(path.dirname(params.sourceRelativeTo), params.relativePath)
+        .split(path.sep)
+        .join("/")
+    : params.relativePath;
+  return `[${params.title}](${linkTarget})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

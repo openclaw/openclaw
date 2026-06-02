@@ -660,6 +660,7 @@ function buildPageLookupKeys(page: WikiPageSummary): Set<string> {
 function renderWikiPageLinks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
+  sourceRelativeTo?: string;
 }): string {
   return params.pages
     .map(
@@ -667,6 +668,7 @@ function renderWikiPageLinks(params: {
         `- ${formatWikiLink({
           renderMode: params.config.vault.renderMode,
           relativePath: page.relativePath,
+          sourceRelativeTo: params.sourceRelativeTo,
           title: page.title,
         })}`,
     )
@@ -755,19 +757,31 @@ function buildRelatedBlockBody(params: {
   if (sourcePages.length > 0) {
     sections.push(
       "### Sources",
-      renderWikiPageLinks({ config: params.config, pages: sourcePages }),
+      renderWikiPageLinks({
+        config: params.config,
+        pages: sourcePages,
+        sourceRelativeTo: params.page.relativePath,
+      }),
     );
   }
   if (backlinkPages.length > 0) {
     sections.push(
       "### Referenced By",
-      renderWikiPageLinks({ config: params.config, pages: backlinkPages }),
+      renderWikiPageLinks({
+        config: params.config,
+        pages: backlinkPages,
+        sourceRelativeTo: params.page.relativePath,
+      }),
     );
   }
   if (relatedPages.length > 0) {
     sections.push(
       "### Related Pages",
-      renderWikiPageLinks({ config: params.config, pages: relatedPages }),
+      renderWikiPageLinks({
+        config: params.config,
+        pages: relatedPages,
+        sourceRelativeTo: params.page.relativePath,
+      }),
     );
   }
   if (sections.length === 0) {
@@ -819,6 +833,7 @@ function renderSectionList(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
   emptyText: string;
+  sourceRelativeTo?: string;
 }): string {
   if (params.pages.length === 0) {
     return `- ${params.emptyText}`;
@@ -829,6 +844,7 @@ function renderSectionList(params: {
         `- ${formatWikiLink({
           renderMode: params.config.vault.renderMode,
           relativePath: page.relativePath,
+          sourceRelativeTo: params.sourceRelativeTo,
           title: page.title,
         })}`,
     )
@@ -1002,6 +1018,7 @@ function buildDirectoryIndexBody(params: {
     config: params.config,
     pages: params.pages.filter((page) => page.kind === params.group.kind),
     emptyText: `No ${normalizeLowercaseStringOrEmpty(params.group.heading)} yet.`,
+    sourceRelativeTo: `${params.group.dir}/index.md`,
   });
 }
 
