@@ -10,6 +10,10 @@ import type {
   ChatCompletionSystemMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../../agents/system-prompt-cache-boundary.js";
 import { createReasoningTagTextPartitioner } from "../../shared/text/reasoning-tag-text-partitioner.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -584,8 +588,10 @@ function buildParams(
   compat: ResolvedOpenAICompletionsCompat = getCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
-  const messages = convertMessages(model, context, compat);
   const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  const messages = convertMessages(model, context, compat, {
+    preserveSystemPromptCacheBoundary: cacheControl !== undefined,
+  });
 
   type ChatCompletionRequestParams = Omit<
     OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
@@ -835,13 +841,7 @@ function addCacheControlToTextContent(
     if (content.length === 0) {
       return false;
     }
-    message.content = [
-      {
-        type: "text",
-        text: content,
-        cache_control: cacheControl,
-      },
-    ] as ChatCompletionTextPartWithCacheControl[];
+    message.content = buildCacheControlledTextParts(content, cacheControl);
     return true;
   }
 
@@ -852,8 +852,8 @@ function addCacheControlToTextContent(
   for (let i = content.length - 1; i >= 0; i--) {
     const part = content[i];
     if (part?.type === "text") {
-      const textPart = part as ChatCompletionTextPartWithCacheControl;
-      textPart.cache_control = cacheControl;
+      const text = (part as ChatCompletionTextPartWithCacheControl).text;
+      content.splice(i, 1, ...buildCacheControlledTextParts(text, cacheControl));
       return true;
     }
   }
@@ -861,10 +861,34 @@ function addCacheControlToTextContent(
   return false;
 }
 
+function buildCacheControlledTextParts(
+  text: string,
+  cacheControl: OpenAICompatCacheControl,
+): ChatCompletionTextPartWithCacheControl[] {
+  const split = splitSystemPromptCacheBoundary(text);
+  if (!split) {
+    return [{ type: "text", text, cache_control: cacheControl }];
+  }
+
+  const parts: ChatCompletionTextPartWithCacheControl[] = [];
+  if (split.stablePrefix) {
+    parts.push({
+      type: "text",
+      text: split.stablePrefix,
+      cache_control: cacheControl,
+    });
+  }
+  if (split.dynamicSuffix) {
+    parts.push({ type: "text", text: split.dynamicSuffix });
+  }
+  return parts.length > 0 ? parts : [{ type: "text", text: "" }];
+}
+
 export function convertMessages(
   model: Model<"openai-completions">,
   context: Context,
   compat: ResolvedOpenAICompletionsCompat,
+  options: { preserveSystemPromptCacheBoundary?: boolean } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
 
@@ -892,7 +916,13 @@ export function convertMessages(
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    params.push({ role, content: sanitizeSurrogates(context.systemPrompt) });
+    const systemPrompt = options.preserveSystemPromptCacheBoundary
+      ? context.systemPrompt
+      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    params.push({
+      role,
+      content: sanitizeSurrogates(systemPrompt),
+    });
   }
 
   let lastRole: string | null = null;
