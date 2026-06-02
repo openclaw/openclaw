@@ -70,6 +70,8 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionMessagesAsync,
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
@@ -81,6 +83,7 @@ function resolveRequestedResetAgentId(
   key: string,
   explicitAgentId?: string,
 ): { ok: true; agentId?: string } | { ok: false; error: ReturnType<typeof errorShape> } {
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const parsed = parseAgentSessionKey(key);
   const requestedAgentId = normalizeOptionalString(explicitAgentId);
   if (requestedAgentId) {
@@ -97,19 +100,24 @@ function resolveRequestedResetAgentId(
         error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
       };
     }
+    if (canonicalKey !== "global") {
+      const keyAgentId = parsed?.agentId
+        ? normalizeAgentId(parsed.agentId)
+        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
+      if (keyAgentId !== agentId) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+        };
+      }
+    }
     return { ok: true, agentId };
   }
   if (!parsed?.agentId) {
     return { ok: true };
   }
   const agentId = normalizeAgentId(parsed.agentId);
-  if (!listAgentIds(cfg).includes(agentId)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${parsed.agentId}`),
-    };
-  }
-  return { ok: true, agentId };
+  return { ok: true, agentId: canonicalKey === "global" ? agentId : undefined };
 }
 
 function resolveResetSessionFile(params: {
@@ -806,6 +814,19 @@ export async function performGatewaySessionReset(params: {
     key: params.key,
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
+  if (
+    target.canonicalKey === "global" &&
+    target.agentId &&
+    !listAgentIds(cfg).includes(target.agentId)
+  ) {
+    const { entry } = loadSessionEntry(params.key, { agentId: target.agentId, cfg });
+    if (!entry) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${target.agentId}`),
+      };
+    }
+  }
   const { storePath } = target;
 
   const lockKey = `${storePath}\0${target.canonicalKey}`;
@@ -845,6 +866,7 @@ async function performGatewaySessionResetInner(ctx: {
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   let pendingAcpResetMeta: { sessionKey: string; meta: SessionAcpMeta } | undefined;
+  let resetSessionKey = target.canonicalKey ?? params.key;
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
@@ -882,11 +904,15 @@ async function performGatewaySessionResetInner(ctx: {
       cfg,
       key: params.key,
       store,
+      ...(target.agentId ? { agentId: target.agentId } : {}),
     });
+    resetSessionKey = primaryKey;
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
     const parsed = parseAgentSessionKey(primaryKey);
-    const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const sessionAgentId = normalizeAgentId(
+      parsed?.agentId ?? target.agentId ?? resolveDefaultAgentId(cfg),
+    );
     const resetPreservedSelection = resolveResetPreservedSelection({
       entry: currentEntry,
     });
@@ -1029,7 +1055,7 @@ async function performGatewaySessionResetInner(ctx: {
   }
   emitGatewaySessionEndPluginHook({
     cfg,
-    sessionKey: target.canonicalKey ?? params.key,
+    sessionKey: resetSessionKey,
     sessionId: oldSessionId,
     storePath,
     sessionFile: oldSessionFile,
@@ -1040,7 +1066,7 @@ async function performGatewaySessionResetInner(ctx: {
   });
   emitGatewaySessionStartPluginHook({
     cfg,
-    sessionKey: target.canonicalKey ?? params.key,
+    sessionKey: resetSessionKey,
     sessionId: next.sessionId,
     resumedFrom: oldSessionId,
     storePath,
@@ -1049,17 +1075,17 @@ async function performGatewaySessionResetInner(ctx: {
   });
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? params.key,
+      targetSessionKey: resetSessionKey,
       reason: "session-reset",
     });
   }
   emitSessionLifecycleEvent({
-    sessionKey: target.canonicalKey,
-    ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+    sessionKey: resetSessionKey,
+    ...(resetSessionKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
     reason: params.reason,
     parentSessionKey: next.parentSessionKey,
     label: next.label,
     displayName: next.displayName,
   });
-  return { ok: true, key: target.canonicalKey, entry: next };
+  return { ok: true, key: resetSessionKey, entry: next };
 }

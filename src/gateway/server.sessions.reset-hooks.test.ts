@@ -449,6 +449,11 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
       agentId: "work",
     });
     expect(resetTarget.storePath).toBe(globalConfig.workStorePath);
+    expectStringWithPrefix(
+      reset.entry.sessionFile,
+      path.join(dir, "work"),
+      "selected global session file",
+    );
     const mainStore = JSON.parse(await fs.readFile(globalConfig.mainStorePath, "utf-8")) as {
       global?: { sessionId?: string };
     };
@@ -488,6 +493,46 @@ test("sessions.reset rejects unknown selected global agents", async () => {
   });
 });
 
+test("sessions.reset preserves existing non-global rows for unconfigured agent stores", async () => {
+  const { dir } = await createSessionStoreDir();
+  await withGlobalAgentSessionStore(dir, async () => {
+    const localStorePath = path.join(dir, "local", "sessions.json");
+    const localTranscript = await writeMessageTranscript({
+      dir,
+      sessionId: "sess-local",
+      content: "hello from local store",
+      messageId: "m-local",
+    });
+
+    await writeSessionStore({
+      entries: {
+        "agent:local:main": sessionStoreEntry("sess-local", {
+          sessionFile: localTranscript,
+        }),
+      },
+      storePath: localStorePath,
+    });
+
+    const reset = await performSessionReset({
+      key: "agent:local:main",
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+    });
+
+    expect(reset.ok).toBe(true);
+    if (!reset.ok) {
+      throw new Error("expected reset to succeed");
+    }
+    expect(reset.key).toBe("agent:local:main");
+    expect(reset.entry.sessionId).not.toBe("sess-local");
+    const store = JSON.parse(await fs.readFile(localStorePath, "utf-8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(store["agent:local:main"]?.sessionId).toBe(reset.entry.sessionId);
+  });
+});
+
 test("sessions.reset emits inferred selected global agent scope", async () => {
   const { dir } = await createSessionStoreDir();
   await withGlobalAgentSessionStore(dir, async (globalConfig) => {
@@ -503,27 +548,27 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
     );
 
     try {
-    const reset = await directSessionReq<{ ok: true; key: string }>(
-      "sessions.reset",
-      { key: "agent:work:main", reason: "reset" },
-      {
-        context: {
-          broadcastToConnIds: broadcast,
-          getSessionEventSubscriberConnIds: () => new Set(["conn-work"]),
+      const reset = await directSessionReq<{ ok: true; key: string }>(
+        "sessions.reset",
+        { key: "agent:work:main", reason: "reset" },
+        {
+          context: {
+            broadcastToConnIds: broadcast,
+            getSessionEventSubscriberConnIds: () => new Set(["conn-work"]),
+          },
         },
-      },
-    );
+      );
 
-    expect(reset.ok).toBe(true);
-    expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-    expect(broadcast.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        sessionKey: "global",
-        agentId: "work",
-        reason: "reset",
-      }),
-    );
-    expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+      expect(reset.ok).toBe(true);
+      expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+      expect(broadcast.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          sessionKey: "global",
+          agentId: "work",
+          reason: "reset",
+        }),
+      );
+      expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
     } finally {
       lifecycleUnsub();
     }
