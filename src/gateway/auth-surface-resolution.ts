@@ -43,6 +43,7 @@ function withDiagnostics<T extends object>(params: {
     : params.result;
 }
 
+/** Resolve best-effort credentials for non-interactive Gateway status/probe calls. */
 export async function resolveGatewayProbeSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -53,6 +54,8 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   const authMode = params.config.gateway?.auth?.mode;
 
   if (params.surface === "remote") {
+    // Remote probes avoid password lookup when a token exists because remote
+    // gateway status uses one auth method and should not surface unused refs.
     const remoteToken = await resolveGatewayCredential({
       config: params.config,
       env,
@@ -141,6 +144,7 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   });
 }
 
+/** Resolve Gateway credentials for interactive clients, returning a user-facing failure reason. */
 export async function resolveGatewayInteractiveSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -164,6 +168,9 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
     : trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
   if (params.surface === "remote") {
+    // Interactive remote clients accept explicit/env credentials as fallbacks
+    // even when configured secret refs are missing, so users can recover from
+    // broken remote config without editing files first.
     const remoteToken = explicitToken
       ? { value: explicitToken }
       : await resolveGatewayCredential({
@@ -271,6 +278,9 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
 
   const shouldUsePassword =
     Boolean(explicitPassword ?? envPassword) || (hasConfiguredPassword && !hasConfiguredToken);
+  // Without an explicit mode, password wins only when it is the only configured
+  // auth secret or the caller supplied one directly; otherwise token remains the
+  // local default to match startup/probe behavior.
   if (shouldUsePassword) {
     const password = await resolvePassword();
     return {
