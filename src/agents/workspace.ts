@@ -289,7 +289,8 @@ export type ExtraBootstrapLoadDiagnosticCode =
   | "invalid-bootstrap-filename"
   | "missing"
   | "security"
-  | "io";
+  | "io"
+  | "glob-match-limit";
 
 export type ExtraBootstrapLoadDiagnostic = {
   path: string;
@@ -1327,6 +1328,7 @@ async function* walkWorkspaceFiles(
   initialRelativeDir: string,
   strictRead: boolean,
   matcher: Minimatch,
+  signal?: { truncated: boolean },
 ): AsyncGenerator<string> {
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
   let visitedEntries = 0;
@@ -1356,6 +1358,7 @@ async function* walkWorkspaceFiles(
         await yieldImmediate();
       }
       if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+        if (signal) signal.truncated = true;
         return;
       }
       const childRelativePath = currentRelativeDir
@@ -1375,24 +1378,30 @@ async function* walkWorkspaceFiles(
   }
 }
 
+type GlobResolution = { matches: string[]; truncated: boolean };
+
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
   strictRead: boolean,
-): Promise<string[]> {
+): Promise<GlobResolution> {
   if (!strictRead && typeof fs.glob === "function") {
     try {
       const matches: string[] = [];
-      let visitedEntries = 0;
+      let truncated = false;
+      // fs.glob only yields matching paths — Node traverses directories
+      // internally, so yieldedResults counts matches, not traversed entries.
+      let yieldedResults = 0;
       for await (const match of fs.glob(pattern, {
         cwd: workspaceDir,
         exclude: (candidate) => hasIgnoredExtraBootstrapDir(candidate),
       })) {
-        visitedEntries += 1;
-        if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
+        yieldedResults += 1;
+        if (yieldedResults % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
           await yieldImmediate();
         }
-        if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+        if (yieldedResults > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
+          truncated = true;
           break;
         }
         // Belt-and-suspenders: fs.glob exclude support varies by Node version,
@@ -1402,17 +1411,18 @@ async function resolveExtraBootstrapPatternPaths(
         }
         matches.push(match);
         if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
+          truncated = true;
           break;
         }
       }
-      return matches;
+      return { matches, truncated };
     } catch {
       // Fall through to the local matcher before treating the pattern as literal.
     }
   }
 
   if (typeof path.matchesGlob !== "function") {
-    return [pattern];
+    return { matches: [pattern], truncated: false };
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
@@ -1422,18 +1432,21 @@ async function resolveExtraBootstrapPatternPaths(
     windowsPathsNoEscape: true,
   });
   const matches: string[] = [];
+  const walkSignal = { truncated: false };
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
     strictRead,
     matcher,
+    walkSignal,
   )) {
     if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
+      walkSignal.truncated = true;
       break;
     }
     matches.push(candidate);
   }
-  return matches.length > 0 ? matches : [pattern];
+  return { matches: matches.length > 0 ? matches : [pattern], truncated: walkSignal.truncated };
 }
 
 function patternWalkRootStaysInWorkspace(workspaceDir: string, pattern: string): boolean {
@@ -1471,13 +1484,20 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const matches = await resolveExtraBootstrapPatternPaths(
+        const { matches, truncated } = await resolveExtraBootstrapPatternPaths(
           resolvedDir,
           pattern,
           options.strictPatternRead === true,
         );
         for (const match of matches) {
           resolvedPaths.add(match);
+        }
+        if (truncated) {
+          diagnostics.push({
+            path: pattern,
+            reason: "glob-match-limit",
+            detail: `glob pattern was truncated; some configured bootstrap context may be missing`,
+          });
         }
       } else {
         resolvedPaths.add(pattern);
