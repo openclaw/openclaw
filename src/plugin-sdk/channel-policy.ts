@@ -80,7 +80,9 @@ export function coerceNativeSetting(value: unknown): boolean | "auto" | undefine
 
 /** Candidate mutable allowlist path inspected for dangerous name-matching warnings. */
 export type ChannelMutableAllowlistCandidate = {
+  /** Config path shown in doctor/operator warnings. */
   pathLabel: string;
+  /** Raw allowlist value; non-arrays are ignored by the collector. */
   list: unknown;
 };
 
@@ -134,6 +136,7 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
         continue;
       }
       for (const candidate of params.collectLists(scope)) {
+        // Only real configured arrays are actionable; malformed config is handled by schema/doctor paths.
         if (!Array.isArray(candidate.list)) {
           continue;
         }
@@ -154,7 +157,10 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
   };
 }
 
-/** Compose the common DM policy resolver with restrict-senders group warnings. */
+/**
+ * Compose the common DM policy resolver with restrict-senders group warnings.
+ * Channels pass account-specific accessors here so DM policy inheritance and group-risk warnings stay aligned.
+ */
 export function createRestrictSendersChannelSecurity<
   ResolvedAccount extends { accountId?: string | null },
 >(params: {
