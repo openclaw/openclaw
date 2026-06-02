@@ -219,7 +219,13 @@ export function parseDurationMs(input: string): number | null {
           : unit === "h"
             ? 3_600_000
             : 86_400_000;
-  return Math.floor(n * factor);
+  const result = Math.floor(n * factor);
+  if (!Number.isFinite(result)) {
+    // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
+    // pure-digit string with "d"); reject it instead of returning Infinity ms.
+    return null;
+  }
+  return result;
 }
 
 export function parseCronStaggerMs(params: {
