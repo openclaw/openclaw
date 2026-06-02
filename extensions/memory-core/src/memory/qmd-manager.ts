@@ -44,7 +44,7 @@ import {
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
   type MemorySource,
-  type MemorySyncProgressUpdate,
+  type MemorySyncParams,
   type ResolvedMemoryBackendConfig,
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
@@ -1321,14 +1321,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
 
-  async sync(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void> {
-    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-      log.debug("qmd sync ignoring targeted sessionFiles hint; running regular update");
+  async sync(params?: MemorySyncParams): Promise<void> {
+    if (
+      params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
+      params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)
+    ) {
+      log.debug("qmd sync ignoring targeted session hint; running regular update");
     }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });

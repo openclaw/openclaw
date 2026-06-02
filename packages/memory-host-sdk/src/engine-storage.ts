@@ -35,7 +35,9 @@ export type {
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
+  MemorySessionSyncTarget,
   MemorySource,
+  MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "./host/types.js";
 export { ensureMemoryIndexSchema } from "./host/memory-schema.js";

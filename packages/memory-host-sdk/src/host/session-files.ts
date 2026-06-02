@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
@@ -20,6 +21,7 @@ import {
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
+import type { MemorySessionSyncTarget } from "./types.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -60,6 +62,12 @@ export type BuildSessionEntryOptions = {
 export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
+};
+
+export type ResolvedMemorySessionSyncTarget = {
+  agentId: string;
+  sessionFile: string;
+  sessionId: string;
 };
 
 type SessionTranscriptStoreEntry = {
@@ -326,6 +334,91 @@ export function sessionPathForFile(absPath: string): string {
   return path
     .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
     .replace(/\\/g, "/");
+}
+
+/**
+ * Parses a deprecated path-shaped memory sync hint only when it points at an
+ * OpenClaw-owned usage-counted transcript in the canonical agent sessions dir.
+ */
+export function parseCanonicalSessionSyncTargetFromPath(
+  sessionFile: string,
+): MemorySessionSyncTarget | null {
+  const trimmed = sessionFile.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.resolve(trimmed);
+  const fileName = path.basename(resolved);
+  const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
+  if (!sessionId || !isUsageCountedSessionTranscriptFileName(fileName)) {
+    return null;
+  }
+  const agentId = extractAgentIdFromSessionPath(resolved);
+  if (!agentId) {
+    return null;
+  }
+  const canonicalSessionsDir = normalizeComparablePath(
+    resolveSessionTranscriptsDirForAgent(agentId),
+  );
+  if (normalizeComparablePath(path.dirname(resolved)) !== canonicalSessionsDir) {
+    return null;
+  }
+  return { agentId, sessionId };
+}
+
+/**
+ * Resolves a storage-neutral memory sync target to the current file-backed
+ * transcript. The SQLite adapter implements this same identity contract without
+ * deriving a path.
+ */
+export function resolveSessionFileForSyncTarget(
+  target: MemorySessionSyncTarget,
+  defaultAgentId?: string,
+): ResolvedMemorySessionSyncTarget | null {
+  const sessionId = target.sessionId.trim();
+  const rawAgentId = (target.agentId ?? defaultAgentId ?? "").trim();
+  if (!rawAgentId || !sessionId) {
+    return null;
+  }
+  const agentId = normalizeAgentId(rawAgentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const sessionKey = target.sessionKey?.trim();
+  if (sessionKey) {
+    const store = readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
+    const persistedPath = resolveSessionStoreTranscriptPath(sessionsDir, store[sessionKey]);
+    const canonicalPath = resolveCanonicalSessionSyncFilePath(agentId, persistedPath);
+    if (canonicalPath) {
+      return {
+        agentId,
+        sessionId,
+        sessionFile: canonicalPath,
+      };
+    }
+  }
+  const sessionFile = resolveCanonicalSessionSyncFilePath(
+    agentId,
+    path.join(sessionsDir, `${sessionId}.jsonl`),
+  );
+  if (!sessionFile) {
+    return null;
+  }
+  return {
+    agentId,
+    sessionId,
+    sessionFile,
+  };
+}
+
+function resolveCanonicalSessionSyncFilePath(
+  agentId: string,
+  sessionFile?: string | null,
+): string | null {
+  if (!sessionFile) {
+    return null;
+  }
+  const resolved = path.resolve(sessionFile);
+  const parsed = parseCanonicalSessionSyncTargetFromPath(resolved);
+  return parsed?.agentId === agentId ? resolved : null;
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
