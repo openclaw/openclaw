@@ -143,10 +143,6 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
-    turnSurfacePolicy.excludeToolNames.length > 0
-      ? { deny: turnSurfacePolicy.excludeToolNames }
-      : undefined,
-    excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
