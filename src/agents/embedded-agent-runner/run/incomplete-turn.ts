@@ -259,6 +259,11 @@ export function resolveAttemptReplayMetadata(attempt: {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/**
+ * Builds the user-visible incomplete-turn warning when a terminal attempt did
+ * not produce a safe final assistant response and no committed delivery/progress
+ * already completed the task.
+ */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -327,6 +332,11 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Allows one retry when the provider returned no assistant turn at all and the
+ * attempt has no side effects, active lifecycle items, delivery, or terminal
+ * assistant/tool state.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
