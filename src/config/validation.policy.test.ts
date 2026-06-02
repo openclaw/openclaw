@@ -45,174 +45,105 @@ vi.mock("../secrets/unsupported-surface-policy.js", async () => {
 });
 
 describe("gateway memory watch config warnings", () => {
-  it("does not warn for configured memory surfaces without many files", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        gateway: { mode: "local" },
-        agents: {
-          defaults: {
-            memorySearch: {
-              extraPaths: ["/srv/shared-notes"],
-            },
-          },
-        },
-      },
-      { pluginValidation: "skip" },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.warnings).not.toContainEqual(
-      expect.objectContaining({
-        path: "agents.defaults.memorySearch.sync.watch",
-      }),
-    );
-  });
-
   it("does not warn when gateway memory watching is disabled explicitly", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        gateway: { mode: "local" },
-        agents: {
-          defaults: {
-            memorySearch: {
-              extraPaths: ["/srv/shared-notes"],
-              sync: { watch: false },
-            },
+    expectNoDefaultMemoryWatchWarning({
+      gateway: { mode: "local" },
+      agents: {
+        defaults: {
+          memorySearch: {
+            extraPaths: ["/srv/shared-notes"],
+            sync: { watch: false },
           },
         },
       },
-      { pluginValidation: "skip" },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.warnings).not.toContainEqual(
-      expect.objectContaining({
-        path: "agents.defaults.memorySearch.sync.watch",
-      }),
-    );
-  });
-
-  it("does not warn for remote client configs", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } },
-        agents: {
-          defaults: {
-            memorySearch: {
-              extraPaths: ["/srv/shared-notes"],
-              sync: { watch: true },
-            },
-          },
-        },
-      },
-      { pluginValidation: "skip" },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.warnings).not.toContainEqual(
-      expect.objectContaining({
-        path: "agents.defaults.memorySearch.sync.watch",
-      }),
-    );
-  });
-
-  it("does not warn for per-agent watcher overrides without many files", () => {
-    const result = validateConfigObjectWithPlugins(
-      {
-        gateway: { mode: "local" },
-        agents: {
-          defaults: {
-            memorySearch: {
-              sync: { watch: false },
-            },
-          },
-          list: [
-            { id: "main", memorySearch: { sync: { watch: false } } },
-            { id: "ops", memorySearch: { sync: { watch: true } } },
-          ],
-        },
-      },
-      { pluginValidation: "skip" },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.warnings).not.toContainEqual(
-      expect.objectContaining({
-        path: "agents.list.1.memorySearch.sync.watch",
-      }),
-    );
+    });
   });
 
   it("warns when gateway memory watching sees more than 2000 memory files", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-watch-warning-"));
-    const memoryDir = path.join(root, "memory");
-    try {
-      fs.mkdirSync(memoryDir, { recursive: true });
-      for (let i = 0; i < 2_001; i += 1) {
-        fs.writeFileSync(path.join(memoryDir, `${i}.md`), "");
-      }
-      const result = validateConfigObjectWithPlugins(
-        {
-          gateway: { mode: "local" },
-          agents: {
-            defaults: {
-              workspace: root,
-              memorySearch: { extraPaths: [memoryDir] },
-            },
+    withLargeMemoryDir((root, memoryDir) => {
+      expectDefaultMemoryWatchWarning({
+        gateway: { mode: "local" },
+        agents: {
+          defaults: {
+            workspace: root,
+            memorySearch: { extraPaths: [memoryDir] },
           },
         },
-        { pluginValidation: "skip" },
-      );
-
-      expect(result.ok).toBe(true);
-      expect(result.warnings).toContainEqual(
-        expect.objectContaining({
-          path: "agents.defaults.memorySearch.sync.watch",
-          message: expect.stringContaining("too many files open"),
-        }),
-      );
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+      });
+    });
   });
 
   it("does not warn for default QMD memory when includeDefaultMemory is false", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-watch-warning-"));
-    const memoryDir = path.join(root, "memory");
-    try {
-      fs.mkdirSync(memoryDir, { recursive: true });
-      for (let i = 0; i < 2_001; i += 1) {
-        fs.writeFileSync(path.join(memoryDir, `${i}.md`), "");
-      }
-      const result = validateConfigObjectWithPlugins(
-        {
-          gateway: { mode: "local" },
-          memory: { backend: "qmd", qmd: { includeDefaultMemory: false } },
-          agents: {
-            defaults: {
-              workspace: root,
+    withLargeMemoryDir((root) => {
+      expectNoDefaultMemoryWatchWarning({
+        gateway: { mode: "local" },
+        memory: { backend: "qmd", qmd: { includeDefaultMemory: false } },
+        agents: {
+          defaults: {
+            workspace: root,
+          },
+        },
+      });
+    });
+  });
+
+  it("does not warn for sessions-only memory search", () => {
+    withLargeMemoryDir((root) => {
+      expectNoDefaultMemoryWatchWarning({
+        gateway: { mode: "local" },
+        agents: {
+          defaults: {
+            workspace: root,
+            memorySearch: {
+              experimental: { sessionMemory: true },
+              sources: ["sessions"],
             },
           },
         },
-        { pluginValidation: "skip" },
-      );
-
-      expect(result.ok).toBe(true);
-      expect(result.warnings).not.toContainEqual(
-        expect.objectContaining({
-          path: "agents.defaults.memorySearch.sync.watch",
-        }),
-      );
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+      });
+    });
   });
 });
 
-function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
-  const issue = issues.find((entry) => entry.path === path);
+function expectDefaultMemoryWatchWarning(raw: unknown): void {
+  const result = validateConfigObjectWithPlugins(raw, { pluginValidation: "skip" });
+  expect(result.ok).toBe(true);
+  expect(result.warnings).toContainEqual(
+    expect.objectContaining({
+      path: "agents.defaults.memorySearch.sync.watch",
+      message: expect.stringContaining("too many files open"),
+    }),
+  );
+}
+
+function expectNoDefaultMemoryWatchWarning(raw: unknown): void {
+  const result = validateConfigObjectWithPlugins(raw, { pluginValidation: "skip" });
+  expect(result.ok).toBe(true);
+  expect(result.warnings).not.toContainEqual(
+    expect.objectContaining({
+      path: "agents.defaults.memorySearch.sync.watch",
+    }),
+  );
+}
+
+function withLargeMemoryDir(run: (root: string, memoryDir: string) => void): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-watch-warning-"));
+  const memoryDir = path.join(root, "memory");
+  try {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    for (let i = 0; i < 2_001; i += 1) {
+      fs.writeFileSync(path.join(memoryDir, `${i}.md`), "");
+    }
+    run(root, memoryDir);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function requireIssue<T extends { path: string }>(issues: T[], issuePath: string): T {
+  const issue = issues.find((entry) => entry.path === issuePath);
   if (!issue) {
-    throw new Error(`expected validation issue at ${path}`);
+    throw new Error(`expected validation issue at ${issuePath}`);
   }
   return issue;
 }

@@ -873,22 +873,14 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
-function isLocalGatewayMode(config: OpenClawConfig): boolean {
-  return config.gateway?.mode === "local";
-}
-
-function isMemorySearchEnabled(
+function isMemoryWatchActive(
   defaults: MemorySearchConfig | undefined,
   override: MemorySearchConfig | undefined,
 ): boolean {
-  return override?.enabled ?? defaults?.enabled ?? true;
-}
-
-function isMemoryWatchEnabled(
-  defaults: MemorySearchConfig | undefined,
-  override: MemorySearchConfig | undefined,
-): boolean {
-  return override?.sync?.watch ?? defaults?.sync?.watch ?? true;
+  return (
+    (override?.enabled ?? defaults?.enabled ?? true) &&
+    (override?.sync?.watch ?? defaults?.sync?.watch ?? true)
+  );
 }
 
 // #86613 reproduced FD storms above 7k files; warn once memory roots are clearly large.
@@ -900,12 +892,23 @@ type MemoryWatchScanContext = {
   remainingEntries: number;
 };
 
+function hasMemorySource(
+  defaults: MemorySearchConfig | undefined,
+  override: MemorySearchConfig | undefined,
+): boolean {
+  const sources = override?.sources ?? defaults?.sources;
+  return sources?.length ? sources.includes("memory") : true;
+}
+
 function collectMemoryWatchDirs(params: {
   config: OpenClawConfig;
   defaults: MemorySearchConfig | undefined;
   override: MemorySearchConfig | undefined;
   agentId: string;
 }): Set<string> {
+  if (!hasMemorySource(params.defaults, params.override)) {
+    return new Set();
+  }
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.agentId);
   const dirs = new Set<string>();
   const addPath = (rawPath: string | undefined): void => {
@@ -928,9 +931,6 @@ function collectMemoryWatchDirs(params: {
     ...(params.override?.qmd?.extraCollections ?? []).map((entry) => entry.path),
   ]) {
     addPath(rawPath);
-  }
-  if (params.config.memory?.qmd?.sessions?.enabled === true) {
-    addPath(params.config.memory.qmd.sessions.exportDir);
   }
   return dirs;
 }
@@ -969,17 +969,9 @@ function countMemoryWatchDirFiles(dirPath: string, context: MemoryWatchScanConte
   return markdownFiles;
 }
 
-function hasManyMemoryWatchFiles(
-  params: {
-    config: OpenClawConfig;
-    defaults: MemorySearchConfig | undefined;
-    override: MemorySearchConfig | undefined;
-    agentId: string;
-  },
-  context: MemoryWatchScanContext,
-): boolean {
+function hasManyMemoryWatchFiles(dirs: Iterable<string>, context: MemoryWatchScanContext): boolean {
   let markdownFiles = 0;
-  for (const dirPath of collectMemoryWatchDirs(params)) {
+  for (const dirPath of dirs) {
     markdownFiles += countMemoryWatchDirFiles(dirPath, context);
     if (markdownFiles > MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD) {
       return true;
@@ -992,44 +984,12 @@ function hasManyMemoryWatchFiles(
   return false;
 }
 
-function hasConfiguredMemoryWatchFdPressureSurface(
-  config: OpenClawConfig,
-  defaults: MemorySearchConfig | undefined,
-  override: MemorySearchConfig | undefined,
-  agentId: string,
-  scanContext: MemoryWatchScanContext,
-): boolean {
-  const hasMemorySearchConfig = Boolean(defaults || override);
-  const hasMultipleGatewayAgents = (config.agents?.list?.length ?? 0) > 1;
-  const hasQmdBackend = config.memory?.backend === "qmd";
-  const hasQmdPaths = Boolean(config.memory?.qmd?.paths?.length);
-  const hasExtraPaths = Boolean(defaults?.extraPaths?.length || override?.extraPaths?.length);
-  const hasExtraQmdCollections = Boolean(
-    defaults?.qmd?.extraCollections?.length || override?.qmd?.extraCollections?.length,
-  );
-  const hasSessionMemory = Boolean(
-    defaults?.experimental?.sessionMemory || override?.experimental?.sessionMemory,
-  );
-  const hasFdPressureSurface =
-    hasMemorySearchConfig ||
-    hasMultipleGatewayAgents ||
-    hasQmdBackend ||
-    hasQmdPaths ||
-    hasExtraPaths ||
-    hasExtraQmdCollections ||
-    hasSessionMemory;
-  return (
-    hasFdPressureSurface &&
-    hasManyMemoryWatchFiles({ config, defaults, override, agentId }, scanContext)
-  );
-}
-
 function memoryWatchFdPressureWarningMessage(): string {
-  return "Memory file watching is on for this Gateway. This keeps memory search up to date, but large memory folders, extraPaths, QMD collections, session memory, or many agents can make the Gateway keep too many files open. If you see open-file or watcher errors, set memorySearch.sync.watch: false for the affected default or agent, then use manual indexing or sync.intervalMinutes to refresh memory.";
+  return "Memory file watching is on for this Gateway. This keeps memory search up to date, but large memory folders, extraPaths, or QMD collections can make the Gateway keep too many files open. If you see open-file or watcher errors, set memorySearch.sync.watch: false for the affected default or agent, then use manual indexing or sync.intervalMinutes to refresh memory.";
 }
 
 function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
-  if (!isLocalGatewayMode(config)) {
+  if (config.gateway?.mode !== "local") {
     return [];
   }
   const defaults = config.agents?.defaults?.memorySearch;
@@ -1038,35 +998,33 @@ function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValida
     remainingEntries: MEMORY_WATCH_FD_WARNING_SCAN_ENTRY_LIMIT,
   };
   const warnings: ConfigValidationIssue[] = [];
-  if (
-    isMemorySearchEnabled(defaults, undefined) &&
-    isMemoryWatchEnabled(defaults, undefined) &&
-    hasConfiguredMemoryWatchFdPressureSurface(
+  if (isMemoryWatchActive(defaults, undefined)) {
+    const dirs = collectMemoryWatchDirs({
       config,
       defaults,
-      undefined,
-      resolveDefaultAgentId(config),
-      scanContext,
-    )
-  ) {
-    warnings.push({
-      path: "agents.defaults.memorySearch.sync.watch",
-      message: memoryWatchFdPressureWarningMessage(),
+      override: undefined,
+      agentId: resolveDefaultAgentId(config),
     });
-  }
-  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
-    const override = agent.memorySearch;
-    if (
-      override &&
-      isMemorySearchEnabled(defaults, override) &&
-      isMemoryWatchEnabled(defaults, override) &&
-      hasConfiguredMemoryWatchFdPressureSurface(config, defaults, override, agent.id, scanContext)
-    ) {
+    if (hasManyMemoryWatchFiles(dirs, scanContext)) {
       warnings.push({
-        path: `agents.list.${index}.memorySearch.sync.watch`,
+        path: "agents.defaults.memorySearch.sync.watch",
         message: memoryWatchFdPressureWarningMessage(),
       });
     }
+  }
+  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+    const override = agent.memorySearch;
+    if (!override || !isMemoryWatchActive(defaults, override)) {
+      continue;
+    }
+    const dirs = collectMemoryWatchDirs({ config, defaults, override, agentId: agent.id });
+    if (!hasManyMemoryWatchFiles(dirs, scanContext)) {
+      continue;
+    }
+    warnings.push({
+      path: `agents.list.${index}.memorySearch.sync.watch`,
+      message: memoryWatchFdPressureWarningMessage(),
+    });
   }
   return warnings;
 }
