@@ -2367,6 +2367,57 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStreamStartedAt).toBeNull();
   });
 
+  it("materializes orphaned segment-only assistant text before clearing caught-up tools", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const persistedToolResult = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "shell",
+      content: [{ type: "text", text: "tool output" }],
+      __openclaw: { seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedToolResult],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number }>;
+      chatToolMessages: Record<string, unknown>[];
+      toolStreamById: Map<string, unknown>;
+      toolStreamOrder: string[];
+      toolStreamSyncTimer: number | null;
+    };
+    state.chatStreamSegments = [{ text: "before tool", ts: 1 }];
+    state.chatToolMessages = [persistedToolResult];
+    state.toolStreamById = new Map([["call_1", { message: persistedToolResult }]]);
+    state.toolStreamOrder = ["call_1"];
+    state.toolStreamSyncTimer = null;
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expect(state.chatMessages[1]).toEqual(persistedToolResult);
+    expectTextChatMessage(state.chatMessages[2], "assistant", "before tool");
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.toolStreamById.size).toBe(0);
+    expect(state.toolStreamOrder).toEqual([]);
+  });
+
   it("clears streamed assistant text when history already contains the replacement", async () => {
     const persistedUser = {
       role: "user",

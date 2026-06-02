@@ -902,12 +902,6 @@ async function loadChatHistoryUncached(
           hasAssistantStreamPartReplacement(state.chatMessages, part),
         );
       const historyReplacedToolStream = hasPersistedToolHistoryMessages(state.chatMessages);
-      if (historyReplacedToolStream) {
-        maybeResetToolStream(state, {
-          preserveStreamSegments:
-            Boolean(state.chatRunId) && visibleStreamParts.length > 0 && !historyReplacedStream,
-        });
-      }
       if (visibleStreamParts.length === 0 || historyReplacedStream) {
         // Clear all streaming state — history includes tool results and text
         // inline, so keeping streaming artifacts would cause duplicates.
@@ -926,6 +920,8 @@ async function loadChatHistoryUncached(
         maybeResetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
+      } else if (historyReplacedToolStream) {
+        maybeResetToolStream(state, { preserveStreamSegments: true });
       }
     }
     recordChatHistoryTiming(state, "applied", startedAtMs, {
