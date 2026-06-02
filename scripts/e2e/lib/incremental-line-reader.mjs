@@ -14,12 +14,20 @@ function readSlice(filePath, start, length) {
   }
 }
 
+function resolveFileIdentity(stats) {
+  if (Number.isSafeInteger(stats.dev) && Number.isSafeInteger(stats.ino) && stats.ino !== 0) {
+    return `${stats.dev}:${stats.ino}`;
+  }
+  return Number.isFinite(stats.birthtimeMs) ? `birth:${stats.birthtimeMs}` : undefined;
+}
+
 export function resolvePositiveInteger(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 export function createIncrementalLineReader(filePath, options = {}) {
   const maxReadBytes = resolvePositiveInteger(options.maxReadBytes, 256 * 1024);
+  let fileIdentity;
   let offset = 0;
   let pending = "";
 
@@ -35,6 +43,18 @@ export function createIncrementalLineReader(filePath, options = {}) {
       }
 
       let reset = false;
+      const nextFileIdentity = resolveFileIdentity(stats);
+      if (
+        fileIdentity !== undefined &&
+        nextFileIdentity !== undefined &&
+        fileIdentity !== nextFileIdentity
+      ) {
+        offset = 0;
+        pending = "";
+        reset = true;
+      }
+      fileIdentity = nextFileIdentity;
+
       if (stats.size < offset) {
         offset = 0;
         pending = "";

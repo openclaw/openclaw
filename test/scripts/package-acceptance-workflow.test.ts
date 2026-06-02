@@ -162,7 +162,10 @@ describe("package acceptance workflow", () => {
     const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
-      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
+      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $cacheRoot "openclaw-pnpm-node-modules"',
+    );
+    expect(hydrateWindowsPnpm.run).toContain(
+      '$env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $env:PNPM_CONFIG_MODULES_DIR ".pnpm"',
     );
     expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
@@ -175,6 +178,10 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsPnpm.run).toContain('"--filter",');
     expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
+    expect(hydrateWindowsPnpm.run).toContain(
+      "New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR",
+    );
+    expect(hydrateWindowsPnpm.run).toContain(".pnpm-workspace-state-v1.json");
     expect(hydrateWindowsPnpm.run).not.toContain("Remove-Item -Recurse -Force");
     expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_ENV");
     expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_PATH");
@@ -726,6 +733,9 @@ describe("package artifact reuse", () => {
     expect(retryHelper).toContain("fetch failed");
     expect(retryHelper).toContain("gateway request timeout");
     expect(retryHelper).toContain("model idle timeout");
+    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_RATE_LIMIT_RETRY_DELAY_SECONDS:-60");
+    expect(retryHelper).toContain("Rate limit reached");
+    expect(retryHelper).toContain("tokens per min");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -878,8 +888,9 @@ describe("package artifact reuse", () => {
     expect(build).toContain('source "$SCRIPT_ROOT_DIR/scripts/lib/docker-build.sh"');
     expect(build).toContain('source "$SCRIPT_ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
     expect(build).toContain(
-      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-600s}}"',
+      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-180s}}"',
     );
+    expect(build).toContain('LIVE_IMAGE_PULL_ATTEMPTS="${OPENCLAW_LIVE_DOCKER_PULL_ATTEMPTS:-3}"');
     expect(build).toContain('docker_e2e_docker_cmd pull "$LIVE_IMAGE_NAME"');
     expect(build).not.toContain('docker pull "$LIVE_IMAGE_NAME"');
     expect(stage).toContain(
@@ -1356,11 +1367,13 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("Verify full release validation target");
     expect(npmWorkflow).not.toContain("Build and smoke test final Docker runtime image");
     expect(fullReleaseWorkflow).toContain("docker_runtime_assets_preflight");
-    expect(fullReleaseWorkflow).toContain("Build and smoke test final Docker runtime image");
+    expect(fullReleaseWorkflow).not.toContain("Build and smoke test final Docker runtime image");
     expect(fullReleaseWorkflow).toContain("docker build");
-    expect(fullReleaseWorkflow).toContain("node /app/openclaw.mjs agent");
+    expect(fullReleaseWorkflow).toContain("--target runtime-assets");
+    expect(fullReleaseWorkflow).toContain("timeout --kill-after=30s 15m docker build");
+    expect(fullReleaseWorkflow).not.toContain("node /app/openclaw.mjs agent");
     expect(fullReleaseWorkflow).toContain('OPENCLAW_EXTENSIONS="diagnostics-otel,codex"');
-    expect(fullReleaseWorkflow).toContain("/app/src/agents/templates/HEARTBEAT.md");
+    expect(fullReleaseWorkflow).not.toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
     expect(fullReleaseWorkflow).toContain(
       "needs.docker_runtime_assets_preflight.result == 'success'",
@@ -1457,6 +1470,16 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
+    expect(releaseWorkflow).toContain("default: from-validation");
+    expect(releaseWorkflow).toContain(
+      'if [[ "$EXPECTED_RELEASE_PROFILE" != "from-validation" && "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "release_profile=$release_profile" >> "$GITHUB_OUTPUT"',
+    );
+    expect(releaseWorkflow).toContain(
+      "has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}",
+    );
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
       releaseWorkflow.indexOf('if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"'),
     );

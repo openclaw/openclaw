@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
@@ -96,10 +96,16 @@ describe("local embedding worker failure detection", () => {
 });
 
 describe("memory embedding timeout abort", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("aborts the provider operation when the timeout fires", async () => {
+    vi.useFakeTimers();
     let signalSeen: AbortSignal | undefined;
 
-    await expect(
+    const result = expect(
       runEmbeddingOperationWithTimeout({
         timeoutMs: 1,
         message: "memory embeddings query timed out after 0s",
@@ -115,12 +121,15 @@ describe("memory embedding timeout abort", () => {
         },
       }),
     ).rejects.toThrow("memory embeddings query timed out after 0s");
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
 
     expect(signalSeen?.aborted).toBe(true);
   });
 
   it("keeps the timeout error when a provider abort listener rejects generically", async () => {
-    await expect(
+    vi.useFakeTimers();
+    const result = expect(
       runEmbeddingOperationWithTimeout({
         timeoutMs: 1,
         message: "memory embeddings batch timed out after 0s",
@@ -132,6 +141,8 @@ describe("memory embedding timeout abort", () => {
           }),
       }),
     ).rejects.toThrow("memory embeddings batch timed out after 0s");
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
   });
 
   it("caps operation watchdog timers before scheduling", async () => {

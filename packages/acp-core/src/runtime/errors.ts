@@ -13,6 +13,7 @@ export const ACP_ERROR_CODES = [
 export type AcpRuntimeErrorCode = (typeof ACP_ERROR_CODES)[number];
 const ACP_ERROR_CODE_SET = new Set<AcpRuntimeErrorCode>(ACP_ERROR_CODES);
 
+/** Error type used at ACP runtime boundaries so callers can preserve structured failure codes. */
 export class AcpRuntimeError extends Error {
   readonly code: AcpRuntimeErrorCode;
   override readonly cause?: unknown;
@@ -67,10 +68,12 @@ function messageWithAcpRequestErrorDetails(error: Error): string {
   return `${error.message}: ${details}`;
 }
 
+/** Recognizes local and cross-realm ACP runtime errors by their stable error code. */
 export function isAcpRuntimeError(value: unknown): value is AcpRuntimeError {
   return value instanceof AcpRuntimeError || getForeignAcpRuntimeError(value) !== null;
 }
 
+/** Converts arbitrary thrown values into ACP runtime errors with redacted request details. */
 export function toAcpRuntimeError(params: {
   error: unknown;
   fallbackCode: AcpRuntimeErrorCode;
@@ -135,6 +138,7 @@ function renderSingleError(error: Error): string {
   return `${error.name}${codeSuffix}: ${error.message}`;
 }
 
+/** Wraps async runtime work and rethrows failures as ACP runtime errors. */
 export async function withAcpRuntimeErrorBoundary<T>(params: {
   run: () => Promise<T>;
   fallbackCode: AcpRuntimeErrorCode;

@@ -195,6 +195,42 @@ describe("normalizeCronJobCreate", () => {
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
   });
 
+  it("normalizes whitespace-only payload text to empty strings so validation rejects it", () => {
+    const agentTurn = normalizeCronJobCreate({
+      name: "blank agent turn",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+    expect(agentTurn.payload).toEqual({ kind: "agentTurn", message: "" });
+    expect(validateCronAddParams(agentTurn)).toBe(false);
+
+    const systemEvent = normalizeCronJobCreate({
+      name: "blank system event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: {
+        kind: "systemEvent",
+        text: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+    expect(systemEvent.payload).toEqual({ kind: "systemEvent", text: "" });
+    expect(validateCronAddParams(systemEvent)).toBe(false);
+
+    const update = normalizeCronJobPatch({
+      payload: { kind: "agentTurn", message: "   " },
+    }) as unknown as Record<string, unknown>;
+    expect(update.payload).toEqual({ kind: "agentTurn", message: "" });
+    expect(validateCronUpdateParams({ id: "job-1", patch: update })).toBe(false);
+  });
+
   it("normalizes delivery accountId and strips blanks", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery account",

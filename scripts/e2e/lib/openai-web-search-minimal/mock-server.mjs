@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv } from "../env-limits.mjs";
-import { readBody, writeJson, writeSse } from "../mock-openai-http.mjs";
+import {
+  boundedRequestLogBody,
+  isRequestBodyTooLargeError,
+  readBody,
+  writeJson,
+  writeSse,
+} from "../mock-openai-http.mjs";
 
 const port = readPositiveIntEnv("MOCK_PORT");
 const requestLog = process.env.MOCK_REQUEST_LOG;
@@ -96,7 +102,16 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const bodyText = await readBody(req);
+    let bodyText;
+    try {
+      bodyText = await readBody(req);
+    } catch (error) {
+      if (isRequestBodyTooLargeError(error)) {
+        writeJson(res, 413, { error: { message: error.message } });
+        return;
+      }
+      throw error;
+    }
     let body;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
@@ -105,7 +120,11 @@ const server = http.createServer((req, res) => {
     }
     fs.appendFileSync(
       requestLog,
-      `${JSON.stringify({ method: req.method, path: url.pathname, body })}\n`,
+      `${JSON.stringify({
+        method: req.method,
+        path: url.pathname,
+        body: boundedRequestLogBody(body, bodyText),
+      })}\n`,
     );
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {

@@ -34,10 +34,12 @@ const SECRET_PATTERNS: RegExp[] = [
 
 let configuredRedactor: ((value: string) => string) | undefined;
 
+/** Installs a host-provided redactor used before ACP fallback secret-pattern redaction. */
 export function configureAcpErrorRedactor(redactor: ((value: string) => string) | undefined): void {
   configuredRedactor = redactor;
 }
 
+/** Redacts common provider, GitHub, HTTP, payment, bot, and private-key secrets from error text. */
 export function redactSensitiveText(value: string): string {
   if (configuredRedactor) {
     return configuredRedactor(value);
@@ -49,6 +51,7 @@ export function redactSensitiveText(value: string): string {
         return "[REDACTED_PRIVATE_KEY]";
       }
       const groups = args.slice(0, -2);
+      // Replace only the captured secret when possible so surrounding diagnostics stay useful.
       const token = groups.findLast((group) => typeof group === "string" && group.length > 0);
       return token ? match.replace(token, "[REDACTED]") : "[REDACTED]";
     });

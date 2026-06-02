@@ -16,6 +16,7 @@ import { normalizeCronRunErrorText, timeoutErrorMessage } from "./execution-erro
 import type { CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
+/** Converts cron ids into bounded session-key path segments with a fallback for empty input. */
 export function normalizeCronLaneSegment(value: string | undefined, fallback: string): string {
   const normalized = normalizeOptionalLowercaseString(value)
     ?.replace(/[^a-z0-9_-]+/g, "-")
@@ -24,6 +25,7 @@ export function normalizeCronLaneSegment(value: string | undefined, fallback: st
   return normalized || fallback;
 }
 
+/** Builds the main-session child key used to isolate one cron run's task transcript. */
 export function resolveMainSessionCronRunSessionKey(job: CronJob, startedAt: number): string {
   const explicitAgentId = job.agentId?.trim();
   const agentId = normalizeAgentId(explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey));
@@ -42,6 +44,8 @@ function resolveCronTaskChildSessionKey(params: {
   }
   const explicitSessionKey = params.job.sessionKey?.trim();
   if (explicitSessionKey) {
+    // Explicit session bindings must win over generated cron session keys so
+    // task drill-down opens the same transcript the cron run actually used.
     return explicitSessionKey;
   }
   if (params.job.sessionTarget !== "isolated") {
@@ -53,6 +57,7 @@ function resolveCronTaskChildSessionKey(params: {
   });
 }
 
+/** Creates a best-effort detached task ledger row for a cron run. */
 export function tryCreateCronTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -93,6 +98,7 @@ export function tryCreateCronTaskRun(params: {
   }
 }
 
+/** Completes or fails the detached task ledger row for a cron run when one exists. */
 export function tryFinishCronTaskRun(
   state: CronServiceState,
   result: {

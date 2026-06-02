@@ -481,18 +481,26 @@ describe("cron tool", () => {
       "string",
       "null",
     ]);
+    expect(patch?.properties?.agentId?.type).toBeUndefined();
+    expect(patch?.properties?.agentId?.description).toContain("null to clear");
     expect(patch?.properties?.sessionKey?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
     ]);
+    expect(patch?.properties?.sessionKey?.type).toBeUndefined();
+    expect(patch?.properties?.sessionKey?.description).toContain("null to clear");
     expect(payload?.properties?.toolsAllow?.anyOf?.map((entry) => entry.type)).toEqual([
       "array",
       "null",
     ]);
+    expect(payload?.properties?.toolsAllow?.type).toBeUndefined();
+    expect(payload?.properties?.toolsAllow?.description).toContain("null to clear");
     expect(delivery?.properties?.channel?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
     ]);
+    expect(delivery?.properties?.channel?.type).toBeUndefined();
+    expect(delivery?.properties?.channel?.description).toContain("null to clear");
     expect(delivery?.properties?.failureDestination?.anyOf?.map((entry) => entry.type)).toEqual([
       "object",
       "null",
@@ -658,6 +666,54 @@ describe("cron tool", () => {
       toolsAllow: ["exec", "read"],
     });
     expect(params?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
+  });
+
+  it("recovers concatenated cron add keys from local tool-call parsers", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-concatenated-add", {
+      action: "add",
+      job: {
+        delivery: { mode: "none" },
+        enabled: true,
+        namePayload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+        scheduleKind: { everyMs: 999_999, kind: "every" },
+        sessionTargetName: "evidence-test",
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toEqual({
+      delivery: { mode: "none" },
+      enabled: true,
+      name: "evidence-test",
+      payload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+      schedule: { everyMs: 999_999, kind: "every" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
+  });
+
+  it("recovers flat concatenated cron add keys from local tool-call parsers", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-flat-concatenated-add", {
+      action: "add",
+      delivery: { mode: "none" },
+      enabled: true,
+      namePayload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+      scheduleKind: { everyMs: 999_999, kind: "every" },
+      sessionTargetName: "evidence-test",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toEqual({
+      delivery: { mode: "none" },
+      enabled: true,
+      name: "evidence-test",
+      payload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+      schedule: { everyMs: 999_999, kind: "every" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
   });
 
   it("stamps cron.add with caller sessionKey when missing", async () => {
@@ -1393,6 +1449,90 @@ describe("cron tool", () => {
       fallbacks: ["openrouter/gpt-4.1-mini", "anthropic/claude-haiku-3-5"],
       toolsAllow: ["exec", "read"],
     });
+  });
+
+  it("recovers concatenated cron update keys from local tool-call parsers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-concatenated", {
+      action: "update",
+      id: "job-concat",
+      patch: {
+        namePayload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+        scheduleKind: { everyMs: 60_000, kind: "every" },
+        sessionTargetName: "updated-name",
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            name?: string;
+            payload?: { kind?: string; message?: string; timeoutSeconds?: number };
+            schedule?: { kind?: string; everyMs?: number };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-concat");
+    expect(params?.patch).toEqual({
+      name: "updated-name",
+      payload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+      schedule: { everyMs: 60_000, kind: "every" },
+    });
+  });
+
+  it("recovers flat concatenated cron update keys from local tool-call parsers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-flat-concatenated", {
+      action: "update",
+      id: "job-concat",
+      namePayload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+      scheduleKind: { everyMs: 60_000, kind: "every" },
+      sessionTargetName: "updated-name",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            name?: string;
+            payload?: { kind?: string; message?: string; timeoutSeconds?: number };
+            schedule?: { kind?: string; everyMs?: number };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-concat");
+    expect(params?.patch).toEqual({
+      name: "updated-name",
+      payload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+      schedule: { everyMs: 60_000, kind: "every" },
+    });
+  });
+
+  it("uses flat string scheduleKind without leaking it to cron update", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-string-schedule-kind", {
+      action: "update",
+      id: "job-kind",
+      expr: "0 8 * * *",
+      scheduleKind: "cron",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: { schedule?: { kind?: string; expr?: string }; scheduleKind?: unknown };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-kind");
+    expect(params?.patch).toEqual({ schedule: { expr: "0 8 * * *", kind: "cron" } });
+    expect(params?.patch?.scheduleKind).toBeUndefined();
   });
 
   it("rejects malformed flattened fallback-only payload patch params for update action", async () => {

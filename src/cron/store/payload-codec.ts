@@ -14,6 +14,7 @@ function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | u
   return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
 }
 
+/** Maps cron payload variants into normalized SQLite columns. */
 export function bindPayloadColumns(
   payload: CronPayload,
 ): Pick<
@@ -57,6 +58,7 @@ export function bindPayloadColumns(
   };
 }
 
+/** Reconstructs cron payload variants from SQLite columns, returning null for invalid rows. */
 export function payloadFromRow(row: CronJobRow): CronPayload | null {
   if (row.payload_kind === "systemEvent") {
     return row.payload_message == null ? null : { kind: "systemEvent", text: row.payload_message };

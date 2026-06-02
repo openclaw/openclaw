@@ -137,6 +137,14 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
 
   const failureDestination = params.delivery?.failureDestination;
   if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
+    if (
+      failureDestination.channel === undefined &&
+      failureDestination.to === undefined &&
+      failureDestination.accountId === undefined &&
+      failureDestination.mode === undefined
+    ) {
+      return;
+    }
     assertCompatibleAnnounceTarget({
       channel: failureDestination.channel,
       to: failureDestination.to,
@@ -624,10 +632,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const jobs = await context.cron.list({ includeDisabled: true });
+      const matchedJob = jobs.find((job) => job.id === jobId);
+      const jobNameById =
+        matchedJob && typeof matchedJob.name === "string"
+          ? { [jobId as string]: matchedJob.name }
+          : undefined;
       const page = await readCronRunLogEntriesPage({
         storePath: context.cronStorePath,
         jobId: jobId as string,
         ...cronRunLogPageFilters(p),
+        jobNameById,
       });
       respond(true, page, undefined);
     } catch (err) {

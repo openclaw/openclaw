@@ -151,6 +151,29 @@ imsg send <handle> "test"
 
 </Tip>
 
+<Accordion title="SSH wrapper sends fail with AppleEvents -1743">
+  A remote-SSH setup can read chats, pass `channels status --probe`, and process inbound messages while outbound sends still fail with an AppleEvents authorization error:
+
+```text
+Not authorized to send Apple events to Messages. (-1743)
+```
+
+Check the signed-in Mac user's TCC database or System Settings > Privacy & Security > Automation. If the Automation entry is recorded for `/usr/libexec/sshd-keygen-wrapper` instead of the `imsg` or local shell process, macOS may not expose a usable Messages toggle for that SSH server-side client:
+
+```text
+kTCCServiceAppleEvents | /usr/libexec/sshd-keygen-wrapper | auth_value=0 | com.apple.MobileSMS
+```
+
+In that state, repeating `tccutil reset AppleEvents` or rerunning `imsg send` through the same SSH wrapper may keep failing because the process context that needs Messages Automation is the SSH wrapper, not an app the UI can grant.
+
+Use one of the supported `imsg` process contexts instead:
+
+- Run the Gateway, or at least the `imsg` bridge, in the logged-in Messages user's local session.
+- Start the Gateway with a LaunchAgent for that user after granting Full Disk Access and Automation from the same session.
+- If you keep the two-user SSH topology, verify that a real outbound `imsg send` succeeds through the exact wrapper before enabling the channel. If it cannot be granted Automation, reconfigure to a single-user `imsg` setup instead of relying on the SSH wrapper for sends.
+
+</Accordion>
+
 ## Enabling the imsg private API
 
 `imsg` ships in two operational modes:

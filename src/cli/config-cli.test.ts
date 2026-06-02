@@ -110,6 +110,11 @@ function writeTempJson5File(prefix: string, value: unknown): string {
   return pathname;
 }
 
+function writeSecurePluginEntrypoint(pathname: string, contents: string): void {
+  fs.writeFileSync(pathname, contents, "utf8");
+  fs.chmodSync(pathname, 0o644);
+}
+
 function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
   return {
     ...resolved,
@@ -2259,8 +2264,11 @@ describe("config cli", () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
       try {
-        fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
-        fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n", "utf8");
+        writeSecurePluginEntrypoint(path.join(rootDir, "index.js"), "export default {};\n");
+        writeSecurePluginEntrypoint(
+          path.join(rootDir, "resolve.mjs"),
+          "process.stdin.resume();\n",
+        );
         const resolved = {
           secrets: {
             providers: {},

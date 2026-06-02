@@ -17,6 +17,7 @@ function readMetaValue<T>(
   return undefined;
 }
 
+/** Reads the first present string metadata value from a current-to-legacy key list. */
 export function readString(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
@@ -24,6 +25,7 @@ export function readString(
   return readMetaValue(meta, keys, normalizeOptionalString);
 }
 
+/** Reads the first boolean metadata value without dropping false. */
 export function readBool(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
@@ -31,6 +33,7 @@ export function readBool(
   return readMetaValue(meta, keys, (value) => (typeof value === "boolean" ? value : undefined));
 }
 
+/** Reads the first finite numeric metadata value from a current-to-legacy key list. */
 export function readNumber(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
@@ -40,6 +43,7 @@ export function readNumber(
   );
 }
 
+/** Reads the first safe non-negative integer metadata value, preserving zero. */
 export function readNonNegativeInteger(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],

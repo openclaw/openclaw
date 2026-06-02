@@ -28,6 +28,7 @@ function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefi
     : undefined;
 }
 
+/** Parses a persisted cron run-log entry object and drops invalid or wrong-job rows. */
 export function parseCronRunLogEntryObject(
   obj: unknown,
   opts?: { jobId?: string },

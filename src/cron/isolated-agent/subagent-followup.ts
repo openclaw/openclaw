@@ -12,6 +12,7 @@ function resolveCronSubagentTimings() {
   };
 }
 
+/** Reads completed descendant subagent replies when the orchestrator only emitted interim text. */
 export async function readDescendantSubagentFallbackReply(params: {
   sessionKey: string;
   runStartedAt: number;

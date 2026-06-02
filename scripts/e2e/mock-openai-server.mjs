@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
-import { readBody, writeJson, writeSse } from "./lib/mock-openai-http.mjs";
+import {
+  boundedRequestLogBody,
+  isRequestBodyTooLargeError,
+  readBody,
+  writeJson,
+  writeSse,
+} from "./lib/mock-openai-http.mjs";
 
 const port =
   process.env.MOCK_PORT != null
@@ -298,18 +304,31 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const bodyText = await readBody(req);
-    if (requestLog) {
-      fs.appendFileSync(
-        requestLog,
-        `${JSON.stringify({ method: req.method, path: url.pathname, body: bodyText })}\n`,
-      );
+    let bodyText;
+    try {
+      bodyText = await readBody(req);
+    } catch (error) {
+      if (isRequestBodyTooLargeError(error)) {
+        writeJson(res, 413, { error: { message: error.message } });
+        return;
+      }
+      throw error;
     }
     let body;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
     } catch {
       body = {};
+    }
+    if (requestLog) {
+      fs.appendFileSync(
+        requestLog,
+        `${JSON.stringify({
+          method: req.method,
+          path: url.pathname,
+          body: boundedRequestLogBody(bodyText, bodyText),
+        })}\n`,
+      );
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {

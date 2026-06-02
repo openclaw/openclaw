@@ -27,7 +27,7 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
-  /** Session context for resolving "current" sessionTarget or auto-binding when not specified */
+  /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
 };
 
@@ -93,6 +93,8 @@ function coerceSchedule(schedule: UnknownRecord) {
   }
 
   if (next.kind === "at") {
+    // Keep each schedule variant canonical so persisted jobs do not carry stale
+    // fields from a previous kind after CLI/API normalization.
     delete next.everyMs;
     delete next.anchorMs;
     delete next.expr;
@@ -126,12 +128,16 @@ function coercePayload(payload: UnknownRecord) {
     const trimmed = normalizeOptionalString(next.message) ?? "";
     if (trimmed) {
       next.message = trimmed;
+    } else {
+      next.message = "";
     }
   }
   if (typeof next.text === "string") {
     const trimmed = normalizeOptionalString(next.text) ?? "";
     if (trimmed) {
       next.text = trimmed;
+    } else {
+      next.text = "";
     }
   }
   if ("model" in next) {
@@ -274,6 +280,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("channel" in next) {
     if (next.channel === null) {
       next.channel = null;
+    } else if (next.channel === undefined) {
+      next.channel = undefined;
     } else {
       const channel = normalizeOptionalLowercaseString(next.channel);
       if (channel) {
@@ -286,6 +294,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("to" in next) {
     if (next.to === null) {
       next.to = null;
+    } else if (next.to === undefined) {
+      next.to = undefined;
     } else {
       const to = normalizeOptionalString(next.to);
       if (to) {
@@ -298,6 +308,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("accountId" in next) {
     if (next.accountId === null) {
       next.accountId = null;
+    } else if (next.accountId === undefined) {
+      next.accountId = undefined;
     } else {
       const accountId = normalizeOptionalString(next.accountId);
       if (accountId) {
@@ -310,6 +322,8 @@ function coerceFailureDestination(value: UnknownRecord) {
   if ("mode" in next) {
     if (next.mode === null) {
       next.mode = null;
+    } else if (next.mode === undefined) {
+      next.mode = undefined;
     } else {
       const mode = normalizeOptionalLowercaseString(next.mode);
       if (mode === "announce" || mode === "webhook") {
@@ -331,7 +345,8 @@ function normalizeSessionTarget(raw: unknown) {
   if (lower === "main" || lower === "isolated" || lower === "current") {
     return lower;
   }
-  // Support custom session IDs with "session:" prefix
+  // Custom session targets must still pass the same session-id safety gate used
+  // by runtime session resolution.
   if (lower.startsWith("session:")) {
     return `session:${assertSafeCronSessionTargetId(trimmed.slice(8))}`;
   }
@@ -349,6 +364,7 @@ function normalizeWakeMode(raw: unknown) {
   return undefined;
 }
 
+/** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
   options: NormalizeOptions = DEFAULT_OPTIONS,
@@ -456,10 +472,8 @@ export function normalizeCronJobInput(
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      // Keep default behavior unchanged for backward compatibility:
-      // - systemEvent defaults to "main"
-      // - agentTurn defaults to "isolated" (NOT "current", to avoid token accumulation)
-      // Users must explicitly specify "current" or "session:xxx" for custom session binding
+      // Keep create-time defaults explicit: system events join main, while agent
+      // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
@@ -500,7 +514,8 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Support "isolated", custom session IDs (session:xxx), and resolved "current" as isolated-like targets
+    // Resolved "current" and custom session ids still use isolated-agent
+    // delivery semantics, so they get the same default announce behavior.
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
@@ -515,6 +530,7 @@ export function normalizeCronJobInput(
   return next;
 }
 
+/** Normalizes a raw cron create request and applies create-time defaults. */
 export function normalizeCronJobCreate(
   raw: unknown,
   options?: Omit<NormalizeOptions, "applyDefaults">,
@@ -525,6 +541,7 @@ export function normalizeCronJobCreate(
   }) as CronJobCreate | null;
 }
 
+/** Normalizes a raw cron patch request without filling omitted fields. */
 export function normalizeCronJobPatch(
   raw: unknown,
   options?: NormalizeOptions,

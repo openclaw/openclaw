@@ -3,6 +3,7 @@ import { resolveIntegerOption } from "./numeric-options.js";
 import type { AcpSession } from "./types.js";
 
 export type AcpSessionStore = {
+  /** Creates or refreshes an in-memory ACP session under the supplied session id. */
   createSession: (params: {
     sessionKey: string;
     cwd: string;
@@ -12,6 +13,7 @@ export type AcpSessionStore = {
   hasSession: (sessionId: string) => boolean;
   getSession: (sessionId: string) => AcpSession | undefined;
   getSessionByRunId: (runId: string) => AcpSession | undefined;
+  /** Binds an active runtime run to a session so cancel/close can abort it later. */
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
@@ -28,6 +30,7 @@ type AcpSessionStoreOptions = {
 const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
+/** Creates the bounded in-memory ACP session registry used by local ACP runtime clients. */
 export function createInMemorySessionStore(options: AcpSessionStoreOptions = {}): AcpSessionStore {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
@@ -98,6 +101,8 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
       return existingSession;
     }
     reapIdleSessions(nowMs);
+    // Active runs are never evicted to make cancellation ownership explicit; callers must
+    // clear/cancel them before the soft cap can make room.
     if (sessions.size >= maxSessions && !evictOldestIdleSession()) {
       throw new Error(
         `ACP session limit reached (max ${maxSessions}). Close idle ACP clients and retry.`,

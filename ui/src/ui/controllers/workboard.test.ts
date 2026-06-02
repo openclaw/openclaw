@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../types.ts";
 import {
+  addWorkboardCardComment,
   archiveWorkboardCard,
   captureSessionToWorkboard,
   createWorkboardCard,
@@ -321,6 +322,36 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
     expect(state.draftOpen).toBe(false);
     expect(state.editingCardId).toBeNull();
+  });
+
+  it("adds operator notes to a selected detail card without opening the edit draft", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.cards = [sampleCard];
+    state.detailCardId = sampleCard.id;
+    state.detailCommentBody = "Need one more proof run.";
+    const updated = {
+      ...sampleCard,
+      metadata: {
+        comments: [{ id: "comment-1", body: "Need one more proof run.", createdAt: 2 }],
+      },
+    } satisfies WorkboardCard;
+    const client = createClient({ "workboard.cards.comment": { card: updated } });
+
+    await addWorkboardCardComment({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      body: state.detailCommentBody,
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.comment", {
+      id: "card-1",
+      body: "Need one more proof run.",
+    });
+    expect(state.cards[0]?.metadata?.comments?.[0]?.body).toBe("Need one more proof run.");
+    expect(state.detailCommentBody).toBe("");
+    expect(state.draftOpen).toBe(false);
   });
 
   it("captures existing sessions as linked workboard cards", async () => {

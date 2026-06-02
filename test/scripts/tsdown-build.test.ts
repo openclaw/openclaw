@@ -61,6 +61,7 @@ describe("resolveTsdownBuildInvocation", () => {
   it("forwards explicit tsdown args after wrapper args are parsed", () => {
     const result = resolveTsdownBuildInvocation({
       args: ["--format", "esm"],
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: {},
@@ -106,10 +107,11 @@ describe("resolveTsdownBuildInvocation", () => {
     });
   });
 
-  it("preserves explicit tsdown heap settings", () => {
+  it("keeps inherited Windows tsdown heap settings at the Windows build cap", () => {
     const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath: "C:\\repo\\pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
       ...NO_MEMORY_LIMIT,
     });
@@ -117,26 +119,52 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
-  it("raises inherited lower tsdown heap settings to the build default", () => {
+  it("clamps explicit Windows tsdown heap settings to the Windows build cap", () => {
     const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+      npmExecPath: "C:\\repo\\pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       ...NO_MEMORY_LIMIT,
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
+  it("preserves explicit tsdown heap settings", () => {
+    const result = resolveTsdownBuildInvocation({
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
+  });
+
+  it("raises inherited lower tsdown heap settings to the build default", () => {
+    const result = resolveTsdownBuildInvocation({
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
+  });
+
   it("raises split inherited lower tsdown heap settings to the build default", () => {
     const result = resolveTsdownBuildInvocation({
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
@@ -154,7 +182,7 @@ describe("resolveTsdownBuildInvocation", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
-      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
@@ -187,6 +215,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it("can run tsdown without invoking pnpm", () => {
     const result = resolveTsdownBuildInvocation({
+      platform: "linux",
       nodeExecPath: "/usr/bin/node",
       env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
       ...NO_MEMORY_LIMIT,
@@ -207,7 +236,7 @@ describe("resolveTsdownBuildInvocation", () => {
         shell: false,
         windowsVerbatimArguments: undefined,
         env: {
-          NODE_OPTIONS: "--max-old-space-size=8192",
+          NODE_OPTIONS: "--max-old-space-size=12288",
           OPENCLAW_BUILD_ALL_NO_PNPM: "1",
         },
       },
@@ -301,10 +330,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     const outputRoots = listTsdownOutputRoots();
     expect(outputRoots).toEqual(
-      expect.arrayContaining([
-        path.join("packages", "agent-core", "dist"),
-        path.join("packages", "net-policy", "dist"),
-      ]),
+      expect.arrayContaining(["packages/agent-core/dist", "packages/net-policy/dist"]),
     );
     expect(outputRoots).not.toContain(path.join("packages", "plugin-sdk", "dist"));
 
