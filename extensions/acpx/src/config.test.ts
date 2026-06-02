@@ -15,6 +15,23 @@ function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string 
   return ["--import", TSX_IMPORT, path.resolve(params.sourceEntry)];
 }
 
+function readManifestConfigPropertyKeys(manifestText: string): string[] {
+  const configSchemaStart = manifestText.indexOf('  "configSchema": {');
+  const propertiesStart = manifestText.indexOf('    "properties": {', configSchemaStart);
+  const uiHintsStart = manifestText.indexOf('  "uiHints": {', propertiesStart);
+  if (configSchemaStart === -1 || propertiesStart === -1 || uiHintsStart === -1) {
+    throw new Error("Unable to locate ACPX manifest configSchema.properties block");
+  }
+
+  return manifestText
+    .slice(propertiesStart, uiHintsStart)
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^      "([^"]+)": \{$/.exec(line);
+      return match ? [match[1]] : [];
+    });
+}
+
 describe("embedded acpx plugin config", () => {
   it("resolves workspace stateDir and cwd by default", () => {
     const workspaceDir = path.resolve("/tmp/openclaw-acpx");
@@ -202,9 +219,27 @@ describe("embedded acpx plugin config", () => {
 
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const pluginRoot = resolveAcpxPluginRoot();
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
-    ) as { configSchema?: unknown };
+    const manifestText = fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8");
+    const manifestConfigPropertyKeys = readManifestConfigPropertyKeys(manifestText);
+    const expectedManifestConfigPropertyKeys = [
+      "cwd",
+      "stateDir",
+      "permissionMode",
+      "nonInteractivePermissions",
+      "pluginToolsMcpBridge",
+      "openClawToolsMcpBridge",
+      "strictWindowsCmdWrapper",
+      "timeoutSeconds",
+      "queueOwnerTtlSeconds",
+      "probeAgent",
+      "mcpServers",
+      "agents",
+    ];
+
+    // JSON.parse keeps only one duplicate key, so compare raw manifest keys before parsing.
+    expect(manifestConfigPropertyKeys).toStrictEqual(expectedManifestConfigPropertyKeys);
+
+    const manifest = JSON.parse(manifestText) as { configSchema?: unknown };
 
     expect(manifest.configSchema).toStrictEqual({
       type: "object",

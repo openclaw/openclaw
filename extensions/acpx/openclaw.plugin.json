@@ -19,10 +19,6 @@
         "type": "string",
         "minLength": 1
       },
-      "probeAgent": {
-        "type": "string",
-        "minLength": 1
-      },
       "permissionMode": {
         "type": "string",
         "enum": ["approve-all", "approve-reads", "deny-all"]
