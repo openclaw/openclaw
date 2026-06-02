@@ -394,15 +394,12 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
 }): boolean {
   const { currentRecord, legacyRecord } = params;
   const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
-  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
-  if (legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec) {
-    return true;
-  }
   const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  if (legacySpec && currentResolvedSpec === legacySpec) {
-    return true;
+  if (legacySpec) {
+    return currentResolvedSpec === legacySpec;
   }
-  return false;
+  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
+  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
 function legacyInstallRecordCoveredByCurrent(

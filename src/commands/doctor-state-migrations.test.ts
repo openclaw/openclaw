@@ -1471,6 +1471,25 @@ describe("doctor legacy state migrations", () => {
       },
     },
     {
+      label: "keep legacy floating selectors even when resolved specs match",
+      current: {
+        source: "npm",
+        spec: "demo@latest",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+      },
+      legacy: {
+        source: "npm",
+        spec: "demo@beta",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+      },
+    },
+    {
       label: "have malformed legacy spec metadata",
       current: {
         source: "npm",
