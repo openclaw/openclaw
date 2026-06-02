@@ -30,6 +30,7 @@ function embedText(text: string): number[] {
 // Mock the embedding provider so search() reaches the hybrid merge path without
 // real embeddings; sqlite-vec stays mocked off via test-runtime-mocks.
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
     provider: {
