@@ -31,6 +31,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadFollowupQueueEntries } from "../../../infra/followup-queue-sqlite.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
@@ -42,7 +43,6 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "../queue.test-helpers.js";
-import { resolveFollowupQueueStatePath } from "./persist.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
@@ -146,10 +146,11 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
       scheduleFollowupDrain(key, runFollowup);
       await secondEntered.promise;
 
-      const parsed = JSON.parse(fs.readFileSync(resolveFollowupQueueStatePath(tmpDir), "utf8"));
-      const persistedEntry = parsed.entries.find((entry: unknown[]) => entry[0] === key);
+      const persistedEntry = loadFollowupQueueEntries().find(
+        ([entryKey]) => entryKey === key,
+      )?.[1] as { items: FollowupRun[] } | undefined;
       expect(persistedEntry).toBeDefined();
-      expect(persistedEntry[1].items.map((item: FollowupRun) => item.prompt)).toEqual(["msg2"]);
+      expect(persistedEntry!.items.map((item) => item.prompt)).toEqual(["msg2"]);
       expect(calls).toEqual(["msg1", "msg2"]);
 
       releaseSecond.resolve();

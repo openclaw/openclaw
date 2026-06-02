@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  followupQueueEntryContainsPrompt,
+  hasFollowupQueueEntries,
+} from "../../infra/followup-queue-sqlite.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import {
@@ -631,11 +635,9 @@ describe("followup queue drain restart after idle window", () => {
         settings,
       );
 
-      // State file should contain the queued item right now (size > empty stub).
-      const statePath = path.join(tmpDir, "live-chat-followup-queues.json");
-      expect(fs.existsSync(statePath)).toBe(true);
-      const beforeRaw = fs.readFileSync(statePath, "utf8");
-      expect(beforeRaw).toContain("aborted item");
+      // Shared SQLite should contain the queued item right now.
+      expect(hasFollowupQueueEntries()).toBe(true);
+      expect(followupQueueEntryContainsPrompt(key, "aborted item")).toBe(true);
 
       // Abort after enqueue so dropAbortedFollowups will splice it out.
       aborter.abort();
@@ -653,13 +655,9 @@ describe("followup queue drain restart after idle window", () => {
         });
       }
 
-      // After the drain, the queue is empty and the state file should not
-      // contain the aborted item anymore — either the file is gone (persist
-      // deletes on empty) or it contains no entries for this key.
-      if (fs.existsSync(statePath)) {
-        const afterRaw = fs.readFileSync(statePath, "utf8");
-        expect(afterRaw).not.toContain("aborted item");
-      }
+      // After the drain, the queue is empty and shared SQLite should not
+      // contain the aborted item anymore.
+      expect(followupQueueEntryContainsPrompt(key, "aborted item")).toBe(false);
       // Confirm the abort path actually ran (the callback was invoked with
       // the aborted run before splice).
       expect(drainCalls.some((r) => r.prompt === "aborted item")).toBe(true);

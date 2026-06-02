@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  followupQueueEntryContainsPrompt,
+  hasFollowupQueueEntries,
+  loadFollowupQueueEntries,
+} from "../../infra/followup-queue-sqlite.js";
 import type { QueueSettings } from "./queue.js";
 import { enqueueFollowupRun } from "./queue.js";
 import {
@@ -12,21 +17,21 @@ import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./queue/
 import {
   clearFollowupQueuesRestoredFlagForTest,
   clearRestoredPendingDrainKeysForTest,
-  resolveFollowupQueueStatePath,
+  hasPersistedFollowupQueues,
   restoreFollowupQueues,
 } from "./queue/persist.js";
 import { FOLLOWUP_QUEUES } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
-// End-to-end persistence round-trip over the real on-disk state file. This is
+// End-to-end persistence round-trip over the real shared SQLite state store. This is
 // the closest in-process reproduction of the production scenario the followup
 // queue guards: a channel message queued mid-turn, a gateway crash, and
 // exactly-once redelivery on restart. The trigger (enqueue while a run is
 // active) is lane-serialized in the live gateway and only reachable from inside
 // the process, so the cycle is exercised here against the real persist/restore
 // modules rather than over a live transport.
-describe("followup queue restart round-trip (real on-disk state file)", () => {
+describe("followup queue restart round-trip (real shared SQLite state)", () => {
   it("persists a mid-turn Telegram followup, restores it after a simulated restart, redelivers exactly once with routing intact, and does not replay after a second restart", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-followup-tg-restart-"));
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -34,9 +39,8 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
 
     const key = "agent:main:telegram:direct:6300969793";
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const statePath = resolveFollowupQueueStatePath();
 
-    // A real gateway crash/SIGKILL keeps only the on-disk state file; everything
+    // A real gateway crash/SIGKILL keeps only the on-disk state store; everything
     // else (in-memory queues, restore-once flag, pending-drain set) is gone.
     const simulateGatewayRestart = () => {
       FOLLOWUP_QUEUES.delete(key);
@@ -68,22 +72,21 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
         false,
       );
 
-      // 2. persistFollowupQueues ran synchronously on enqueue: the state file
-      //    exists on disk and carries the Telegram routing needed to redeliver.
-      expect(fs.existsSync(statePath)).toBe(true);
-      const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
-        entries: [
-          string,
-          { items: { prompt: string; originatingChannel?: string; originatingTo?: string }[] },
-        ][];
-      };
-      const persistedEntry = persisted.entries.find(([entryKey]) => entryKey === key);
-      const persistedItem = persistedEntry?.[1]?.items[0];
+      // 2. persistFollowupQueues ran synchronously on enqueue: the shared SQLite
+      //    row exists on disk and carries the Telegram routing needed to redeliver.
+      expect(hasPersistedFollowupQueues()).toBe(true);
+      expect(followupQueueEntryContainsPrompt(key, "summarize the thread so far")).toBe(true);
+      const persistedEntry = loadFollowupQueueEntries().find(
+        ([entryKey]) => entryKey === key,
+      )?.[1] as
+        | { items: { prompt: string; originatingChannel?: string; originatingTo?: string }[] }
+        | undefined;
+      const persistedItem = persistedEntry?.items[0];
       expect(persistedItem?.prompt).toBe("summarize the thread so far");
       expect(persistedItem?.originatingChannel).toBe("telegram");
       expect(persistedItem?.originatingTo).toBe("6300969793");
 
-      // 3. Crash + restart: wipe process memory; only the disk file survives.
+      // 3. Crash + restart: wipe process memory; only the disk store survives.
       simulateGatewayRestart();
       expect(FOLLOWUP_QUEUES.has(key)).toBe(false);
 
@@ -103,17 +106,16 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
       kickFollowupDrainIfIdle(key);
 
       // Wait for the drain to fully settle: it delivers, removes the item, and
-      // persists the acknowledgement. Poll the on-disk state until our key is
-      // gone (or empty) so the no-replay check below sees the acked file.
+      // persists the acknowledgement. Poll shared SQLite until our key is
+      // gone (or empty) so the no-replay check below sees the acked state.
       const keyDrainedOnDisk = () => {
-        if (!fs.existsSync(statePath)) {
+        if (!hasFollowupQueueEntries()) {
           return true;
         }
-        const disk = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
-          entries?: [string, { items?: unknown[] }][];
-        };
-        const entry = (disk.entries ?? []).find(([k]) => k === key);
-        return !entry || (entry[1]?.items?.length ?? 0) === 0;
+        const entry = loadFollowupQueueEntries().find(([entryKey]) => entryKey === key)?.[1] as
+          | { items?: unknown[] }
+          | undefined;
+        return !entry || (entry.items?.length ?? 0) === 0;
       };
       const deadline = Date.now() + 5_000;
       while (!keyDrainedOnDisk() && Date.now() < deadline) {

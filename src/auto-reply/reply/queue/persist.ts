@@ -1,17 +1,20 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  hasFollowupQueueEntries,
+  loadFollowupQueueEntries,
+  replaceFollowupQueueEntries,
+} from "../../../infra/followup-queue-sqlite.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { FollowupQueueState, FollowupRun, QueueDropPolicy, QueueMode } from "./types.js";
 
-const FOLLOWUP_QUEUE_STATE_FILENAME = "live-chat-followup-queues.json";
+export const LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME = "live-chat-followup-queues.json";
 
 const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 const DEFAULT_QUEUE_CAP = 20;
@@ -67,7 +70,12 @@ export function clearFollowupQueuesRestoredFlagForTest(): void {
 }
 
 export function resolveFollowupQueueStatePath(stateDir: string = resolveStateDir()): string {
-  return path.join(stateDir, FOLLOWUP_QUEUE_STATE_FILENAME);
+  return path.join(stateDir, LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME);
+}
+
+/** For tests: whether any followup queue rows exist in shared SQLite state. */
+export function hasPersistedFollowupQueues(stateDir?: string): boolean {
+  return hasFollowupQueueEntries(stateDir);
 }
 
 /**
@@ -294,7 +302,6 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
  */
 export function persistFollowupQueues(): void {
   try {
-    const statePath = resolveFollowupQueueStatePath();
     const entries: Array<[string, PersistedQueueEntry]> = [];
     for (const [key, queue] of FOLLOWUP_QUEUES) {
       if (!queue || (queue.items.length === 0 && queue.droppedCount === 0)) {
@@ -315,34 +322,7 @@ export function persistFollowupQueues(): void {
         },
       ]);
     }
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    if (entries.length === 0) {
-      try {
-        fs.unlinkSync(statePath);
-      } catch {
-        // File may not exist — ignore.
-      }
-      return;
-    }
-    // Items can carry user prompts, session ids, and channel routing identifiers,
-    // so the state file must be private (0o600) and written atomically — a crash
-    // mid-write must not leave a half-written file that breaks restore on next boot.
-    const tmpPath = `${statePath}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
-    try {
-      fs.writeFileSync(
-        tmpPath,
-        JSON.stringify({ version: 1, updatedAt: Date.now(), entries }, null, 2),
-        { mode: 0o600 },
-      );
-      fs.renameSync(tmpPath, statePath);
-    } catch (err) {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        // Temp file may not exist — ignore.
-      }
-      throw err;
-    }
+    replaceFollowupQueueEntries({ entries });
   } catch (err) {
     defaultRuntime.error?.(`failed to persist followup queues: ${String(err)}`);
   }
@@ -364,19 +344,11 @@ export function restoreFollowupQueues(): void {
   }
   markFollowupQueuesRestored();
   try {
-    const statePath = resolveFollowupQueueStatePath();
-    if (!fs.existsSync(statePath)) {
+    const entries = loadFollowupQueueEntries();
+    if (entries.length === 0) {
       return;
     }
-    const raw = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
-      version?: number;
-      entries?: unknown;
-    };
-    const entries = Array.isArray(raw?.entries) ? raw.entries : [];
-    // Resolve the current process config once and share it across all restored
-    // items. The snapshot path is cheap; the loadConfig() fallback only fires
-    // when restore runs before the runtime layer has set the snapshot.
-    const currentConfig = entries.length > 0 ? resolveCurrentRunConfig() : ({} as OpenClawConfig);
+    const currentConfig = resolveCurrentRunConfig();
     for (const entry of entries) {
       const key = normalizeOptionalString(Array.isArray(entry) ? entry[0] : undefined);
       const data = Array.isArray(entry) ? (entry[1] as Partial<PersistedQueueEntry>) : undefined;

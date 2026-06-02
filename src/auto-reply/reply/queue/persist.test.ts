@@ -8,9 +8,16 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  followupQueueEntryContainsPrompt,
+  loadFollowupQueueEntries,
+  replaceFollowupQueueEntries,
+} from "../../../infra/followup-queue-sqlite.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import {
   clearFollowupQueuesRestoredFlagForTest,
   clearRestoredPendingDrainKey,
   clearRestoredPendingDrainKeysForTest,
+  hasPersistedFollowupQueues,
   peekRestoredPendingDrainKeys,
   persistFollowupQueues,
   resolveFollowupQueueStatePath,
@@ -57,6 +64,10 @@ function makeFollowupRun(prompt: string): FollowupRun {
   };
 }
 
+function readPersistedQueueEntry(key: string): unknown {
+  return loadFollowupQueueEntries().find(([entryKey]) => entryKey === key)?.[1];
+}
+
 describe("resolveFollowupQueueStatePath", () => {
   it("resolves under the given stateDir", () => {
     expect(resolveFollowupQueueStatePath("/home/user/.openclaw/state")).toBe(
@@ -91,23 +102,23 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("writes state file when a non-empty queue exists", () => {
+  it("writes shared SQLite state when a non-empty queue exists", () => {
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     queue.items.push(makeFollowupRun("hello"));
     persistFollowupQueues();
-    const statePath = path.join(tmpDir, STATE_FILE);
-    expect(fs.existsSync(statePath)).toBe(true);
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    expect(parsed.version).toBe(1);
-    expect(Array.isArray(parsed.entries)).toBe(true);
+    expect(hasPersistedFollowupQueues()).toBe(true);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(true);
+    const persisted = readPersistedQueueEntry(TEST_KEY) as { items?: unknown[] };
+    expect(Array.isArray(persisted?.items)).toBe(true);
   });
 
-  it("removes the state file when all queues are empty", () => {
-    const statePath = path.join(tmpDir, STATE_FILE);
-    fs.writeFileSync(statePath, JSON.stringify({ version: 1, entries: [] }));
-    expect(fs.existsSync(statePath)).toBe(true);
+  it("clears shared SQLite rows when all queues are empty", () => {
+    replaceFollowupQueueEntries({
+      entries: [[TEST_KEY, { items: [], mode: "steer", droppedCount: 0, summaryLines: [] }]],
+    });
+    expect(hasPersistedFollowupQueues()).toBe(true);
     persistFollowupQueues();
-    expect(fs.existsSync(statePath)).toBe(false);
+    expect(hasPersistedFollowupQueues()).toBe(false);
   });
 
   it("round-trips prompt and routing through persist+restore", () => {
@@ -168,14 +179,13 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(restored?.items[0].abortSignal).toBeUndefined();
   });
 
-  it("is a no-op when no state file exists", () => {
+  it("is a no-op when no persisted queue rows exist", () => {
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
     expect(() => restoreFollowupQueues()).not.toThrow();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
   });
 
   it("guards restore against split-module re-evaluation (restore-once)", () => {
-    // First evaluation: state file present, restore populates the queue.
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     queue.items.push(makeFollowupRun("originally queued"));
     persistFollowupQueues();
@@ -185,10 +195,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("originally queued");
 
-    // Simulate the drain having taken over: the queue is now mid-flight with
-    // a fresh item and draining=true. A second module evaluation calling
-    // restoreFollowupQueues() MUST NOT overwrite this in-flight state — that
-    // would replay an already-delivered prompt or drop the fresh enqueue.
     FOLLOWUP_QUEUES.set(TEST_KEY, {
       items: [makeFollowupRun("arrived during drain")],
       draining: true,
@@ -209,10 +215,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
   });
 
   it("resumes restore after the flag is explicitly cleared (test hook)", () => {
-    // The forTest clear hook lets the test suite re-exercise the round-trip
-    // without restarting the process. Without the clear, the second restore
-    // would be a no-op and this test (and the existing round-trip tests in
-    // this file) would assert against stale state.
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     queue.items.push(makeFollowupRun("first round"));
     persistFollowupQueues();
@@ -222,12 +224,9 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("first round");
 
     FOLLOWUP_QUEUES.delete(TEST_KEY);
-    // Without clearing the flag, the next restore is a no-op even though the
-    // state file is still on disk and the in-memory queue is empty.
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
 
-    // After explicitly clearing, restore runs again.
     clearFollowupQueuesRestoredFlagForTest();
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("first round");
@@ -247,53 +246,25 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
   });
 
   it("does not add to pending-drain set when restored queue is empty", () => {
-    // Write a state file with an empty items array to verify the guard.
-    const statePath = path.join(tmpDir, STATE_FILE);
-    fs.writeFileSync(
-      statePath,
-      JSON.stringify({
-        version: 1,
-        updatedAt: Date.now(),
-        entries: [[TEST_KEY, { items: [], mode: "steer", droppedCount: 0, summaryLines: [] }]],
-      }),
-    );
+    replaceFollowupQueueEntries({
+      entries: [
+        [
+          TEST_KEY,
+          { items: [], mode: "steer", droppedCount: 0, summaryLines: [], lastEnqueuedAt: 1 },
+        ],
+      ],
+    });
     restoreFollowupQueues();
     expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(false);
   });
 
-  it("writes the state file with 0o600 permissions and no leftover temp files", () => {
-    // Skip on Windows: chmod semantics differ and POSIX bit checks do not apply.
-    if (process.platform === "win32") {
-      return;
-    }
+  it("persists queue data in shared SQLite state", () => {
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     queue.items.push(makeFollowupRun("private"));
     persistFollowupQueues();
 
-    const statePath = path.join(tmpDir, STATE_FILE);
-    const mode = fs.statSync(statePath).mode & 0o777;
-    expect(mode).toBe(0o600);
-
-    const leftovers = fs
-      .readdirSync(tmpDir)
-      .filter((name) => name.startsWith(`${STATE_FILE}.tmp.`));
-    expect(leftovers).toEqual([]);
-  });
-
-  it("replaces a pre-existing world-readable state file with a 0o600 file", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    // Simulate an install that wrote the file before the private-write fix landed.
-    const statePath = path.join(tmpDir, STATE_FILE);
-    fs.writeFileSync(statePath, JSON.stringify({ version: 1, entries: [] }), { mode: 0o644 });
-    expect(fs.statSync(statePath).mode & 0o777).toBe(0o644);
-
-    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
-    queue.items.push(makeFollowupRun("upgrade"));
-    persistFollowupQueues();
-
-    expect(fs.statSync(statePath).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(true);
+    expect(followupQueueEntryContainsPrompt(TEST_KEY, "private")).toBe(true);
   });
 
   it("strips secret-bearing runtime fields but persists auth and reply context selectors", () => {
@@ -322,7 +293,8 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     queue.lastRun = run;
     persistFollowupQueues();
 
-    const raw = fs.readFileSync(path.join(tmpDir, STATE_FILE), "utf8");
+    const entries = loadFollowupQueueEntries();
+    const raw = JSON.stringify(entries);
     for (const needle of [
       "anthropic-secret",
       "claude-secret",
@@ -332,8 +304,11 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     ]) {
       expect(raw).not.toContain(needle);
     }
-    const parsed = JSON.parse(raw);
-    const persistedItem = parsed.entries[0][1].items[0];
+    const persisted = readPersistedQueueEntry(TEST_KEY) as {
+      items: Array<{ originatingReplyToId?: string; run: Record<string, unknown> }>;
+      lastRun?: Record<string, unknown>;
+    };
+    const persistedItem = persisted.items[0];
     const persistedRun = persistedItem.run;
     expect(persistedItem.originatingReplyToId).toBe("msg-42");
     expect(persistedRun.config).toBeUndefined();
@@ -347,12 +322,12 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       sourceChannel: "telegram",
       sourceSessionKey: "agent:main:dm:123",
     });
-    const persistedLastRun = parsed.entries[0][1].lastRun;
-    expect(persistedLastRun.config).toBeUndefined();
-    expect(persistedLastRun.skillsSnapshot).toBeUndefined();
-    expect(persistedLastRun.authProfileId).toBe("profile-secret");
-    expect(persistedLastRun.authProfileIdSource).toBe("user");
-    expect(persistedLastRun.inputProvenance).toEqual({
+    const persistedLastRun = persisted.lastRun;
+    expect(persistedLastRun?.config).toBeUndefined();
+    expect(persistedLastRun?.skillsSnapshot).toBeUndefined();
+    expect(persistedLastRun?.authProfileId).toBe("profile-secret");
+    expect(persistedLastRun?.authProfileIdSource).toBe("user");
+    expect(persistedLastRun?.inputProvenance).toEqual({
       kind: "external_user",
       sourceChannel: "telegram",
       sourceSessionKey: "agent:main:dm:123",
@@ -379,8 +354,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
   });
 
   it("rehydrates run.config from the live runtime snapshot on restore", () => {
-    // Simulate a configured gateway: the runtime snapshot is the source of
-    // truth at the moment restore runs, so restored items should pick it up.
     const liveConfig = {
       defaults: { agent: { provider: "anthropic-live", model: "claude-live" } },
     } as unknown as OpenClawConfig;
@@ -398,13 +371,9 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     const rerun = restored!.items[0].run;
     expect(rerun.config).toBe(liveConfig);
     expect(restored!.lastRun?.config).toBe(liveConfig);
-    // Other stripped fields stay undefined; the dispatcher fills them when
-    // they're actually needed.
     expect(rerun.skillsSnapshot).toBeUndefined();
     expect(rerun.extraSystemPrompt).toBeUndefined();
-    // inputProvenance is persisted when present on the queued run.
     expect(rerun.inputProvenance).toBeUndefined();
-    // Identity / routing / paths / per-message intent survive.
     expect(rerun.agentId).toBe("main");
     expect(rerun.sessionId).toBe("sess-persist");
     expect(rerun.workspaceDir).toBe("/tmp/ws");
@@ -415,9 +384,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
   });
 
   it("picks up a refreshed snapshot across separate restore passes", () => {
-    // First persist+restore with one snapshot, then update the snapshot and
-    // restore again — restored items should reflect the latest config, not
-    // anything carried over from disk.
     const oldConfig = { defaults: { agent: { model: "claude-old" } } } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(oldConfig);
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
@@ -432,27 +398,18 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       defaults: { agent: { model: "claude-new" } },
     } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(newConfig);
-    // The restore-once guard would short-circuit the second pass; this test
-    // models two separate process boots, so explicitly reset the flag.
     clearFollowupQueuesRestoredFlagForTest();
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)!.items[0].run.config).toBe(newConfig);
   });
 
   it("skips entries with missing or invalid items array", () => {
-    const statePath = path.join(tmpDir, STATE_FILE);
-    fs.writeFileSync(
-      statePath,
-      JSON.stringify({
-        version: 1,
-        updatedAt: Date.now(),
-        entries: [
-          ["agent:bad", { items: "not-an-array" }],
-          [null, { items: [] }],
-          [TEST_KEY, { items: [{ prompt: "ok", enqueuedAt: 1, run: makeRun() }], mode: "steer" }],
-        ],
-      }),
-    );
+    replaceFollowupQueueEntries({
+      entries: [
+        ["agent:bad", { items: "not-an-array" }],
+        [TEST_KEY, { items: [{ prompt: "ok", enqueuedAt: 1, run: makeRun() }], mode: "steer" }],
+      ],
+    });
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("ok");
     expect(FOLLOWUP_QUEUES.get("agent:bad")).toBeUndefined();
