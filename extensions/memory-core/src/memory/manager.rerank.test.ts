@@ -236,6 +236,141 @@ describe("memory rerank stage", () => {
     expect(custom.rerank?.state).toBe("degraded");
   });
 
+  it("(g) score out of range (>1): pre-rerank order, degraded state, no rerankScore applied", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+    expect(preOrder.length).toBeGreaterThan(0);
+
+    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // score of 2 is outside [0,1] — must be rejected
+        candidates.map((c) => ({ ref: c.ref, score: 2 })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+    expect(custom.rerank?.lastError).toBeTruthy();
+  });
+
+  it("(h) score out of range (<0): pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // score of -1 is outside [0,1] — must be rejected
+        candidates.map((c) => ({ ref: c.ref, score: -1 })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(i) NaN score: pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // NaN score must be rejected as non-finite
+        candidates.map((c) => ({ ref: c.ref, score: NaN })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(j) Infinity score: pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // Infinity is non-finite — must be rejected
+        candidates.map((c) => ({ ref: c.ref, score: Infinity })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(k) incomplete scores (provider omits one ref): degraded state, pre-rerank order", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+    expect(preOrder.length).toBeGreaterThan(1);
+
+    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // Return all but the last candidate — partial list must be rejected
+        candidates.slice(0, -1).map((c, i) => ({
+          ref: c.ref,
+          score: i / Math.max(1, candidates.length - 1),
+        })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    // Pre-rerank order must be preserved (not a partial reorder).
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    // No rerankScore applied since the response was rejected.
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+  });
+
   it("(f) reranker returns [] with non-empty candidates: pre-rerank order, degraded state, failureCount 1", async () => {
     const baseline = await getManager();
     if (!ftsAvailable(baseline)) {

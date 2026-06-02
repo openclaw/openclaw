@@ -787,10 +787,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  // Enforces the bijection contract: exactly one finite score in [0,1] per
+  // candidate ref. length+unique+range together guarantee full coverage; the
+  // score checks reject NaN, Infinity, and values outside [0,1]. Any violation
+  // routes to the degraded failure path so partial/garbage scores never reach
+  // reorderByRerankScores.
   private isValidRerankScores(
     scores: ReadonlyArray<{ ref: number; score: number }>,
     poolSize: number,
   ): boolean {
+    if (scores.length !== poolSize) {
+      return false;
+    }
     const seen = new Set<number>();
     for (const entry of scores) {
       const ref = entry.ref;
@@ -798,30 +806,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return false;
       }
       seen.add(ref);
+      if (!Number.isFinite(entry.score) || entry.score < 0 || entry.score > 1) {
+        return false;
+      }
     }
     return true;
   }
 
+  // Scores are guaranteed complete (one per candidate) by isValidRerankScores,
+  // so a simple sort-by-rerankScore is sufficient; no "omitted refs appended"
+  // path is needed.
   private reorderByRerankScores(
     merged: MemorySearchResult[],
     scores: ReadonlyArray<{ ref: number; score: number }>,
   ): MemorySearchResult[] {
     const scored: Array<{ item: MemorySearchResult; score: number }> = [];
-    const seen = new Set<number>();
     for (const entry of scores) {
       merged[entry.ref].rerankScore = entry.score;
       scored.push({ item: merged[entry.ref], score: entry.score });
-      seen.add(entry.ref);
     }
     scored.sort((a, b) => b.score - a.score);
-    const ordered = scored.map((s) => s.item);
-    // Append any candidate the provider omitted, preserving original pool order.
-    for (let i = 0; i < merged.length; i += 1) {
-      if (!seen.has(i)) {
-        ordered.push(merged[i]);
-      }
-    }
-    return ordered;
+    return scored.map((s) => s.item);
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
