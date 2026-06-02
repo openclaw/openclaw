@@ -16,9 +16,8 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
-import type { AgentHarnessV2 } from "./v2.js";
-import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 function createAttemptParams(): AgentHarnessAttemptParams {
   return {
@@ -120,112 +119,68 @@ function captureDiagnosticEvents(
   return { events, unsubscribe };
 }
 
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call at index ${index}`);
-  }
-  return call[0];
-}
-
-describe("AgentHarness V2 compatibility adapter", () => {
+describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticTraceContextForTest();
   });
 
-  it("executes prepare/start/send/outcome/cleanup as one bounded lifecycle", async () => {
+  it("runs a harness attempt without changing attempt params", async () => {
     const params = createAttemptParams();
     const result = createAttemptResult();
-    const events: string[] = [];
-    const harness: AgentHarnessV2 = {
-      id: "native-v2",
-      label: "Native V2",
-      supports: () => ({ supported: true }),
-      prepare: async (attemptParams) => {
-        events.push("prepare");
-        expect(attemptParams).toBe(params);
-        return {
-          harnessId: "native-v2",
-          label: "Native V2",
-          params,
-          lifecycleState: "prepared",
-        };
-      },
-      start: async (prepared) => {
-        events.push(`start:${prepared.lifecycleState}`);
-        return { ...prepared, lifecycleState: "started" };
-      },
-      send: async (session) => {
-        events.push(`send:${session.lifecycleState}`);
-        return result;
-      },
-      resolveOutcome: async (session, rawResult) => {
-        events.push(`outcome:${session.lifecycleState}`);
-        return { ...rawResult, agentHarnessId: session.harnessId };
-      },
-      cleanup: async ({ prepared, session, result: cleanupResult, error }) => {
-        expect(prepared?.lifecycleState).toBe("prepared");
-        expect(session?.lifecycleState).toBe("started");
-        if (!session) {
-          throw new Error("expected started session during successful cleanup");
-        }
-        events.push(`cleanup:${session.lifecycleState}`);
-        expect((cleanupResult as { agentHarnessId?: string }).agentHarnessId).toBe("native-v2");
-        expect(error).toBeUndefined();
-      },
+    const runAttempt = vi.fn(async () => result);
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt,
     };
 
-    const attemptResult = await runAgentHarnessV2LifecycleAttempt(harness, params);
-    expect((attemptResult as { agentHarnessId?: string }).agentHarnessId).toBe("native-v2");
-    expect(attemptResult.sessionIdUsed).toBe("session-1");
-    expect(events).toEqual([
-      "prepare",
-      "start:prepared",
-      "send:started",
-      "outcome:started",
-      "cleanup:started",
-    ]);
+    const attemptResult = await runAgentHarnessLifecycleAttempt(harness, params);
+
+    expect(attemptResult).toEqual({ ...result, agentHarnessId: "codex" });
+    expect(runAttempt).toHaveBeenCalledWith(params);
   });
 
-  it("rejects V1-adapted harnesses that do not advertise required context-engine capabilities", async () => {
+  it("rejects harnesses that do not advertise required context-engine capabilities", async () => {
     const params = createAttemptParams();
     params.contextEngine = createContextEngineRequiringAssembly();
     const runAttempt = vi.fn(async () => createAttemptResult());
-    const harness = adaptAgentHarnessToV2({
+    const harness: AgentHarness = {
       id: "custom",
       label: "Custom",
       supports: () => ({ supported: true }),
       runAttempt,
-    });
+    };
 
-    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+    await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toThrow(
       'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
     );
     expect(runAttempt).not.toHaveBeenCalled();
   });
 
-  it("allows V1-adapted harnesses that advertise required context-engine capabilities", async () => {
+  it("allows harnesses that advertise required context-engine capabilities", async () => {
     const params = createAttemptParams();
     params.contextEngine = createContextEngineRequiringAssembly();
     const result = createAttemptResult();
     const runAttempt = vi.fn(async () => result);
-    const harness = adaptAgentHarnessToV2({
+    const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
       contextEngineHostCapabilities: ["assemble-before-prompt"],
       supports: () => ({ supported: true }),
       runAttempt,
-    });
+    };
 
-    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).resolves.toEqual({
+    await expect(runAgentHarnessLifecycleAttempt(harness, params)).resolves.toEqual({
       ...result,
       agentHarnessId: "codex",
     });
     expect(runAttempt).toHaveBeenCalledOnce();
   });
 
-  it("advertises OpenClaw embedded host capabilities through the V1 adapter", async () => {
+  it("advertises OpenClaw embedded host capabilities", async () => {
     const harness = createOpenClawAgentHarness();
 
     expect(harness.contextEngineHostCapabilities).toEqual(
@@ -242,26 +197,16 @@ describe("AgentHarness V2 compatibility adapter", () => {
       yieldDetected: true,
       itemLifecycle: { startedCount: 3, completedCount: 2, activeCount: 1 },
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarnessV2 = {
+    const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
       pluginId: "codex-plugin",
       supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "codex",
-        label: "Codex",
-        pluginId: "codex-plugin",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => result,
-      resolveOutcome: async (_session, rawResult) => rawResult,
-      cleanup: async () => {},
+      runAttempt: async () => result,
     };
     const diagnostics = captureDiagnosticEvents();
     try {
-      await runAgentHarnessV2LifecycleAttempt(harness, params);
+      await runAgentHarnessLifecycleAttempt(harness, params);
       await flushDiagnosticEvents();
     } finally {
       diagnostics.unsubscribe();
@@ -296,7 +241,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
     expect(typeof completedEvent?.durationMs).toBe("number");
   });
 
-  it("scopes plugin harness send diagnostics under a child run trace", async () => {
+  it("scopes plugin harness run diagnostics under a child run trace", async () => {
     resetDiagnosticEventsForTest();
     const params = createAttemptParams();
     params.messageChannel = undefined;
@@ -305,30 +250,22 @@ describe("AgentHarness V2 compatibility adapter", () => {
     const result = createAttemptResult();
     result.diagnosticTrace = undefined;
     let attemptResult: EmbeddedRunAttemptResult | undefined;
-    let sendTrace: DiagnosticTraceContext | undefined;
-    let resolveTrace: DiagnosticTraceContext | undefined;
-    const harness: AgentHarnessV2 = {
+    let runAttemptTrace: DiagnosticTraceContext | undefined;
+    let classifyTrace: DiagnosticTraceContext | undefined;
+    const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => {
+      classifyTrace = getActiveDiagnosticTraceContext();
+      return "ok";
+    });
+    const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
       pluginId: "codex-plugin",
       supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "codex",
-        label: "Codex",
-        pluginId: "codex-plugin",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => {
-        sendTrace = getActiveDiagnosticTraceContext();
+      runAttempt: async () => {
+        runAttemptTrace = getActiveDiagnosticTraceContext();
         return result;
       },
-      resolveOutcome: async (_session, rawResult) => {
-        resolveTrace = getActiveDiagnosticTraceContext();
-        return rawResult;
-      },
-      cleanup: async () => {},
+      classify,
     };
     const diagnostics = captureDiagnosticEvents(
       (event) =>
@@ -339,7 +276,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
     );
     try {
       attemptResult = await runWithDiagnosticTraceContext(harnessTrace, () =>
-        runAgentHarnessV2LifecycleAttempt(harness, params),
+        runAgentHarnessLifecycleAttempt(harness, params),
       );
       await flushDiagnosticEvents();
     } finally {
@@ -368,8 +305,8 @@ describe("AgentHarness V2 compatibility adapter", () => {
       | undefined;
     expect(runStarted?.trace?.traceId).toBe(harnessTrace.traceId);
     expect(runStarted?.trace?.parentSpanId).toBe(harnessTrace.spanId);
-    expect(sendTrace).toEqual(runStarted?.trace);
-    expect(resolveTrace).toEqual(runStarted?.trace);
+    expect(runAttemptTrace).toEqual(runStarted?.trace);
+    expect(classifyTrace).toEqual(runStarted?.trace);
     expect(runCompleted?.trace).toEqual(runStarted?.trace);
     expect(runCompleted?.outcome).toBe("completed");
     expect(runCompleted?.channel).toBe("discord-voice");
@@ -387,25 +324,16 @@ describe("AgentHarness V2 compatibility adapter", () => {
       promptError: new Error("blocked by policy"),
       promptErrorSource: "hook:before_agent_run",
     } as EmbeddedRunAttemptResult;
-    const harness: AgentHarnessV2 = {
+    const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
       supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "codex",
-        label: "Codex",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => result,
-      resolveOutcome: async (_session, rawResult) => rawResult,
-      cleanup: async () => {},
+      runAttempt: async () => result,
     };
     const diagnostics = captureDiagnosticEvents((event) => event.type === "run.completed");
     try {
       await runWithDiagnosticTraceContext(harnessTrace, () =>
-        runAgentHarnessV2LifecycleAttempt(harness, params),
+        runAgentHarnessLifecycleAttempt(harness, params),
       );
       await flushDiagnosticEvents();
     } finally {
@@ -428,28 +356,17 @@ describe("AgentHarness V2 compatibility adapter", () => {
     resetDiagnosticEventsForTest();
     const params = createAttemptParams();
     const sendError = new Error("codex app-server send failed");
-    const harness: AgentHarnessV2 = {
+    const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
       supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "codex",
-        label: "Codex",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => {
+      runAttempt: async () => {
         throw sendError;
-      },
-      resolveOutcome: async (_session, rawResult) => rawResult,
-      cleanup: async () => {
-        throw new Error("cleanup failed");
       },
     };
     const diagnostics = captureDiagnosticEvents();
     try {
-      await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      await expect(runAgentHarnessLifecycleAttempt(harness, params)).rejects.toThrow(
         "codex app-server send failed",
       );
       await flushDiagnosticEvents();
@@ -468,171 +385,9 @@ describe("AgentHarness V2 compatibility adapter", () => {
     expect(errorEvent?.type).toBe("harness.run.error");
     expect(errorEvent?.phase).toBe("send");
     expect(errorEvent?.errorCategory).toBe("Error");
-    expect(errorEvent?.cleanupFailed).toBe(true);
+    expect(errorEvent).not.toHaveProperty("cleanupFailed");
     expect(errorEvent?.harnessId).toBe("codex");
     expect(typeof errorEvent?.durationMs).toBe("number");
-  });
-
-  it("runs cleanup with the original failure and preserves that failure", async () => {
-    const params = createAttemptParams();
-    const sendError = new Error("codex app-server send failed");
-    const cleanup = vi.fn(async () => {
-      throw new Error("cleanup should not mask send failure");
-    });
-    const harness: AgentHarnessV2 = {
-      id: "native-v2",
-      label: "Native V2",
-      supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "native-v2",
-        label: "Native V2",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => {
-        throw sendError;
-      },
-      resolveOutcome: async (_session, rawResult) => rawResult,
-      cleanup,
-    };
-
-    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
-      "codex app-server send failed",
-    );
-    const cleanupInput = mockCallArg(cleanup) as {
-      error?: unknown;
-      prepared?: { lifecycleState?: string };
-      session?: { lifecycleState?: string };
-    };
-    expect(cleanupInput.error).toBe(sendError);
-    expect(cleanupInput.prepared?.lifecycleState).toBe("prepared");
-    expect(cleanupInput.session?.lifecycleState).toBe("started");
-  });
-
-  it("runs cleanup for failed prepare/start lifecycle stages", async () => {
-    const params = createAttemptParams();
-    const startError = new Error("codex app-server start failed");
-    const cleanup = vi.fn(async () => {});
-    const harness: AgentHarnessV2 = {
-      id: "native-v2",
-      label: "Native V2",
-      supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "native-v2",
-        label: "Native V2",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async () => {
-        throw startError;
-      },
-      send: async () => createAttemptResult(),
-      resolveOutcome: async (_session, rawResult) => rawResult,
-      cleanup,
-    };
-
-    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
-      "codex app-server start failed",
-    );
-    const cleanupInput = mockCallArg(cleanup) as {
-      error?: unknown;
-      prepared?: { lifecycleState?: string };
-      session?: unknown;
-    };
-    expect(cleanupInput.error).toBe(startError);
-    expect(cleanupInput.prepared?.lifecycleState).toBe("prepared");
-    expect(cleanupInput.session).toBeUndefined();
-  });
-
-  it("passes raw send results to cleanup when outcome resolution fails", async () => {
-    const params = createAttemptParams();
-    const rawResult = createAttemptResult();
-    const outcomeError = new Error("outcome classification failed");
-    const cleanup = vi.fn(async () => {});
-    const harness: AgentHarnessV2 = {
-      id: "native-v2",
-      label: "Native V2",
-      supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "native-v2",
-        label: "Native V2",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => rawResult,
-      resolveOutcome: async () => {
-        throw outcomeError;
-      },
-      cleanup,
-    };
-
-    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
-      "outcome classification failed",
-    );
-    const cleanupInput = mockCallArg(cleanup) as {
-      error?: unknown;
-      result?: unknown;
-      prepared?: { lifecycleState?: string };
-      session?: { lifecycleState?: string };
-    };
-    expect(cleanupInput.error).toBe(outcomeError);
-    expect(cleanupInput.result).toBe(rawResult);
-    expect(cleanupInput.prepared?.lifecycleState).toBe("prepared");
-    expect(cleanupInput.session?.lifecycleState).toBe("started");
-  });
-
-  it("surfaces cleanup failures after successful outcomes", async () => {
-    const params = createAttemptParams();
-    const harness: AgentHarnessV2 = {
-      id: "native-v2",
-      label: "Native V2",
-      supports: () => ({ supported: true }),
-      prepare: async () => ({
-        harnessId: "native-v2",
-        label: "Native V2",
-        params,
-        lifecycleState: "prepared",
-      }),
-      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
-      send: async () => createAttemptResult(),
-      resolveOutcome: async (_session, rawResult) => rawResult,
-      cleanup: async () => {
-        throw new Error("cleanup failed");
-      },
-    };
-
-    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
-      "cleanup failed",
-    );
-  });
-
-  it("runs a V1 harness through prepare/start/send without changing attempt params", async () => {
-    const params = createAttemptParams();
-    const result = createAttemptResult();
-    const runAttempt = vi.fn(async () => result);
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt,
-    };
-
-    const v2 = adaptAgentHarnessToV2(harness);
-    const prepared = await v2.prepare(params);
-    const session = await v2.start(prepared);
-
-    expect(v2["resume"]).toBeUndefined();
-    expect(await v2.send(session)).toBe(result);
-    expect(runAttempt).toHaveBeenCalledWith(params);
-    expect(session.harnessId).toBe("codex");
-    expect(session.label).toBe("Codex");
-    expect(session.pluginId).toBe("codex-plugin");
-    expect(session.params).toBe(params);
-    expect(session.lifecycleState).toBe("started");
-    expect(prepared.lifecycleState).toBe("prepared");
   });
 
   it("keeps result classification as an explicit outcome stage", async () => {
@@ -647,10 +402,8 @@ describe("AgentHarness V2 compatibility adapter", () => {
       classify,
     };
 
-    const v2 = adaptAgentHarnessToV2(harness);
-    const session = await v2.start(await v2.prepare(params));
+    const outcome = await runAgentHarnessLifecycleAttempt(harness, params);
 
-    const outcome = await v2.resolveOutcome(session, result);
     expect(outcome.agentHarnessId).toBe("codex");
     expect(outcome.agentHarnessResultClassification).toBe("empty");
     expect(harness["classify"]).toHaveBeenCalledWith(result, params);
@@ -669,10 +422,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
       runAttempt: vi.fn(async () => result),
     };
 
-    const v2 = adaptAgentHarnessToV2(harness);
-    const session = await v2.start(await v2.prepare(params));
-
-    const outcome = await v2.resolveOutcome(session, result);
+    const outcome = await runAgentHarnessLifecycleAttempt(harness, params);
     expect(outcome.agentHarnessId).toBe("codex");
     expect(outcome.agentHarnessResultClassification).toBe("reasoning-only");
   });
@@ -692,66 +442,12 @@ describe("AgentHarness V2 compatibility adapter", () => {
       classify,
     };
 
-    const v2 = adaptAgentHarnessToV2(harness);
-    const session = await v2.start(await v2.prepare(params));
-
-    const classified = await v2.resolveOutcome(session, result);
+    const classified = await runAgentHarnessLifecycleAttempt(harness, params);
     expect(classified.agentHarnessId).toBe("codex");
     expect(classified).not.toHaveProperty("agentHarnessResultClassification");
   });
 
-  it("preserves existing compact/reset/dispose hook this binding as compatibility methods", async () => {
-    const harness: AgentHarness & {
-      compactCalls: number;
-      resetCalls: number;
-      disposeCalls: number;
-    } = {
-      id: "custom",
-      label: "Custom",
-      compactCalls: 0,
-      resetCalls: 0,
-      disposeCalls: 0,
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(async () => createAttemptResult()),
-      async compact() {
-        this.compactCalls += 1;
-        return {
-          ok: true,
-          compacted: true,
-          result: {
-            summary: "done",
-            firstKeptEntryId: "entry-1",
-            tokensBefore: 100,
-          },
-        };
-      },
-      reset(params) {
-        expect(params).toEqual({ reason: "reset" });
-        this.resetCalls += 1;
-      },
-      dispose() {
-        this.disposeCalls += 1;
-      },
-    };
-
-    const v2 = adaptAgentHarnessToV2(harness);
-
-    await expect(
-      v2.compact?.({
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-      }),
-    ).resolves.toHaveProperty("compacted", true);
-    await v2.reset?.({ reason: "reset" });
-    await v2.dispose?.();
-
-    expect(harness.compactCalls).toBe(1);
-    expect(harness.resetCalls).toBe(1);
-    expect(harness.disposeCalls).toBe(1);
-  });
-
-  it("does not dispose V1 harnesses during per-attempt cleanup", async () => {
+  it("does not dispose harnesses after individual attempts", async () => {
     const dispose = vi.fn();
     const harness: AgentHarness = {
       id: "custom",
@@ -760,10 +456,8 @@ describe("AgentHarness V2 compatibility adapter", () => {
       runAttempt: vi.fn(async () => createAttemptResult()),
       dispose,
     };
-    const v2 = adaptAgentHarnessToV2(harness);
-    const session = await v2.start(await v2.prepare(createAttemptParams()));
 
-    await v2.cleanup({ session, result: createAttemptResult() });
+    await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
 
     expect(dispose).not.toHaveBeenCalled();
   });

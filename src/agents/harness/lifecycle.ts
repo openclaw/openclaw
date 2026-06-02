@@ -15,121 +15,20 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
-  AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
-  AgentHarnessResetParams,
-  AgentHarnessSupport,
-  AgentHarnessSupportContext,
 } from "./types.js";
 
-const log = createSubsystemLogger("agents/harness/v2");
-type AgentHarnessV2LifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
+type AgentHarnessLifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
 type AgentRunCompletedOutcome = "completed" | "aborted" | "blocked" | "error";
 type AgentRunCompletion = {
   outcome: AgentRunCompletedOutcome;
   blockedBy?: string;
   error?: unknown;
 };
-
-type AgentHarnessV2RunBase = {
-  harnessId: string;
-  label: string;
-  pluginId?: string;
-  params: AgentHarnessAttemptParams;
-  contextEngineHost?: ContextEngineHostSupport;
-};
-
-export type AgentHarnessV2PreparedRun = AgentHarnessV2RunBase & {
-  lifecycleState: "prepared";
-};
-
-export type AgentHarnessV2Session = AgentHarnessV2RunBase & {
-  lifecycleState: "started";
-};
-
-export type AgentHarnessV2ToolCall = {
-  id?: string;
-  name: string;
-  input?: unknown;
-};
-
-export type AgentHarnessV2CleanupParams = {
-  prepared?: AgentHarnessV2PreparedRun;
-  session?: AgentHarnessV2Session;
-  result?: AgentHarnessAttemptResult;
-  error?: unknown;
-};
-
-export type AgentHarnessV2 = {
-  id: string;
-  label: string;
-  pluginId?: string;
-  supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
-  prepare(params: AgentHarnessAttemptParams): Promise<AgentHarnessV2PreparedRun>;
-  start(prepared: AgentHarnessV2PreparedRun): Promise<AgentHarnessV2Session>;
-  resume?(session: AgentHarnessV2Session): Promise<AgentHarnessV2Session>;
-  send(session: AgentHarnessV2Session): Promise<AgentHarnessAttemptResult>;
-  handleToolCall?(session: AgentHarnessV2Session, call: AgentHarnessV2ToolCall): Promise<unknown>;
-  resolveOutcome(
-    session: AgentHarnessV2Session,
-    result: AgentHarnessAttemptResult,
-  ): Promise<AgentHarnessAttemptResult>;
-  cleanup(params: AgentHarnessV2CleanupParams): Promise<void>;
-  compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
-  reset?(params: AgentHarnessResetParams): Promise<void> | void;
-  dispose?(): Promise<void> | void;
-};
-
-export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
-  return {
-    id: harness.id,
-    label: harness.label,
-    pluginId: harness.pluginId,
-    supports: (ctx) => harness.supports(ctx),
-    prepare: async (params) => ({
-      harnessId: harness.id,
-      label: harness.label,
-      pluginId: harness.pluginId,
-      params,
-      contextEngineHost: buildAgentHarnessContextEngineHostSupport(harness),
-      lifecycleState: "prepared",
-    }),
-    start: async (prepared) => ({
-      harnessId: prepared.harnessId,
-      label: prepared.label,
-      pluginId: prepared.pluginId,
-      params: prepared.params,
-      contextEngineHost: prepared.contextEngineHost,
-      lifecycleState: "started",
-    }),
-    send: async (session) => {
-      if (session.params.contextEngine && session.params.contextEngine.info.id !== "legacy") {
-        assertContextEngineHostSupport({
-          contextEngine: session.params.contextEngine,
-          operation: "agent-run",
-          host: session.contextEngineHost ?? buildAgentHarnessContextEngineHostSupport(harness),
-        });
-      }
-      return harness.runAttempt(session.params);
-    },
-    resolveOutcome: async (session, result) =>
-      applyAgentHarnessResultClassification(harness, result, session.params),
-    cleanup: async (_params) => {
-      // V1 harnesses have no per-attempt cleanup hook. Global cleanup remains
-      // on dispose(), which must not run after every attempt.
-    },
-    compact: harness.compact ? (params) => harness.compact!(params) : undefined,
-    reset: harness.reset ? (params) => harness.reset!(params) : undefined,
-    dispose: harness.dispose ? () => harness.dispose!() : undefined,
-  };
-}
 
 function buildAgentHarnessContextEngineHostSupport(
   harness: AgentHarness,
@@ -141,8 +40,22 @@ function buildAgentHarnessContextEngineHostSupport(
   };
 }
 
+function assertAgentHarnessContextEngineSupport(
+  harness: AgentHarness,
+  params: AgentHarnessAttemptParams,
+): void {
+  if (!params.contextEngine || params.contextEngine.info.id === "legacy") {
+    return;
+  }
+  assertContextEngineHostSupport({
+    contextEngine: params.contextEngine,
+    operation: "agent-run",
+    host: buildAgentHarnessContextEngineHostSupport(harness),
+  });
+}
+
 function agentHarnessDiagnosticBase(
-  harness: AgentHarnessV2,
+  harness: AgentHarness,
   params: AgentHarnessAttemptParams,
   trace?: DiagnosticTraceContext,
 ) {
@@ -175,7 +88,7 @@ function agentHarnessRunOutcome(result: AgentHarnessAttemptResult): DiagnosticHa
   return "completed";
 }
 
-function shouldEmitAgentRunDiagnostics(harness: AgentHarnessV2): boolean {
+function shouldEmitAgentRunDiagnostics(harness: AgentHarness): boolean {
   return harness.id !== "openclaw";
 }
 
@@ -230,7 +143,7 @@ function withFallbackDiagnosticTrace(
 }
 
 function emitAgentHarnessRunStarted(
-  harness: AgentHarnessV2,
+  harness: AgentHarness,
   params: AgentHarnessAttemptParams,
   trace?: DiagnosticTraceContext,
 ): void {
@@ -241,7 +154,7 @@ function emitAgentHarnessRunStarted(
 }
 
 function emitAgentHarnessRunCompleted(params: {
-  harness: AgentHarnessV2;
+  harness: AgentHarness;
   attemptParams: AgentHarnessAttemptParams;
   result: AgentHarnessAttemptResult;
   startedAt: number;
@@ -262,34 +175,29 @@ function emitAgentHarnessRunCompleted(params: {
 }
 
 function emitAgentHarnessRunError(params: {
-  harness: AgentHarnessV2;
+  harness: AgentHarness;
   attemptParams: AgentHarnessAttemptParams;
   startedAt: number;
-  phase: AgentHarnessV2LifecyclePhase;
+  phase: AgentHarnessLifecyclePhase;
   error: unknown;
-  cleanupFailed?: boolean;
   trace?: DiagnosticTraceContext;
 }): void {
-  const { harness, attemptParams, startedAt, phase, error, cleanupFailed, trace } = params;
+  const { harness, attemptParams, startedAt, phase, error, trace } = params;
   emitTrustedDiagnosticEvent({
     type: "harness.run.error",
     ...agentHarnessDiagnosticBase(harness, attemptParams, trace),
     durationMs: Date.now() - startedAt,
     phase,
     errorCategory: diagnosticErrorCategory(error),
-    ...(cleanupFailed ? { cleanupFailed: true } : {}),
   });
 }
 
-export async function runAgentHarnessV2LifecycleAttempt(
-  harness: AgentHarnessV2,
+export async function runAgentHarnessLifecycleAttempt(
+  harness: AgentHarness,
   params: AgentHarnessAttemptParams,
 ): Promise<AgentHarnessAttemptResult> {
-  let prepared: AgentHarnessV2PreparedRun | undefined;
-  let session: AgentHarnessV2Session | undefined;
-  let rawResult: AgentHarnessAttemptResult | undefined;
   let result: AgentHarnessAttemptResult;
-  let phase: AgentHarnessV2LifecyclePhase = "prepare";
+  let phase: AgentHarnessLifecyclePhase = "prepare";
   const startedAt = Date.now();
   const activeHarnessTrace = getActiveDiagnosticTraceContext();
   let agentRunTrace: DiagnosticTraceContext | undefined;
@@ -315,10 +223,7 @@ export async function runAgentHarnessV2LifecycleAttempt(
   emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
   try {
     phase = "prepare";
-    prepared = await harness.prepare(params);
-    phase = "start";
-    session = await harness.start(prepared);
-    const startedSession = session;
+    assertAgentHarnessContextEngineSupport(harness, params);
     if (shouldEmitAgentRunDiagnostics(harness) && activeHarnessTrace) {
       agentRunTrace = freezeDiagnosticTraceContext(
         createChildDiagnosticTraceContext(activeHarnessTrace),
@@ -329,65 +234,29 @@ export async function runAgentHarnessV2LifecycleAttempt(
         ...agentRunDiagnosticBase(params, agentRunTrace),
       });
     }
-    const sendAndResolve = async () => {
+    const runAndClassify = async () => {
       phase = "send";
-      rawResult = await harness.send(startedSession);
+      const rawResult = await harness.runAttempt(params);
       phase = "resolve";
-      return await harness.resolveOutcome(startedSession, rawResult);
+      return applyAgentHarnessResultClassification(harness, rawResult, params);
     };
     result = agentRunTrace
-      ? await runWithDiagnosticTraceContext(agentRunTrace, sendAndResolve)
-      : await sendAndResolve();
+      ? await runWithDiagnosticTraceContext(agentRunTrace, runAndClassify)
+      : await runAndClassify();
     result = withFallbackDiagnosticTrace(result, activeHarnessTrace);
   } catch (error) {
-    let cleanupFailed = false;
-    try {
-      await harness.cleanup({
-        prepared,
-        session,
-        error,
-        ...(rawResult === undefined ? {} : { result: rawResult }),
-      });
-    } catch (cleanupError) {
-      cleanupFailed = true;
-      // Preserve the user-visible harness failure. Cleanup errors after a
-      // failed lifecycle stage must not mask the actionable runtime error.
-      log.warn("agent harness cleanup failed after attempt failure", {
-        harnessId: harness.id,
-        provider: params.provider,
-        modelId: params.modelId,
-        error: formatErrorMessage(cleanupError),
-        originalError: formatErrorMessage(error),
-      });
-    }
     emitAgentHarnessRunError({
       harness,
       attemptParams: params,
       startedAt,
       phase,
       error,
-      cleanupFailed,
       trace: activeHarnessTrace,
     });
     emitAgentRunCompleted({ outcome: "error", error });
     throw error;
   }
 
-  try {
-    phase = "cleanup";
-    await harness.cleanup({ prepared, session, result });
-  } catch (error) {
-    emitAgentHarnessRunError({
-      harness,
-      attemptParams: params,
-      startedAt,
-      phase,
-      error,
-      trace: activeHarnessTrace,
-    });
-    emitAgentRunCompleted({ outcome: "error", error });
-    throw error;
-  }
   emitAgentRunCompleted(agentRunCompletion(result));
   emitAgentHarnessRunCompleted({
     harness,
