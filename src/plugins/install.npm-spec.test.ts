@@ -1636,6 +1636,157 @@ describe("installPluginFromNpmSpec", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("does not fail rollback snapshots on plugin-local openclaw peer symlinks", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@openclaw/codex",
+    });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/codex": "0.0.1",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeNpmRootPackageLock({
+      npmRoot: npmProjectRoot,
+      dependencies: { "@openclaw/codex": "0.0.1" },
+      packages: [
+        {
+          packageName: "@openclaw/codex",
+          version: "0.0.1",
+          npmRoot: npmProjectRoot,
+        },
+      ],
+    });
+    const hostRoot = suiteTempRootTracker.makeTempDir();
+    fs.writeFileSync(
+      path.join(hostRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2)}\n`,
+      "utf8",
+    );
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
+    const installedDir = writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName: "@openclaw/codex",
+      version: "0.0.1",
+      peerDependencies: { openclaw: "*" },
+    });
+    const peerLink = path.join(installedDir, "node_modules", "openclaw");
+    fs.mkdirSync(path.dirname(peerLink), { recursive: true });
+    fs.symlinkSync(hostRoot, peerLink, "junction");
+
+    const originalCp = fs.promises.cp.bind(fs.promises);
+    const cpSpy = vi.spyOn(fs.promises, "cp").mockImplementation(async (...args: unknown[]) => {
+      const [source, destination, options] = args as [
+        string,
+        string,
+        { filter?: (source: string, destination: string) => boolean | Promise<boolean> },
+      ];
+      const nodeModulesDir = path.join(npmProjectRoot, "node_modules");
+      if (source === nodeModulesDir && fs.existsSync(peerLink)) {
+        const destinationPeerLink = path.join(
+          destination,
+          "@openclaw",
+          "codex",
+          "node_modules",
+          "openclaw",
+        );
+        const shouldCopyPeerLink = options.filter
+          ? await options.filter(peerLink, destinationPeerLink)
+          : true;
+        if (shouldCopyPeerLink) {
+          throw Object.assign(
+            new Error(
+              `EPERM: operation not permitted, symlink '${peerLink}' -> '${destinationPeerLink}'`,
+            ),
+            { code: "EPERM" },
+          );
+        }
+      }
+      return await originalCp(...(args as Parameters<typeof fs.promises.cp>));
+    });
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (JSON.stringify(argv) === JSON.stringify(npmViewArgv("@openclaw/codex@0.0.2"))) {
+          return successfulSpawn(
+            JSON.stringify({
+              name: "@openclaw/codex",
+              version: "0.0.2",
+              dist: {
+                integrity: "sha512-plugin-test",
+                shasum: "pluginshasum",
+              },
+            }),
+          );
+        }
+        if (isNpmPeerPlannerInstallCommand(argv)) {
+          const npmRootLocal = options?.cwd;
+          if (!npmRootLocal) {
+            throw new Error(`unexpected npm peer planner command: ${argv.join(" ")}`);
+          }
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(npmRootLocal, "package.json"), "utf8"),
+          ) as {
+            dependencies?: Record<string, string>;
+          };
+          writeNpmRootPackageLock({
+            npmRoot: npmRootLocal,
+            dependencies: manifest.dependencies ?? {},
+            packages: [
+              {
+                packageName: "@openclaw/codex",
+                version: "0.0.1",
+                npmRoot: npmRootLocal,
+              },
+            ],
+          });
+          return successfulSpawn();
+        }
+        if (isManagedNpmInstallCommand(argv)) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "registry unavailable",
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+          };
+        }
+        throw new Error(`unexpected command: ${(argv as string[]).join(" ")}`);
+      },
+    );
+
+    try {
+      const result = await installPluginFromNpmSpec({
+        spec: "@openclaw/codex@0.0.2",
+        npmDir: npmRoot,
+        mode: "update",
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("registry unavailable");
+        expect(result.error).not.toContain("Failed to snapshot");
+      }
+      await expect(fs.promises.realpath(peerLink)).resolves.toBe(
+        await fs.promises.realpath(hostRoot),
+      );
+    } finally {
+      cpSpy.mockRestore();
+    }
+  });
+
   it("retries without npm alias overrides when npm rejects alias comparators", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const hostRoot = suiteTempRootTracker.makeTempDir();

@@ -537,6 +537,10 @@ async function rollbackManagedNpmPluginInstall(params: {
         npmRoot: params.npmRoot,
         snapshot: params.snapshot,
       });
+      await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+        npmRoot: params.npmRoot,
+        logger: params.logger,
+      });
     } catch (error) {
       params.logger.warn?.(
         `Failed to restore managed npm plugin root after installing ${params.packageName}: ${String(error)}`,
@@ -804,6 +808,11 @@ async function createManagedNpmPluginInstallRollbackSnapshot(params: {
     await fs.cp(nodeModulesDir, nodeModulesBackupDir, {
       recursive: true,
       force: true,
+      filter: (sourcePath) =>
+        shouldCopyManagedNpmRollbackSnapshotEntry({
+          nodeModulesDir,
+          sourcePath,
+        }),
       mode: rollbackSnapshotCopyMode,
       verbatimSymlinks: true,
     });
@@ -825,6 +834,37 @@ async function createManagedNpmPluginInstallRollbackSnapshot(params: {
     };
   } catch (error) {
     await fs.rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function shouldCopyManagedNpmRollbackSnapshotEntry(params: {
+  nodeModulesDir: string;
+  sourcePath: string | URL;
+}): Promise<boolean> {
+  if (typeof params.sourcePath !== "string") {
+    return true;
+  }
+
+  const relativeParts = path.relative(params.nodeModulesDir, params.sourcePath).split(path.sep);
+  const isPluginLocalOpenClawPeer =
+    (relativeParts.length === 3 &&
+      relativeParts[1] === "node_modules" &&
+      relativeParts[2] === "openclaw") ||
+    (relativeParts.length === 4 &&
+      relativeParts[0]?.startsWith("@") &&
+      relativeParts[2] === "node_modules" &&
+      relativeParts[3] === "openclaw");
+  if (!isPluginLocalOpenClawPeer) {
+    return true;
+  }
+
+  try {
+    return !(await fs.lstat(params.sourcePath)).isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
     throw error;
   }
 }

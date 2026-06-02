@@ -21,6 +21,8 @@ const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "interactive",
   "media",
   "mediaUrl",
+  "mediaUrls",
+  "media_urls",
   "message",
   "mimeType",
   "path",

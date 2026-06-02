@@ -185,46 +185,19 @@ function renderEvents(card: WorkboardCard) {
   `;
 }
 
-function renderMetadataBadges(card: WorkboardCard) {
+function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
   const metadata = card.metadata;
   const badges = [
     metadata?.templateId ? t(`workboard.template.${metadata.templateId}`) : null,
-    card.taskId ? t("workboard.badgeTaskLinked") : null,
-    metadata?.attempts?.length
-      ? t("workboard.badgeAttempts", { count: String(metadata.attempts.length) })
-      : null,
+    (task ?? card.taskId) ? t("workboard.badgeTaskLinked") : null,
     metadata?.failureCount
       ? t("workboard.badgeFailures", { count: String(metadata.failureCount) })
       : null,
     metadata?.comments?.length
       ? t("workboard.badgeComments", { count: String(metadata.comments.length) })
       : null,
-    metadata?.links?.length
-      ? t("workboard.badgeLinks", { count: String(metadata.links.length) })
-      : null,
     metadata?.proof?.length
       ? t("workboard.badgeProof", { count: String(metadata.proof.length) })
-      : null,
-    metadata?.artifacts?.length
-      ? t("workboard.badgeArtifacts", { count: String(metadata.artifacts.length) })
-      : null,
-    metadata?.attachments?.length
-      ? t("workboard.badgeAttachments", { count: String(metadata.attachments.length) })
-      : null,
-    metadata?.workerLogs?.length
-      ? t("workboard.badgeWorkerLogs", { count: String(metadata.workerLogs.length) })
-      : null,
-    metadata?.workerProtocol?.state
-      ? t("workboard.badgeWorkerProtocol", { state: metadata.workerProtocol.state })
-      : null,
-    metadata?.automation?.tenant
-      ? t("workboard.badgeTenant", { tenant: metadata.automation.tenant })
-      : null,
-    metadata?.automation?.skills?.length
-      ? t("workboard.badgeSkills", { count: String(metadata.automation.skills.length) })
-      : null,
-    metadata?.automation?.dispatchCount
-      ? t("workboard.badgeDispatches", { count: String(metadata.automation.dispatchCount) })
       : null,
     metadata?.claim ? t("workboard.badgeClaimed", { owner: metadata.claim.ownerId }) : null,
     metadata?.diagnostics?.length
@@ -326,16 +299,9 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
-function openCardSession(
-  props: Pick<WorkboardProps, "onOpenSession">,
-  card: WorkboardCard,
-): boolean {
-  const sessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  if (!sessionKey) {
-    return false;
-  }
-  props.onOpenSession(sessionKey);
-  return true;
+function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
+  state.detailCardId = card.id;
+  state.detailCommentBody = "";
 }
 
 function resetDraft(state: WorkboardUiState) {
@@ -395,6 +361,7 @@ function renderCardModal(props: WorkboardProps) {
     ? (state.cards.find((card) => card.id === state.editingCardId) ?? null)
     : null;
   const comments = editingCard?.metadata?.comments ?? [];
+  const draftCommentBusy = editing && state.busyCardId === state.editingCardId;
   return html`
     <div
       class="workboard-modal"
@@ -413,6 +380,9 @@ function renderCardModal(props: WorkboardProps) {
         aria-labelledby="workboard-card-modal-title"
         @submit=${(event: SubmitEvent) => {
           event.preventDefault();
+          if (state.loading || draftCommentBusy) {
+            return;
+          }
           void saveWorkboardCardDraft({
             host: props.host,
             client: props.client,
@@ -601,7 +571,7 @@ function renderCardModal(props: WorkboardProps) {
                   <button
                     class="btn"
                     type="button"
-                    ?disabled=${state.loading || !state.draftCommentBody.trim()}
+                    ?disabled=${state.loading || draftCommentBusy || !state.draftCommentBody.trim()}
                     @click=${() => {
                       void addWorkboardCardComment({
                         host: props.host,
@@ -617,7 +587,10 @@ function renderCardModal(props: WorkboardProps) {
             `
           : nothing}
         <div class="workboard-modal__actions">
-          <button class="btn primary" ?disabled=${state.loading || !state.draftTitle.trim()}>
+          <button
+            class="btn primary"
+            ?disabled=${state.loading || draftCommentBusy || !state.draftTitle.trim()}
+          >
             ${editing ? t("common.save") : t("common.create")}
           </button>
           <button
@@ -714,6 +687,18 @@ function taskIsActive(task: WorkboardTaskSummary | undefined): boolean {
   return task?.status === "queued" || task?.status === "running";
 }
 
+function cardCanStart(
+  state: WorkboardUiState,
+  sessions: readonly GatewaySessionRow[],
+  card: WorkboardCard,
+): boolean {
+  const task = state.tasksByCardId.get(card.id);
+  const session = findWorkboardSession(card, sessions);
+  const activeTask = taskIsActive(task);
+  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  return !activeTask && (!linkedSessionKey || !session);
+}
+
 function renderLifecycle(
   card: WorkboardCard,
   sessions: readonly GatewaySessionRow[],
@@ -797,6 +782,272 @@ function renderStartExecutionControls(props: WorkboardProps, card: WorkboardCard
   `;
 }
 
+function renderDetailRow(label: string, value: unknown) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return nothing;
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return nothing;
+  }
+  return html`
+    <div class="workboard-detail__row">
+      <span>${label}</span>
+      <strong>${text}</strong>
+    </div>
+  `;
+}
+
+function renderDetailList(
+  title: string,
+  values: readonly string[],
+  empty: string | typeof nothing = nothing,
+) {
+  const entries = values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(-6);
+  if (entries.length === 0) {
+    return empty;
+  }
+  return html`
+    <section class="workboard-detail__section">
+      <h3>${title}</h3>
+      <ol class="workboard-detail__list">
+        ${entries.map((entry) => html`<li>${entry}</li>`)}
+      </ol>
+    </section>
+  `;
+}
+
+function renderCardDetailsPanel(props: WorkboardProps) {
+  const state = getWorkboardState(props.host);
+  const card = state.detailCardId
+    ? (state.cards.find((entry) => entry.id === state.detailCardId) ?? null)
+    : null;
+  if (!card || card.metadata?.archivedAt) {
+    return nothing;
+  }
+  const task = state.tasksByCardId.get(card.id);
+  const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
+  const formatted = formatLifecycle(lifecycle);
+  const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
+  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
+  const writable = canMutate(props);
+  const comments = card.metadata?.comments ?? [];
+  const attempts = card.metadata?.attempts ?? [];
+  const links = card.metadata?.links ?? [];
+  const proof = card.metadata?.proof ?? [];
+  const artifacts = card.metadata?.artifacts ?? [];
+  const attachments = card.metadata?.attachments ?? [];
+  const diagnostics = card.metadata?.diagnostics ?? [];
+  const workerLogs = card.metadata?.workerLogs ?? [];
+  const workerProtocol = card.metadata?.workerProtocol;
+  const automation = card.metadata?.automation;
+  const events = (card.events ?? []).slice(-6).toReversed();
+  const busy = state.busyCardId === card.id;
+  const showStartControls = writable && cardCanStart(state, props.sessions, card);
+  return html`
+    <aside class="workboard-detail-drawer" aria-label=${t("workboard.detailTitle")}>
+      <div class="workboard-detail">
+        <header class="workboard-detail__header">
+          <div>
+            <span class="workboard-card__priority">${card.priority}</span>
+            <h2>${card.title}</h2>
+          </div>
+          <button
+            class="btn btn--icon workboard-card__icon"
+            type="button"
+            title=${t("common.cancel")}
+            @click=${() => {
+              state.detailCardId = null;
+              state.detailCommentBody = "";
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${icons.x}
+          </button>
+        </header>
+
+        <section class="workboard-detail__section">
+          <div class="workboard-card__lifecycle">
+            <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
+              ${formatted.label}
+            </span>
+            <span class="workboard-card__lifecycle-detail">
+              ${task && taskIsAuthoritative
+                ? taskDetail(task)
+                : (lifecycle.session?.displayName ?? formatted.detail)}
+            </span>
+          </div>
+          <div class="workboard-detail__grid">
+            ${renderDetailRow(t("workboard.fieldStatus"), formatStatusLabel(card.status))}
+            ${renderDetailRow(
+              t("workboard.fieldAgent"),
+              card.agentId ?? t("workboard.defaultAgent"),
+            )}
+            ${renderDetailRow(t("workboard.detailTask"), task?.taskId ?? card.taskId)}
+            ${renderDetailRow(t("workboard.fieldSession"), linkedSessionKey)}
+            ${renderDetailRow(t("workboard.detailRun"), card.runId ?? card.execution?.runId)}
+            ${renderDetailRow(t("workboard.detailUpdated"), formatTime(card.updatedAt))}
+          </div>
+        </section>
+
+        ${card.notes
+          ? html`
+              <section class="workboard-detail__section">
+                <h3>${t("workboard.fieldNotes")}</h3>
+                <p>${card.notes}</p>
+              </section>
+            `
+          : nothing}
+        ${renderDetailList(t("workboard.fieldLabels"), card.labels)}
+        ${renderDetailList(
+          t("workboard.badgeAttempts", { count: String(attempts.length) }),
+          attempts.map((entry) =>
+            [entry.status, entry.model, entry.sessionKey, entry.error].filter(Boolean).join(" - "),
+          ),
+        )}
+        ${renderDetailList(
+          t("workboard.badgeLinks", { count: String(links.length) }),
+          links.map((entry) =>
+            [entry.type, entry.title, entry.targetCardId, entry.url].filter(Boolean).join(" - "),
+          ),
+        )}
+        ${renderDetailList(
+          t("workboard.detailProof"),
+          proof.map((entry) =>
+            [entry.status, entry.label, entry.command, entry.url, entry.note]
+              .filter(Boolean)
+              .join(" - "),
+          ),
+        )}
+        ${renderDetailList(
+          t("workboard.badgeArtifacts", { count: String(artifacts.length) }),
+          artifacts.map((entry) =>
+            [entry.label, entry.url, entry.path, entry.mimeType].filter(Boolean).join(" - "),
+          ),
+        )}
+        ${renderDetailList(
+          t("workboard.badgeAttachments", { count: String(attachments.length) }),
+          attachments.map((entry) =>
+            [entry.fileName, entry.mimeType, entry.note].filter(Boolean).join(" - "),
+          ),
+        )}
+        ${renderDetailList(
+          t("workboard.detailDiagnostics"),
+          diagnostics.map((entry) => `${entry.severity}: ${entry.title}`),
+        )}
+        ${renderDetailList(
+          t("workboard.detailWorkerLogs"),
+          workerLogs.map((entry) => `${entry.level}: ${entry.message}`),
+        )}
+        ${workerProtocol
+          ? renderDetailList(t("workboard.detailWorkerProtocol"), [
+              workerProtocol.state,
+              workerProtocol.detail ?? "",
+              workerProtocol.updatedAt
+                ? t("workboard.detailUpdatedValue", { time: formatTime(workerProtocol.updatedAt) })
+                : "",
+            ])
+          : nothing}
+        ${automation
+          ? renderDetailList(t("workboard.detailAutomation"), [
+              automation.tenant
+                ? t("workboard.detailAutomationTenant", { tenant: automation.tenant })
+                : "",
+              automation.boardId
+                ? t("workboard.detailAutomationBoard", { board: automation.boardId })
+                : "",
+              automation.skills?.length
+                ? t("workboard.detailAutomationSkills", { skills: automation.skills.join(", ") })
+                : "",
+              automation.workspace
+                ? t("workboard.detailAutomationWorkspace", {
+                    workspace: [
+                      automation.workspace.kind,
+                      automation.workspace.path,
+                      automation.workspace.branch,
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                  })
+                : "",
+              automation.dispatchCount
+                ? t("workboard.badgeDispatches", { count: String(automation.dispatchCount) })
+                : "",
+              automation.lastDispatchAt
+                ? t("workboard.detailUpdatedValue", { time: formatTime(automation.lastDispatchAt) })
+                : "",
+              automation.summary
+                ? t("workboard.detailAutomationSummary", { summary: automation.summary })
+                : "",
+            ])
+          : nothing}
+        ${renderDetailList(
+          t("workboard.eventsLabel"),
+          events.map((event) => `${formatEventLabel(event)} ${formatTime(event.at)}`),
+        )}
+
+        <section class="workboard-detail__section">
+          <h3>${t("workboard.detailOperatorNotes")}</h3>
+          ${comments.length
+            ? html`
+                <ol class="workboard-detail__list">
+                  ${comments.slice(-6).map((comment) => html`<li>${comment.body}</li>`)}
+                </ol>
+              `
+            : html`<p>${t("workboard.detailNoNotes")}</p>`}
+          ${writable
+            ? html`
+                <textarea
+                  class="input workboard-detail__note"
+                  maxlength="2000"
+                  placeholder=${t("workboard.detailNotePlaceholder")}
+                  .value=${state.detailCommentBody}
+                  @input=${(event: InputEvent) => {
+                    state.detailCommentBody = (event.currentTarget as HTMLTextAreaElement).value;
+                    props.onRequestUpdate?.();
+                  }}
+                ></textarea>
+                <button
+                  class="btn"
+                  type="button"
+                  ?disabled=${busy || !state.detailCommentBody.trim()}
+                  @click=${() =>
+                    addWorkboardCardComment({
+                      host: props.host,
+                      client: props.client,
+                      cardId: card.id,
+                      body: state.detailCommentBody,
+                      requestUpdate: props.onRequestUpdate,
+                    })}
+                >
+                  ${icons.plus} ${t("workboard.detailAddNote")}
+                </button>
+              `
+            : nothing}
+        </section>
+
+        <div class="workboard-detail__actions">
+          ${linkedSessionKey
+            ? html`
+                <button
+                  class="btn"
+                  type="button"
+                  @click=${() => props.onOpenSession(linkedSessionKey)}
+                >
+                  ${icons.messageSquare} ${t("workboard.openSession")}
+                </button>
+              `
+            : nothing}
+          ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
+        </div>
+      </div>
+    </aside>
+  `;
+}
+
 function renderDispatchSummary(state: WorkboardUiState) {
   const summary = state.lastDispatchSummary;
   if (!summary) {
@@ -836,30 +1087,30 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     session?.hasActiveRun === true ||
     (session?.hasActiveRun !== false && session?.status === "running");
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  const openable = Boolean(linkedSessionKey);
   const writable = canMutate(props);
-  const showStartControls = writable && !activeTask && (!linkedSessionKey || !session);
+  const showStartControls = writable && cardCanStart(state, props.sessions, card);
   return html`
     <article
       class="workboard-card priority-${card.priority} ${busy
         ? "workboard-card--busy"
-        : ""} ${openable ? "workboard-card--openable" : ""}"
-      role=${openable ? "button" : nothing}
-      tabindex=${openable ? 0 : nothing}
-      title=${openable ? t("workboard.openLinkedSession") : nothing}
+        : ""} workboard-card--openable"
+      role="button"
+      tabindex="0"
+      title=${t("workboard.viewDetails")}
       draggable=${writable ? "true" : "false"}
       @click=${(event: MouseEvent) => {
         if (!isCardActionTarget(event)) {
-          openCardSession(props, card);
+          openCardDetails(state, card);
+          props.onRequestUpdate?.();
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
         if (isCardActionTarget(event) || (event.key !== "Enter" && event.key !== " ")) {
           return;
         }
-        if (openCardSession(props, card)) {
-          event.preventDefault();
-        }
+        openCardDetails(state, card);
+        props.onRequestUpdate?.();
+        event.preventDefault();
       }}
       @dragstart=${(event: DragEvent) => {
         if (!writable) {
@@ -889,7 +1140,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
             ${card.labels.map((label) => html`<span>${label}</span>`)}
           </div>`
         : nothing}
-      ${renderMetadataBadges(card)}
+      ${renderCompactBadges(card, task)}
       <div class="workboard-card__meta">
         ${card.agentId
           ? html`<span>${card.agentId}</span>`
@@ -898,6 +1149,16 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
       </div>
       ${renderEvents(card)}
       <div class="workboard-card__actions">
+        <button
+          class="btn btn--icon workboard-card__icon"
+          title=${t("workboard.viewDetails")}
+          @click=${() => {
+            openCardDetails(state, card);
+            props.onRequestUpdate?.();
+          }}
+        >
+          ${icons.panelRightOpen}
+        </button>
         ${writable
           ? html`
               <button
@@ -959,7 +1220,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
               </button>
             `
           : nothing}
-        ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
+        ${showStartControls ? renderStartExecutionButton(props, card, null, "autonomous") : nothing}
         ${writable
           ? html`
               <button
@@ -1155,7 +1416,7 @@ export function renderWorkboard(props: WorkboardProps) {
         </div>
       </div>
       ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
-      ${renderDispatchSummary(state)} ${renderCardModal(props)}
+      ${renderDispatchSummary(state)} ${renderCardModal(props)} ${renderCardDetailsPanel(props)}
       <div class="workboard-board">
         ${state.statuses.map((status) => renderColumn(props, status, byStatus.get(status) ?? []))}
       </div>

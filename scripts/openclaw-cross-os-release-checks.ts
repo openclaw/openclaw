@@ -39,12 +39,44 @@ const SUPPORTED_SUITES = new Set([
 ]);
 const SUPPORTED_OS_IDS = new Set(["ubuntu", "windows", "macos"]);
 
+const CROSS_OS_SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+const CROSS_OS_ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+let forwardedSignalExitCode: number | undefined;
+let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
+
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   600,
 );
 export const CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES = 16 * 1024 * 1024;
+const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
+  15_000,
+);
 const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
+
+for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= CROSS_OS_SIGNAL_EXIT_CODES[signal];
+    if (CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size === 0) {
+      process.exit(forwardedSignalExitCode);
+    }
+    const activeKillers = Array.from(CROSS_OS_ACTIVE_CHILD_TREE_KILLERS);
+    for (const killChildTree of activeKillers) {
+      killChildTree(signal);
+    }
+    forwardedSignalForceKillTimer ??= setTimeout(() => {
+      for (const killChildTree of activeKillers) {
+        killChildTree("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, CROSS_OS_PROCESS_TREE_KILL_AFTER_MS);
+  });
+}
 
 const providerConfig = {
   openai: {
@@ -2972,6 +3004,7 @@ async function exerciseManagedGatewayLifecycle(params) {
 
 async function startGateway(params) {
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
+  const useProcessGroup = process.platform !== "win32";
   const child = spawn(
     process.execPath,
     [
@@ -2988,9 +3021,11 @@ async function startGateway(params) {
       cwd: params.lane.homeDir,
       env: params.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
       windowsHide: true,
     },
   );
+  const activeChildTree = registerActiveChildProcessTree(child);
   child.stdout?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
@@ -3009,9 +3044,11 @@ async function startGateway(params) {
     });
   };
   child.once("close", () => {
+    activeChildTree.unregister();
     void closeLog();
   });
   child.once("error", () => {
+    activeChildTree.unregister();
     void closeLog();
   });
   return { child, closeLog, logPath: params.logPath };
@@ -3383,17 +3420,43 @@ async function stopGateway(gateway) {
       return;
     }
     if (hasChildExited(gateway.child)) {
+      signalChildProcessTree(gateway.child, "SIGTERM");
+      await sleep(2_000);
+      signalChildProcessTree(gateway.child, "SIGKILL");
       return;
     }
-    gateway.child.kill("SIGTERM");
+    signalChildProcessTree(gateway.child, "SIGTERM");
     const exitedAfterTerm = await waitForChildExit(gateway.child, 2_000);
     if (!exitedAfterTerm && !hasChildExited(gateway.child)) {
-      gateway.child.kill("SIGKILL");
+      signalChildProcessTree(gateway.child, "SIGKILL");
       await waitForChildExit(gateway.child, 5_000);
     }
   } finally {
     await gateway?.closeLog?.();
   }
+}
+
+function signalChildProcessTree(child, signal) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The child may have exited before its process group was signaled.
+    }
+  }
+  child.kill(signal);
+}
+
+function registerActiveChildProcessTree(child) {
+  const killChildTree = (signal) => signalChildProcessTree(child, signal);
+  CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
+  return {
+    killChildTree,
+    unregister: () => {
+      CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.delete(killChildTree);
+    },
+  };
 }
 
 async function waitForChildExit(child, timeoutMs) {
@@ -3622,14 +3685,17 @@ export async function runCommand(command, args, options) {
 async function runCommandInvocation(invocation, options) {
   return new Promise((resolvePromise, rejectPromise) => {
     const commandLabel = `${invocation.command} ${invocation.args.join(" ")}`;
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd,
       env: options.env,
       shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       windowsHide: true,
     });
+    const activeChildTree = registerActiveChildProcessTree(child);
     const logStream = createWriteStream(options.logPath, { flags: "a" });
     let stdout = "";
     let stderr = "";
@@ -3679,7 +3745,7 @@ async function runCommandInvocation(invocation, options) {
           return;
         }
       }
-      child.kill(process.platform === "win32" ? undefined : "SIGKILL");
+      activeChildTree.killChildTree("SIGKILL");
     };
 
     timer =
@@ -3724,10 +3790,15 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
+      activeChildTree.unregister();
+      if (forwardedSignalExitCode !== undefined) {
+        return;
+      }
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,

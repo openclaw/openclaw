@@ -347,6 +347,8 @@ export type WorkboardUiState = {
   draftSessionKey: string;
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
+  detailCardId: string | null;
+  detailCommentBody: string;
   busyCardId: string | null;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
@@ -389,6 +391,8 @@ function createDefaultState(): WorkboardUiState {
     draftSessionKey: "",
     draftTemplateId: "",
     draftCommentBody: "",
+    detailCardId: null,
+    detailCommentBody: "",
     busyCardId: null,
     draggedCardId: null,
     syncingCardIds: new Set(),
@@ -1680,27 +1684,34 @@ export async function saveWorkboardCardDraft(params: {
 export async function addWorkboardCardComment(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
+  cardId?: string;
+  body?: string;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  const body = state.draftCommentBody.trim();
-  if (!state.editingCardId || !params.client || !body) {
+  const cardId = params.cardId ?? state.editingCardId;
+  const body = (params.body ?? state.draftCommentBody).trim();
+  if (!cardId || !params.client || !body) {
     return;
   }
-  state.loading = true;
+  state.busyCardId = cardId;
   state.error = null;
   params.requestUpdate?.();
   try {
     const payload = await params.client.request("workboard.cards.comment", {
-      id: state.editingCardId,
+      id: cardId,
       body,
     });
     replaceCard(state, normalizeCardPayload(payload));
-    state.draftCommentBody = "";
+    if (params.body === undefined) {
+      state.draftCommentBody = "";
+    } else if (state.detailCardId === cardId) {
+      state.detailCommentBody = "";
+    }
   } catch (error) {
     state.error = formatError(error);
   } finally {
-    state.loading = false;
+    state.busyCardId = null;
     params.requestUpdate?.();
   }
 }

@@ -194,6 +194,10 @@ export async function loadSubagentSpawnModuleForTest(params: {
 
   const resetSubagentRegistryForTests = vi.fn();
 
+  vi.doMock("./provider-model-normalization.runtime.js", () => ({
+    normalizeProviderModelIdWithRuntime: () => undefined,
+  }));
+
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
     buildSubagentSystemPrompt: () => "system-prompt",

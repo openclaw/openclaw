@@ -74,6 +74,15 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).not.toContain("lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true");
   });
 
+  it("keeps the default restart log scoped to the current worktree lock", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain(
+      'LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"',
+    );
+    expect(script).not.toContain('LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"');
+  });
+
   it("prefers the freshly packaged app unless an explicit app bundle is set", () => {
     const script = readFileSync(restartScriptPath, "utf8");
     const chooseBlock = script.slice(
@@ -82,10 +91,10 @@ describe("scripts/restart-mac.sh", () => {
     );
 
     expect(chooseBlock).toContain('fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"');
-    expect(chooseBlock.indexOf('${ROOT_DIR}/dist/OpenClaw.app')).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf('/Applications/OpenClaw.app')).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf('${ROOT_DIR}/dist/OpenClaw.app')).toBeLessThan(
-      chooseBlock.indexOf('/Applications/OpenClaw.app'),
+    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeGreaterThan(-1);
+    expect(chooseBlock.indexOf("/Applications/OpenClaw.app")).toBeGreaterThan(-1);
+    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeLessThan(
+      chooseBlock.indexOf("/Applications/OpenClaw.app"),
     );
   });
 });
