@@ -276,6 +276,9 @@ describe("session accessor file-backed seam", () => {
     const freshTranscriptPath = path.join(tempDir, "fresh-lifecycle.jsonl");
     const referencedTranscriptPath = path.join(tempDir, "referenced.jsonl");
     const orphanTranscriptPath = path.join(tempDir, "orphan-lifecycle.jsonl");
+    const siblingDir = `${tempDir}-sibling-sessions`;
+    const siblingTranscriptPath = path.join(siblingDir, "sibling-lifecycle.jsonl");
+    fs.mkdirSync(siblingDir, { recursive: true });
 
     fs.writeFileSync(
       storePath,
@@ -290,6 +293,10 @@ describe("session accessor file-backed seam", () => {
           sessionFile: "custom-lifecycle-old.jsonl",
           sessionId: "custom-lifecycle",
         },
+        "agent:main:lifecycle-cleanup-sibling": {
+          sessionFile: siblingTranscriptPath,
+          sessionId: "sibling-lifecycle",
+        },
         "agent:main:telegram:group:lifecycle-cleanup-room": {
           sessionId: "kept-by-segment",
         },
@@ -303,6 +310,7 @@ describe("session accessor file-backed seam", () => {
     fs.writeFileSync(customTranscriptPath, '{"runId":"lifecycle-marker-custom"}\n', "utf-8");
     fs.writeFileSync(freshDefaultTranscriptPath, '{"runId":"lifecycle-marker-default"}\n', "utf-8");
     fs.writeFileSync(freshTranscriptPath, '{"runId":"lifecycle-marker-fresh"}\n', "utf-8");
+    fs.writeFileSync(siblingTranscriptPath, '{"runId":"lifecycle-marker-sibling"}\n', "utf-8");
     fs.writeFileSync(
       referencedTranscriptPath,
       '{"runId":"lifecycle-marker-referenced"}\n',
@@ -311,6 +319,7 @@ describe("session accessor file-backed seam", () => {
     fs.writeFileSync(orphanTranscriptPath, '{"runId":"lifecycle-marker-orphan"}\n', "utf-8");
     fs.utimesSync(removedTranscriptPath, oldDate, oldDate);
     fs.utimesSync(customTranscriptPath, oldDate, oldDate);
+    fs.utimesSync(siblingTranscriptPath, oldDate, oldDate);
     fs.utimesSync(referencedTranscriptPath, oldDate, oldDate);
     fs.utimesSync(orphanTranscriptPath, oldDate, oldDate);
 
@@ -322,10 +331,11 @@ describe("session accessor file-backed seam", () => {
       nowMs,
     });
 
-    expect(result).toEqual({ removedEntries: 2, archivedTranscriptArtifacts: 3 });
+    expect(result).toEqual({ removedEntries: 3, archivedTranscriptArtifacts: 3 });
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-removed");
     expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-custom");
+    expect(loaded).not.toHaveProperty("agent:main:lifecycle-cleanup-sibling");
     expect(loaded).toHaveProperty("agent:main:lifecycle-cleanup-fresh");
     expect(loaded).toHaveProperty("agent:main:telegram:group:lifecycle-cleanup-room");
     expect(loaded).toHaveProperty("agent:main:regular");
@@ -342,6 +352,8 @@ describe("session accessor file-backed seam", () => {
     expect(files).toContain("custom-lifecycle.jsonl");
     expect(files).toContain("fresh-lifecycle.jsonl");
     expect(files).toContain("referenced.jsonl");
+    expect(fs.existsSync(siblingTranscriptPath)).toBe(true);
+    expect(fs.readdirSync(siblingDir)).toEqual(["sibling-lifecycle.jsonl"]);
   });
 
   it("loads and appends transcript events through a session scope", async () => {

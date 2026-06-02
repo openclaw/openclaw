@@ -574,10 +574,19 @@ function lifecycleTranscriptIsReclaimable(params: {
   }
 }
 
-function archiveExactLifecycleTranscriptPath(transcriptPath: string): number {
-  const archivedPath = `${transcriptPath}.deleted.${formatSessionArchiveTimestamp()}`;
+function archiveExactLifecycleTranscriptPath(params: {
+  sessionsDir: string;
+  transcriptPath: string;
+}): number {
+  const resolvedSessionsDir = normalizePathForLifecycleComparison(params.sessionsDir);
+  const resolvedTranscriptPath = normalizePathForLifecycleComparison(params.transcriptPath);
+  const relative = path.relative(resolvedSessionsDir, resolvedTranscriptPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return 0;
+  }
+  const archivedPath = `${resolvedTranscriptPath}.deleted.${formatSessionArchiveTimestamp()}`;
   try {
-    fs.renameSync(transcriptPath, archivedPath);
+    fs.renameSync(resolvedTranscriptPath, archivedPath);
     emitSessionTranscriptUpdate({ sessionFile: archivedPath });
     return 1;
   } catch {
@@ -1038,7 +1047,10 @@ export async function cleanupSessionLifecycleArtifacts(
       if (referencedSessionIds.has(removedSessionId)) {
         continue;
       }
-      archivedTranscriptArtifacts += archiveExactLifecycleTranscriptPath(transcriptPath);
+      archivedTranscriptArtifacts += archiveExactLifecycleTranscriptPath({
+        sessionsDir,
+        transcriptPath,
+      });
     }
     const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
     await removeRemovedSessionTrajectoryArtifacts({
