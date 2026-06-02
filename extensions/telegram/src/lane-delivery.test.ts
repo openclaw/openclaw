@@ -179,6 +179,65 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
+  it("keeps media fallback non-durable when materializing an intermediate preview", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "visible block",
+      payload: { text: "visible block", mediaUrls: ["file:///site-a.png"] },
+      infoKind: "block",
+      finalizePreview: true,
+      durable: false,
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("visible block");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { mediaUrls: ["file:///site-a.png"] },
+      { durable: false },
+    );
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("does not use final transcript recovery when materializing an intermediate block preview", async () => {
+    const previousBlock =
+      "Here is the complete block preview with enough stable prefix text before the ellipsis...";
+    const nextAssistantBlock =
+      "Here is the complete block preview with enough stable prefix text before the ellipsis and later assistant continuation text.";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(nextAssistantBlock);
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => nextAssistantBlock,
+    });
+    harness.lanes.answer.lastPartialText = previousBlock;
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: previousBlock,
+      payload: { text: previousBlock },
+      infoKind: "block",
+      finalizePreview: true,
+      durable: false,
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith(previousBlock);
+    expect(answer.update).not.toHaveBeenCalledWith(nextAssistantBlock);
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: previousBlock },
+      { durable: false },
+    );
+    expect(harness.sendPayload).not.toHaveBeenCalledWith(
+      { text: nextAssistantBlock },
+      expect.anything(),
+    );
+  });
+
   it("keeps block delivery in the draft lane when delivered text is stale", async () => {
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue("working");

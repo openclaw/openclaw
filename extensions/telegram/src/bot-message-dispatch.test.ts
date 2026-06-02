@@ -2129,6 +2129,111 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("falls back to normal delivery before rotating a stale queued block preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let firstBlockPreviewWentStale = false;
+    answerDraftStream.lastDeliveredText.mockImplementation(() =>
+      firstBlockPreviewWentStale ? "stale draft still visible" : "",
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const firstPayload = setReplyPayloadMetadata(
+          { text: "Site A shows X." },
+          { assistantMessageIndex: 0 },
+        );
+        const secondPayload = setReplyPayloadMetadata(
+          { text: "Site B shows Y." },
+          { assistantMessageIndex: 1 },
+        );
+        await replyOptions?.onBlockReplyQueued?.(firstPayload, { assistantMessageIndex: 0 });
+        await dispatcherOptions.deliver(firstPayload, { kind: "block" });
+        firstBlockPreviewWentStale = true;
+        await replyOptions?.onBlockReplyQueued?.(secondPayload, { assistantMessageIndex: 1 });
+        await dispatcherOptions.deliver(secondPayload, { kind: "block" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site A shows X.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Site B shows Y.");
+    expect(answerDraftStream.clear).toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    const fallbackDelivery = mockCallArg(deliverReplies) as {
+      replies?: Array<{ text?: string }>;
+      transcriptMirror?: unknown;
+    };
+    expect(fallbackDelivery.replies?.[0]?.text).toBe("Site A shows X.");
+    expect(fallbackDelivery.transcriptMirror).toBeUndefined();
+    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
+    const fallbackDeliveryOrder = deliverReplies.mock.invocationCallOrder[0];
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[2];
+    expect(clearOrder).toBeLessThan(fallbackDeliveryOrder);
+    expect(fallbackDeliveryOrder).toBeLessThan(rotationOrder);
+    expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
+  });
+
+  it("keeps stale block materialization tied to the streamed block before later media sends", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    let firstBlockPreviewWentStale = false;
+    answerDraftStream.lastDeliveredText.mockImplementation(() =>
+      firstBlockPreviewWentStale ? "stale draft still visible" : "",
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const firstPayload = setReplyPayloadMetadata(
+          { text: "Site A shows X." },
+          { assistantMessageIndex: 0 },
+        );
+        const mediaPayload = setReplyPayloadMetadata(
+          {
+            text: "Chart attached",
+            mediaUrl: "https://example.test/chart.png",
+          },
+          { assistantMessageIndex: 0 },
+        );
+        const nextPayload = setReplyPayloadMetadata(
+          { text: "Site B shows Y." },
+          { assistantMessageIndex: 1 },
+        );
+        await replyOptions?.onBlockReplyQueued?.(firstPayload, { assistantMessageIndex: 0 });
+        await dispatcherOptions.deliver(firstPayload, { kind: "block" });
+        await replyOptions?.onBlockReplyQueued?.(mediaPayload, { assistantMessageIndex: 0 });
+        await dispatcherOptions.deliver(mediaPayload, { kind: "block" });
+        firstBlockPreviewWentStale = true;
+        await replyOptions?.onBlockReplyQueued?.(nextPayload, { assistantMessageIndex: 1 });
+        await dispatcherOptions.deliver(nextPayload, { kind: "block" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site A shows X.");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Site B shows Y.");
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(
+      0,
+      { text: "Chart attached", mediaUrl: "https://example.test/chart.png" },
+      0,
+    );
+    const fallbackDelivery = mockCallArg(deliverReplies, 1) as {
+      replies?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
+    };
+    expect(fallbackDelivery.replies?.[0]).toEqual({ text: "Site A shows X." });
+    const mediaDeliveryOrder = deliverReplies.mock.invocationCallOrder[0];
+    const fallbackDeliveryOrder = deliverReplies.mock.invocationCallOrder[1];
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const nextBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[2];
+    expect(mediaDeliveryOrder).toBeLessThan(fallbackDeliveryOrder);
+    expect(fallbackDeliveryOrder).toBeLessThan(rotationOrder);
+    expect(rotationOrder).toBeLessThan(nextBlockUpdateOrder);
+  });
+
   it("rotates queued block boundaries before async block delivery drains", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -2158,6 +2263,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const secondBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
     expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Site A shows X.",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "123",
+      messageId: 2001,
+      text: "Site A shows X.",
+      messageThreadId: 777,
+    });
   });
 
   it("skips canceled queued block rotations when later delivery drains", async () => {
@@ -2175,7 +2290,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         );
         await dispatcherOptions.deliver(
           setReplyPayloadMetadata({ text: "Repeated block." }, { assistantMessageIndex: 1 }),
-          { kind: "block" },
+          { kind: "block", assistantMessageIndex: 1 } as { kind: "block" },
         );
         return { queuedFinal: true };
       },
@@ -2286,6 +2401,60 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("expires rewritten unindexed queued block rotations after cancellation", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Existing preview" });
+        await replyOptions?.onBlockReplyQueued?.({ text: "Original block text" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.onBeforeDeliverCancelled?.(
+          { text: "PFX Original block text" },
+          { kind: "block" },
+        );
+        await replyOptions?.onPartialReply?.({ text: "Second preview" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Existing preview");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Second preview");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondPreviewUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(rotationOrder).toBeLessThan(secondPreviewUpdateOrder);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("expires rewritten unindexed queued block rotations after skip", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Existing preview" });
+        await replyOptions?.onBlockReplyQueued?.({ text: "Original block text" });
+        await replyOptions?.onAssistantMessageStart?.();
+        dispatcherOptions.onSkip?.(
+          { text: "PFX Original block text" },
+          { kind: "block", reason: "silent" },
+        );
+        await replyOptions?.onPartialReply?.({ text: "Second preview" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Existing preview");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Second preview");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondPreviewUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(rotationOrder).toBeLessThan(secondPreviewUpdateOrder);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("expires canceled queued block rotations before later partial previews", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -2310,6 +2479,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
     const secondPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(rotationOrder).toBeLessThan(secondPartialUpdateOrder);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("serializes canceled block cleanup behind queued assistant-boundary events", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        const payload = setReplyPayloadMetadata(
+          { text: "Site A final" },
+          { assistantMessageIndex: 0 },
+        );
+        void replyOptions?.onPartialReply?.({ text: "Site A partial" });
+        void replyOptions?.onBlockReplyQueued?.(payload, { assistantMessageIndex: 0 });
+        void replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.onBeforeDeliverCancelled?.(payload, { kind: "block" });
+        await replyOptions?.onPartialReply?.({ text: "Site B partial" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B partial");
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    const firstPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
+    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(firstPartialUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(secondPartialUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -2541,7 +2740,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
             { mediaUrls: ["https://example.test/site-a.png"] },
             { assistantMessageIndex: 0 },
           ),
-          { kind: "block" },
+          { kind: "block", assistantMessageIndex: 0 } as { kind: "block" },
         );
         await replyOptions?.onPartialReply?.({ text: "Site B partial" });
         return { queuedFinal: true };
