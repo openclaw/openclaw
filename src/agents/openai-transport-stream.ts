@@ -1500,7 +1500,31 @@ async function processResponsesStream(
       }
     } else if (type === "response.function_call_arguments.delta") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-        currentBlock.partialJson = `${stringifyJsonLike(currentBlock.partialJson)}${stringifyJsonLike(event.delta)}`;
+        const delta = stringifyJsonLike(event.delta);
+        const concatenated = `${stringifyJsonLike(currentBlock.partialJson)}${delta}`;
+        let isConcatenatedValidJson = false;
+        try {
+          JSON.parse(concatenated);
+          isConcatenatedValidJson = true;
+        } catch {
+          isConcatenatedValidJson = false;
+        }
+        if (isConcatenatedValidJson) {
+          currentBlock.partialJson = concatenated;
+        } else {
+          let isDeltaValidJson = false;
+          try {
+            JSON.parse(delta);
+            isDeltaValidJson = true;
+          } catch {
+            isDeltaValidJson = false;
+          }
+          if (isDeltaValidJson) {
+            currentBlock.partialJson = delta;
+          } else {
+            currentBlock.partialJson = concatenated;
+          }
+        }
         currentBlock.arguments = parseStreamingJson(stringifyJsonLike(currentBlock.partialJson));
         stream.push({
           type: "toolcall_delta",
@@ -2820,8 +2844,41 @@ async function processOpenAICompletionsStream(
           if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
             throw new Error("Exceeded tool-call argument buffer limit");
           }
-          toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
-          block.partialArgs += toolCall.function.arguments;
+          // Some OpenAI-compatible local servers (e.g. llama.cpp) send the
+          // complete accumulated arguments string in every chunk rather than
+          // incremental deltas. Detect that and replace the buffer instead of
+          // concatenating, otherwise the JSON ends up duplicated / corrupted.
+          const concatenated = block.partialArgs + toolCall.function.arguments;
+          let isConcatenatedValidJson = false;
+          try {
+            JSON.parse(concatenated);
+            isConcatenatedValidJson = true;
+          } catch {
+            isConcatenatedValidJson = false;
+          }
+          if (isConcatenatedValidJson) {
+            // Normal incremental delta – append as usual.
+            toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
+            block.partialArgs += toolCall.function.arguments;
+          } else {
+            let isNewChunkValidJson = false;
+            try {
+              JSON.parse(toolCall.function.arguments);
+              isNewChunkValidJson = true;
+            } catch {
+              isNewChunkValidJson = false;
+            }
+            if (isNewChunkValidJson) {
+              // Cumulative chunk – replace buffer so we keep exactly one copy.
+              toolCallBlockBytes.set(block, nextArgumentBytes);
+              block.partialArgs = toolCall.function.arguments;
+            } else {
+              // Neither concatenated nor new chunk is valid JSON – append
+              // and let the streaming parser do its best.
+              toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
+              block.partialArgs += toolCall.function.arguments;
+            }
+          }
           block.arguments = parseStreamingJson(block.partialArgs);
           stream.push({
             type: "toolcall_delta",

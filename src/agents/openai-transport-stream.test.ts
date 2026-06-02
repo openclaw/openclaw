@@ -1852,6 +1852,129 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it("handles cumulative tool-call argument chunks from OpenAI-compatible local servers (e.g. llama.cpp)", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-llamacpp-cumulative",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_cumulative_1",
+                    type: "function",
+                    function: {
+                      name: "cron",
+                      // First chunk: partial JSON (as some servers start with incomplete object)
+                      arguments: '{"action":"add","job":{"delivery":{"mode":"none"},"enabled":true,"name":"evidence-test"',
+                    },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-llamacpp-cumulative",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_cumulative_1",
+                    type: "function",
+                    function: {
+                      name: "cron",
+                      // Second chunk: complete accumulated JSON so far (cumulative, not incremental)
+                      arguments: '{"action":"add","job":{"delivery":{"mode":"none"},"enabled":true,"name":"evidence-test","payload":{"kind":"agentTurn","message":"Evidence test.","timeoutSeconds":10}}',
+                    },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-llamacpp-cumulative",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_cumulative_1",
+                    type: "function",
+                    function: {
+                      name: "cron",
+                      // Third chunk: complete final JSON (cumulative)
+                      arguments: '{"action":"add","job":{"delivery":{"mode":"none"},"enabled":true,"name":"evidence-test","payload":{"kind":"agentTurn","message":"Evidence test.","timeoutSeconds":10},"schedule":{"everyMs":999999,"kind":"every"},"sessionTarget":"isolated"}}',
+                    },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_cumulative_1",
+        name: "cron",
+        arguments: {
+          action: "add",
+          job: {
+            delivery: { mode: "none" },
+            enabled: true,
+            name: "evidence-test",
+            payload: {
+              kind: "agentTurn",
+              message: "Evidence test.",
+              timeoutSeconds: 10,
+            },
+            schedule: {
+              everyMs: 999999,
+              kind: "every",
+            },
+            sessionTarget: "isolated",
+          },
+        },
+        partialArgs:
+          '{"action":"add","job":{"delivery":{"mode":"none"},"enabled":true,"name":"evidence-test","payload":{"kind":"agentTurn","message":"Evidence test.","timeoutSeconds":10},"schedule":{"everyMs":999999,"kind":"every"},"sessionTarget":"isolated"}}',
+      },
+    ]);
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
