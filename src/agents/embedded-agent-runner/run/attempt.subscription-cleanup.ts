@@ -2,6 +2,7 @@ import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-s
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
+/** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
 export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
 type IdleAwareAgent = {
@@ -46,12 +47,23 @@ async function waitForEmbeddedAbortSettle(params: {
   }
 }
 
+/**
+ * Identity helper that preserves the concrete subscription params type at call
+ * sites. Keeping this as a named helper lets tests assert the exact shape passed
+ * into the subscription layer without widening the object inline.
+ */
 export function buildEmbeddedSubscriptionParams(
   params: SubscribeEmbeddedAgentSessionParams,
 ): SubscribeEmbeddedAgentSessionParams {
   return params;
 }
 
+/**
+ * Tears down per-attempt resources in lock-safe order: remove guards, settle
+ * aborted prompts, flush tool results, release the session lock, then dispose
+ * runtimes. Lock release errors are reported after best-effort disposal so a
+ * failed lock does not leak spawned runtimes.
+ */
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
   flushPendingToolResultsAfterIdle: (params: {
