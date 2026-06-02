@@ -1275,12 +1275,31 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
-    const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
-    if (hadActiveRunBeforeEvent) {
-      state.chatMessages = appendVisibleStreamMessage(state.chatMessages, state.chatStream);
-    }
-    if (errorMessage) {
-      state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, errorMessage);
+    const payloadMessage = hadActiveRunBeforeEvent
+      ? normalizeFinalAssistantMessage(payload.message)
+      : null;
+    const visiblePayloadMessage =
+      payloadMessage && !shouldHideAssistantChatMessage(payloadMessage) ? payloadMessage : null;
+    if (visiblePayloadMessage) {
+      const visibleStream = visibleAssistantStreamText(state.chatStream);
+      const payloadReplacesStream =
+        visibleStream !== null &&
+        hasAssistantStreamReplacement(
+          [...state.chatMessages, visiblePayloadMessage],
+          visibleStream,
+        );
+      if (!payloadReplacesStream) {
+        state.chatMessages = appendVisibleStreamMessage(state.chatMessages, state.chatStream);
+      }
+      state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, visiblePayloadMessage);
+    } else {
+      const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
+      if (hadActiveRunBeforeEvent) {
+        state.chatMessages = appendVisibleStreamMessage(state.chatMessages, state.chatStream);
+      }
+      if (errorMessage) {
+        state.chatMessages = appendDisplayMessageIfMissing(state.chatMessages, errorMessage);
+      }
     }
     reconcileTerminalRun("interrupted", "failed");
     setChatError(state, payload.errorMessage ?? "chat error");

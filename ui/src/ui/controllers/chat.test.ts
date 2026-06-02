@@ -1074,6 +1074,7 @@ describe("handleChatEvent", () => {
       role: "assistant",
       content: [{ type: "text", text: "Partial answer before gateway error." }],
       timestamp: 101,
+      metadata: { source: "gateway" },
     };
     const state = createState({
       sessionKey: "main",
@@ -1090,12 +1091,31 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("error");
-    expect(state.chatMessages).toHaveLength(1);
-    expectTextChatMessage(
-      state.chatMessages[0],
-      "assistant",
-      "Partial answer before gateway error.",
-    );
+    expect(state.chatMessages).toEqual([message]);
+  });
+
+  it("does not keep partial stream when the error payload contains the fuller text", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Partial answer before gateway error. Final detail." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before gateway error.",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "gateway disconnected",
+      message,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([message]);
   });
 
   it("prefers server-provided assistant error messages", () => {
