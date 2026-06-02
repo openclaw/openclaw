@@ -7,6 +7,25 @@
 
 ## Last Session
 
+- **Date**: 2026-06-01 / 2026-06-02 (Havaya per-user integration — writer + reader + parity)
+- **What changed**:
+  - **Gateway PR #49** (`feat/save-user-section-tool`): new `save_user_section` agent tool writing allowlisted sections (`User_D_Prompt`, `app_note`) to `workspace/users/<appUserId>.md` with HTML-comment markers and fail-closed upsert. Added `appUserId?: string` to `SessionEntry` (`src/config/sessions/types.ts`), `ChatSendParamsSchema` (`src/gateway/protocol/schema/logs-chat.ts`), and `chat.send` handler (`src/gateway/server-methods/chat.ts`) — persists `appUserId` from the incoming RPC onto the session entry before dispatch so the tool can resolve identity server-side without the model passing a user id. Registered in `src/agents/openclaw-tools.ts` (only when `appUserId` resolves). 9 vitest unit tests (`src/agents/tools/save-user-section.test.ts`).
+  - **Dashboard PR #107**: per-user workspace-file reader endpoint `GET /api/public/chat/[agentName]/user-file?userId=&section=`. Single module `lib/user-file-core.ts` (pure helpers + DI orchestrator). Route glue: timing-safe app-key auth (`AGENTGLOB_APP_API_KEY`), SSH stat-first + read via `lib/ssh-client.ts`, in-memory TTL cache, per-key rate limit, ETag/304/Vary validation. 30 unit tests (node:test). Section allowlist: `User_D_Prompt`, `app_note`.
+  - **Dashboard PR #108**: threads `appUserId` from the public chat POST body through `chatSendAndWait` into gateway `chat.send` params (`lib/gateway-client.ts` + `app/api/public/chat/[agentName]/route.ts`).
+  - **Dashboard PR #110**: parity — `chatSendStream` and the `/stream` route also forward `appUserId` (prevents silent identity drop if a consumer switches to the streaming/voice UI).
+  - **Gateway image `v2026.06.01.1`**: built from `origin/main` (SHA `ef5cdc992`) via fresh detached worktree (skipped dirty main checkout). Deployed to **`life` only** on 2ndClaw; all other agents remain on `v2026.05.24.x`.
+  - **`life` `workspace/AGENTS.md`**: added **App Profile Sections (Havaya web app)** guidance block (backup at `AGENTS.md.bak.20260601`). No redeploy needed — read on next agent turn.
+  - **Docs PRs**: openclaw #51 (`docs/tools/save-user-section.md` + `docs.json` nav); openclaw-dashboard #109 (as-built + plan SHIPPED banner); app.havaya #3 (consumer), #4 (as-built status), #6 (key redaction).
+  - **Security remediation**: a parallel-session PR committed the live `AGENTGLOB_APP_API_KEY` in plaintext. Key rotated on both the dashboard (Cloud Run) and Havaya (Coolify). Havaya `main` history rewritten (narrow 2-commit filter-branch); `feat/ui-tweaks` rebased onto clean main. All repos verified 0 reachable key occurrences.
+- **Validation**:
+  - Gateway: `pnpm check` (tsgo + oxfmt + oxlint) — pre-existing red CI (format drift + unrelated test errors); admin-merged per owner decision. `save-user-section.test.ts` 9/9 vitest pass.
+  - Dashboard: `npx tsc --noEmit` clean; `npm run build` exit 0 for PRs #107, #108, #110.
+  - Runtime smoke (prod): `GET /api/public/chat/life/user-file` — no key→401, valid key + missing file→404, non-allowlist→404, wrong key→401 ✅. Real user write confirmed: `users/user_3erjup5l2qciurikq1buqtxlglj.md` written by the `life` agent with correct marker format. Post-rotation smoke: old key→401, new key→200 ✅.
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-05-12 (projectmanager wallet chat access)
 - **What changed**:
   - Gateway branch `codex/fix-wallet-chat-access`: added `skills/wallet/SKILL.md` so deployed agents can use the AgentGlob wallet runtime from chat.
