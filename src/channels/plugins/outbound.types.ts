@@ -12,6 +12,7 @@ import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type { ChannelOutboundTargetRef } from "./outbound-target.types.js";
 import type {
   ChannelOutboundTargetMode,
   ChannelPollContext,
@@ -125,12 +126,7 @@ export type ChannelOutboundPayloadHint =
     }
   | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
 
-export type ChannelOutboundTargetRef = {
-  channel: string;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
+export type { ChannelOutboundTargetRef } from "./outbound-target.types.js";
 
 export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;

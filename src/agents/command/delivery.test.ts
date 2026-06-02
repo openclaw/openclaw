@@ -764,6 +764,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
             error: Error;
             sentBeforeError: true;
             stage: "platform_send";
+            target?: { channel: string; accountId?: string; to: string; threadId?: string };
           }) => void;
         }
       ).onPayloadDeliveryOutcome?.({
@@ -772,6 +773,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         error: new Error("second chunk failed"),
         sentBeforeError: true,
         stage: "platform_send",
+        target: { channel: "slack", to: "#general", threadId: "thread-1" },
       });
       return [{ channel: "slack", messageId: "msg-1" }];
     });
@@ -802,6 +804,11 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(String(outcome?.error)).toContain("second chunk failed");
     expect(outcome?.sentBeforeError).toBe(true);
     expect(outcome?.stage).toBe("platform_send");
+    expect(outcome?.target).toEqual({
+      provider: "slack",
+      to: "#general",
+      threadId: "thread-1",
+    });
   });
 
   it("marks no-payload deliveryStatus as terminal delivery success", async () => {
