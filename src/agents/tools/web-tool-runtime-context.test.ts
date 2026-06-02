@@ -125,6 +125,40 @@ describe("web tool runtime context", () => {
     });
   });
 
+  it("lets configured search provider ids win over stale runtime metadata", () => {
+    resolveWebSearchToolRuntimeContext({
+      config: { tools: { web: { search: { provider: "custom" } } } },
+      runtimeWebSearch: {
+        providerConfigured: "stale",
+        providerSource: "configured",
+        selectedProvider: "stale",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+
+    const ownerLookup = latestOwnerLookupParams();
+    expect(ownerLookup.contract).toBe("webSearchProviders");
+    expect(ownerLookup.value).toBe("custom");
+  });
+
+  it("keeps fetch provider ids aligned with runtime metadata precedence", () => {
+    resolveWebFetchToolRuntimeContext({
+      config: { tools: { web: { fetch: { provider: "firecrawl" } } } },
+      runtimeWebFetch: {
+        providerConfigured: "perplexity-fetch",
+        providerSource: "configured",
+        selectedProvider: "perplexity-fetch",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+
+    const ownerLookup = latestOwnerLookupParams();
+    expect(ownerLookup.contract).toBe("webFetchProviders");
+    expect(ownerLookup.value).toBe("perplexity-fetch");
+  });
+
   it("treats resolved global provider owners as explicit selections", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
     const { resolveWebSearchToolRuntimeContext: resolveWebSearchToolRuntimeContextLocal } =

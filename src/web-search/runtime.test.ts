@@ -921,7 +921,6 @@ describe("web search runtime", () => {
             },
           },
         },
-        providerId: "custom",
         runtimeWebSearch: {
           providerConfigured: "stale",
           selectedProvider: "stale",
@@ -972,7 +971,7 @@ describe("web search runtime", () => {
     ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
-  it("still falls back when config names an unknown provider id", async () => {
+  it("fails fast when config names an unknown provider id", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
         createTool: () => {
@@ -982,22 +981,20 @@ describe("web search runtime", () => {
       createDuckDuckGoSearchProvider(),
     ]);
 
-    const result = await runWebSearch({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "missing-id",
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "missing-id",
+              },
             },
           },
         },
-      },
-      args: { query: "config-typo" },
-    });
-    expect(result.provider).toBe("duckduckgo");
-    const searchResult = requireRecord(result.result);
-    expect(searchResult.provider).toBe("duckduckgo");
-    expect(searchResult.query).toBe("config-typo");
+        args: { query: "config-typo" },
+      }),
+    ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
   it("honors preferRuntimeProviders during execution", async () => {
