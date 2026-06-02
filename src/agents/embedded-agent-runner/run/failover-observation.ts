@@ -28,16 +28,27 @@ export type FailoverDecisionLoggerInput = {
 
 export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
+/**
+ * Normalizes observation fields that are not present in provider error text,
+ * especially runner-owned deadline timeouts.
+ */
 export function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
   return {
     ...base,
+    // Deadline timeouts may have no provider stop reason, but the failover log
+    // still needs a concrete reason so profile rotation and model fallback are
+    // searchable by the same dimension as provider-classified failures.
     failoverReason: base.failoverReason ?? (base.timedOut ? "timeout" : null),
     profileFailureReason: base.profileFailureReason ?? (base.timedOut ? "timeout" : null),
   };
 }
 
+/**
+ * Builds the structured warning logger used whenever the embedded runner
+ * rotates profiles, falls back to a model, or surfaces a provider error.
+ */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
@@ -60,6 +71,8 @@ export function createFailoverDecisionLogger(
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     const rawErrorConsoleSuffix =
+      // Keep structured rawErrorPreview for diagnostics, but suppress noisy
+      // provider HTML bodies in the one-line console message.
       safeRawErrorPreview &&
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
