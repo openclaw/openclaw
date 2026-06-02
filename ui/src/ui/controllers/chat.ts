@@ -136,7 +136,7 @@ function collectToolCallIds(message: unknown): string[] {
     return [];
   }
   const entry = message as Record<string, unknown>;
-  const ids = [entry.toolCallId, entry.tool_call_id]
+  const ids = [entry.toolCallId, entry.tool_call_id, entry.toolUseId, entry.tool_use_id, entry.id]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => value.trim());
   if (!Array.isArray(entry.content)) {
@@ -147,7 +147,13 @@ function collectToolCallIds(message: unknown): string[] {
       continue;
     }
     const contentEntry = block as Record<string, unknown>;
-    for (const value of [contentEntry.toolCallId, contentEntry.tool_call_id]) {
+    for (const value of [
+      contentEntry.toolCallId,
+      contentEntry.tool_call_id,
+      contentEntry.toolUseId,
+      contentEntry.tool_use_id,
+      contentEntry.id,
+    ]) {
       if (typeof value === "string" && value.trim()) {
         ids.push(value.trim());
       }
