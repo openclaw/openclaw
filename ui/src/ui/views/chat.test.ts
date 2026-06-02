@@ -1936,6 +1936,41 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, targetSessionKey);
   });
 
+  it("switches sessions from the desktop picker option before closing the picker", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn((callbackState: AppViewState, nextSessionKey: string) => {
+      expect(callbackState).toBe(state);
+      expect(callbackState.chatSessionPickerOpen).toBe(true);
+      expect(nextSessionKey).toBe("agent:main:work");
+    });
+    state.sessionKey = "agent:main:main";
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const sessions = createSessionsResultFromRows([
+      { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 2 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ]);
+    state.sessionsResult = sessions;
+    state.chatSessionPickerResult = sessions;
+    const container = document.createElement("div");
+    render(
+      renderChatSessionSelect(state, onSwitchSession, {
+        surface: "desktop",
+      }),
+      container,
+    );
+
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"][data-session-key="agent:main:work"]',
+      )!
+      .click();
+
+    expect(onSwitchSession).toHaveBeenCalledTimes(1);
+    expect(state.chatSessionPickerOpen).toBe(false);
+    expect(state.chatSessionPickerSurface).toBeNull();
+  });
+
   it("clears applied chat session picker search when the input is cleared", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;

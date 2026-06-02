@@ -699,11 +699,14 @@ function renderChatSessionPickerPopover(
                 aria-selected=${selected ? "true" : "false"}
                 title=${label}
                 type="button"
-                @click=${() => {
-                  closeChatSessionPicker(state);
-                  if (row.key !== state.sessionKey) {
-                    onSwitchSession(state, row.key);
+                @click=${(event: MouseEvent) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const nextSessionKey = row.key;
+                  if (nextSessionKey !== state.sessionKey) {
+                    onSwitchSession(state, nextSessionKey);
                   }
+                  closeChatSessionPicker(state);
                 }}
               >
                 <span class="chat-session-picker__option-main">
