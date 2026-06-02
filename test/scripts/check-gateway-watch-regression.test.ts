@@ -150,6 +150,12 @@ describe("check-gateway-watch-regression", () => {
         }),
     );
     const waitForGatewayReady = vi.fn(async () => false);
+    const spawn = vi.fn(() => {
+      process.nextTick(() => {
+        child.emit("error", new Error("spawn failed"));
+      });
+      return child;
+    });
 
     try {
       const result = await runTimedWatch(
@@ -162,12 +168,7 @@ describe("check-gateway-watch-regression", () => {
         outputDir,
         {
           allocateLoopbackPort: async () => 19042,
-          spawn: () => {
-            process.nextTick(() => {
-              child.emit("error", new Error("spawn failed"));
-            });
-            return child;
-          },
+          spawn,
           sleep,
           stopTimedWatchChild: stopChild,
           waitForGatewayReady,
@@ -180,6 +181,7 @@ describe("check-gateway-watch-regression", () => {
       expect(result.spawnError).toBe("spawn failed");
       expect(fs.existsSync(isolatedHomeDir)).toBe(false);
       expect(fs.existsSync(path.join(outputDir, "watch.home.txt"))).toBe(true);
+      expect(spawn.mock.calls[0]?.[2]?.env?.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS).toBe("0");
       expect(waitForGatewayReady).not.toHaveBeenCalled();
       expect(stopChild).not.toHaveBeenCalled();
     } finally {

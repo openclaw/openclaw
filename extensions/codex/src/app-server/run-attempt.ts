@@ -165,7 +165,7 @@ import {
 } from "./dynamic-tool-execution.js";
 import {
   filterCodexDynamicTools,
-  resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -595,7 +595,7 @@ export async function runCodexAppServerAttempt(
     tools,
     registeredTools,
     signal: runAbortController.signal,
-    loading: resolveCodexDynamicToolsLoading(pluginConfig),
+    loading: resolveCodexDynamicToolsLoadingForModel(pluginConfig, params.modelId),
     directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
     hookContext: {
       agentId: sessionAgentId,
@@ -1924,6 +1924,38 @@ export async function runCodexAppServerAttempt(
           );
         } else {
           thread = await restartContextEngineCodexThread();
+          // The fresh retry thread was not bootstrapped with the
+          // context-engine projection. Clear the stale projection from
+          // the saved binding so the next run will re-project instead
+          // of assuming the old epoch is still in the thread.
+          {
+            const retryBinding = await readCodexAppServerBinding(activeSessionFile);
+            if (
+              retryBinding &&
+              retryBinding.threadId === thread.threadId &&
+              retryBinding.contextEngine?.projection
+            ) {
+              const {
+                schemaVersion: _schemaVersion,
+                sessionFile: _boundSessionFile,
+                updatedAt: _updatedAt,
+                ...bindingForWrite
+              } = retryBinding;
+              await writeCodexAppServerBinding(activeSessionFile, {
+                ...bindingForWrite,
+                contextEngine: bindingForWrite.contextEngine
+                  ? { ...bindingForWrite.contextEngine, projection: undefined }
+                  : undefined,
+              });
+              embeddedAgentLog.info(
+                "codex app-server cleared stale context-engine projection after overflow retry",
+                {
+                  threadId: thread.threadId,
+                  previousEpoch: retryBinding.contextEngine.projection.epoch,
+                },
+              );
+            }
+          }
           emitCodexAppServerEvent(params, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: thread.threadId },
@@ -2640,7 +2672,7 @@ export const testing = {
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   includeForcedCodexDynamicToolAllow,
-  resolveCodexDynamicToolsLoading,
+  resolveCodexDynamicToolsLoadingForModel,
   resolveCodexAppServerHookChannelId,
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,

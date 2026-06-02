@@ -32,6 +32,7 @@ import {
   stopGateway,
   summarizeProcessSamples,
   tailFile,
+  unwrapRpcPayload,
   usesBuiltOpenClawEntry,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
@@ -444,6 +445,19 @@ describe("kitchen-sink RPC caller loading", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("kitchen-sink RPC payload unwrapping", () => {
+  it("preserves explicit nullish JSON-RPC result fields", () => {
+    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
+    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
+  });
+
+  it("prefers result before legacy payload and data envelopes", () => {
+    expect(unwrapRpcPayload({ result: false, payload: { stale: true } })).toBe(false);
+    expect(unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
+    expect(unwrapRpcPayload({ data: 0 })).toBe(0);
   });
 });
 
