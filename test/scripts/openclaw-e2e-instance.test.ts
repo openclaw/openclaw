@@ -625,7 +625,7 @@ fi
             "openclaw_e2e_install_trash_shim",
             `printf "%s" "$PATH" > ${shellQuote(pathFile)}`,
             `printf "%s" "$OPENCLAW_E2E_BIN_DIR" > ${shellQuote(binDirFile)}`,
-            'command -v trash >/dev/null',
+            "command -v trash >/dev/null",
           ].join("; "),
         ],
         {

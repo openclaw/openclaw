@@ -231,9 +231,7 @@ function broadcastToolResultToOwner(
   },
 ): void {
   const payload =
-    params.forced === true
-      ? { result: params.result, forced: true }
-      : { result: params.result };
+    params.forced === true ? { result: params.result, forced: true } : { result: params.result };
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "toolResult",

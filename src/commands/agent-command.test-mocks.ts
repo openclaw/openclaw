@@ -197,13 +197,7 @@ vi.mock("../agents/model-selection.js", () => {
       resolveDefaultRef(cfg),
     ),
     resolveModelRefFromString: vi.fn(
-      ({
-        raw,
-        defaultProvider,
-      }: {
-        raw: string;
-        defaultProvider?: string;
-      }) => {
+      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
         const ref = parseModelRef(raw, defaultProvider ?? "openai");
         return ref ? { ref, source: "parsed" } : null;
       },

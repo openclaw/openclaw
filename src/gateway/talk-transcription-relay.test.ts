@@ -130,9 +130,13 @@ describe("talk transcription gateway relay", () => {
       sttRequest?.onPartial?.("hel");
       sttRequest?.onTranscript?.("hello world");
     });
-    const { events, session } = await createStartedRelaySession(sttSession, { model: "stt-model" }, (req) => {
-      sttRequest = req;
-    });
+    const { events, session } = await createStartedRelaySession(
+      sttSession,
+      { model: "stt-model" },
+      (req) => {
+        sttRequest = req;
+      },
+    );
 
     expectRecordFields(session, "session", {
       provider: "stt-test",

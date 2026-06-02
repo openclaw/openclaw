@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferred } from "../test/deferred.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
-import { createDeferred } from "../test/deferred.js";
 import type { RespondFn } from "./types.js";
 
 function requestModelsList(params: {

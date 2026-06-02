@@ -32,9 +32,10 @@ type McpLoopbackScopeParams = {
   senderIsOwner: boolean | undefined;
 };
 
-export function resolveMcpLoopbackScopedTools(
-  params: McpLoopbackScopeParams,
-): { agentId: string | undefined; tools: McpLoopbackTool[] } {
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
+  agentId: string | undefined;
+  tools: McpLoopbackTool[];
+} {
   const scoped = resolveGatewayScopedTools({
     ...params,
     surface: "loopback",
