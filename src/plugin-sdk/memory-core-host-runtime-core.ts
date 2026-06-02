@@ -39,15 +39,23 @@ export type {
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
+  MemoryRerankProviderRegistration,
 } from "../plugins/memory-state.js";
+export type {
+  MemoryRerankCandidate,
+  MemoryRerankProvider,
+  MemoryRerankScore,
+} from "../../packages/memory-host-sdk/src/host/types.js";
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  listMemoryRerankProviders,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
+  registerMemoryRerankProvider,
 } from "../plugins/memory-state.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";
