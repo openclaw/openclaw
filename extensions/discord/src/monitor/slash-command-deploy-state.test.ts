@@ -1,10 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { setDiscordRuntime, type DiscordRuntime } from "../runtime.js";
 import {
   buildDiscordSlashCommandDeployStoreKey,
   clearDiscordSlashCommandDeployHashes,
+  DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
   mergeDiscordSlashCommandDeployHashes,
   readDiscordSlashCommandDeployHashes,
 } from "./slash-command-deploy-state.js";
@@ -14,10 +21,21 @@ const tempDirs: string[] = [];
 async function createStateEnv(): Promise<NodeJS.ProcessEnv> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-disc-slash-deploy-"));
   tempDirs.push(dir);
-  return { ...process.env, OPENCLAW_STATE_DIR: dir };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+  setDiscordRuntime({
+    state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("discord", {
+          ...options,
+          env: options.env ?? env,
+        }),
+    },
+  } as unknown as DiscordRuntime);
+  return env;
 }
 
 afterEach(async () => {
+  resetPluginStateStoreForTests();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await fs.rm(dir, { recursive: true, force: true });
@@ -98,7 +116,7 @@ describe("slash command deploy persistence", () => {
     ).toBe(0);
   });
 
-  it("buildDiscordSlashCommandDeployStoreKey matches persisted entries", async () => {
+  it("buildDiscordSlashCommandDeployStoreKey matches plugin state entries", async () => {
     const env = await createStateEnv();
     const applicationId = "9".repeat(12);
     const accountId = "workspace";
@@ -109,12 +127,12 @@ describe("slash command deploy persistence", () => {
       accountId,
       hashes: { "guild:111": "e".repeat(64) },
     });
-    const filePath = path.join(
-      env.OPENCLAW_STATE_DIR as string,
-      "discord",
-      "slash-command-deploy-hashes.json",
-    );
-    const raw = JSON.parse(await fs.readFile(filePath, "utf-8"));
-    expect(Object.keys(raw.entries)).toContain(key);
+    const store = createPluginStateKeyedStoreForTests("discord", {
+      namespace: DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+      maxEntries: 256,
+      env,
+    });
+    const entries = await store.entries();
+    expect(entries.map((entry) => entry.key)).toContain(key);
   });
 });

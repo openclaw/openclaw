@@ -1,30 +1,23 @@
-import os from "node:os";
-import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getDiscordRuntime } from "../runtime.js";
 
-const SLASH_COMMAND_DEPLOY_STORE_LOCK_OPTIONS = {
-  retries: {
-    retries: 8,
-    factor: 2,
-    minTimeout: 50,
-    maxTimeout: 5_000,
-    randomize: true,
-  },
-  stale: 15_000,
-} as const;
+export const DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE = "slash-command-deploy-hashes";
+export const DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES = 256;
+export const DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH =
+  "discord/slash-command-deploy-hashes.json";
 
-type SlashCommandDeployStore = {
+type SlashCommandDeployHashesEntry = {
   version: 1;
-  entries: Record<string, Record<string, string>>;
+  hashes: Record<string, string>;
 };
 
-function resolveSlashCommandDeployStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "discord", "slash-command-deploy-hashes.json");
+function openSlashCommandDeployStore(env?: NodeJS.ProcessEnv) {
+  return getDiscordRuntime().state.openKeyedStore<SlashCommandDeployHashesEntry>({
+    namespace: DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+    maxEntries: DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+    ...(env ? { env } : {}),
+  });
 }
 
 export function buildDiscordSlashCommandDeployStoreKey(params: {
@@ -36,7 +29,7 @@ export function buildDiscordSlashCommandDeployStoreKey(params: {
   return `${app}:${acct}`;
 }
 
-function sanitizeScopeHashes(raw: unknown): Record<string, string> {
+export function sanitizeSlashCommandDeployScopeHashes(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== "object") {
     return {};
   }
@@ -54,23 +47,19 @@ function sanitizeScopeHashes(raw: unknown): Record<string, string> {
   return out;
 }
 
-async function readStore(filePath: string): Promise<SlashCommandDeployStore> {
-  const { value } = await readJsonFileWithFallback(filePath, {
-    version: 1,
-    entries: {} as Record<string, Record<string, string>>,
-  });
-  if (!value || typeof value !== "object" || value.version !== 1) {
-    return { version: 1, entries: {} };
+function sanitizeStoredEntry(value: unknown): SlashCommandDeployHashesEntry | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
   }
-  const entries: Record<string, Record<string, string>> = {};
-  if (value.entries && typeof value.entries === "object") {
-    for (const [k, v] of Object.entries(value.entries)) {
-      if (typeof k === "string") {
-        entries[k] = sanitizeScopeHashes(v);
-      }
-    }
+  const typed = value as { version?: unknown; hashes?: unknown };
+  if (typed.version !== 1) {
+    return undefined;
   }
-  return { version: 1, entries };
+  const hashes = sanitizeSlashCommandDeployScopeHashes(typed.hashes);
+  if (Object.keys(hashes).length === 0) {
+    return undefined;
+  }
+  return { version: 1, hashes };
 }
 
 export async function readDiscordSlashCommandDeployHashes(params: {
@@ -83,9 +72,12 @@ export async function readDiscordSlashCommandDeployHashes(params: {
     return {};
   }
   const key = buildDiscordSlashCommandDeployStoreKey(params);
-  const filePath = resolveSlashCommandDeployStorePath(params.env);
-  const store = await readStore(filePath);
-  return { ...sanitizeScopeHashes(store.entries[key]) };
+  try {
+    const entry = await openSlashCommandDeployStore(params.env).lookup(key);
+    return { ...sanitizeStoredEntry(entry)?.hashes };
+  } catch {
+    return {};
+  }
 }
 
 export async function mergeDiscordSlashCommandDeployHashes(params: {
@@ -98,19 +90,19 @@ export async function mergeDiscordSlashCommandDeployHashes(params: {
   if (!app) {
     return;
   }
-  const snapshot = sanitizeScopeHashes(params.hashes);
+  const snapshot = sanitizeSlashCommandDeployScopeHashes(params.hashes);
   if (Object.keys(snapshot).length === 0) {
     return;
   }
   const key = buildDiscordSlashCommandDeployStoreKey(params);
-  const filePath = resolveSlashCommandDeployStorePath(params.env);
-
-  await withFileLock(filePath, SLASH_COMMAND_DEPLOY_STORE_LOCK_OPTIONS, async () => {
-    const store = await readStore(filePath);
-    const prior = sanitizeScopeHashes(store.entries[key]);
-    store.entries[key] = { ...prior, ...snapshot };
-    await writeJsonFileAtomically(filePath, store);
-  });
+  try {
+    await openSlashCommandDeployStore(params.env).update(key, (current) => {
+      const prior = sanitizeStoredEntry(current)?.hashes ?? {};
+      return { version: 1, hashes: { ...prior, ...snapshot } };
+    });
+  } catch {
+    // Fingerprint cache is best-effort; deploy should never fail because persistence did.
+  }
 }
 
 export async function clearDiscordSlashCommandDeployHashes(params: {
@@ -123,15 +115,9 @@ export async function clearDiscordSlashCommandDeployHashes(params: {
     return;
   }
   const key = buildDiscordSlashCommandDeployStoreKey(params);
-  const filePath = resolveSlashCommandDeployStorePath(params.env);
-
-  await withFileLock(filePath, SLASH_COMMAND_DEPLOY_STORE_LOCK_OPTIONS, async () => {
-    const store = await readStore(filePath);
-    if (!store.entries[key]) {
-      return;
-    }
-    const { [key]: _removed, ...rest } = store.entries;
-    store.entries = rest;
-    await writeJsonFileAtomically(filePath, store);
-  });
+  try {
+    await openSlashCommandDeployStore(params.env).delete(key);
+  } catch {
+    // Best-effort cache cleanup only.
+  }
 }

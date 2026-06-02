@@ -7,6 +7,12 @@ import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH,
+  DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+  DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+  sanitizeSlashCommandDeployScopeHashes,
+} from "./slash-command-deploy-state.js";
+import {
   normalizePersistedBinding,
   THREAD_BINDINGS_MAX_ENTRIES,
   THREAD_BINDINGS_NAMESPACE,
@@ -31,6 +37,11 @@ type LegacyThreadBindingsStore = {
   bindings?: unknown;
 };
 
+type LegacySlashCommandDeployStore = {
+  version?: unknown;
+  entries?: unknown;
+};
+
 function fileExists(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isFile();
@@ -45,6 +56,15 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
     return parsed && typeof parsed === "object"
       ? (parsed as LegacyModelPickerPreferencesStore)
       : null;
+  } catch {
+    return null;
+  }
+}
+
+function readLegacySlashCommandDeployStore(filePath: string): LegacySlashCommandDeployStore | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as LegacySlashCommandDeployStore) : null;
   } catch {
     return null;
   }
@@ -197,6 +217,45 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
           if (normalized) {
             out.push({ key: toBindingRecordKey(normalized), value: normalized });
           }
+        }
+        return out;
+      },
+    });
+  }
+
+  const slashCommandDeploySourcePath = path.join(
+    stateDir,
+    DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH,
+  );
+  if (fileExists(slashCommandDeploySourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord slash command deploy fingerprints",
+      sourcePath: slashCommandDeploySourcePath,
+      targetPath: `plugin state:${DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+      maxEntries: DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "rename",
+      readEntries: () => {
+        const store = readLegacySlashCommandDeployStore(slashCommandDeploySourcePath);
+        if (!store?.entries || typeof store.entries !== "object") {
+          return [];
+        }
+        const out: Array<{ key: string; value: unknown }> = [];
+        for (const [rawKey, rawHashes] of Object.entries(
+          store.entries as Record<string, unknown>,
+        )) {
+          const key = rawKey.trim();
+          if (!key.includes(":")) {
+            continue;
+          }
+          const hashes = sanitizeSlashCommandDeployScopeHashes(rawHashes);
+          if (Object.keys(hashes).length === 0) {
+            continue;
+          }
+          out.push({ key, value: { version: 1, hashes } });
         }
         return out;
       },

@@ -298,7 +298,7 @@ export type DiscordSlashCommandDeployMode =
   | "always"
   /** Default: persist command-set fingerprints and skip Discord deploy REST when unchanged since last successful deploy. */
   | "changed-only"
-  /** Skip automatic background deploy; does not affect explicit `commands.native=false` clearing. */
+  /** Skip automatic background deploy when native commands stay enabled. */
   | "disabled";
 
 export type DiscordSlashCommandDeployConfig = {

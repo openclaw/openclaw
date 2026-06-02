@@ -626,13 +626,13 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
 - `commands.native` defaults to `"auto"` and is enabled for Discord.
 - Per-channel override: `channels.discord.commands.native`.
-- `commands.native=false` explicitly clears previously registered Discord native commands.
+- `commands.native=false` disables native slash command registration and skips automatic startup deploy. It does not call Discord's command API to remove commands already registered on the application.
 - `slashCommandDeploy` controls gateway startup reconcile when native Discord commands stay enabled. Set it directly (`"always" | "changed-only" | "disabled"`) or use `{ mode: "..." }`. Default: `changed-only`.
   - `always`: reconcile on each restart (prior behavior).
 
-  - `changed-only`: persist successful command-set fingerprints under the OpenClaw state directory (see `discord/slash-command-deploy-hashes.json`) and skip deploy REST unless the serialized command registrations change since the last recorded successful deploy.
+  - `changed-only`: persist successful command-set fingerprints in Discord plugin state and skip deploy REST unless the serialized command registrations change since the last recorded successful deploy. Run `openclaw doctor --fix` to migrate legacy `discord/slash-command-deploy-hashes.json` files.
 
-  - `disabled`: skip automatic background deploy (useful when an external registrar owns commands). Clearing via `commands.native=false` remains explicit and unaffected.
+  - `disabled`: skip automatic background deploy (useful when an external registrar owns commands). `commands.native=false` also skips deploy but does not clear Discord-side commands.
 
 - Native command auth uses the same Discord allowlists/policies as normal message handling.
 - Commands may still be visible in Discord UI for users who are not authorized; execution still enforces OpenClaw auth and returns "not authorized".

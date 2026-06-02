@@ -52,7 +52,7 @@ export const discordChannelConfigUiHints = {
   },
   "slashCommandDeploy.mode": {
     label: "Discord Native Slash Deploy Mode",
-    help: 'Startup deploy policy for Discord application commands when native slash commands are enabled: "changed-only" (default; persist fingerprints under the OpenClaw state dir and skip deploy REST until the serialized command sets change), "always" (reconcile on each gateway restart), or "disabled" (skip automatic startup deploy).',
+    help: 'Startup deploy policy for Discord application commands when native slash commands are enabled: "changed-only" (default; persist fingerprints in Discord plugin state and skip deploy REST until the serialized command sets change), "always" (reconcile on each gateway restart), or "disabled" (skip automatic startup deploy).',
   },
   streaming: {
     label: "Discord Streaming Mode",
