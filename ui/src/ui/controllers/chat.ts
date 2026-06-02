@@ -661,7 +661,7 @@ function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): b
   );
 }
 
-function maybeResetToolStream(state: ChatState) {
+function maybeResetToolStream(state: ChatState, opts?: { preserveStreamSegments?: boolean }) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
     toolHost.toolStreamById instanceof Map &&
@@ -669,7 +669,13 @@ function maybeResetToolStream(state: ChatState) {
     Array.isArray(toolHost.chatToolMessages) &&
     Array.isArray(toolHost.chatStreamSegments)
   ) {
+    const preservedStreamSegments = opts?.preserveStreamSegments
+      ? [...toolHost.chatStreamSegments]
+      : null;
     resetToolStream(toolHost as Parameters<typeof resetToolStream>[0]);
+    if (preservedStreamSegments) {
+      toolHost.chatStreamSegments = preservedStreamSegments;
+    }
   }
 }
 
@@ -886,14 +892,20 @@ async function loadChatHistoryUncached(
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
-      const visibleStream = visibleAssistantStreamText(state.chatStream);
+      const visibleStreamParts = visibleAssistantStreamParts(state);
       const historyReplacedStream =
-        visibleStream !== null && hasAssistantStreamReplacement(state.chatMessages, visibleStream);
+        visibleStreamParts.length > 0 &&
+        visibleStreamParts.every((part) =>
+          hasAssistantStreamPartReplacement(state.chatMessages, part),
+        );
       const historyReplacedToolStream = hasPersistedToolHistoryMessages(state.chatMessages);
       if (historyReplacedToolStream) {
-        maybeResetToolStream(state);
+        maybeResetToolStream(state, {
+          preserveStreamSegments:
+            Boolean(state.chatRunId) && visibleStreamParts.length > 0 && !historyReplacedStream,
+        });
       }
-      if (!visibleStream || historyReplacedStream) {
+      if (visibleStreamParts.length === 0 || historyReplacedStream) {
         // Clear all streaming state — history includes tool results and text
         // inline, so keeping streaming artifacts would cause duplicates.
         maybeResetToolStream(state);
