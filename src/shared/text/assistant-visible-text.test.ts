@@ -835,6 +835,7 @@ describe("sanitizeAssistantVisibleText", () => {
       "Visible intro.",
       "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
+      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
       "🛠️ run git status",
       "Visible outro.",
     ].join("\n");
@@ -903,6 +904,18 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
 
     expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
       "[Tool Call: read (ID: toolu_1)]",
+    );
+  });
+
+  it("uses the tool-progress profile to strip scaffolding while preserving progress lines", () => {
+    const input = [
+      "<think>private reasoning</think>",
+      '<tool_call>{"name":"x"}</tool_call>',
+      "🛠️ run git status",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
+      "🛠️ run git status",
     );
   });
 });

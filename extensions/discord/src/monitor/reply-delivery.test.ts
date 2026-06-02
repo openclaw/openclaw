@@ -176,6 +176,33 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("strips assistant scaffolding from explicit tool progress payloads", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "<think>private reasoning</think>",
+            '<tool_call>{"name":"x"}</tool_call>',
+            "🛠️ run git status",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "tool",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "🛠️ run git status" }],
+      }),
+    );
+  });
+
   it("strips internal execution trace lines at the final Discord send boundary", async () => {
     await deliverDiscordReply({
       replies: [

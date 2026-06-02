@@ -1,6 +1,9 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithProfile,
+} from "openclaw/plugin-sdk/text-chunking";
 import { stripPlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
 const DISCORD_INTERNAL_CHANNEL_LINE_RE =
@@ -71,7 +74,9 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
     const safeText =
       typeof payload.text === "string"
         ? preserveVerboseToolProgress
-          ? collapseExcessBlankLines(payload.text).trim()
+          ? collapseExcessBlankLines(
+              sanitizeAssistantVisibleTextWithProfile(payload.text, "tool-progress"),
+            ).trim()
           : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
