@@ -29,6 +29,18 @@ describe("detectPackageManager", () => {
     );
   });
 
+  it("uses npm shrinkwrap as published npm package evidence", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
   it.each([
     {
       name: "uses bun.lock",
@@ -45,6 +57,14 @@ describe("detectPackageManager", () => {
       files: [
         { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
         { path: "package-lock.json", content: "" },
+      ],
+      expected: "npm",
+    },
+    {
+      name: "falls back to npm shrinkwrap for unsupported packageManager values",
+      files: [
+        { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
       ],
       expected: "npm",
     },

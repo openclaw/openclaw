@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -219,7 +220,12 @@ function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
   }
   if (params.manager === "npm") {
     return {
-      lockfilePath: path.join(root, "package-lock.json"),
+      lockfilePath: path.join(
+        root,
+        existsSync(path.join(root, "npm-shrinkwrap.json"))
+          ? "npm-shrinkwrap.json"
+          : "package-lock.json",
+      ),
       markerPath: path.join(root, "node_modules"),
     };
   }
