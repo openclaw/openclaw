@@ -1,4 +1,3 @@
-// Feishu tests cover streaming card plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -219,14 +218,14 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
-  it("retries cumulative content after a failed streaming update", async () => {
+  it("retries unsent content after a failed content update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_000);
     const updateBodies: string[] = [];
     mockFetches(updateBodies, new Set([0]));
 
     const session = new FeishuStreamingSession({} as never, {
-      appId: "app_failed_delta_retry",
+      appId: "app_failed_content_retry",
       appSecret: "secret",
     });
     setStreamingSessionInternals(session, {
@@ -257,14 +256,14 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
-  it("retries cumulative content after a non-OK streaming update", async () => {
+  it("retries unsent content after a non-OK content update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_500);
     const updateBodies: string[] = [];
     mockFetches(updateBodies, new Set<number>(), [], new Map([[0, 429]]));
 
     const session = new FeishuStreamingSession({} as never, {
-      appId: "app_non_ok_delta_retry",
+      appId: "app_non_ok_content_retry",
       appSecret: "secret",
     });
     setStreamingSessionInternals(session, {
