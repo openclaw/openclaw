@@ -1289,6 +1289,30 @@ describe("OpenClaw SDK", () => {
     await oc.close();
   });
 
+  it("records a late failure cause even when the hub was already closed", () => {
+    const hub = new EventHub<GatewayEvent>();
+    const failure = new Error("late pump failure");
+
+    hub.close();
+    hub.close(failure);
+
+    const iterator = hub.stream()[Symbol.asyncIterator]();
+    return expect(iterator.next()).rejects.toBe(failure);
+  });
+
+  it("wakes a blocked consumer when a failure cause arrives", async () => {
+    const hub = new EventHub<GatewayEvent>();
+    const failure = new Error("failure after consumer parked");
+    const iterator = hub.stream()[Symbol.asyncIterator]();
+
+    const pending = iterator.next();
+    // Consumer is parked waiting for events; deliver the failure afterwards.
+    await Promise.resolve();
+    hub.close(failure);
+
+    await expect(pending).rejects.toBe(failure);
+  });
+
   it("surfaces pump failures after a successful event when the iterator later throws", async () => {
     const failure = new Error("synthetic transport event failure after yield");
     const transport: OpenClawTransport = {

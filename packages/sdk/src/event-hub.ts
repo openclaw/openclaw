@@ -39,15 +39,26 @@ export class EventHub<T> {
   }
 
   close(error?: unknown): void {
+    // Record the first failure cause even if the hub was already closed
+    // without one, so a pump failure racing a plain consumer-driven close()
+    // still surfaces instead of being swallowed by idempotency.
+    if (error !== undefined && this.closeError === undefined) {
+      this.closeError = error;
+      this.wakeAllWaiters();
+    }
     if (this.closed) {
       return;
     }
     this.closed = true;
-    if (error !== undefined) {
-      this.closeError = error;
-    }
     this.replayEvents.length = 0;
     this.listeners.clear();
+    this.wakeAllWaiters();
+  }
+
+  private wakeAllWaiters(): void {
+    if (this.waiters.size === 0) {
+      return;
+    }
     for (const wake of this.waiters) {
       wake();
     }
@@ -99,11 +110,13 @@ export class EventHub<T> {
               if (queue.length > 0) {
                 return { done: false, value: queue.shift() as T };
               }
+              // Surface a pump failure once buffered events are drained,
+              // independent of whether the hub has also been marked closed.
+              if (this.closeError !== undefined) {
+                cleanup();
+                throw this.closeError;
+              }
               if (this.closed) {
-                if (this.closeError !== undefined) {
-                  cleanup();
-                  throw this.closeError;
-                }
                 break;
               }
               await new Promise<void>((resolve) => {

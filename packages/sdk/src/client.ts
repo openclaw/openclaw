@@ -354,6 +354,9 @@ export class OpenClaw {
 
   async close(): Promise<void> {
     await this.transport.close?.();
+    // Await the pump first so a pump failure lands in normalizedEvents via
+    // close(pumpError) before this consumer-driven close() runs. EventHub
+    // still records a late failure cause if the ordering ever changes.
     await this.eventPumpPromise?.catch(() => {});
     this.normalizedEvents.close();
     this.eventPumpPromise = null;
