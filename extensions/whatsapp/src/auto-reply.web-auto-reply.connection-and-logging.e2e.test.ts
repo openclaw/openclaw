@@ -938,6 +938,36 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
+  it("passes readOnly: true from account config into the listener", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+              readOnly: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      { accountId: "work" },
+    );
+
+    resetLoadConfigMock();
+    expect((capture.getLastOptions() as { readOnly?: boolean })?.readOnly).toBe(true);
+  });
+
   it("processes inbound messages without batching and preserves timestamps", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       const originalMax = process.getMaxListeners();

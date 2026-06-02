@@ -65,7 +65,7 @@ import {
 } from "./outbound-mentions.js";
 import { DisconnectReason, isJidGroup } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
-import { normalizeWhatsAppSendResult } from "./send-result.js";
+import { normalizeWhatsAppSendResult, normalizeWhatsAppSendResultDropped } from "./send-result.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
@@ -187,6 +187,8 @@ type MonitorWebInboxOptions = {
   selfChatMode?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Drop all outbound socket writes (sendMessage + sendPresenceUpdate) for this account. */
+  readOnly?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Optional debounce gating predicate. */
@@ -243,14 +245,16 @@ export async function attachWebInboxToSocket(
   };
   const presence = options.selfChatMode ? "unavailable" : "available";
 
-  try {
-    await sock.sendPresenceUpdate(presence);
-    logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
-  } catch (err) {
-    logWhatsAppVerbose(
-      options.verbose,
-      `Failed to send '${presence}' presence on connect: ${String(err)}`,
-    );
+  if (!options.readOnly) {
+    try {
+      await sock.sendPresenceUpdate(presence);
+      logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
+    } catch (err) {
+      logWhatsAppVerbose(
+        options.verbose,
+        `Failed to send '${presence}' presence on connect: ${String(err)}`,
+      );
+    }
   }
 
   const selfIdentity = await readWebSelfIdentityForDecision(
@@ -426,6 +430,9 @@ export async function attachWebInboxToSocket(
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
   ) => {
+    if (options.readOnly) {
+      return undefined;
+    }
     let lastErr: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt++) {
       const currentSock = getCurrentSock();
@@ -963,6 +970,9 @@ export async function attachWebInboxToSocket(
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
+      if (options.readOnly) {
+        return;
+      }
       const currentSock = getCurrentSock();
       if (!currentSock) {
         return;
@@ -974,6 +984,11 @@ export async function attachWebInboxToSocket(
       }
     };
     const reply = async (text: string, optionsResult?: MiscMessageGenerationOptions) => {
+      // readOnly suppresses all outbound sends by policy; signal a drop rather
+      // than a failure so callers can distinguish sent / dropped / failed.
+      if (options.readOnly) {
+        return normalizeWhatsAppSendResultDropped("text", "read-only");
+      }
       const resolved = await resolveOutboundMentionsForGroup(chatJid, text);
       const result = await sendTrackedMessage(
         chatJid,
@@ -986,6 +1001,9 @@ export async function attachWebInboxToSocket(
       payload: AnyMessageContent,
       optionsValue?: MiscMessageGenerationOptions,
     ) => {
+      if (options.readOnly) {
+        return normalizeWhatsAppSendResultDropped("media", "read-only");
+      }
       const previewPayload = await addWhatsAppImagePreviewFields(payload);
       const result = await sendTrackedMessage(
         chatJid,
@@ -1250,6 +1268,7 @@ export async function attachWebInboxToSocket(
   })();
 
   const sendApi = createWebSendApi({
+    readOnly: options.readOnly,
     sock: {
       sendMessage: (
         jid: string,
@@ -1257,6 +1276,9 @@ export async function attachWebInboxToSocket(
         optionsLocal?: MiscMessageGenerationOptions,
       ) => sendTrackedMessage(jid, content, optionsLocal),
       sendPresenceUpdate: async (presenceLocal, jid?: string) => {
+        if (options.readOnly) {
+          return;
+        }
         const currentSock = getCurrentSock();
         if (!currentSock) {
           throw new Error(RECONNECT_IN_PROGRESS_ERROR);

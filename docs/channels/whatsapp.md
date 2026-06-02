@@ -554,6 +554,47 @@ Behavior notes:
 - `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold.
 - Tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
 
+## Read-only account mode
+
+Set `readOnly: true` on an account to put it into passive observation mode.
+OpenClaw will receive and process inbound messages normally but will never
+write anything back to WhatsApp on that account:
+
+- **Outbound messages are always suppressed** — no message, poll, or
+  reaction will ever be sent on this account, regardless of what triggered
+  the send: an agent reply to an inbound message, an agent acting on its own
+  initiative, or an explicit owner request.
+- **Typing indicators** are suppressed — neither the connect-time presence
+  announcement nor per-turn composing presence is sent.
+- **Owner slash commands** sent to this account are ignored. Commands like
+  `/reset` or `/config` are interactive: they change state and confirm the
+  change via a reply. On a read-only account the confirmation can never be
+  sent, so the command would mutate state silently with no feedback.
+- **Read receipts** are governed by `sendReadReceipts` independently of
+  `readOnly`. Set `sendReadReceipts: false` on the same account to also
+  suppress blue ticks.
+- **Requires a gateway restart** to take effect after changing.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        monitor: {
+          readOnly: true,
+          sendReadReceipts: false, // suppress blue ticks too
+        },
+      },
+    },
+  },
+}
+```
+
+Typical use: when your personal number is used to read and summarize
+conversations or run automations, without ever replying on your behalf.
+Also useful for compliance or archive accounts that must not send under
+any circumstances.
+
 ## Multi-account and credentials
 
 <AccordionGroup>
@@ -579,6 +620,7 @@ Behavior notes:
     In legacy auth directories, `oauth.json` is preserved while Baileys auth files are removed.
 
   </Accordion>
+
 </AccordionGroup>
 
 ## Tools, actions, and config writes
@@ -781,7 +823,7 @@ High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
-- multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
+- multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, `accounts.<id>.readOnly`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 - prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`

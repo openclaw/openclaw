@@ -613,7 +613,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
       skipLog: false,
       tableMode,
     });
-    if (!delivery.providerAccepted) {
+    if (!delivery.providerAccepted && !delivery.dropReason) {
       params.replyLogger.warn(
         {
           correlationId: params.msg.id ?? null,
@@ -625,6 +625,20 @@ export async function dispatchWhatsAppBufferedReply(params: {
           replyKind: info.kind,
         },
         "auto-reply was not accepted by WhatsApp provider",
+      );
+      return whatsAppReplyDeliveryVisibility(false);
+    }
+    if (delivery.dropReason) {
+      params.replyLogger.debug(
+        {
+          correlationId: params.msg.id ?? null,
+          connectionId: params.connectionId,
+          conversationId: params.conversationId,
+          chatId: params.msg.chatId,
+          replyKind: info.kind,
+          dropReason: delivery.dropReason,
+        },
+        `auto-reply suppressed (${delivery.dropReason})`,
       );
       return whatsAppReplyDeliveryVisibility(false);
     }

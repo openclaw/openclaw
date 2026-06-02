@@ -741,4 +741,45 @@ describe("web outbound", () => {
       undefined,
     );
   });
+
+  it.each([
+    {
+      label: "message",
+      mockDrop: (fn: ReturnType<typeof vi.fn>) =>
+        fn.mockResolvedValueOnce({
+          kind: "text",
+          messageId: "dropped",
+          keys: [],
+          providerAccepted: false,
+          dropReason: "read-only",
+        } satisfies WhatsAppSendResult),
+      run: () => sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg: WHATSAPP_TEST_CFG }),
+      mock: () => sendMessage,
+    },
+    {
+      label: "poll",
+      mockDrop: (fn: ReturnType<typeof vi.fn>) =>
+        fn.mockResolvedValueOnce({
+          kind: "poll",
+          messageId: "dropped",
+          keys: [],
+          providerAccepted: false,
+          dropReason: "read-only",
+        } satisfies WhatsAppSendResult),
+      run: () =>
+        sendPollWhatsApp(
+          "+1555",
+          { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 1 },
+          { verbose: false, cfg: WHATSAPP_TEST_CFG },
+        ),
+      mock: () => sendPoll,
+    },
+  ])(
+    "read-only policy drop does not produce a delivered message id ($label)",
+    async ({ mockDrop, run, mock }) => {
+      mockDrop(mock());
+      const result = await run();
+      expect(result.messageId).toBe("");
+    },
+  );
 });

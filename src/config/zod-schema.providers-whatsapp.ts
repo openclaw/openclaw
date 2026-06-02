@@ -75,6 +75,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
+    readOnly: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),

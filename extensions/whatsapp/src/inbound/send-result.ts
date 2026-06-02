@@ -10,6 +10,12 @@ import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/strin
 
 export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
 
+/**
+ * Reason a send was intentionally suppressed before reaching the transport.
+ * Distinguishes policy drops from actual transport failures.
+ */
+export type WhatsAppSendDropReason = "read-only";
+
 type WhatsAppSendKey = Omit<
   Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,
   "id"
@@ -22,7 +28,12 @@ export type WhatsAppSendResult = {
   messageId: string;
   receipt?: MessageReceipt;
   keys: WhatsAppSendKey[];
+  /** True when the provider acknowledged the send. False for both transport
+   * failures and intentional policy drops — use dropReason to distinguish. */
   providerAccepted: boolean;
+  /** Set when providerAccepted is false because the send was suppressed by
+   * policy rather than a transport failure. Absence means an actual failure. */
+  dropReason?: WhatsAppSendDropReason;
 };
 
 function resolveWhatsAppReceiptKind(kind: WhatsAppSendKind): MessageReceiptPartKind {
@@ -82,18 +93,44 @@ export function normalizeWhatsAppSendResult(
   };
 }
 
+/** Create a result representing an intentional policy drop (not a transport failure). */
+export function normalizeWhatsAppSendResultDropped(
+  kind: WhatsAppSendKind,
+  dropReason: WhatsAppSendDropReason,
+): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: "dropped",
+    receipt: createWhatsAppSendReceipt(kind, []),
+    keys: [],
+    providerAccepted: false,
+    dropReason,
+  };
+}
+
 export function combineWhatsAppSendResults(
   kind: WhatsAppSendKind,
   results: readonly WhatsAppSendResult[],
 ): WhatsAppSendResult {
   const messageIds = uniqueStrings(results.flatMap(listWhatsAppSendResultMessageIds));
   const keys = results.flatMap((result) => result.keys);
+  const anyAccepted = results.some((result) => result.providerAccepted);
+  // Propagate dropReason only when nothing was sent: if all non-accepted results
+  // share the same drop reason and none were actually accepted, the combined
+  // result was dropped for that reason rather than failing.
+  const dropReason =
+    !anyAccepted &&
+    results.length > 0 &&
+    results.every((r) => r.dropReason !== undefined && r.dropReason === results[0]?.dropReason)
+      ? results[0]?.dropReason
+      : undefined;
   return {
     kind,
     messageId: messageIds[0] ?? "unknown",
     receipt: createWhatsAppSendReceipt(kind, keys),
     keys,
-    providerAccepted: results.some((result) => result.providerAccepted),
+    providerAccepted: anyAccepted,
+    ...(dropReason !== undefined ? { dropReason } : {}),
   };
 }
 

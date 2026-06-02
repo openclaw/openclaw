@@ -6,6 +6,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { normalizeWhatsAppSendResultDropped } from "../inbound/send-result.js";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import type { WebInboundMsg } from "./types.js";
@@ -187,6 +188,7 @@ function mockSecondReplySuccess(msg: WebInboundMsg) {
 }
 
 const replyLogger = {
+  debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
 };
@@ -288,6 +290,27 @@ describe("deliverWebReply", () => {
     expect(mockCallArg(replyLogger.warn, 0, 1, "replyLogger.warn")).toBe(
       "auto-reply text was not accepted by WhatsApp provider",
     );
+  });
+
+  it("does not warn when a text reply is suppressed by policy (read-only)", async () => {
+    const msg = makeMsg();
+    vi.mocked(msg.reply).mockResolvedValueOnce(
+      normalizeWhatsAppSendResultDropped("text", "read-only"),
+    );
+    const warnsBefore = replyLogger.warn.mock.calls.length;
+
+    const delivery = await deliverWebReply({
+      replyResult: { text: "hello" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(delivery.providerAccepted).toBe(false);
+    expect(delivery.dropReason).toBe("read-only");
+    expect(replyLogger.warn.mock.calls.length).toBe(warnsBefore);
   });
 
   it("strips raw XML tool-call blocks before WhatsApp text delivery", async () => {

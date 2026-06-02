@@ -335,6 +335,7 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              readOnly: account.readOnly,
               debounceMs: inboundDebounceMs,
               shouldDebounce,
               socketRef: controller.socketRef,
@@ -343,6 +344,13 @@ export async function monitorWebChannel(
               disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
               groupMetadataCache,
               onMessage: async (msg: WebInboundMsg) => {
+                // readOnly accounts are purely passive. Owner slash commands are in-band
+                // control designed to elicit a reply; a readOnly account cannot reply, so
+                // processing them would silently mutate state (history, config) with no
+                // confirmation. Drop here before anything runs.
+                if (account.readOnly && isControlCommandMessage(msg.body, cfg)) {
+                  return;
+                }
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);

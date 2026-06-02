@@ -17,6 +17,7 @@ import {
 import {
   combineWhatsAppSendResults,
   normalizeWhatsAppSendResult,
+  normalizeWhatsAppSendResultDropped,
   type WhatsAppSendResult,
 } from "./send-result.js";
 import type { ActiveWebSendOptions } from "./types.js";
@@ -52,6 +53,8 @@ export function createWebSendApi(params: {
   // proactive sends to LID-addressed contacts reach the recipient instead of
   // ending up in a sender-only ghost chat (#67378). Defaults to PN-only.
   authDir?: string;
+  /** When true, suppress all sends and return a policy-drop result. */
+  readOnly?: boolean;
 }) {
   const resolveOutboundJid = (recipient: string): string =>
     params.authDir
@@ -73,6 +76,9 @@ export function createWebSendApi(params: {
       mediaTypeInput?: string,
       sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
+      if (params.readOnly) {
+        return normalizeWhatsAppSendResultDropped(mediaBuffer ? "media" : "text", "read-only");
+      }
       let mediaType = mediaTypeInput;
       const jid = resolveOutboundJid(to);
       let payload: AnyMessageContent;
@@ -159,6 +165,9 @@ export function createWebSendApi(params: {
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
     ): Promise<WhatsAppSendResult> => {
+      if (params.readOnly) {
+        return normalizeWhatsAppSendResultDropped("poll", "read-only");
+      }
       const jid = resolveOutboundJid(to);
       const result = await params.sock.sendMessage(jid, {
         poll: {
@@ -177,6 +186,9 @@ export function createWebSendApi(params: {
       fromMe: boolean,
       participant?: string,
     ): Promise<WhatsAppSendResult> => {
+      if (params.readOnly) {
+        return normalizeWhatsAppSendResultDropped("reaction", "read-only");
+      }
       // Resolve DM targets through the same LID-aware path as normal sends so
       // reactions land on the delivered WhatsApp message key.
       const jid = resolveOutboundJid(chatJid);

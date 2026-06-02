@@ -151,7 +151,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - Optional `channels.whatsapp.defaultAccount` overrides that fallback default account selection when it matches a configured account id.
 - Legacy single-account Baileys auth dir is migrated by `openclaw doctor` into `whatsapp/default`.
-- Per-account overrides: `channels.whatsapp.accounts.<id>.sendReadReceipts`, `channels.whatsapp.accounts.<id>.dmPolicy`, `channels.whatsapp.accounts.<id>.allowFrom`.
+- Per-account overrides: `channels.whatsapp.accounts.<id>.sendReadReceipts`, `channels.whatsapp.accounts.<id>.dmPolicy`, `channels.whatsapp.accounts.<id>.allowFrom`, `channels.whatsapp.accounts.<id>.readOnly`.
+- `readOnly: true` puts an account into passive observation mode — inbound messages are received and processed but no messages, reactions, presence updates, or control command responses are ever sent on that account.
 
 </Accordion>
 
