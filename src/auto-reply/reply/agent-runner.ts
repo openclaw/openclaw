@@ -226,9 +226,8 @@ function resolveReplyRunDeliveryContext(params: {
   sessionKey: string;
   runtimePolicySessionKey?: string;
   opts?: GetReplyOptions;
-  skipSuppressionCheck?: boolean;
 }): DeliveryContext | undefined {
-  if (!params.skipSuppressionCheck && resolveSourceReplyPolicy(params).suppressDelivery) {
+  if (resolveSourceReplyPolicy(params).suppressDelivery) {
     return undefined;
   }
   const threadId =
@@ -2580,12 +2579,15 @@ export async function runReplyAgent(params: {
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
       const assistantFinalText = rawAssistantText ?? "";
-      const isStrandedReply = shouldWarnAboutPrivateMessageToolFinal({
-        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-        sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-        successfulSourceReplyDelivery,
-        finalText: assistantFinalText,
-      });
+      const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
+      const isStrandedReply =
+        !isRoomEvent &&
+        shouldWarnAboutPrivateMessageToolFinal({
+          sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+          sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+          successfulSourceReplyDelivery,
+          finalText: assistantFinalText,
+        });
       if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
@@ -2596,14 +2598,35 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
-        // #85714: Mark final payloads for delivery despite source reply suppression,
-        // so dispatch-from-config delivers the stranded reply in this turn.
-        for (const payload of finalPayloads) {
-          markReplyPayloadForSourceSuppressionDelivery(payload);
-        }
+        // #85714: Enqueue a retry turn so the agent can deliver via message(action=send),
+        // preserving the message_tool_only privacy contract instead of bypassing suppression.
+        const retryPrompt =
+          `[System] Your previous reply was not delivered to the conversation because ` +
+          `you did not call message(action=send). Your reply text was:\n\n` +
+          `"${assistantFinalText}"\n\n` +
+          `Please deliver this reply now by calling message(action=send). ` +
+          `Do not add any extra commentary — just deliver the original reply.`;
+        enqueueFollowupRun(
+          queueKey,
+          {
+            ...followupRun,
+            prompt: retryPrompt,
+            summaryLine: "stranded-reply-retry",
+            // Clear transcript/persistence fields so the retry turn uses the
+            // retry prompt, not the original user message. The followup runner
+            // resolves `transcriptPrompt ?? extracted.text`, so a retained
+            // transcriptPrompt would hide the retry instruction.
+            transcriptPrompt: undefined,
+            userTurnTranscriptRecorder: undefined,
+            currentInboundContext: undefined,
+          },
+          resolvedQueue,
+          "none",
+          queuedRunFollowupTurn,
+          true,
+        );
       }
-      const pendingText =
-        sourceReplyPolicy.suppressDelivery && !isStrandedReply ? "" : finalDeliveryText;
+      const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
       const heartbeatAckMaxChars = Math.max(
@@ -2629,7 +2652,6 @@ export async function runReplyAgent(params: {
           sessionKey,
           runtimePolicySessionKey,
           opts,
-          skipSuppressionCheck: isStrandedReply,
         });
         await updateSessionEntry(
           { storePath, sessionKey },

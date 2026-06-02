@@ -28,6 +28,7 @@ import {
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { enqueueFollowupRun } from "./queue.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import {
@@ -35,7 +36,6 @@ import {
   testing as replyRunRegistryTesting,
   replyRunRegistry,
 } from "./reply-run-registry.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -279,6 +279,7 @@ function setupAgentRunnerMocks(): void {
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(scheduleFollowupDrain).mockReset();
+  vi.mocked(enqueueFollowupRun).mockReset();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -3446,6 +3447,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     finalAssistantText?: string;
     payloadText?: string;
     successfulCronAdds?: number;
+    resolvedVerboseLevel?: string;
+    isNewSession?: boolean;
+    inboundEventKind?: string;
+    transcriptPrompt?: string;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3477,11 +3482,13 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       AccountId: "primary",
       MessageSid: "msg",
       ChatType: "direct",
+      ...(params.inboundEventKind ? { InboundEventKind: params.inboundEventKind } : {}),
     } as unknown as TemplateContext;
     const followupRun = {
       prompt: "hello",
       summaryLine: "hello",
       enqueuedAt: Date.now(),
+      ...(params.transcriptPrompt ? { transcriptPrompt: params.transcriptPrompt } : {}),
       run: {
         agentId: "main",
         agentDir: "/tmp/agent",
@@ -3523,8 +3530,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       storePath,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
+      resolvedVerboseLevel: params.resolvedVerboseLevel ?? "off",
+      isNewSession: params.isNewSession ?? false,
       blockStreamingEnabled: false,
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
@@ -3539,65 +3546,25 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
   });
 
-  it("sets pendingFinalDelivery for a stranded substantive reply (#85714)", async () => {
-    const { storePath, sessionKey } = await runPrivateFinalCase({});
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
-
-    expect(store[sessionKey]?.pendingFinalDelivery).toBe(true);
-    expect(store[sessionKey]?.pendingFinalDeliveryText).toContain("Here is the answer");
-    expect(store[sessionKey]?.pendingFinalDeliveryContext).toMatchObject({
-      channel: "whatsapp",
-      to: "+15550001111",
-      accountId: "primary",
-    });
+  it("enqueues a followup retry for a stranded substantive reply (#85714)", async () => {
+    await runPrivateFinalCase({});
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryPrompt = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1]?.prompt;
+    expect(retryPrompt).toContain("message(action=send)");
+    expect(retryPrompt).toContain("Here is the answer");
   });
 
-  it("does not warn for a short private final reply", async () => {
+  it("does not enqueue retry for short private final replies", async () => {
     await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
-    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
-  it("does not set pendingFinalDelivery for short private final replies", async () => {
-    const { storePath, sessionKey } = await runPrivateFinalCase({
-      finalAssistantText: "Nothing to send here.",
-    });
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
-
-    expect(store[sessionKey]?.pendingFinalDelivery).not.toBe(true);
-  });
-
-  it("does not warn when the message tool delivered this turn", async () => {
+  it("does not enqueue retry when the message tool delivered this turn", async () => {
     await runPrivateFinalCase({
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
     });
-    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not set pendingFinalDelivery when the message tool delivered this turn", async () => {
-    const { storePath, sessionKey } = await runPrivateFinalCase({
-      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
-    });
-    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
-
-    expect(store[sessionKey]?.pendingFinalDelivery).not.toBe(true);
-  });
-
-  it("marks stranded reply payloads for delivery despite source suppression (#85714)", async () => {
-    const { result } = await runPrivateFinalCase({});
-    // runReplyAgent returns a single payload or array; normalize to check metadata.
-    const payload = result && typeof result === "object" ? result : undefined;
-    expect(payload).toBeDefined();
-    expect(getReplyPayloadMetadata(payload!)?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
-
-  it("does not mark short replies for delivery despite source suppression", async () => {
-    const { result } = await runPrivateFinalCase({ finalAssistantText: "Short." });
-    const payload = result && typeof result === "object" ? result : undefined;
-    if (payload) {
-      expect(
-        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
-      ).not.toBe(true);
-    }
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
   it("still warns when only an unrelated cron side effect succeeded", async () => {
@@ -3614,5 +3581,24 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       payloadText: "Auto-compaction complete (count 1).",
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue retry for room_event turns (#85714)", async () => {
+    await runPrivateFinalCase({ inboundEventKind: "room_event" });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("clears transcriptPrompt on retry to prevent original prompt from hiding retry instruction (#85714)", async () => {
+    await runPrivateFinalCase({ transcriptPrompt: "original user question" });
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    // transcriptPrompt must be cleared so the followup runner uses the retry
+    // prompt, not the original user message.
+    expect(retryRun?.transcriptPrompt).toBeUndefined();
+    expect(retryRun?.userTurnTranscriptRecorder).toBeUndefined();
+    expect(retryRun?.currentInboundContext).toBeUndefined();
+    // The retry prompt itself must contain the delivery instruction.
+    expect(retryRun?.prompt).toContain("message(action=send)");
   });
 });
