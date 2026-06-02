@@ -6,7 +6,7 @@ import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channe
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { listDiscordAccountIds } from "../accounts.js";
+import { listDiscordAccountIds, mergeDiscordAccountConfig } from "../accounts.js";
 import {
   buildDiscordSlashCommandDeployStoreKey,
   DISCORD_COMMAND_DEPLOY_CACHE_LEGACY_JSON_RELATIVE_PATH,
@@ -296,17 +296,23 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         if (Object.keys(hashes).length === 0) {
           return [];
         }
-        const applicationId = (cfg.channels?.discord as Record<string, unknown> | undefined)
-          ?.applicationId;
-        const appId = typeof applicationId === "string" ? applicationId.trim() : "";
-        if (!appId) {
-          return [];
-        }
         const accountIds = listDiscordAccountIds(cfg);
-        return accountIds.map((accountId) => ({
-          key: buildDiscordSlashCommandDeployStoreKey({ applicationId: appId, accountId }),
-          value: { version: 1, hashes },
-        }));
+        const entries: Array<{ key: string; value: unknown }> = [];
+        for (const accountId of accountIds) {
+          const merged = mergeDiscordAccountConfig(cfg, accountId);
+          const appId =
+            typeof (merged as Record<string, unknown>).applicationId === "string"
+              ? ((merged as Record<string, unknown>).applicationId as string).trim()
+              : "";
+          if (!appId) {
+            continue;
+          }
+          entries.push({
+            key: buildDiscordSlashCommandDeployStoreKey({ applicationId: appId, accountId }),
+            value: { version: 1, hashes },
+          });
+        }
+        return entries;
       },
     });
   }

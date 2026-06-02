@@ -367,6 +367,42 @@ describe("Discord model picker preference migration", () => {
     expect(await plan.readEntries()).toEqual([]);
   });
 
+  it("plans legacy command-deploy-cache.json import with per-account applicationId", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const hash = "c".repeat(64);
+    await fs.writeFile(sourcePath, JSON.stringify({ hashes: { "global:reconcile": hash } }));
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {
+          channels: {
+            discord: {
+              // No root applicationId — each account has its own
+              accounts: {
+                bot1: { applicationId: "111100001111", token: "tok1" },
+                bot2: { applicationId: "222200002222", token: "tok2" },
+              },
+            },
+          },
+        },
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.find((p) => p.label.includes("command deploy cache"));
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    const entries = await plan.readEntries();
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.key).sort()).toEqual(["111100001111:bot1", "222200002222:bot2"]);
+    expect(entries[0]?.value).toEqual({ version: 1, hashes: { "global:reconcile": hash } });
+  });
+
   it("keeps malformed legacy thread bindings for doctor warning", async () => {
     const stateDir = await makeStateDir();
     const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
