@@ -55,12 +55,13 @@ export function handleAgentEnd(
   const hasAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
-  const hadDeterministicSideEffect =
+  const hadLivenessPreservingSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
-    ctx.state.replayState.hadPotentialSideEffects ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
     hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
+  const hadBeforeFinalizeSideEffect =
+    hadLivenessPreservingSideEffect || ctx.state.replayState.hadPotentialSideEffects;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
     lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
@@ -74,7 +75,7 @@ export function handleAgentEnd(
   const derivedWorkingTerminalState = isError
     ? "blocked"
     : replayInvalid &&
-        !hadDeterministicSideEffect &&
+        !hadLivenessPreservingSideEffect &&
         (!hasAssistantVisibleText || incompleteTerminalAssistant)
       ? "abandoned"
       : ctx.state.livenessState;
@@ -234,7 +235,7 @@ export function handleAgentEnd(
       hasAssistantVisibleText,
       isError,
       incompleteTerminalAssistant,
-      hadDeterministicSideEffect,
+      hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
     });
     if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(result)) {
       return result;
