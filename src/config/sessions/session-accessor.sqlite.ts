@@ -607,16 +607,15 @@ function sqliteTranscriptStateHasMarker(params: {
   transcriptContentMarker: string;
 }): boolean {
   const db = getSessionKysely(params.database.db);
-  const row = executeSqliteQueryTakeFirstSync(
+  const rows = executeSqliteQuerySync(
     params.database.db,
     db
       .selectFrom("transcript_events")
-      .select("seq")
+      .select("event_json")
       .where("session_id", "=", params.sessionId)
-      .where("event_json", "like", `%${params.transcriptContentMarker}%`)
-      .limit(1),
-  );
-  return row !== undefined;
+      .orderBy("seq", "asc"),
+  ).rows;
+  return rows.some((row) => row.event_json.includes(params.transcriptContentMarker));
 }
 
 function readReferencedSqliteSessionIds(database: OpenClawAgentDatabase): Set<string> {
