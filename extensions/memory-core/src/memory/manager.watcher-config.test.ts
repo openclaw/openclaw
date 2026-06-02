@@ -23,19 +23,31 @@ const {
   // execute, so we resolve the same Symbol.for keys inline here.
   const chokidarKey = Symbol.for("openclaw.test.memoryWatchFactory");
   const nativeKey = Symbol.for("openclaw.test.memoryNativeWatchFactory");
-  type ChokidarEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
+  type ChokidarEvent = "add" | "change" | "unlink" | "unlinkDir" | "error" | "ready";
   type ChokidarCallback = (...args: unknown[]) => void;
   function createMockChokidarWatcher() {
     const handlers = new Map<ChokidarEvent, ChokidarCallback[]>();
+    const onceHandlers = new Map<ChokidarEvent, ChokidarCallback[]>();
     const watcher = {
+      watchedEntries: {} as Record<string, string[]>,
       on: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
         handlers.set(event, [...(handlers.get(event) ?? []), callback]);
         return watcher;
       }),
+      once: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
+        onceHandlers.set(event, [...(onceHandlers.get(event) ?? []), callback]);
+        return watcher;
+      }),
       add: vi.fn((_path: string | string[]) => watcher),
       close: vi.fn(async () => undefined),
+      getWatched: vi.fn(() => watcher.watchedEntries),
       emit: (event: ChokidarEvent, ...args: unknown[]) => {
         for (const callback of handlers.get(event) ?? []) {
+          callback(...args);
+        }
+        const callbacks = onceHandlers.get(event) ?? [];
+        onceHandlers.delete(event);
+        for (const callback of callbacks) {
           callback(...args);
         }
       },
@@ -533,6 +545,30 @@ describe("memory watcher config", () => {
     }
   });
 
+  it("warns when Linux memory watching tracks many directories", async () => {
+    const originalPlatformValue = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const root = path.join(workspaceDir, "memory");
+      for (let i = 0; i < 2_001; i += 1) {
+        await fs.mkdir(path.join(root, `topic-${i}`));
+      }
+      const cfg = createWatcherConfig({ extraPaths: [] });
+
+      await expectWatcherManager(cfg);
+
+      expect(memoryLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("Memory file watching is tracking 2002 directories."),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatformValue,
+        configurable: true,
+      });
+    }
+  });
+
   it("attaches Linux native watchers for new subdirectories", async () => {
     const originalPlatformValue = process.platform;
     try {
@@ -974,5 +1010,23 @@ describe("memory watcher config", () => {
     expect(errorRegistration?.[1]).toBeTypeOf("function");
     expect(chokidarWatcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
     expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
+  });
+
+  it("warns when chokidar memory watching tracks many paths", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+
+    const chokidarWatcher = createdChokidarWatchers[0];
+    expect(chokidarWatcher).toBeDefined();
+    chokidarWatcher!.watchedEntries = {
+      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+    };
+    chokidarWatcher!.emit("ready");
+
+    expect(memoryLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Memory file watching is tracking 2002 paths."),
+    );
   });
 });

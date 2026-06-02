@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { validateConfigObjectRaw, validateConfigObjectWithPlugins } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation.js";
 
 vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: () => [],
@@ -44,122 +41,10 @@ vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   };
 });
 
-describe("gateway memory watch config warnings", () => {
-  it("does not warn when gateway memory watching is disabled explicitly", () => {
-    expectNoDefaultMemoryWatchWarning({
-      gateway: { mode: "local" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            extraPaths: ["/srv/shared-notes"],
-            sync: { watch: false },
-          },
-        },
-      },
-    });
-  });
-
-  it("warns when gateway memory watching sees more than 2000 memory files", () => {
-    withLargeMemoryDir((root, memoryDir) => {
-      expectDefaultMemoryWatchWarning({
-        gateway: { mode: "local" },
-        agents: {
-          defaults: {
-            workspace: root,
-            memorySearch: { extraPaths: [memoryDir] },
-          },
-        },
-      });
-    });
-  });
-
-  it("does not warn for default QMD memory when includeDefaultMemory is false", () => {
-    withLargeMemoryDir((root) => {
-      expectNoDefaultMemoryWatchWarning({
-        gateway: { mode: "local" },
-        memory: { backend: "qmd", qmd: { includeDefaultMemory: false } },
-        agents: {
-          defaults: {
-            workspace: root,
-          },
-        },
-      });
-    });
-  });
-
-  it("does not warn for sessions-only memory search", () => {
-    withLargeMemoryDir((root) => {
-      expectNoDefaultMemoryWatchWarning({
-        gateway: { mode: "local" },
-        agents: {
-          defaults: {
-            workspace: root,
-            memorySearch: {
-              experimental: { sessionMemory: true },
-              sources: ["sessions"],
-            },
-          },
-        },
-      });
-    });
-  });
-
-  it("warns for sessions-only memory search when session memory is disabled", () => {
-    withLargeMemoryDir((root) => {
-      expectDefaultMemoryWatchWarning({
-        gateway: { mode: "local" },
-        agents: {
-          defaults: {
-            workspace: root,
-            memorySearch: {
-              sources: ["sessions"],
-            },
-          },
-        },
-      });
-    });
-  });
-});
-
-function expectDefaultMemoryWatchWarning(raw: unknown): void {
-  const result = validateConfigObjectWithPlugins(raw, { pluginValidation: "skip" });
-  expect(result.ok).toBe(true);
-  expect(result.warnings).toContainEqual(
-    expect.objectContaining({
-      path: "agents.defaults.memorySearch.sync.watch",
-      message: expect.stringContaining("too many files open"),
-    }),
-  );
-}
-
-function expectNoDefaultMemoryWatchWarning(raw: unknown): void {
-  const result = validateConfigObjectWithPlugins(raw, { pluginValidation: "skip" });
-  expect(result.ok).toBe(true);
-  expect(result.warnings).not.toContainEqual(
-    expect.objectContaining({
-      path: "agents.defaults.memorySearch.sync.watch",
-    }),
-  );
-}
-
-function withLargeMemoryDir(run: (root: string, memoryDir: string) => void): void {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-watch-warning-"));
-  const memoryDir = path.join(root, "memory");
-  try {
-    fs.mkdirSync(memoryDir, { recursive: true });
-    for (let i = 0; i < 2_001; i += 1) {
-      fs.writeFileSync(path.join(memoryDir, `${i}.md`), "");
-    }
-    run(root, memoryDir);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function requireIssue<T extends { path: string }>(issues: T[], issuePath: string): T {
-  const issue = issues.find((entry) => entry.path === issuePath);
+function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
+  const issue = issues.find((entry) => entry.path === path);
   if (!issue) {
-    throw new Error(`expected validation issue at ${issuePath}`);
+    throw new Error(`expected validation issue at ${path}`);
   }
   return issue;
 }

@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
@@ -47,7 +46,6 @@ import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diag
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import type { MemorySearchConfig } from "./types.tools.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -873,167 +871,6 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
-function isMemoryWatchActive(
-  defaults: MemorySearchConfig | undefined,
-  override: MemorySearchConfig | undefined,
-): boolean {
-  return (
-    (override?.enabled ?? defaults?.enabled ?? true) &&
-    (override?.sync?.watch ?? defaults?.sync?.watch ?? true)
-  );
-}
-
-// #86613 reproduced FD storms above 7k files; warn once memory roots are clearly large.
-const MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD = 2_000;
-const MEMORY_WATCH_FD_WARNING_SCAN_ENTRY_LIMIT = 20_000;
-
-type MemoryWatchScanContext = {
-  countsByDir: Map<string, number>;
-  remainingEntries: number;
-};
-
-function hasMemorySource(
-  defaults: MemorySearchConfig | undefined,
-  override: MemorySearchConfig | undefined,
-): boolean {
-  const sources = override?.sources ?? defaults?.sources;
-  if (!sources?.length || sources.includes("memory")) {
-    return true;
-  }
-  const sessionMemory =
-    override?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  return !sessionMemory;
-}
-
-function collectMemoryWatchDirs(params: {
-  config: OpenClawConfig;
-  defaults: MemorySearchConfig | undefined;
-  override: MemorySearchConfig | undefined;
-  agentId: string;
-}): Set<string> {
-  if (!hasMemorySource(params.defaults, params.override)) {
-    return new Set();
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(params.config, params.agentId);
-  const dirs = new Set<string>();
-  const addPath = (rawPath: string | undefined): void => {
-    const trimmed = rawPath?.trim();
-    if (trimmed) {
-      dirs.add(path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceDir, trimmed));
-    }
-  };
-  if (
-    params.config.memory?.backend !== "qmd" ||
-    params.config.memory.qmd?.includeDefaultMemory !== false
-  ) {
-    addPath("memory");
-  }
-  for (const rawPath of [
-    ...(params.config.memory?.qmd?.paths ?? []).map((entry) => entry.path),
-    ...(params.defaults?.extraPaths ?? []),
-    ...(params.override?.extraPaths ?? []),
-    ...(params.defaults?.qmd?.extraCollections ?? []).map((entry) => entry.path),
-    ...(params.override?.qmd?.extraCollections ?? []).map((entry) => entry.path),
-  ]) {
-    addPath(rawPath);
-  }
-  return dirs;
-}
-
-function countMemoryWatchDirFiles(dirPath: string, context: MemoryWatchScanContext): number {
-  const cached = context.countsByDir.get(dirPath);
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  let markdownFiles = 0;
-  let dir: fsSync.Dir;
-  try {
-    dir = fsSync.opendirSync(dirPath, { recursive: true });
-  } catch {
-    context.countsByDir.set(dirPath, 0);
-    return 0;
-  }
-  try {
-    let entry: fsSync.Dirent | null;
-    while ((entry = dir.readSync())) {
-      if (context.remainingEntries-- <= 0) {
-        break;
-      }
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-        markdownFiles += 1;
-      }
-      if (markdownFiles > MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD) {
-        break;
-      }
-    }
-  } finally {
-    dir.closeSync();
-  }
-  context.countsByDir.set(dirPath, markdownFiles);
-  return markdownFiles;
-}
-
-function hasManyMemoryWatchFiles(dirs: Iterable<string>, context: MemoryWatchScanContext): boolean {
-  let markdownFiles = 0;
-  for (const dirPath of dirs) {
-    markdownFiles += countMemoryWatchDirFiles(dirPath, context);
-    if (markdownFiles > MEMORY_WATCH_FD_WARNING_FILE_THRESHOLD) {
-      return true;
-    }
-    if (context.remainingEntries <= 0) {
-      // Best-effort warning only: cap startup validation work even if this under-warns.
-      return false;
-    }
-  }
-  return false;
-}
-
-function memoryWatchFdPressureWarningMessage(): string {
-  return "Memory file watching is on for this Gateway. This keeps memory search up to date, but large memory folders, extraPaths, or QMD collections can make the Gateway keep too many files open. If you see open-file or watcher errors, set memorySearch.sync.watch: false for the affected default or agent, then use manual indexing or sync.intervalMinutes to refresh memory.";
-}
-
-function collectGatewayMemoryWatchWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
-  if (config.gateway?.mode !== "local") {
-    return [];
-  }
-  const defaults = config.agents?.defaults?.memorySearch;
-  const scanContext: MemoryWatchScanContext = {
-    countsByDir: new Map(),
-    remainingEntries: MEMORY_WATCH_FD_WARNING_SCAN_ENTRY_LIMIT,
-  };
-  const warnings: ConfigValidationIssue[] = [];
-  if (isMemoryWatchActive(defaults, undefined)) {
-    const dirs = collectMemoryWatchDirs({
-      config,
-      defaults,
-      override: undefined,
-      agentId: resolveDefaultAgentId(config),
-    });
-    if (hasManyMemoryWatchFiles(dirs, scanContext)) {
-      warnings.push({
-        path: "agents.defaults.memorySearch.sync.watch",
-        message: memoryWatchFdPressureWarningMessage(),
-      });
-    }
-  }
-  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
-    const override = agent.memorySearch;
-    if (!override || !isMemoryWatchActive(defaults, override)) {
-      continue;
-    }
-    const dirs = collectMemoryWatchDirs({ config, defaults, override, agentId: agent.id });
-    if (!hasManyMemoryWatchFiles(dirs, scanContext)) {
-      continue;
-    }
-    warnings.push({
-      path: `agents.list.${index}.memorySearch.sync.watch`,
-      message: memoryWatchFdPressureWarningMessage(),
-    });
-  }
-  return warnings;
-}
-
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -1202,19 +1039,16 @@ function validateConfigObjectWithPluginsBase(
         manifestRegistry: registryInfo?.registry,
       })
     : base.config;
-  const gatewayMemoryWatchWarnings = opts.applyDefaults
-    ? collectGatewayMemoryWatchWarnings(config)
-    : [];
   if (opts.pluginValidation === "skip") {
     return {
       ok: true,
       config,
-      warnings: gatewayMemoryWatchWarnings,
+      warnings: [],
     };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [...gatewayMemoryWatchWarnings];
+  const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 

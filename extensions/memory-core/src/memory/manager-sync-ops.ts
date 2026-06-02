@@ -104,6 +104,8 @@ const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+// Warn only after real watcher state is high; #86613 reproduced FD pressure in large trees.
+const MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -180,6 +182,15 @@ function shouldIgnoreMemoryWatchPath(
   return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
+function countChokidarWatchedEntries(watcher: FSWatcher): number {
+  const watched = watcher.getWatched();
+  let count = Object.keys(watched).length;
+  for (const entries of Object.values(watched)) {
+    count += entries.length;
+  }
+  return count;
+}
+
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
   void sync().catch((err: unknown) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
@@ -242,6 +253,7 @@ export abstract class MemoryManagerSyncOps {
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
+  private memoryWatchPressureWarningShown = false;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
@@ -586,6 +598,9 @@ export abstract class MemoryManagerSyncOps {
         : process.platform === "linux"
           ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
           : false;
+      if (attached && process.platform === "linux") {
+        this.warnIfLinuxMemoryWatchPressure(dir);
+      }
       if (!attached) {
         // Native creation failed (dir missing, unsupported FS, throw) —
         // fall back to chokidar so directory coverage isn't dropped.
@@ -597,23 +612,52 @@ export abstract class MemoryManagerSyncOps {
       if (existingWatcher) {
         existingWatcher.add(Array.from(fileWatchPaths));
       } else {
-        this.watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
+        const watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
           ignoreInitial: true,
           ignored: (watchPath, stats) =>
             shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
         });
-        this.watcher.on("add", markDirty);
-        this.watcher.on("change", markDirty);
-        this.watcher.on("unlink", markDirty);
-        this.watcher.on("unlinkDir", markDirty);
-        this.watcher.on("error", (err) => {
+        this.watcher = watcher;
+        watcher.on("add", markDirty);
+        watcher.on("change", markDirty);
+        watcher.on("unlink", markDirty);
+        watcher.on("unlinkDir", markDirty);
+        watcher.on("error", (err) => {
           // File watcher errors (e.g., ENOSPC) should not crash the gateway.
           // Log the error and continue - memory search still works without auto-sync.
           const message = err instanceof Error ? err.message : String(err);
           log.warn(`memory watcher error: ${message}`);
         });
+        watcher.once("ready", () => {
+          this.warnIfChokidarMemoryWatchPressure(watcher);
+        });
       }
     }
+  }
+
+  private warnIfLinuxMemoryWatchPressure(dir: string): void {
+    const pair = this.nativeMemoryWatchPairs.find((entry) => entry.dir === dir);
+    const watcherCount = pair?.treeWatchers?.size ?? 0;
+    this.warnIfMemoryWatchPressure(watcherCount, "directories");
+  }
+
+  private warnIfChokidarMemoryWatchPressure(watcher: FSWatcher | null): void {
+    if (!watcher) {
+      return;
+    }
+    this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
+  }
+
+  private warnIfMemoryWatchPressure(count: number, unit: "directories" | "paths"): void {
+    if (this.memoryWatchPressureWarningShown || count <= MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD) {
+      return;
+    }
+    this.memoryWatchPressureWarningShown = true;
+    log.warn(
+      `Memory file watching is tracking ${count} ${unit}. ` +
+        "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files. " +
+        "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+    );
   }
 
   private currentMemoryChokidarWatcher(): FSWatcher | null {
@@ -1076,18 +1120,22 @@ export abstract class MemoryManagerSyncOps {
       }
       // No chokidar watcher exists yet. Spin one up just for this directory
       // so the periodic-sync gap is closed.
-      this.watcher = resolveMemoryWatchFactory()([dir], {
+      const watcher = resolveMemoryWatchFactory()([dir], {
         ignoreInitial: true,
         ignored: (watchPath, stats) =>
           shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
       });
-      this.watcher.on("add", markDirty);
-      this.watcher.on("change", markDirty);
-      this.watcher.on("unlink", markDirty);
-      this.watcher.on("unlinkDir", markDirty);
-      this.watcher.on("error", (err) => {
+      this.watcher = watcher;
+      watcher.on("add", markDirty);
+      watcher.on("change", markDirty);
+      watcher.on("unlink", markDirty);
+      watcher.on("unlinkDir", markDirty);
+      watcher.on("error", (err) => {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory watcher error: ${message}`);
+      });
+      watcher.once("ready", () => {
+        this.warnIfChokidarMemoryWatchPressure(watcher);
       });
     } catch (err) {
       log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
