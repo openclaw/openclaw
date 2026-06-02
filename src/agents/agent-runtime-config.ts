@@ -74,11 +74,17 @@ function hasAgentRuntimeSecretRefs(params: {
   }
   if (
     Array.isArray(config.agents?.list) &&
-    config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
+    config.agents.list.some(
+      (agent) =>
+        hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey) || hasNestedSecretRef(agent?.tts),
+    )
   ) {
     return true;
   }
   if (hasNestedSecretRef(config.messages?.tts?.providers)) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.messages?.tts?.personas)) {
     return true;
   }
   if (hasNestedSecretRef(config.skills?.entries)) {
