@@ -94,7 +94,6 @@ describe("skill archive install", () => {
             slug: `legacy-${marker.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
             extractedRoot,
             mode: "install",
-            scan: false,
             rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
           }),
       });
