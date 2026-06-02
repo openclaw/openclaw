@@ -134,7 +134,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
         senderId,
         action: "approve",
         approvalKind: "exec",
-      }).authorized === true,
+      })?.authorized ?? false,
     isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
       googleChatApprovalAuth.authorizeActorAction?.({
         cfg,
@@ -142,7 +142,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
         senderId,
         action: "approve",
         approvalKind: "plugin",
-      }).authorized === true,
+      })?.authorized ?? false,
     isNativeDeliveryEnabled: isGoogleChatNativeApprovalClientEnabled,
     resolveNativeDeliveryMode: () => "channel",
     requireMatchingTurnSourceChannel: true,

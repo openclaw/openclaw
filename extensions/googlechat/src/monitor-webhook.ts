@@ -107,28 +107,30 @@ function parseGoogleChatInboundPayload(
       user: chat.user,
       eventTime: chat.eventTime,
     };
-  } else if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.buttonClickedPayload) {
+  } else if (rawObj.commonEventObject?.hostApp === "CHAT") {
     const chat = rawObj.chat;
-    const buttonClickedPayload = chat.buttonClickedPayload;
-    const invokedFunction = rawObj.commonEventObject.invokedFunction;
-    const actionParameters = recordParamsToActionParameters(rawObj.commonEventObject.parameters);
-    eventPayload = {
-      type: "CARD_CLICKED",
-      space: buttonClickedPayload.space,
-      message: buttonClickedPayload.message,
-      user: buttonClickedPayload.user ?? chat.user,
-      eventTime: chat.eventTime,
-      action:
-        buttonClickedPayload.action ??
-        ({
-          ...(typeof invokedFunction === "string" ? { actionMethodName: invokedFunction } : {}),
-          ...(actionParameters ? { parameters: actionParameters } : {}),
-        } satisfies GoogleChatAction),
-      commonEventObject: {
-        ...(typeof invokedFunction === "string" ? { invokedFunction } : {}),
-        parameters: rawObj.commonEventObject.parameters,
-      },
-    };
+    const buttonClickedPayload = chat?.buttonClickedPayload;
+    if (buttonClickedPayload) {
+      const invokedFunction = rawObj.commonEventObject.invokedFunction;
+      const actionParameters = recordParamsToActionParameters(rawObj.commonEventObject.parameters);
+      eventPayload = {
+        type: "CARD_CLICKED",
+        space: buttonClickedPayload.space,
+        message: buttonClickedPayload.message,
+        user: buttonClickedPayload.user ?? chat.user,
+        eventTime: chat.eventTime,
+        action:
+          buttonClickedPayload.action ??
+          ({
+            ...(typeof invokedFunction === "string" ? { actionMethodName: invokedFunction } : {}),
+            ...(actionParameters ? { parameters: actionParameters } : {}),
+          } satisfies GoogleChatAction),
+        commonEventObject: {
+          ...(typeof invokedFunction === "string" ? { invokedFunction } : {}),
+          parameters: rawObj.commonEventObject.parameters,
+        },
+      };
+    }
   }
 
   const event = eventPayload as GoogleChatEvent;
