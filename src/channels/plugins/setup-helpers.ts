@@ -51,6 +51,10 @@ function shouldStoreNameInAccounts(params: {
   return channelHasAccounts(params.cfg, params.channelKey);
 }
 
+/**
+ * Applies a display name to either the channel root or the scoped account,
+ * matching how that channel stores default-account setup state.
+ */
 export function applyAccountNameToChannelSection(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -110,6 +114,10 @@ export function applyAccountNameToChannelSection(params: {
   } as OpenClawConfig;
 }
 
+/**
+ * Moves a legacy root `name` into the default account before adding named
+ * account config, preserving the old default account label.
+ */
 export function migrateBaseNameToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -144,6 +152,10 @@ export function migrateBaseNameToDefaultAccount(params: {
   } as OpenClawConfig;
 }
 
+/**
+ * Prepares config for scoped setup by applying the account name and optionally
+ * migrating the previous root name into the default account.
+ */
 export function prepareScopedSetupConfig(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -169,6 +181,7 @@ export function prepareScopedSetupConfig(params: {
   });
 }
 
+/** Applies a setup patch to the selected channel account. */
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -183,6 +196,10 @@ export function applySetupAccountConfigPatch(params: {
   });
 }
 
+/**
+ * Creates a setup adapter that turns validated setup input into a channel or
+ * account-scoped config patch.
+ */
 export function createPatchedAccountSetupAdapter(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
@@ -226,6 +243,7 @@ export function createPatchedAccountSetupAdapter(params: {
   };
 }
 
+/** Creates a setup-input validator backed by a Zod schema plus optional checks. */
 export function createZodSetupInputValidator<T extends ChannelSetupInput>(params: {
   schema: ZodType<T>;
   validate?: (params: { cfg: OpenClawConfig; accountId: string; input: T }) => string | null;
@@ -262,6 +280,10 @@ function hasPresentSetupValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/**
+ * Creates a generic setup validator for forms that can either use env vars or
+ * require one of several explicit credential fields.
+ */
 export function createSetupInputPresenceValidator(params: {
   defaultAccountOnlyEnvError?: string;
   whenNotUseEnv?: SetupInputPresenceRequirement[];
@@ -295,6 +317,10 @@ export function createSetupInputPresenceValidator(params: {
   });
 }
 
+/**
+ * Creates a setup adapter for channels that support env-backed default account
+ * setup and explicit credential patches for config-backed setup.
+ */
 export function createEnvPatchedAccountSetupAdapter(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
@@ -324,6 +350,10 @@ export function createEnvPatchedAccountSetupAdapter(params: {
   });
 }
 
+/**
+ * Patches a channel root or account section, creating the account block and
+ * enabled flags required by setup flows.
+ */
 export function patchScopedAccountConfig(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -475,9 +505,10 @@ function resolveSingleAccountPromotionTarget(params: { channel: ChannelSectionBa
   return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
 }
 
-// When promoting a single-account channel config to multi-account,
-// move top-level account settings into accounts.default so the original
-// account keeps working without duplicate account values at channel root.
+/**
+ * Promotes root single-account config into an account block so the original
+ * account keeps working after multi-account setup is introduced.
+ */
 export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;

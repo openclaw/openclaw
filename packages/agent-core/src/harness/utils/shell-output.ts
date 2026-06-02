@@ -13,14 +13,20 @@ export interface ShellCaptureOptions extends Omit<
   ExecutionEnvExecOptions,
   "onStdout" | "onStderr"
 > {
+  /** Optional observer for sanitized stdout/stderr chunks as they arrive. */
   onChunk?: (chunk: string) => void;
 }
 
 export interface ShellCaptureResult {
+  /** Bounded output tail returned to the model or caller. */
   output: string;
+  /** Process exit code, undefined when the command was cancelled. */
   exitCode: number | undefined;
+  /** True when execution ended through the abort path. */
   cancelled: boolean;
+  /** True when returned output was shortened to the tail window. */
   truncated: boolean;
+  /** Temp file containing full output once captured output crosses the in-memory limit. */
   fullOutputPath?: string;
 }
 
@@ -32,6 +38,7 @@ function toExecutionError(error: unknown): ExecutionError {
   return new ExecutionError("unknown", cause.message, cause);
 }
 
+/** Removes control/binary markers while preserving tabs and line breaks for shell diagnostics. */
 export function sanitizeBinaryOutput(str: string): string {
   return Array.from(str)
     .filter((char) => {
@@ -53,6 +60,7 @@ export function sanitizeBinaryOutput(str: string): string {
     .join("");
 }
 
+/** Executes a shell command with bounded in-memory output and optional full-output spillover. */
 export async function executeShellWithCapture(
   env: ExecutionEnv,
   command: string,
@@ -90,6 +98,7 @@ export async function executeShellWithCapture(
       if (!previous.ok) {
         return previous;
       }
+      // Create the spill file lazily so short commands never touch the filesystem.
       const tempFile = await env.createTempFile({
         prefix: "bash-",
         suffix: ".log",
@@ -113,6 +122,8 @@ export async function executeShellWithCapture(
       totalBytes += encoder.encode(chunk).byteLength;
       const text = sanitizeBinaryOutput(chunk).replace(/\r/g, "");
       if (totalBytes > DEFAULT_MAX_BYTES && !fullOutputPath) {
+        // Once raw output crosses the default window, keep the model-facing tail
+        // in memory and stream the full sanitized transcript into a temp file.
         ensureFullOutputFile(outputChunks.join("") + text);
       } else {
         appendFullOutput(text);

@@ -22,6 +22,7 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
+/** Attach the common gateway transport flags used by every `openclaw nodes` RPC command. */
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -29,6 +30,7 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
+/** Lazy gateway RPC wrapper; keeps Commander registration cold-start light. */
 export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
@@ -39,6 +41,7 @@ export const callGatewayCli = async (
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Backend-mode gateway call used only for node pairing approval/list flows. */
 export const callNodePairApprovalGatewayCli = async (
   method: "node.pair.list" | "node.pair.approve",
   opts: NodesRpcOpts,
@@ -49,6 +52,7 @@ export const callNodePairApprovalGatewayCli = async (
   return await runtime.callNodePairApprovalGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Build a node.invoke payload while preserving retry idempotency across callers. */
 export function buildNodeInvokeParams(params: {
   nodeId: string;
   command: string;
@@ -83,6 +87,7 @@ export function parseOptionalNodePositiveInteger(value: unknown, flag: string): 
   return parsed;
 }
 
+/** Parse optional count/timeout flags where zero is a valid user value. */
 export function parseOptionalNodeNonNegativeInteger(
   value: unknown,
   flag: string,
@@ -97,6 +102,7 @@ export function parseOptionalNodeNonNegativeInteger(
   return parsed;
 }
 
+/** Parse optional decimal flags with command-specific bounds and consistent errors. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -125,6 +131,7 @@ export function parseOptionalNodeFiniteNumber(
   return parsed;
 }
 
+/** Return a local-dev signing hint for Peekaboo bridge authorization failures. */
 export function unauthorizedHintForMessage(message: string): string | null {
   const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
@@ -141,10 +148,12 @@ export function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Resolve a node query to the canonical node id accepted by gateway node methods. */
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   return (await resolveNode(opts, query)).nodeId;
 }
 
+/** Resolve from `node.list`, falling back to paired nodes when the node service is unavailable. */
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {

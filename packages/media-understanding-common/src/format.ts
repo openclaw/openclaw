@@ -32,7 +32,9 @@ function formatSection(
 
 /** Formats media-understanding outputs into the chat body sent back to the model. */
 export function formatMediaUnderstandingBody(params: {
+  /** Original user body, often containing synthetic `<media:...>` placeholders. */
   body?: string;
+  /** Provider outputs for audio, image, or video attachments. */
   outputs: MediaUnderstandingOutput[];
 }): string {
   const outputs = params.outputs.filter((output) => output.text.trim());

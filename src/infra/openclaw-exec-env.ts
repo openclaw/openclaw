@@ -1,6 +1,7 @@
 export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 export const OPENCLAW_CLI_ENV_VALUE = "1";
 
+/** Returns a cloned child-process env marked as an OpenClaw CLI execution. */
 export function markOpenClawExecEnv<T extends Record<string, string | undefined>>(env: T): T {
   return {
     ...env,
@@ -8,6 +9,7 @@ export function markOpenClawExecEnv<T extends Record<string, string | undefined>
   };
 }
 
+/** Mutates a process env object so downstream code can detect OpenClaw CLI context. */
 export function ensureOpenClawExecMarkerOnProcess(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {

@@ -33,6 +33,7 @@ type ConversationResolutionSource =
   | "inbound-bundled-plugin"
   | "inbound-fallback";
 
+/** Canonical conversation identity chosen for binding/spawn decisions. */
 type ConversationResolution = {
   canonical: {
     channel: string;
@@ -45,6 +46,7 @@ type ConversationResolution = {
   source: ConversationResolutionSource;
 };
 
+/** Raw command context used to resolve the conversation a command should bind to. */
 export type ResolveCommandConversationResolutionInput = {
   cfg: OpenClawConfig;
   channel?: string | null;
@@ -63,6 +65,7 @@ export type ResolveCommandConversationResolutionInput = {
   includePlacementHint?: boolean;
 };
 
+/** Raw inbound context used to resolve the conversation a message belongs to. */
 type ResolveInboundConversationResolutionInput = {
   cfg: OpenClawConfig;
   channel?: string | null;
@@ -263,6 +266,7 @@ function resolveChannelTargetId(params: {
   return target;
 }
 
+/** Convert command route facts into the provider hook context without inventing defaults. */
 function buildThreadingContext(params: {
   fallbackTo?: string;
   originatingTo?: string;
@@ -282,6 +286,7 @@ function buildThreadingContext(params: {
   };
 }
 
+/** Resolve where top-level thread bindings should attach for a channel. */
 export function resolveChannelDefaultBindingPlacement(
   rawChannel?: string | null,
 ): "current" | "child" | undefined {
@@ -294,6 +299,7 @@ export function resolveChannelDefaultBindingPlacement(
   return pluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(channel);
 }
 
+/** Resolve command-originated conversation binding identity, preferring provider hooks first. */
 export function resolveCommandConversationResolution(
   params: ResolveCommandConversationResolutionInput,
 ): ConversationResolution | null {
@@ -362,6 +368,7 @@ export function resolveCommandConversationResolution(
     return focusedResolution;
   }
 
+  // Fallback order keeps explicit command/origin targets ahead of ambient context.
   const baseConversationId =
     resolveChannelTargetId({
       channel,
@@ -401,6 +408,7 @@ export function resolveCommandConversationResolution(
   });
 }
 
+/** Resolve inbound message conversation identity, respecting provider-owned rejection. */
 export function resolveInboundConversationResolution(
   params: ResolveInboundConversationResolutionInput,
 ): ConversationResolution | null {
@@ -437,6 +445,7 @@ export function resolveInboundConversationResolution(
     plugin,
   });
   if (providerResolution || providerConversation === null) {
+    // A null provider result is an explicit rejection; do not reinterpret it generically.
     return providerResolution;
   }
 
@@ -453,6 +462,7 @@ export function resolveInboundConversationResolution(
     plugin,
   });
   if (artifactResolution || artifactConversation === null) {
+    // Bundled artifact resolvers keep the same stop-on-null contract as provider hooks.
     return artifactResolution;
   }
 

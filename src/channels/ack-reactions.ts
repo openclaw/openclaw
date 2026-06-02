@@ -2,12 +2,14 @@ export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions"
 
 export type WhatsAppAckReactionMode = "always" | "mentions" | "never";
 
+/** Pending ack reaction plus the provider callback needed to remove it after a reply. */
 export type AckReactionHandle = {
   ackReactionPromise: Promise<boolean>;
   ackReactionValue: string;
   remove: () => Promise<void>;
 };
 
+/** Channel-neutral facts used to decide whether an inbound message gets an ack reaction. */
 export type AckReactionGateParams = {
   scope: AckReactionScope | undefined;
   isDirect: boolean;
@@ -19,6 +21,7 @@ export type AckReactionGateParams = {
   shouldBypassMention?: boolean;
 };
 
+/** Apply channel-neutral ack reaction scope rules before a provider sends an emoji. */
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
   if (scope === "off" || scope === "none") {
@@ -48,6 +51,7 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
   return false;
 }
 
+/** Adapt WhatsApp's direct/group knobs onto the shared ack reaction gate. */
 export function shouldAckReactionForWhatsApp(params: {
   emoji: string;
   isDirect: boolean;
@@ -84,6 +88,7 @@ export function shouldAckReactionForWhatsApp(params: {
   });
 }
 
+/** Start sending an ack reaction and retain enough state for optional cleanup. */
 export function createAckReactionHandle(params: {
   ackReactionValue: string;
   send: () => Promise<void>;
@@ -115,6 +120,7 @@ export function createAckReactionHandle(params: {
   };
 }
 
+/** Remove an ack reaction only after the send path confirmed it was applied. */
 export function removeAckReactionAfterReply(params: {
   removeAfterReply: boolean;
   ackReactionPromise: Promise<boolean> | null;
@@ -139,6 +145,7 @@ export function removeAckReactionAfterReply(params: {
   });
 }
 
+/** Convenience wrapper for removing a stored ack reaction handle after reply delivery. */
 export function removeAckReactionHandleAfterReply(params: {
   removeAfterReply: boolean;
   ackReaction: AckReactionHandle | null | undefined;

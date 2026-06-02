@@ -27,29 +27,44 @@ import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 
 export type UpdateCommandOptions = {
+  /** Emit machine-readable update results and suppress human-only warnings. */
   json?: boolean;
+  /** Restart the managed gateway after a successful package/git update. */
   restart?: boolean;
+  /** Resolve and report the plan without mutating the checkout/package. */
   dryRun?: boolean;
+  /** Requested release channel; normalized before it is translated to npm/git targets. */
   channel?: string;
+  /** Explicit npm tag or semver target, overriding channel-derived defaults. */
   tag?: string;
+  /** Per-step timeout in seconds as accepted by the CLI flag parser. */
   timeout?: string;
+  /** Skip interactive confirmation prompts for non-TTY update flows. */
   yes?: boolean;
 };
 
 export type UpdateStatusOptions = {
+  /** Emit the raw status payload instead of the terminal table. */
   json?: boolean;
+  /** Registry/git probe timeout in seconds as accepted by the CLI flag parser. */
   timeout?: string;
 };
 
 export type UpdateFinalizeOptions = {
+  /** Emit machine-readable finalize output and suppress terminal-only text. */
   json?: boolean;
+  /** Channel carried from the pre-restart update command into finalize. */
   channel?: string;
+  /** Per-step timeout in seconds as accepted by the CLI flag parser. */
   timeout?: string;
+  /** Skip interactive confirmation prompts during finalization repair. */
   yes?: boolean;
+  /** Whether finalize should restart the managed gateway when repair succeeds. */
   restart?: boolean;
 };
 
 export type UpdateWizardOptions = {
+  /** Probe/update timeout in seconds as accepted by the wizard flag parser. */
   timeout?: string;
 };
 
@@ -106,6 +121,7 @@ export async function resolveTargetVersion(
   return res.version ?? null;
 }
 
+/** Detect git installs by repository metadata, not by package manager shape. */
 export async function isGitCheckout(root: string): Promise<boolean> {
   try {
     await fs.stat(path.join(root, ".git"));
@@ -129,6 +145,7 @@ export async function isEmptyDir(targetPath: string): Promise<boolean> {
   }
 }
 
+/** Resolve the persistent dev-channel checkout, honoring the operator override. */
 export function resolveGitInstallDir(): string {
   const override = process.env.OPENCLAW_GIT_DIR?.trim();
   if (override) {
@@ -153,6 +170,7 @@ export function resolveNodeRunner(): string {
   return "node";
 }
 
+/** Locate the package root used for update probes, falling back to cwd for source runs. */
 export async function resolveUpdateRoot(): Promise<string> {
   return (
     (await resolveOpenClawPackageRoot({
@@ -163,6 +181,7 @@ export async function resolveUpdateRoot(): Promise<string> {
   );
 }
 
+/** Run one update step and report a bounded stdout/stderr tail to callers and progress UI. */
 export async function runUpdateStep(params: {
   name: string;
   argv: string[];
@@ -209,6 +228,7 @@ export async function runUpdateStep(params: {
   };
 }
 
+/** Ensure the dev-channel checkout exists and is an OpenClaw core checkout. */
 export async function ensureGitCheckout(params: {
   dir: string;
   timeoutMs: number;
@@ -253,6 +273,7 @@ export async function ensureGitCheckout(params: {
   return null;
 }
 
+/** Choose the package manager that can update the current global install. */
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -322,6 +343,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
   }
 }
 
+/** Adapter that lets updater probes share the normal timeout-capped process runner. */
 export function createGlobalCommandRunner(): CommandRunner {
   return async (argv, options) => {
     const res = await runCommandWithTimeout(argv, options);

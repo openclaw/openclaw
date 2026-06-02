@@ -178,6 +178,8 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
     nextPruneAtMs = nowMs + pruneIntervalMs;
     for (const [key, entry] of tracked) {
+      // Each pair can update its runtime window, so prune with the entry's last window
+      // instead of the current caller's settings.
       pruneRecentTimestamps(entry, nowMs, entry.windowMs);
       if (entry.recentMs.length === 0 && entry.cooldownUntilMs <= nowMs) {
         tracked.delete(key);
@@ -224,6 +226,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
       entry = { recentMs: [], windowMs, cooldownStartedAtMs: 0, cooldownUntilMs: 0 };
       tracked.set(key, entry);
     }
+    // Reordered historical events should not inherit a cooldown that starts in their future.
     if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
     }

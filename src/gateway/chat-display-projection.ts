@@ -150,6 +150,8 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   content: unknown[];
   changed: boolean;
 } {
+  // When signatures identify assistant phases, transcript display keeps only
+  // final-answer text so commentary does not appear as a second final reply.
   const hasExplicitPhasedText = content.some((block) => {
     if (!block || typeof block !== "object") {
       return false;
@@ -182,6 +184,9 @@ function projectAssistantTextFromMixedToolContent(
   content: unknown[],
   maxChars: number,
 ): { content: unknown[]; changed: boolean } | null {
+  // Mixed assistant tool-use blocks can carry visible progress text alongside
+  // tool payloads. Preserve that text while dropping the tool-only blocks from
+  // the display transcript.
   const hasToolHistoryBlock = content.some((block) => {
     if (!block || typeof block !== "object") {
       return false;
@@ -751,6 +756,9 @@ function buildMessageToolVisibleReplyMirror(
 }
 
 function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
+  // A successful in-chat `message.send` call is user-visible even when the
+  // assistant follow-up is a silent control reply; mirror the sent text into the
+  // transcript at the tool-result boundary.
   if (messages.length === 0) {
     return messages;
   }
@@ -840,6 +848,13 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   return !hasAssistantNonTextContent(message);
 }
 
+/**
+ * Redact and compact raw chat history before it is shown or sent through RPC.
+ *
+ * This keeps tool payloads, binary blobs, directive tags, and internal
+ * commentary/control replies out of user-visible history while preserving the
+ * original array reference when nothing changes.
+ */
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -1040,6 +1055,8 @@ function mergeTtsSupplementContent(
 function mergeTtsSupplementMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
+  // TTS attachments may arrive as delayed supplement messages. Merge them into
+  // the matching visible assistant text before final display truncation.
   if (!messages.some(isAssistantTtsSupplementMessage)) {
     return messages;
   }
@@ -1085,6 +1102,9 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
 }
 
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+  // Projection removes runtime/context plumbing and heartbeat traffic, but keeps
+  // real user media rows and empty assistant placeholders that may still own
+  // attachments or completion metadata.
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
@@ -1191,6 +1211,12 @@ function filterVisibleProjectedHistoryMessages(
   return changed ? visible : messages;
 }
 
+/**
+ * Convert stored chat/session messages into the display-safe transcript shape.
+ *
+ * Projection folds tool-visible replies, hides heartbeat/control plumbing, and
+ * applies final truncation so server-method consumers share one transcript view.
+ */
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
@@ -1220,6 +1246,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
   return messages.slice(-Math.floor(maxMessages));
 }
 
+/** Project display messages and keep only the most recent bounded window. */
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
@@ -1230,6 +1257,7 @@ export function projectRecentChatDisplayMessages(
   );
 }
 
+/** Project one message through the same display pipeline used for transcripts. */
 export function projectChatDisplayMessage(
   message: unknown,
   options?: { maxChars?: number; stripEnvelope?: boolean },

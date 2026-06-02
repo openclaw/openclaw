@@ -1,5 +1,3 @@
-// Public web-search registration helpers for provider plugins.
-
 import type {
   WebSearchCredentialResolutionSource,
   WebSearchProviderSetupContext,

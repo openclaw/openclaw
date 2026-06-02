@@ -1,12 +1,3 @@
-/**
- * Media Stream Handler
- *
- * Handles bidirectional audio streaming between Twilio and the AI services.
- * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to the selected realtime transcription provider
- * - Sends TTS audio back to Twilio
- */
-
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -101,6 +92,7 @@ const MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 const MAX_WS_BUFFERED_BYTES = 1024 * 1024;
 const CLOSE_REASON_LOG_MAX_CHARS = 120;
 
+/** Scrubs control characters and bounds carrier/user text before logging close reasons. */
 export function sanitizeLogText(value: string, maxChars: number): string {
   const sanitized = value
     .replace(/\p{Cc}/gu, " ")
@@ -122,6 +114,12 @@ function normalizeWsMessageData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+/**
+ * Parses one Twilio websocket message from any `ws` RawData representation.
+ *
+ * Malformed JSON is surfaced as a typed error so security tests and upgrade
+ * guards can distinguish bad input from normal carrier events.
+ */
 export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
   const raw = normalizeWsMessageData(data);
   try {
@@ -131,9 +129,7 @@ export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
   }
 }
 
-/**
- * Manages WebSocket connections for Twilio media streams.
- */
+/** Manages Twilio media-stream WebSockets, STT sessions, and queued TTS playback. */
 export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private sessions = new Map<string, StreamSession>();
@@ -167,7 +163,10 @@ export class MediaStreamHandler {
   }
 
   /**
-   * Handle WebSocket upgrade for media stream connections.
+   * Handles the HTTP upgrade into a Twilio media-stream socket.
+   *
+   * The handler reserves capacity before `ws` emits `connection` so slow
+   * handshakes cannot bypass global connection limits.
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.wss) {
@@ -187,6 +186,8 @@ export class MediaStreamHandler {
       return;
     }
 
+    // Count the socket before ws has emitted "connection"; otherwise a burst of
+    // slow handshakes can bypass the max-connection cap.
     this.inflightUpgrades += 1;
     let released = false;
     const releaseUpgradeReservation = () => {
@@ -299,9 +300,7 @@ export class MediaStreamHandler {
     });
   }
 
-  /**
-   * Handle stream start event.
-   */
+  /** Accepts Twilio's `start` frame and creates the STT/Talk session for the stream. */
   private handleStart(
     ws: WebSocket,
     message: TwilioMediaMessage,
@@ -336,6 +335,8 @@ export class MediaStreamHandler {
       onPartial: (partial) => {
         const session = this.sessions.get(streamSid);
         if (session) {
+          // Provider callbacks can arrive after stop/close; emit observability
+          // only for the currently registered session.
           this.emitTalkEvent(session, {
             type: "transcript.delta",
             turnId: this.ensureActiveTurn(session),
@@ -434,6 +435,8 @@ export class MediaStreamHandler {
       this.sessions.get(session.streamSid) !== session ||
       session.ws.readyState !== WebSocket.OPEN
     ) {
+      // The socket may close while provider auth/connect is still pending; close
+      // the orphan STT session instead of announcing readiness for a dead stream.
       session.sttSession.close();
       return;
     }
@@ -445,9 +448,7 @@ export class MediaStreamHandler {
     this.config.onTranscriptionReady?.(session.callId, session.streamSid);
   }
 
-  /**
-   * Handle stream stop event.
-   */
+  /** Tears down stream-owned STT, Talk, and TTS state exactly once on stop/close. */
   private handleStop(session: StreamSession): void {
     console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
 
@@ -498,6 +499,8 @@ export class MediaStreamHandler {
       return false;
     }
 
+    // A Twilio media socket is unauthenticated until its start frame arrives, so
+    // bound both time and cardinality for these pre-start connections.
     const timeout = setTimeout(() => {
       if (!this.pendingConnections.has(ws)) {
         return;
@@ -577,6 +580,8 @@ export class MediaStreamHandler {
       };
     }
     if (bufferedBeforeBytes > MAX_WS_BUFFERED_BYTES) {
+      // Once ws has already crossed the cap, skip enqueueing more frames. The
+      // caller treats sent:false as backpressure/failure evidence.
       try {
         session.ws.close(1013, "Backpressure: send buffer exceeded");
       } catch {
@@ -594,6 +599,8 @@ export class MediaStreamHandler {
       session.ws.send(JSON.stringify(message));
       const bufferedAfterBytes = session.ws.bufferedAmount;
       if (bufferedAfterBytes > MAX_WS_BUFFERED_BYTES) {
+        // send() can synchronously enqueue beyond the cap; close immediately so
+        // the stream does not keep accumulating TTS/audio frames.
         try {
           session.ws.close(1013, "Backpressure: send buffer exceeded");
         } catch {
@@ -660,10 +667,7 @@ export class MediaStreamHandler {
     return this.sendToStream(streamSid, { event: "clear", streamSid });
   }
 
-  /**
-   * Queue a TTS operation for sequential playback.
-   * Only one TTS operation plays at a time per stream to prevent overlap.
-   */
+  /** Queues one TTS playback unit behind any active audio for the same stream. */
   async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
     const queue = this.getTtsQueue(streamSid);
     let resolveEntry: () => void;
@@ -692,6 +696,8 @@ export class MediaStreamHandler {
    */
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
     const queue = this.getTtsQueue(streamSid);
+    // Barge-in resolves queued work as cancelled success while the active
+    // playback observes AbortSignal, so callers do not hang during teardown.
     this.resolveQueuedTtsEntries(queue);
     this.ttsActiveControllers.get(streamSid)?.abort();
     const session = this.sessions.get(streamSid);

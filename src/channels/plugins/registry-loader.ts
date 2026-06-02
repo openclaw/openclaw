@@ -6,6 +6,7 @@ type ChannelRegistryValueResolver<TValue> = (
   entry: PluginChannelRegistration,
 ) => TValue | undefined;
 
+/** Creates a lightweight channel registry value loader for narrow runtime surfaces. */
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
@@ -23,6 +24,7 @@ export function createChannelRegistryLoader<TValue>(
       return channelValue;
     }
 
+    // Some callers run before the channel-only registry view exists, so fall back to the active registry.
     const activeRegistry = getActivePluginRegistry();
     if (activeRegistry && activeRegistry !== channelRegistry) {
       return resolveFromRegistry(activeRegistry);

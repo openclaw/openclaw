@@ -8,18 +8,22 @@ export type GatewayDiscoverOpts = {
   json?: boolean;
 };
 
+/** Parses the discovery timeout flag with strict type rejection for command-line input. */
 export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
   return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
 }
 
+/** Returns the reachable host that discovery commands should show or use for follow-up probes. */
 export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
   return buildGatewayDiscoveryTarget(beacon).endpoint?.host ?? null;
 }
 
+/** Returns the resolved Gateway port after TXT metadata and discovery-target normalization. */
 export function pickGatewayPort(beacon: GatewayBonjourBeacon): number | null {
   return buildGatewayDiscoveryTarget(beacon).endpoint?.port ?? null;
 }
 
+/** Collapses duplicate Bonjour answers while preserving the first stable render order. */
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   const out: GatewayBonjourBeacon[] = [];
   const seen = new Set<string>();
@@ -42,6 +46,7 @@ export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBe
   return out;
 }
 
+/** Formats one normalized discovery beacon for terminal output. */
 export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): string[] {
   const target = buildGatewayDiscoveryTarget(beacon);
   const title = colorize(rich, theme.accentBright, target.title);
@@ -77,6 +82,7 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
     lines.push(`  ${colorize(rich, theme.muted, "tls")}: ${fingerprint}`);
   }
   if (target.endpoint && target.sshPort) {
+    // Keep this tunnel recipe aligned with the gateway's default local listener.
     const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${target.endpoint.host} -p ${target.sshPort}`;
     lines.push(`  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`);
   }

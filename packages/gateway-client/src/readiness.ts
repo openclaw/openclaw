@@ -7,6 +7,7 @@ import {
 import { resolveConnectChallengeTimeoutMs } from "./timeouts.js";
 
 export type GatewayClientStartable = {
+  /** Starts the underlying gateway connection after readiness succeeds. */
   start(): void;
 };
 
@@ -17,11 +18,14 @@ export type EventLoopReadyWaiter = (
 
 /** Timeout and abort controls for delaying client start until the loop can process IO. */
 export type GatewayClientStartReadinessOptions = {
+  /** Explicit readiness wait cap; wins over client connection timeout settings. */
   timeoutMs?: number;
+  /** Client connection settings used to derive a readiness cap when timeoutMs is absent. */
   clientOptions?: Pick<
     GatewayClientOptions,
     "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
   >;
+  /** Cancels readiness without starting the client. */
   signal?: AbortSignal;
 };
 
@@ -33,6 +37,8 @@ function resolveGatewayClientStartReadinessTimeoutMs(
   }
   const clientOptions = options.clientOptions ?? {};
   const timeoutOverride =
+    // Prefer the challenge watchdog over the older connectDelayMs alias so
+    // readiness stays aligned with the server-side preauth handshake window.
     typeof clientOptions.connectChallengeTimeoutMs === "number" &&
     Number.isFinite(clientOptions.connectChallengeTimeoutMs)
       ? clientOptions.connectChallengeTimeoutMs
@@ -55,6 +61,8 @@ export async function startGatewayClientWithReadinessWait(
     maxWaitMs: resolveGatewayClientStartReadinessTimeoutMs(options),
     signal: options.signal,
   });
+  // The readiness waiter can race with abort delivery; gate start on both the
+  // returned state and the current signal so aborted startup remains side-effect-free.
   if (readiness.ready && !readiness.aborted && options.signal?.aborted !== true) {
     client.start();
   }

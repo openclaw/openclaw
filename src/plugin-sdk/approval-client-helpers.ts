@@ -38,7 +38,9 @@ function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
 export { getExecApprovalReplyMetadata, matchesApprovalRequestFilters };
 
 export function isChannelExecApprovalClientEnabledFromConfig(params: {
+  /** Channel/account config value; auto is enabled only when approvers exist. */
   enabled?: ChannelExecApprovalEnableMode;
+  /** Number of configured approvers for the evaluated channel/account. */
   approverCount: number;
 }): boolean {
   if (params.approverCount <= 0) {
@@ -48,11 +50,17 @@ export function isChannelExecApprovalClientEnabledFromConfig(params: {
 }
 
 export function isChannelExecApprovalTargetRecipient(params: {
+  /** Resolved config containing global exec approval target forwarding rules. */
   cfg: OpenClawConfig;
+  /** Sender id from the native channel event being checked. */
   senderId?: string | null;
+  /** Channel account scope for target matching. */
   accountId?: string | null;
+  /** Channel id that target configs must match. */
   channel: string;
+  /** Optional sender normalization hook for channel-specific id grammar. */
   normalizeSenderId?: (value: string) => string | undefined;
+  /** Channel-specific comparison between a configured target and normalized sender. */
   matchTarget: (params: {
     target: ExecApprovalForwardTarget;
     normalizedSenderId: string;
@@ -63,6 +71,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
   const normalizedSenderId = params.senderId ? normalizeSenderId(params.senderId) : undefined;
   const normalizedChannel = normalizeOptionalLowercaseString(params.channel);
   if (!normalizedSenderId || !isApprovalTargetsMode(params.cfg)) {
+    // Target recipients are meaningful only for global target/both forwarding mode.
     return false;
   }
   const targets = params.cfg.approvals?.exec?.targets;
@@ -90,13 +99,19 @@ export function isChannelExecApprovalTargetRecipient(params: {
 }
 
 export function createChannelExecApprovalProfile(params: {
+  /** Resolves channel/account approval settings such as enabled, target, and filters. */
   resolveConfig: (params: ApprovalProfileParams) => ChannelApprovalConfig | undefined;
+  /** Returns normalized approver ids for the evaluated channel/account. */
   resolveApprovers: (params: ApprovalProfileParams) => string[];
+  /** Optional sender normalization hook for channel-specific id grammar. */
   normalizeSenderId?: (value: string) => string | undefined;
+  /** Optional check for configured approval target recipients. */
   isTargetRecipient?: (params: ApprovalProfileParams & { senderId?: string | null }) => boolean;
+  /** Optional channel/account ownership check for pending approval requests. */
   matchesRequestAccount?: (params: ApprovalProfileParams & { request: ApprovalRequest }) => boolean;
   // Some channels encode the effective agent only in sessionKey for forwarded approvals.
   fallbackAgentIdFromSessionKey?: boolean;
+  /** Allows channels with local-only prompts to suppress without configured approvers. */
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
@@ -157,6 +172,8 @@ export function createChannelExecApprovalProfile(params: {
     if (params.requireClientEnabledForLocalPromptSuppression !== false && !isClientEnabled(input)) {
       return false;
     }
+    // Suppression is tied to reply metadata so normal messages cannot disable
+    // the local approval prompt by merely flowing through this profile.
     return getExecApprovalReplyMetadata(input.payload) !== null;
   };
 

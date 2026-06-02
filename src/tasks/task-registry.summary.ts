@@ -26,6 +26,7 @@ function createEmptyTaskRuntimeCounts(): TaskRuntimeCounts {
   };
 }
 
+/** Creates a zeroed task summary with all known status/runtime counters present. */
 export function createEmptyTaskRegistrySummary(): TaskRegistrySummary {
   return {
     total: 0,
@@ -37,6 +38,7 @@ export function createEmptyTaskRegistrySummary(): TaskRegistrySummary {
   };
 }
 
+/** Summarizes task records by lifecycle state, failure count, and runtime family. */
 export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistrySummary {
   const summary = createEmptyTaskRegistrySummary();
   for (const task of records) {
@@ -48,6 +50,8 @@ export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistr
     } else {
       summary.terminal += 1;
     }
+    // Cancelled tasks are terminal but not counted as failures; lost tasks are
+    // failures because their backing session disappeared before finalization.
     if (task.status === "failed" || task.status === "timed_out" || task.status === "lost") {
       summary.failures += 1;
     }

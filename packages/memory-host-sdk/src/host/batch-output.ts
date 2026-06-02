@@ -1,7 +1,10 @@
 export type EmbeddingBatchOutputLine = {
+  /** Provider request id for the input row, used to match embeddings back to chunks. */
   custom_id?: string;
+  /** Provider-level batch row error, when the request never produced a response body. */
   error?: { message?: string };
   response?: {
+    /** HTTP-like status for the row inside the provider batch output file. */
     status_code?: number;
     body?:
       | {
@@ -14,6 +17,7 @@ export type EmbeddingBatchOutputLine = {
   };
 };
 
+/** Applies one provider batch output row to remaining ids, embedding map, or error list. */
 export function applyEmbeddingBatchOutputLine(params: {
   line: EmbeddingBatchOutputLine;
   remaining: Set<string>;

@@ -42,6 +42,7 @@ function loadMessageGatewayRuntime() {
   return messageGatewayRuntimePromise;
 }
 
+/** Gateway transport options accepted by direct message helper APIs. */
 export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
@@ -85,6 +86,7 @@ type MessageSendParams = {
   parseMode?: "HTML";
 };
 
+/** Result summary for direct or gateway-backed message sends. */
 export type MessageSendResult = {
   channel: string;
   to: string;
@@ -113,6 +115,7 @@ type MessagePollParams = {
   idempotencyKey?: string;
 };
 
+/** Result summary for gateway-backed poll creation. */
 export type MessagePollResult = {
   channel: string;
   to: string;
@@ -290,6 +293,7 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
+/** Sends text/media payloads through the selected outbound channel. */
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
@@ -433,6 +437,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   };
 }
 
+/** Creates a poll through the selected outbound channel gateway. */
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });

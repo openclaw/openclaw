@@ -39,6 +39,8 @@ function isSafeLiteralToken(value: string): boolean {
   if (!value || value === "-") {
     return true;
   }
+  // Safe-bin arguments are allowed to shape stdin processing, not select files or defer expansion
+  // to a shell/glob layer that can read outside the piped stream.
   return !hasGlobToken(value) && !hasShellExpansionToken(value) && !isPathLikeToken(value);
 }
 
@@ -57,6 +59,8 @@ function resolveCanonicalLongFlag(params: {
   if (params.knownLongFlagsSet.has(params.flag)) {
     return params.flag;
   }
+  // GNU tools accept unambiguous long-option prefixes; ambiguous prefixes are
+  // stored as null so validation fails closed instead of guessing a flag.
   return params.longFlagPrefixMap.get(params.flag) ?? null;
 }
 
@@ -158,6 +162,8 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
     }
 
     if (token.kind === "terminator") {
+      // `--` only stops option parsing; any following real token still has to be stdin-safe because
+      // many coreutils treat post-terminator positionals as filenames.
       for (let j = i + 1; j < args.length; j += 1) {
         const rest = args[j];
         if (!rest || rest === "-") {
@@ -213,6 +219,12 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
   return positional;
 }
 
+/**
+ * Validates argv tokens against a safe-bin profile without trusting shell expansion.
+ *
+ * This accepts only stdin-oriented invocations: option values and positionals must be literal,
+ * non-path-like tokens, denied flags fail closed, and command-family semantic rules run last.
+ */
 export function validateSafeBinArgv(
   args: string[],
   profile: SafeBinProfile,

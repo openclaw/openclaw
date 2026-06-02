@@ -5,6 +5,11 @@ import { normalizeProviderId } from "./model-selection.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
+/**
+ * Hash CLI-session reuse inputs before persisting them into session metadata.
+ * The stored value is only an equality token, so prompt/cwd/MCP inputs are not
+ * written back into the session store in plaintext.
+ */
 export function hashCliSessionText(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -13,6 +18,11 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
+/**
+ * Resolve the stored CLI session binding for a provider. New structured
+ * bindings win, older provider-id maps are still read, and the legacy
+ * Claude-only field is retained as a final migration fallback.
+ */
 export function getCliSessionBinding(
   entry: SessionEntry | undefined,
   provider: string,
@@ -51,6 +61,7 @@ export function getCliSessionBinding(
   return undefined;
 }
 
+/** Return only the reusable CLI session id for callers that do not need invalidation metadata. */
 export function getCliSessionId(
   entry: SessionEntry | undefined,
   provider: string,
@@ -58,10 +69,19 @@ export function getCliSessionId(
   return getCliSessionBinding(entry, provider)?.sessionId;
 }
 
+/**
+ * Store a CLI session id without reuse metadata. Prefer `setCliSessionBinding`
+ * when the caller can also persist auth, prompt, cwd, or MCP hashes.
+ */
 export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
   setCliSessionBinding(entry, provider, { sessionId });
 }
 
+/**
+ * Persist a provider-scoped CLI session binding in all currently supported
+ * session-store shapes. The duplicate legacy writes keep older readers working
+ * while structured bindings carry the invalidation inputs for newer runtimes.
+ */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -109,6 +129,11 @@ export function setCliSessionBinding(
   }
 }
 
+/**
+ * Clear one provider's CLI session binding across structured and legacy fields.
+ * Other providers' bindings stay intact so a model switch only invalidates the
+ * backend that actually failed or changed reuse conditions.
+ */
 export function clearCliSession(entry: SessionEntry, provider: string): void {
   const normalized = normalizeProviderId(provider);
   if (entry.cliSessionBindings?.[normalized] !== undefined) {
@@ -126,12 +151,18 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
+/** Clear every persisted CLI session binding from a session entry. */
 export function clearAllCliSessions(entry: SessionEntry): void {
   entry.cliSessionBindings = undefined;
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;
 }
 
+/**
+ * Decide whether a stored CLI session can be reused under the current run
+ * inputs. Auth, system prompt, cwd, and MCP changes invalidate the session
+ * unless the binding was explicitly marked `forceReuse`.
+ */
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
@@ -163,6 +194,8 @@ export function resolveCliSessionReuse(params: {
   const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
+  // Versioned auth epochs let a rotated profile keep reuse when the underlying
+  // auth material is known to be unchanged, avoiding unnecessary CLI restarts.
   const hasMatchingVersionedAuthEpoch =
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== undefined &&

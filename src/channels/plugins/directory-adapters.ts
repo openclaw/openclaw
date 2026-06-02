@@ -1,8 +1,10 @@
 import type { ChannelDirectoryAdapter } from "./types.adapters.js";
 
+/** Shared self resolver for directory adapters that cannot identify the current account. */
 export const nullChannelDirectorySelf: NonNullable<ChannelDirectoryAdapter["self"]> = async () =>
   null;
 
+/** Shared list resolver for directory adapters with no peer or group directory entries. */
 export const emptyChannelDirectoryList: NonNullable<
   ChannelDirectoryAdapter["listPeers"]
 > = async () => [];

@@ -17,6 +17,8 @@ function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean 
   if (!isRecord(searchConfig)) {
     return false;
   }
+  // `enabled` is a feature toggle, not credential material. Any other present value indicates
+  // the user attempted to configure web-search auth.
   return Object.entries(searchConfig).some(
     ([key, value]) => key !== "enabled" && hasConfiguredCredentialValue(value),
   );
@@ -60,6 +62,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
   });
 }
 
+/** Detects web-search credential presence across core config, plugin config, and env-backed manifests. */
 export function hasConfiguredWebSearchCredential(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

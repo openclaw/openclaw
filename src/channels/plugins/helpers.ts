@@ -5,7 +5,11 @@ import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { ChannelSecurityDmPolicy } from "./types.core.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-// Channel docking helper: use this when selecting the default account for a plugin.
+/**
+ * Resolves the account id a channel should use when a caller did not provide
+ * one, honoring plugin-specific defaults before falling back to the first
+ * configured account and then the shared default account.
+ */
 export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
@@ -15,12 +19,14 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   return params.plugin.config.defaultAccountId?.(params.cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
+/** Formats the CLI commands needed to approve a pending pairing request. */
 export function formatPairingApproveHint(channelId: string): string {
   const listCmd = formatCliCommand(`openclaw pairing list ${channelId}`);
   const approveCmd = formatCliCommand(`openclaw pairing approve ${channelId} <code>`);
   return `Approve via: ${listCmd} / ${approveCmd}`;
 }
 
+/** Splits optional comma, semicolon, or newline-delimited config values. */
 export function parseOptionalDelimitedEntries(value?: string): string[] | undefined {
   if (!value?.trim()) {
     return undefined;
@@ -29,6 +35,10 @@ export function parseOptionalDelimitedEntries(value?: string): string[] | undefi
   return parsed.length > 0 ? parsed : undefined;
 }
 
+/**
+ * Builds a DM security policy for channel/account scoped allowlists while
+ * reporting the config path a user should edit.
+ */
 export function buildAccountScopedDmSecurityPolicy(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -68,6 +78,8 @@ export function buildAccountScopedDmSecurityPolicy(params: {
     config: Record<string, unknown> | undefined,
     fields: Array<string | null>,
   ) => fields.some((field) => field != null && config?.[field] !== undefined);
+  // Prefer the narrowest config path that already carries either policy field;
+  // otherwise report the account path when that account exists, then root.
   const basePath =
     simplePolicyField || simpleAllowFromField
       ? matchesAnyField(accountConfig, [simplePolicyField, simpleAllowFromField])

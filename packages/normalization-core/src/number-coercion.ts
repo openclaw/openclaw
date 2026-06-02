@@ -50,6 +50,7 @@ export function asSafeIntegerInRange(
   return value;
 }
 
+/** Normalizes numeric string tokens while rejecting whitespace-only input. */
 function normalizeNumericString(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
@@ -366,6 +367,8 @@ export function resolveExpiresAtMsFromDurationOrEpoch(
     return resolveExpiresAtMsFromDurationSeconds(parsed, { nowMs: opts.nowMs });
   }
   const absoluteMillisecondsThreshold = opts.absoluteMillisecondsThreshold ?? 1_000_000_000_000;
+  // Values below this threshold are treated as epoch seconds; larger values are
+  // already millisecond timestamps and must fit JavaScript Date bounds.
   if (parsed < absoluteMillisecondsThreshold) {
     return resolveExpiresAtMsFromEpochSeconds(parsed);
   }

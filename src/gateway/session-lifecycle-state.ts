@@ -66,6 +66,9 @@ function mapAgentRunTerminalOutcomeToSessionStatus(
 
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
   const phase = resolveLifecyclePhase(event);
+  // Funnel lifecycle metadata through the shared terminal-outcome classifier so
+  // persisted session rows use the same timeout/cancel/failure semantics as run
+  // cleanup and reporting.
   const terminal = buildAgentRunTerminalOutcome({
     status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
     error: event.data?.error,
@@ -118,8 +121,11 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
+/** Derive the live Gateway session-row fields from an agent lifecycle event. */
 export function deriveGatewaySessionLifecycleSnapshot(params: {
+  /** Existing live row fields used to preserve timestamps when the event omits them. */
   session?: Partial<LifecycleSessionShape> | null;
+  /** Agent lifecycle event carrying start/end/error phase metadata. */
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const phase = resolveLifecyclePhase(params.event);
@@ -131,6 +137,8 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   if (phase === "start") {
     const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
     const updatedAt = startedAt ?? existing?.updatedAt;
+    // A new start clears terminal fields from any prior run under the row while
+    // preserving a valid timestamp if this event omitted one.
     return {
       updatedAt,
       status: "running",
@@ -144,6 +152,9 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
+  // End/error events may arrive without a start timestamp after reconnects or
+  // reset races; keep existing runtime data rather than fabricating negative or
+  // NaN durations.
   return {
     updatedAt,
     status: resolveTerminalStatus(params.event),
@@ -158,8 +169,11 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   };
 }
 
+/** Derive the persisted session-store patch for an agent lifecycle event. */
 export function derivePersistedSessionLifecyclePatch(params: {
+  /** Existing persisted entry fields used to preserve timestamps when the event omits them. */
   entry?: Partial<PersistedLifecycleSessionShape> | null;
+  /** Agent lifecycle event carrying start/end/error phase metadata. */
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
@@ -178,7 +192,9 @@ export function derivePersistedSessionLifecyclePatch(params: {
  * run's sessionId and the current row's sessionId are known and differ.
  */
 export function isStaleLifecycleEventForSession(params: {
+  /** Session id attached to the lifecycle event's owning run. */
   owningSessionId?: string;
+  /** Current session id stored under the session key. */
   currentSessionId?: string;
 }): boolean {
   return Boolean(
@@ -188,9 +204,13 @@ export function isStaleLifecycleEventForSession(params: {
   );
 }
 
+/** Persist an agent lifecycle event into the session store row when it still owns the row. */
 export async function persistGatewaySessionLifecycleEvent(params: {
+  /** Session key whose store row should receive lifecycle state. */
   sessionKey: string;
+  /** Optional agent scope used when loading the store entry. */
   agentId?: string;
+  /** Agent lifecycle event carrying phase and terminal metadata. */
   event: LifecycleEventLike;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);

@@ -18,6 +18,12 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
+/**
+ * Resolve the Gateway target URL and operator-facing connection message.
+ *
+ * Callers can inject resolvers for tests/status scans, but the security check
+ * always rejects plaintext remote `ws://` targets before credentials are used.
+ */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;

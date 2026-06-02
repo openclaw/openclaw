@@ -67,6 +67,8 @@ export async function resolveGatewayRuntimeConfig(params: {
   const customBindHost = params.cfg.gateway?.customBindHost;
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
+    // Loopback is a security boundary, not a preference; never fall back to a
+    // routable bind when host detection or custom resolution fails.
     throw new Error(
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
     );
@@ -107,6 +109,8 @@ export async function resolveGatewayRuntimeConfig(params: {
         : undefined;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
+  // Blank roots mean "use the bundled Control UI"; do not pass whitespace into
+  // the static-file layer where it would become a filesystem path candidate.
   const controlUiRoot =
     typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
       ? controlUiRootRaw.trim()
@@ -129,6 +133,8 @@ export async function resolveGatewayRuntimeConfig(params: {
   // trusted proxy; mode alone is not enough because env/config resolution may be empty.
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
+  // Resolve hooks during runtime config creation so invalid hook policy fails
+  // before the HTTP server binds and starts accepting requests.
   const hooksConfig = resolveHooksConfig(params.cfg);
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
   const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])

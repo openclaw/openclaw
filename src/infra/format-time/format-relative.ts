@@ -1,13 +1,3 @@
-/**
- * Centralized relative-time formatting utilities.
- *
- * Consolidates 7+ scattered implementations (formatAge, formatAgeShort, formatAgo,
- * formatRelativeTime, formatElapsedTime) into two functions:
- *
- * - `formatTimeAgo(durationMs)` — format a duration as "5m ago" / "5m" (for known elapsed time)
- * - `formatRelativeTimestamp(epochMs)` — format an epoch timestamp relative to now (handles future)
- */
-
 export type FormatTimeAgoOptions = {
   /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
   suffix?: boolean;

@@ -83,6 +83,8 @@ function collectBundledChannelOwnerPluginIds(params: {
       const pluginId = normalizeOptionalLowercaseString(plugin.id);
       if (
         pluginId &&
+        // Channel configuration can imply bundled plugin owners, but explicit owner policy
+        // still decides whether that inferred owner is allowed to become effective.
         passesManifestOwnerBasePolicy({
           plugin: { id: pluginId },
           normalizedConfig: plugins,
@@ -140,6 +142,7 @@ function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[]
   return [pluginId];
 }
 
+/** Resolves plugin ids that should be active from explicit config plus inferred owner surfaces. */
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -155,6 +158,8 @@ export function resolveEffectivePluginIds(params: {
   for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
     ids.add(pluginId);
   }
+  // Keep original config as activation source so auto-enable rewrites do not erase explicit
+  // channel/default evidence needed for owner inference.
   const configuredChannelIds = collectConfiguredChannelIds(
     effectiveConfig,
     params.config,

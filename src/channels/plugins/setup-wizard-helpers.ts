@@ -46,6 +46,7 @@ function asAllowFromList(value: unknown): ReadonlyArray<string | number> | undef
     : undefined;
 }
 
+/** Prompts for an existing or new account id and returns its normalized form. */
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
   const initial = params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
@@ -79,6 +80,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
   return normalized;
 };
 
+/** Adds the open-DM wildcard to a normalized allowFrom list without duplicating it. */
 export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
   const next = normalizeStringEntries(allowFrom ?? []);
   if (!next.includes("*")) {
@@ -87,6 +89,7 @@ export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> 
   return next;
 }
 
+/** Merges existing and newly parsed allowFrom entries while preserving first-seen order. */
 export function mergeAllowFromEntries(
   current: Array<string | number> | null | undefined,
   additions: Array<string | number>,
@@ -95,12 +98,17 @@ export function mergeAllowFromEntries(
   return uniqueStrings(merged);
 }
 
+/** Splits setup prompt input on common multi-entry separators and normalizes blanks away. */
 export function splitSetupEntries(raw: string): string[] {
   return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
 type ParsedSetupEntry = { value: string } | { error: string };
 
+/**
+ * Parses delimited setup entries with a channel-specific parser, returning the
+ * first validation error instead of partially applying mixed-valid input.
+ */
 export function parseSetupEntriesWithParser(
   raw: string,
   parseEntry: (entry: string) => ParsedSetupEntry,
@@ -117,6 +125,7 @@ export function parseSetupEntriesWithParser(
   return { entries: normalizeAllowFromEntries(entries) };
 }
 
+/** Parses setup entries while preserving "*" as the explicit open-access token. */
 export function parseSetupEntriesAllowingWildcard(
   raw: string,
   parseEntry: (entry: string) => ParsedSetupEntry,
@@ -129,6 +138,7 @@ export function parseSetupEntriesAllowingWildcard(
   });
 }
 
+/** Parses either a mention, a prefixed id, or a bare id into the channel's canonical id. */
 export function parseMentionOrPrefixedId(params: {
   value: string;
   mentionPattern: RegExp;
@@ -154,6 +164,7 @@ export function parseMentionOrPrefixedId(params: {
   return params.normalizeId ? params.normalizeId(stripped) : stripped;
 }
 
+/** Normalizes allowFrom values, preserving "*" and de-duplicating canonical ids. */
 export function normalizeAllowFromEntries(
   entries: Array<string | number>,
   normalizeEntry?: (value: string) => string | null | undefined,
@@ -172,6 +183,7 @@ export function normalizeAllowFromEntries(
   return uniqueStrings(normalized);
 }
 
+/** Builds the common configured/unconfigured status contract for setup wizards. */
 export function createStandardChannelSetupStatus(params: {
   channelLabel: string;
   configuredLabel: string;
@@ -218,6 +230,7 @@ export function createStandardChannelSetupStatus(params: {
   return status;
 }
 
+/** Resolves the effective setup account id from an override or channel default. */
 export function resolveSetupAccountId(params: {
   accountId?: string;
   defaultAccountId: string;
@@ -225,6 +238,7 @@ export function resolveSetupAccountId(params: {
   return params.accountId?.trim() ? normalizeAccountId(params.accountId) : params.defaultAccountId;
 }
 
+/** Resolves or prompts for the account id used by a configure run. */
 export async function resolveAccountIdForConfigure(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -249,6 +263,7 @@ export async function resolveAccountIdForConfigure(params: {
   return accountId;
 }
 
+/** Writes an account-scoped DM allowlist patch for setup flows. */
 export function setAccountAllowFromForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -265,6 +280,7 @@ export function setAccountAllowFromForChannel(params: {
   });
 }
 
+/** Patches a top-level channel section while optionally clearing stale fields first. */
 export function patchTopLevelChannelConfigSection(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -291,6 +307,7 @@ export function patchTopLevelChannelConfigSection(params: {
   };
 }
 
+/** Patches a nested channel section while preserving sibling channel config. */
 export function patchNestedChannelConfigSection(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -324,6 +341,7 @@ export function patchNestedChannelConfigSection(params: {
   };
 }
 
+/** Writes a top-level allowFrom list for setup helpers that do not use accounts. */
 export function setTopLevelChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -338,6 +356,7 @@ export function setTopLevelChannelAllowFrom(params: {
   });
 }
 
+/** Writes a nested allowFrom list for setup helpers with section-scoped config. */
 export function setNestedChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -354,6 +373,7 @@ export function setNestedChannelAllowFrom(params: {
   });
 }
 
+/** Sets a top-level DM policy and carries allowFrom forward when opening access. */
 export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -378,6 +398,7 @@ export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
+/** Sets a nested DM policy and carries allowFrom forward when opening access. */
 export function setNestedChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -408,6 +429,7 @@ export function setNestedChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
+/** Sets a top-level group policy for setup helpers that do not use nested sections. */
 export function setTopLevelChannelGroupPolicy(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -422,6 +444,7 @@ export function setTopLevelChannelGroupPolicy(params: {
   });
 }
 
+/** Builds the setup wizard DM-policy descriptor for top-level channel config. */
 export function createTopLevelChannelDmPolicy(params: {
   label: string;
   channel: string;
@@ -446,6 +469,7 @@ export function createTopLevelChannelDmPolicy(params: {
   };
 }
 
+/** Builds the setup wizard DM-policy descriptor for nested channel config. */
 export function createNestedChannelDmPolicy(params: {
   label: string;
   channel: string;
@@ -474,6 +498,7 @@ export function createNestedChannelDmPolicy(params: {
   };
 }
 
+/** Creates a top-level DM policy setter suitable for wizard descriptors. */
 export function createTopLevelChannelDmPolicySetter(params: {
   channel: string;
   getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
@@ -487,6 +512,7 @@ export function createTopLevelChannelDmPolicySetter(params: {
     });
 }
 
+/** Creates a nested DM policy setter suitable for wizard descriptors. */
 export function createNestedChannelDmPolicySetter(params: {
   channel: string;
   section: string;
@@ -504,6 +530,7 @@ export function createNestedChannelDmPolicySetter(params: {
     });
 }
 
+/** Creates a top-level allowFrom setter suitable for wizard descriptors. */
 export function createTopLevelChannelAllowFromSetter(params: {
   channel: string;
   enabled?: boolean;
@@ -517,6 +544,7 @@ export function createTopLevelChannelAllowFromSetter(params: {
     });
 }
 
+/** Creates a nested allowFrom setter suitable for wizard descriptors. */
 export function createNestedChannelAllowFromSetter(params: {
   channel: string;
   section: string;
@@ -532,6 +560,7 @@ export function createNestedChannelAllowFromSetter(params: {
     });
 }
 
+/** Creates a reusable setter for top-level channel group policy fields. */
 export function createTopLevelChannelGroupPolicySetter(params: {
   channel: string;
   enabled?: boolean;
@@ -545,6 +574,7 @@ export function createTopLevelChannelGroupPolicySetter(params: {
     });
 }
 
+/** Sets DM policy on a channel and adds "*" when switching the policy to open. */
 export function setChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -569,6 +599,7 @@ export function setChannelDmPolicyWithAllowFrom(params: {
   };
 }
 
+/** Sets the compatibility DM policy shape while preserving nested dm enablement. */
 export function setCompatChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -598,6 +629,7 @@ export function setCompatChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
+/** Writes allowFrom through the compatibility DM config patcher. */
 export function setCompatChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -610,6 +642,7 @@ export function setCompatChannelAllowFrom(params: {
   });
 }
 
+/** Sets account-scoped group policy and enables the account/channel as needed. */
 export function setAccountGroupPolicyForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -624,6 +657,7 @@ export function setAccountGroupPolicyForChannel(params: {
   });
 }
 
+/** Sets account-scoped DM allowFrom and forces DM policy to allowlist. */
 export function setAccountDmAllowFromForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -638,6 +672,7 @@ export function setAccountDmAllowFromForChannel(params: {
   });
 }
 
+/** Builds a DM-policy descriptor for channels that still support the compat DM shape. */
 export function createCompatChannelDmPolicy(params: {
   label: string;
   channel: string;
@@ -714,6 +749,7 @@ export function createCompatChannelDmPolicy(params: {
   };
 }
 
+/** Resolves group allowlist entries, showing setup notes and falling back on lookup failure. */
 export async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
   label: string;
   prompter: Pick<WizardPrompter, "note">;
@@ -739,6 +775,7 @@ export async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
   }
 }
 
+/** Builds an account-scoped allowFrom wizard section backed by the shared account patcher. */
 export function createAccountScopedAllowFromSection(params: {
   channel: string;
   credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
@@ -769,6 +806,7 @@ export function createAccountScopedAllowFromSection(params: {
   };
 }
 
+/** Builds an account-scoped group-access wizard section with lookup-failure notes. */
 export function createAccountScopedGroupAccessSection<TResolved>(params: {
   channel: string;
   label: string;
@@ -836,6 +874,7 @@ export function createAccountScopedGroupAccessSection<TResolved>(params: {
 type AccountScopedChannel = string;
 type CompatDmChannel = string;
 
+/** Patches compat DM channel config while keeping the nested dm block enabled by default. */
 export function patchCompatDmChannelConfig(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -853,6 +892,7 @@ export function patchCompatDmChannelConfig(params: {
         ...patch,
         dm: {
           ...dmConfig,
+          // Compat DM setup owns policy/allowFrom at the root but still needs dm enabled.
           enabled: typeof dmConfig.enabled === "boolean" ? dmConfig.enabled : true,
         },
       },
@@ -860,6 +900,7 @@ export function patchCompatDmChannelConfig(params: {
   };
 }
 
+/** Toggles the channel enabled flag without disturbing existing setup config. */
 export function setSetupChannelEnabled(
   cfg: OpenClawConfig,
   channel: string,
@@ -899,6 +940,8 @@ function patchConfigForScopedAccount(params: {
           cfg,
           channelKey: channel,
         });
+  // First named-account write seeds root single-account config into default so
+  // adding a second account does not steal the original account's credentials.
   return patchScopedAccountConfig({
     cfg: seededCfg,
     channelKey: channel,
@@ -909,6 +952,7 @@ function patchConfigForScopedAccount(params: {
   });
 }
 
+/** Patches account-scoped setup config and enables the account/channel. */
 export function patchChannelConfigForAccount(params: {
   cfg: OpenClawConfig;
   channel: AccountScopedChannel;
@@ -921,6 +965,7 @@ export function patchChannelConfigForAccount(params: {
   });
 }
 
+/** Applies a token prompt result to account config, including env-only account creation. */
 export function applySingleTokenPromptResult(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -951,6 +996,7 @@ export function applySingleTokenPromptResult(params: {
   return next;
 }
 
+/** Resolves which secret prompt choices are available for a single-channel setup step. */
 export function buildSingleChannelSecretPromptState(params: {
   accountConfigured: boolean;
   hasConfigToken: boolean;
@@ -968,6 +1014,7 @@ export function buildSingleChannelSecretPromptState(params: {
   };
 }
 
+/** Prompts for a plaintext token, allowing existing config or env selection when valid. */
 export async function promptSingleChannelToken(params: {
   prompter: Pick<WizardPrompter, "confirm" | "text">;
   accountConfigured: boolean;
@@ -1014,6 +1061,7 @@ export type SingleChannelSecretInputPromptResult =
   | { action: "use-env" }
   | { action: "set"; value: SecretInput; resolvedValue: string };
 
+/** Runs one credential setup step and applies the resulting config mutation hook. */
 export async function runSingleChannelSecretStep(params: {
   cfg: OpenClawConfig;
   prompter: Pick<WizardPrompter, "confirm" | "text" | "select" | "note">;
@@ -1090,6 +1138,7 @@ export async function runSingleChannelSecretStep(params: {
   };
 }
 
+/** Prompts for plaintext or secret-ref credential input for setup wizards. */
 export async function promptSingleChannelSecretInput(params: {
   cfg: OpenClawConfig;
   prompter: Pick<WizardPrompter, "confirm" | "text" | "select" | "note">;
@@ -1169,6 +1218,7 @@ export async function promptSingleChannelSecretInput(params: {
 
 type ParsedAllowFromResult = { entries: string[]; error?: string };
 
+/** Prompts for parsed allowFrom entries and applies them to the resolved account. */
 export async function promptParsedAllowFromForAccount<TConfig extends OpenClawConfig>(params: {
   cfg: TConfig;
   accountId?: string;
@@ -1223,6 +1273,7 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
   });
 }
 
+/** Creates a reusable promptAllowFrom hook from parsed-entry prompt parameters. */
 export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawConfig>(params: {
   defaultAccountId: string | ((cfg: TConfig) => string);
   noteTitle?: string;
@@ -1258,6 +1309,7 @@ export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawCo
     });
 }
 
+/** Prompts parsed allowFrom entries for account-scoped channel config. */
 export async function promptParsedAllowFromForScopedChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -1295,6 +1347,7 @@ export async function promptParsedAllowFromForScopedChannel(params: {
   });
 }
 
+/** Creates a top-level promptAllowFrom hook for parsed allowFrom input. */
 export function createTopLevelChannelParsedAllowFromPrompt(params: {
   channel: string;
   defaultAccountId: string | ((cfg: OpenClawConfig) => string);
@@ -1341,6 +1394,7 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
   });
 }
 
+/** Creates a nested-section promptAllowFrom hook for parsed allowFrom input. */
 export function createNestedChannelParsedAllowFromPrompt(params: {
   channel: string;
   section: string;
@@ -1392,6 +1446,7 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
   });
 }
 
+/** Converts parsed allowFrom inputs into wizard resolution rows. */
 export function resolveParsedAllowFromEntries(params: {
   entries: string[];
   parseId: (raw: string) => string | null;
@@ -1406,6 +1461,7 @@ export function resolveParsedAllowFromEntries(params: {
   });
 }
 
+/** Builds a generic allowFrom wizard section with parsed-entry resolution fallback. */
 export function createAllowFromSection(params: {
   helpTitle?: string;
   helpLines?: string[];
@@ -1434,6 +1490,7 @@ export function createAllowFromSection(params: {
   };
 }
 
+/** Notes resolved and unresolved channel lookup rows when there is something to show. */
 export async function noteChannelLookupSummary(params: {
   prompter: Pick<WizardPrompter, "note">;
   label: string;
@@ -1455,6 +1512,7 @@ export async function noteChannelLookupSummary(params: {
   }
 }
 
+/** Notes a lookup failure without discarding the user's typed entries. */
 export async function noteChannelLookupFailure(params: {
   prompter: Pick<WizardPrompter, "note">;
   label: string;
@@ -1472,6 +1530,7 @@ type AllowFromResolution = {
   id?: string | null;
 };
 
+/** Resolves allowFrom entries only when a credential token is available. */
 export async function resolveEntriesWithOptionalToken<TResult>(params: {
   token?: string | null;
   entries: string[];
@@ -1488,6 +1547,7 @@ export async function resolveEntriesWithOptionalToken<TResult>(params: {
   });
 }
 
+/** Prompts until allowFrom entries can be parsed or resolved into concrete ids. */
 export async function promptResolvedAllowFrom(params: {
   prompter: WizardPrompter;
   existing: Array<string | number>;
@@ -1540,6 +1600,7 @@ export async function promptResolvedAllowFrom(params: {
   }
 }
 
+/** Prompts and writes compat-channel allowFrom entries. */
 export async function promptLegacyChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: CompatDmChannel;
@@ -1574,6 +1635,7 @@ export async function promptLegacyChannelAllowFrom(params: {
   });
 }
 
+/** Resolves the setup account, then prompts and writes compat-channel allowFrom entries. */
 export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
   cfg: OpenClawConfig;
   channel: CompatDmChannel;

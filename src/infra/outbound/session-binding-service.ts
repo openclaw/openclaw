@@ -35,6 +35,7 @@ export type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
+/** Structured error raised by session binding adapters and service operations. */
 export class SessionBindingError extends Error {
   constructor(
     public readonly code: SessionBindingErrorCode,
@@ -50,10 +51,12 @@ export class SessionBindingError extends Error {
   }
 }
 
+/** Type guard for callers that need to inspect session binding error codes. */
 export function isSessionBindingError(error: unknown): error is SessionBindingError {
   return error instanceof SessionBindingError;
 }
 
+/** Public service facade for binding sessions to channel conversations. */
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
   getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
@@ -63,12 +66,14 @@ export type SessionBindingService = {
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
+/** Capabilities advertised by a channel-specific session binding adapter. */
 export type SessionBindingAdapterCapabilities = {
   placements?: SessionBindingPlacement[];
   bindSupported?: boolean;
   unbindSupported?: boolean;
 };
 
+/** Channel/account-specific implementation backing session binding operations. */
 export type SessionBindingAdapter = {
   channel: string;
   accountId: string;
@@ -139,6 +144,7 @@ function getActiveAdapterForKey(key: string): SessionBindingAdapter | null {
   return registrations?.at(-1)?.normalizedAdapter ?? null;
 }
 
+/** Registers a session binding adapter for one normalized channel/account pair. */
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const normalizedAdapter = {
     ...adapter,
@@ -161,6 +167,7 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
+/** Removes the active or matching adapter registration for a channel/account pair. */
 export function unregisterSessionBindingAdapter(params: {
   channel: string;
   accountId: string;
@@ -391,6 +398,7 @@ function createDefaultSessionBindingService(): SessionBindingService {
 
 const DEFAULT_SESSION_BINDING_SERVICE = createDefaultSessionBindingService();
 
+/** Returns the process-wide session binding service facade. */
 export function getSessionBindingService(): SessionBindingService {
   return DEFAULT_SESSION_BINDING_SERVICE;
 }

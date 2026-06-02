@@ -37,18 +37,21 @@ function uniqueFlags(flags: string[]): string[] {
   return normalizeUniqueStringEntriesLower(flags);
 }
 
+/** Resolves configured diagnostic flags plus OPENCLAW_DIAGNOSTICS overrides. */
 export function resolveDiagnosticFlags(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const configFlags = Array.isArray(cfg?.diagnostics?.flags) ? cfg?.diagnostics?.flags : [];
   const envFlags = parseEnvFlags(env[DIAGNOSTICS_ENV]);
+  // False-like env values are an operator override that disables config flags too.
   if (envFlags.disablesAll) {
     return [];
   }
   return uniqueFlags([...configFlags, ...envFlags.flags]);
 }
 
+/** Matches exact flags, "*" aliases, namespace wildcards, and raw prefix wildcards. */
 export function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boolean {
   const target = normalizeLowercaseStringOrEmpty(flag);
   if (!target) {
@@ -81,6 +84,7 @@ export function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boo
   return false;
 }
 
+/** Resolves diagnostics for the current environment and checks a single flag. */
 export function isDiagnosticFlagEnabled(
   flag: string,
   cfg?: OpenClawConfig,

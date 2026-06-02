@@ -10,11 +10,12 @@ const MARKDOWN_STYLE_MARKERS = {
   code_block: { open: "```\n", close: "```" },
 } as const;
 
-/** Converts markdown tables into the configured plaintext/code rendering mode. */
+/** Converts markdown tables into the configured plaintext/code mode while preserving links. */
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
   if (!markdown || mode === "off") {
     return markdown;
   }
+  // External "block" mode shares the code renderer when callers want inline replacement text.
   const effectiveMode = mode === "block" ? "code" : mode;
   const { ir, hasTables } = markdownToIRWithMeta(markdown, {
     linkify: false,

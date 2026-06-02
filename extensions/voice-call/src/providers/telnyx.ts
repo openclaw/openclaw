@@ -21,14 +21,9 @@ import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
-/**
- * Telnyx Voice API provider implementation.
- *
- * Uses Telnyx Call Control API v2 for managing calls.
- * @see https://developers.telnyx.com/docs/api/v2/call-control
- */
+/** Telnyx provider knobs that affect webhook verification behavior. */
 export interface TelnyxProviderOptions {
-  /** Skip webhook signature verification (development only, NOT for production) */
+  /** Development-only escape hatch; production webhooks should verify Ed25519 signatures. */
   skipVerification?: boolean;
 }
 
@@ -54,11 +49,13 @@ function normalizeBase64ForCompare(value: string): string {
 function decodeClientStateBase64(value: string): string | null {
   const buffer = Buffer.from(value, "base64");
   if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    // Telnyx echoes client_state; reject malformed base64 instead of inventing a call id.
     return null;
   }
   return buffer.toString("utf8");
 }
 
+/** Telnyx Call Control provider for outbound/inbound call control and PCMU media streaming. */
 export class TelnyxProvider implements VoiceCallProvider {
   readonly name = "telnyx" as const;
 
@@ -83,9 +80,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.options = options;
   }
 
-  /**
-   * Make an authenticated request to the Telnyx API.
-   */
+  /** Sends an authenticated Telnyx Call Control command through the SSRF guard. */
   private async apiRequest<T = unknown>(
     endpoint: string,
     body: Record<string, unknown>,
@@ -106,9 +101,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Verify Telnyx webhook signature using Ed25519.
-   */
+  /** Verifies Telnyx webhook signatures and returns replay keys for manager dedupe. */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
     const result = verifyTelnyxWebhook(ctx, this.publicKey, {
       skipVerification: this.options.skipVerification,
@@ -122,9 +115,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     };
   }
 
-  /**
-   * Parse Telnyx webhook event into normalized format.
-   */
+  /** Parses one Telnyx webhook into the manager's normalized event envelope. */
   parseWebhookEvent(
     ctx: WebhookContext,
     options?: WebhookParseOptions,
@@ -147,13 +138,11 @@ export class TelnyxProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Convert Telnyx event to normalized event format.
-   */
+  /** Converts Telnyx Call Control events while preserving verified-request dedupe keys. */
   private normalizeEvent(data: TelnyxEvent, dedupeKey?: string): NormalizedEvent | null {
-    // Decode client_state from Base64 (we encode it in initiateCall)
     let callId = "";
     if (data.payload?.client_state) {
+      // Outbound calls encode OpenClaw's call id in client_state; fall back to raw carrier value.
       callId = decodeClientStateBase64(data.payload.client_state) ?? data.payload.client_state;
     }
     if (!callId) {
@@ -217,6 +206,7 @@ export class TelnyxProvider implements VoiceCallProvider {
 
       case "streaming.started":
       case "streaming.stopped":
+        // WebSocket bridge owns stream lifecycle; carrier lifecycle webhooks are acknowledged only.
         return null;
 
       default:
@@ -224,10 +214,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Map Telnyx hangup cause to normalized end reason.
-   * @see https://developers.telnyx.com/docs/api/v2/call-control/Call-Commands#hangup-causes
-   */
+  /** Maps Telnyx hangup causes to OpenClaw terminal reasons used by call records. */
   private mapHangupCause(cause?: string): EndReason {
     switch (cause) {
       case "normal_clearing":
@@ -253,7 +240,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       case "subscriber_absent":
         return "hangup-user";
       default:
-        // Unknown cause - log it for debugging and return completed
+        // Unknown Telnyx causes are not retryable proof; log and preserve historical completion behavior.
         if (cause) {
           console.warn(`[telnyx] Unknown hangup cause: ${cause}`);
         }
@@ -261,6 +248,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     }
   }
 
+  /** Starts an outbound Telnyx call and embeds the OpenClaw call id in signed callback state. */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const body: Record<string, unknown> = {
       connection_id: this.connectionId,
@@ -268,6 +256,8 @@ export class TelnyxProvider implements VoiceCallProvider {
       from: input.from,
       webhook_url: input.webhookUrl,
       webhook_url_method: "POST",
+      // Telnyx echoes client_state on webhooks; encode the OpenClaw call id so
+      // outbound callbacks can rejoin local state before call_control_id mapping exists.
       client_state: Buffer.from(input.callId).toString("base64"),
       timeout_secs: 30,
       ...(input.streamUrl
@@ -282,9 +272,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     };
   }
 
-  /**
-   * Hang up a call via Telnyx API.
-   */
+  /** Hangs up a call-control leg; missing legs are treated as already ended. */
   async hangupCall(input: HangupCallInput): Promise<void> {
     await this.apiRequest(
       `/calls/${input.providerCallId}/actions/hangup`,
@@ -293,8 +281,10 @@ export class TelnyxProvider implements VoiceCallProvider {
     );
   }
 
+  /** Answers an inbound call, optionally attaching the bidirectional PCMU stream bridge. */
   async answerCall(input: AnswerCallInput): Promise<void> {
     const body: Record<string, unknown> = {
+      // Stable command id makes answer retries idempotent for one OpenClaw call.
       command_id: `openclaw-answer-${input.callId}`,
       ...(input.streamUrl
         ? buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken)
@@ -303,9 +293,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, body);
   }
 
-  /**
-   * Play TTS audio via Telnyx speak action.
-   */
+  /** Plays text through Telnyx speak, passing provider-specific voice ids through unchanged. */
   async playTts(input: PlayTtsInput): Promise<void> {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/speak`, {
       command_id: crypto.randomUUID(),
@@ -315,9 +303,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Start transcription (STT) via Telnyx.
-   */
+  /** Starts Telnyx transcription for the active call leg. */
   async startListening(input: StartListeningInput): Promise<void> {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/transcription_start`, {
       command_id: crypto.randomUUID(),
@@ -325,9 +311,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Stop transcription via Telnyx.
-   */
+  /** Stops Telnyx transcription; missing legs are safe during hangup races. */
   async stopListening(input: StopListeningInput): Promise<void> {
     await this.apiRequest(
       `/calls/${input.providerCallId}/actions/transcription_stop`,
@@ -336,6 +320,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     );
   }
 
+  /** Reads Telnyx liveness for restore; ambiguous responses stay non-terminal. */
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     try {
       const data = await guardedJsonApiRequest<{ data?: { state?: string; is_alive?: boolean } }>({
@@ -357,8 +342,8 @@ export class TelnyxProvider implements VoiceCallProvider {
 
       const state = data.data?.state ?? "unknown";
       const isAlive = data.data?.is_alive;
-      // If is_alive is missing, treat as unknown rather than terminal (P1 fix)
       if (isAlive === undefined) {
+        // Missing liveness is not terminal proof; keep restore logic conservative.
         return { status: state, isTerminal: false, isUnknown: true };
       }
       return { status: state, isTerminal: !isAlive };
@@ -372,6 +357,8 @@ function buildTelnyxStreamingFields(
   streamUrl: string,
   streamAuthToken: string | undefined,
 ): Record<string, unknown> {
+  // Realtime voice expects 8kHz PCMU both ways; keep these fields in sync with
+  // the WebSocket bridge's frame codec and sample-rate assumptions.
   return {
     stream_url: streamUrl,
     stream_track: "inbound_track",

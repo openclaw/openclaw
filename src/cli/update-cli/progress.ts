@@ -36,10 +36,12 @@ const STEP_LABELS: Record<string, string> = {
   "global install": "Installing global package",
 };
 
+/** Keep terminal progress wording stable even when low-level step names change. */
 function getStepLabel(step: UpdateStepInfo): string {
   return STEP_LABELS[step.name] ?? step.name;
 }
 
+/** Infer actionable recovery hints from updater-owned failure modes and stderr tails. */
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
@@ -108,10 +110,13 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 }
 
 export type ProgressController = {
+  /** Callback bag passed into the update runner; empty when progress is disabled. */
   progress: UpdateStepProgress;
+  /** Stops any active spinner before the command exits or switches output modes. */
   stop: () => void;
 };
 
+/** Create terminal spinner callbacks while preserving a no-op controller for JSON mode. */
 export function createUpdateProgress(enabled: boolean): ProgressController {
   if (!enabled) {
     return {
@@ -172,9 +177,11 @@ function formatStepStatus(exitCode: number | null): string {
 }
 
 type PrintResultOptions = UpdateCommandOptions & {
+  /** Suppress per-step rendering when another command has already shown progress. */
   hideSteps?: boolean;
 };
 
+/** Render the final update result in either JSON or terminal-friendly summary form. */
 export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
   if (opts.json) {
     defaultRuntime.writeJson(result);

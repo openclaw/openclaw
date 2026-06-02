@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Extracts the native conversation id from an account-prefixed binding id. */
 export function resolveThreadBindingConversationIdFromBindingId(params: {
   accountId: string;
   bindingId?: string;

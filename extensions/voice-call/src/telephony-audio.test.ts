@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertPcmToMulaw8k, resamplePcmTo8k } from "./telephony-audio.js";
+import { chunkAudio, convertPcmToMulaw8k, resamplePcmTo8k } from "./telephony-audio.js";
 
 function makeSinePcm(
   sampleRate: number,
@@ -77,5 +77,16 @@ describe("telephony-audio convertPcmToMulaw8k", () => {
     const mulaw = convertPcmToMulaw8k(input, 8_000);
     const unalignedMulaw = convertPcmToMulaw8k(unalignedCopy(input), 8_000);
     expect(unalignedMulaw.equals(mulaw)).toBe(true);
+  });
+});
+
+describe("telephony-audio chunkAudio", () => {
+  it("returns streaming frame views with a short final chunk", () => {
+    const audio = Buffer.from([1, 2, 3, 4, 5]);
+    const chunks = [...chunkAudio(audio, 2)];
+
+    expect(chunks.map((chunk) => [...chunk])).toEqual([[1, 2], [3, 4], [5]]);
+    audio[0] = 9;
+    expect(chunks[0]?.[0]).toBe(9);
   });
 });

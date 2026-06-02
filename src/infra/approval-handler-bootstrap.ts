@@ -39,6 +39,13 @@ function formatRetryableApprovalBootstrapStartError(error: unknown): string {
   return message;
 }
 
+/**
+ * Start and track a channel native approval handler as runtime contexts appear and disappear.
+ *
+ * The returned cleanup function unsubscribes from runtime-context changes, cancels deferred retry
+ * timers, and stops the currently active handler. Retryable gateway readiness failures are retried
+ * for the same context; terminal auth failures disable that context until it is registered again.
+ */
 export async function startChannelApprovalHandlerBootstrap(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
@@ -84,6 +91,8 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     if (generation !== activeGeneration) {
       return;
     }
+    // Handler factories can lazy-load channel runtime code; generation checks make context
+    // replacement/unregistration win without starting a handler bound to stale native state.
     const handler = await createChannelApprovalHandlerFromCapability({
       capability,
       label: `${params.plugin.id}/native-approvals`,
@@ -98,6 +107,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       return;
     }
     if (generation !== activeGeneration) {
+      // The runtime context was replaced while the handler factory was still loading.
       await handler.stop().catch(() => {});
       return;
     }
@@ -145,6 +155,8 @@ export async function startChannelApprovalHandlerBootstrap(params: {
           return;
         }
         if (isRetryableApprovalBootstrapStartError(error)) {
+          // Gateway startup can be transient during process boot or device-token rotation; keep
+          // retrying without noisy error logs until the same context is replaced or cleaned up.
           logger.warn(
             `native approval handler deferred until gateway readiness recovers: ${formatRetryableApprovalBootstrapStartError(error)}`,
           );

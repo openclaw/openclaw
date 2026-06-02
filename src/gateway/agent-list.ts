@@ -37,6 +37,8 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
     }
   }
 
+  // Status must show agents that exist only on disk after direct session writes
+  // or partial config repair, but explicit config lists still gate visibility below.
   for (const id of listExistingAgentIdsFromDisk()) {
     ids.add(id);
   }
@@ -48,6 +50,13 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
     : sorted;
 }
 
+/**
+ * Build the compact agent list consumed by status and local diagnostics.
+ *
+ * The result preserves the default agent first, includes the active main key
+ * when allowed, and only exposes disk-discovered agents when config has not
+ * declared an explicit allow-list.
+ */
 export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;

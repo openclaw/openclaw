@@ -117,7 +117,8 @@ export class CallManager {
     const verified = await this.verifyRestoredCalls(provider, persisted.activeCalls);
     this.activeCalls = verified;
 
-    // Rebuild providerCallIdMap from verified calls only
+    // Only verified calls are addressable by provider id after restart; skipped
+    // persisted records must not receive future webhook events.
     this.providerCallIdMap = new Map();
     for (const [callId, call] of verified) {
       if (call.providerCallId) {
@@ -125,14 +126,14 @@ export class CallManager {
       }
     }
 
-    // Restart max-duration timers for restored calls that are past the answered state
+    // Restore only the remaining duration. Calls whose answered window already
+    // elapsed are dropped because a timer scheduled at 0ms races startup state.
     let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
       if (call.answeredAt && !TerminalStates.has(call.state)) {
         const elapsed = Date.now() - call.answeredAt;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
         if (elapsed >= maxDurationMs) {
-          // Already expired — remove instead of keeping
           verified.delete(callId);
           if (call.providerCallId) {
             this.providerCallIdMap.delete(call.providerCallId);
@@ -187,13 +188,15 @@ export class CallManager {
     let keptVerificationFailures = 0;
 
     for (const [callId, call] of candidates) {
-      // Skip calls without a provider ID — can't verify
+      // Without a provider id there is no remote state to verify, so restoring
+      // would create a local-only call that can never receive carrier events.
       if (!call.providerCallId) {
         skippedNoProviderCallId += 1;
         continue;
       }
 
-      // Skip calls older than maxDurationSeconds (time-based fallback)
+      // Age is the local fallback when provider state is unavailable or stale;
+      // persist timeout locally and make a best-effort remote hangup.
       if (now - call.startedAt > maxAgeMs) {
         skippedOlderThanMaxDuration += 1;
         markRestoredCallSkipped(call, "timeout");
@@ -232,7 +235,8 @@ export class CallManager {
             }
           })
           .catch(() => {
-            // Verification failed entirely — keep the call, rely on timer
+            // Treat verification failure like an unknown provider status: the
+            // restored max-duration timer remains the safety net.
             keptVerificationFailures += 1;
             verified.set(callId, call);
           }),

@@ -311,6 +311,7 @@ function enforceRelaySessionLimits(connId: string): void {
   }
 }
 
+/** Create a Gateway-owned realtime voice relay session for one client connection. */
 export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
@@ -484,6 +485,8 @@ export function createTalkRealtimeRelaySession(
           return;
         }
         if (forceAgentConsultOnFinalTranscript) {
+          // Some realtime providers finalize speech without calling tools.
+          // Force a consult after a short delay unless a native consult appears.
           scheduleForcedAgentConsult(relay, question);
         }
       }
@@ -720,10 +723,15 @@ function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   return session;
 }
 
+/** Send one base64 PCM audio frame from a browser client into a realtime relay. */
 export function sendTalkRealtimeRelayAudio(params: {
+  /** Relay session id returned by createTalkRealtimeRelaySession. */
   relaySessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** Base64-encoded PCM16 frame. */
   audioBase64: string;
+  /** Optional client media timestamp to forward to the provider bridge. */
   timestamp?: number;
 }): void {
   if (params.audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
@@ -748,11 +756,17 @@ export function sendTalkRealtimeRelayAudio(params: {
   }
 }
 
+/** Submit a tool result from the Gateway/client side back into the realtime provider bridge. */
 export function submitTalkRealtimeRelayToolResult(params: {
+  /** Relay session id returned by createTalkRealtimeRelaySession. */
   relaySessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** Provider tool call id being completed. */
   callId: string;
+  /** Tool result payload to deliver to the provider bridge. */
   result: unknown;
+  /** Provider-specific continuation options for streaming tool results. */
   options?: RealtimeVoiceToolResultOptions;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
@@ -825,11 +839,17 @@ export function submitTalkRealtimeRelayToolResult(params: {
   });
 }
 
+/** Associate an OpenClaw agent run with a realtime relay tool call for later steering/cancel. */
 export function registerTalkRealtimeRelayAgentRun(params: {
+  /** Relay session id returned by createTalkRealtimeRelaySession. */
   relaySessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** OpenClaw session key for the agent run. */
   sessionKey: string;
+  /** Agent run id to abort or steer later. */
   runId: string;
+  /** Optional realtime tool call id that owns the run. */
   callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
@@ -842,11 +862,17 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   }
 }
 
+/** Steer or cancel the agent run currently associated with a realtime relay session. */
 export async function steerTalkRealtimeRelayAgentRun(params: {
+  /** Relay session id returned by createTalkRealtimeRelaySession. */
   relaySessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** Optional expected session key; mismatches are rejected. */
   sessionKey?: string;
+  /** User speech/control text to route into agent run control. */
   text: string;
+  /** Optional control mode override for agent run steering. */
   mode?: string;
 }): Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
@@ -884,9 +910,13 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   return result;
 }
 
+/** Cancel the active realtime relay turn and abort any associated agent runs. */
 export function cancelTalkRealtimeRelayTurn(params: {
+  /** Relay session id returned by createTalkRealtimeRelaySession. */
   relaySessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
+  /** Optional cancellation reason delivered to talk events and agent aborts. */
   reason?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
@@ -906,14 +936,18 @@ export function cancelTalkRealtimeRelayTurn(params: {
   });
 }
 
+/** Close a realtime relay session as a completed client stop. */
 export function stopTalkRealtimeRelaySession(params: {
+  /** Relay session id returned by createTalkRealtimeRelaySession. */
   relaySessionId: string;
+  /** Owning Gateway connection id; prevents cross-connection relay access. */
   connId: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   closeRelaySession(session, "completed");
 }
 
+/** Close and clear all realtime relay sessions for test isolation. */
 export function clearTalkRealtimeRelaySessionsForTest(): void {
   for (const session of relaySessions.values()) {
     session.forcedConsults.clear();

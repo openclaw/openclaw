@@ -2,10 +2,15 @@ import type { ChatAttachment } from "../chat-attachments.js";
 
 /** RPC attachment payload shape accepted by chat-like gateway methods. */
 export type RpcAttachmentInput = {
+  /** Optional attachment family forwarded to ChatAttachment when supplied as a string. */
   type?: unknown;
+  /** OpenClaw-style MIME type; Anthropic source.media_type is used as fallback. */
   mimeType?: unknown;
+  /** Optional display filename kept only when already string-normalized by the caller. */
   fileName?: unknown;
+  /** OpenClaw-style base64 string, ArrayBuffer, or typed-array payload. */
   content?: unknown;
+  /** Anthropic-style source object accepted for compatibility at the RPC boundary. */
   source?: unknown;
 };
 
@@ -50,6 +55,7 @@ export function normalizeRpcAttachmentsToChatAttachments(
           content: normalizeAttachmentContent(a?.content) ?? sourceContent,
         };
       })
+      // Drop metadata-only entries; downstream chat handling requires content.
       .filter((a) => a.content) ?? []
   );
 }

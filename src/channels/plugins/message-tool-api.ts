@@ -1,6 +1,7 @@
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.public.js";
 
+/** Minimal bundled artifact surface needed for message-tool discovery. */
 export type ChannelMessageToolDiscoveryAdapter = Pick<
   ChannelMessageActionAdapter,
   "describeMessageTool"
@@ -28,6 +29,7 @@ function loadBundledChannelMessageToolApi(channelId: string): MessageToolApi | u
   }
 }
 
+/** Resolves message-tool discovery from a bundled channel's narrow public artifact. */
 export function resolveBundledChannelMessageToolDiscoveryAdapter(
   channelId: string,
 ): ChannelMessageToolDiscoveryAdapter | undefined {
@@ -38,6 +40,7 @@ export function resolveBundledChannelMessageToolDiscoveryAdapter(
   return { describeMessageTool };
 }
 
+/** Describes bundled channel message-tool support through the narrow public artifact. */
 export function describeBundledChannelMessageTool(params: {
   channelId: string;
   context: Parameters<NonNullable<ChannelMessageToolDiscoveryAdapter["describeMessageTool"]>>[0];

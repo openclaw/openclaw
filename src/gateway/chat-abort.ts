@@ -71,6 +71,9 @@ export function resolveChatRunExpiresAtMs(params: {
   minMs?: number;
   maxMs?: number;
 }): number {
+  // Abort-controller entries outlive the model timeout by a grace window so
+  // late terminal events can still clean up; invalid clocks collapse to `0`
+  // for deterministic maintenance expiry.
   const {
     now,
     timeoutMs,
@@ -133,6 +136,8 @@ export function registerChatAbortController(params: {
   };
 
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
+    // A duplicate run id keeps the new controller local to the caller but does
+    // not replace the existing retry/abort guard for that in-flight run.
     return { controller, registered: false, cleanup };
   }
 
@@ -415,6 +420,8 @@ export function abortChatRunById(
 
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
+  // Capture buffered text before aborting because runtime abort listeners may
+  // synchronously clear buffers while we still owe clients a final partial row.
   ops.chatAbortedRuns.set(runId, Date.now());
   if (stopReason) {
     active.abortStopReason = stopReason;
@@ -481,6 +488,8 @@ export function abortChatRunsForProvider(
   if (!providerId) {
     return { runIds: [] };
   }
+  // Auth-provider and runtime-provider ids can diverge after fallback. Match
+  // both so revocation/maintenance aborts every run using the affected backend.
   const matches = [...ops.chatAbortControllers.entries()].filter(
     ([, entry]) =>
       normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||

@@ -17,6 +17,7 @@ export type LocalMediaAccessErrorCode =
   | "not-file";
 
 export class LocalMediaAccessError extends Error {
+  /** Stable machine-readable access failure reason for callers and tests. */
   code: LocalMediaAccessErrorCode;
 
   constructor(code: LocalMediaAccessErrorCode, message: string, options?: ErrorOptions) {
@@ -26,10 +27,15 @@ export class LocalMediaAccessError extends Error {
   }
 }
 
+/** Returns the process default roots used when callers do not pass scoped localRoots. */
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+/**
+ * Enforce local media read access against managed inbound media and configured
+ * root allowlists.
+ */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
@@ -38,6 +44,8 @@ export async function assertLocalMediaAllowed(
   if (localRoots === "any") {
     return;
   }
+  // Managed inbound media is already staged by OpenClaw; allow the canonical flat inbound
+  // reference even when a caller passes no localRoots.
   const inboundReference = await resolveInboundMediaReference(mediaPath).catch(() => null);
   if (inboundReference) {
     return;
@@ -53,6 +61,7 @@ export async function assertLocalMediaAllowed(
     options?.inboundRoots?.length &&
     isInboundPathAllowed({ filePath: mediaPath, roots: options.inboundRoots })
   ) {
+    // Channel-specific inbound roots are trusted staging areas supplied by the channel contract.
     return;
   }
   const roots = localRoots ?? getDefaultLocalRoots();
@@ -71,6 +80,8 @@ export async function assertLocalMediaAllowed(
       if (rel && isPathInside(stateDir, resolved)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
         if (firstSegment.startsWith("workspace-")) {
+          // Unscoped defaults expose the shared workspace, not every agent workspace-* sibling
+          // under the state dir. Scoped localRoots can opt into a specific sibling explicitly.
           throw new LocalMediaAccessError(
             "path-not-allowed",
             `Local media path is not under an allowed directory: ${mediaPath}`,
@@ -88,6 +99,7 @@ export async function assertLocalMediaAllowed(
       resolvedRoot = path.resolve(root);
     }
     if (resolvedRoot === path.parse(resolvedRoot).root) {
+      // A root allowlist entry of "/" or "C:\" would make every local path readable.
       throw new LocalMediaAccessError(
         "invalid-root",
         `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,

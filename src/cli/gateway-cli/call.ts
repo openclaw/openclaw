@@ -20,6 +20,7 @@ export type GatewayRpcOpts = {
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 
+/** Adds the connection/auth flags shared by the legacy `openclaw gateway call` subcommands. */
 export const gatewayCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -29,6 +30,7 @@ export const gatewayCallOpts = (cmd: Command) =>
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 
+/** Executes a raw Gateway RPC for the gateway command group with CLI progress handling. */
 export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, params?: unknown) =>
   withProgress(
     {

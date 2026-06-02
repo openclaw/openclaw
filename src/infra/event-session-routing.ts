@@ -15,6 +15,7 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 
 type UnknownRecord = Record<string, unknown>;
 
+/** Routing inputs that decide whether event-originated work stays per-event or moves to main. */
 export type EventSessionRoutingPolicy = {
   mainKey?: string;
   sessionScope?: SessionScope;
@@ -61,6 +62,7 @@ function normalizeEntry(value: string): string | undefined {
   return normalizeLowercaseStringOrEmpty(value) || undefined;
 }
 
+/** Parses direct-message agent session keys into agent/channel/account/peer routing parts. */
 export function parseDirectAgentSessionTarget(
   sessionKey: string | undefined | null,
 ): DirectSessionTarget | null {
@@ -87,6 +89,7 @@ export function parseDirectAgentSessionTarget(
   };
 }
 
+/** Resolves the channel/account allowlist that can pin a direct event session to main. */
 export function resolveEventSessionAllowFrom(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
@@ -148,6 +151,7 @@ function shouldPreserveDirectSessionKeyFromRoute(params: {
   }
 }
 
+/** Builds the routing policy for event-originated follow-up work. */
 export function resolveEventSessionRoutingPolicy(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
@@ -185,6 +189,7 @@ export function resolveEventSessionRoutingPolicy(params: {
   };
 }
 
+/** Returns the main-session key for single-owner direct sessions, or null when not eligible. */
 export function resolveMainScopedEventSessionKey(params: {
   cfg?: OpenClawConfig;
   sessionKey: string;
@@ -237,6 +242,7 @@ export function resolveMainScopedEventSessionKey(params: {
   });
 }
 
+/** Applies cron and direct-message routing policy to an event session key. */
 export function resolveEventSessionKeyForPolicy(
   sessionKey: string,
   policy?: EventSessionRoutingPolicy,
@@ -248,6 +254,7 @@ export function resolveEventSessionKeyForPolicy(
   return resolveMainScopedEventSessionKey({ sessionKey, policy }) ?? sessionKey;
 }
 
+/** Applies event session routing to heartbeat wake options without losing caller fields. */
 export function scopedHeartbeatWakeOptionsForPolicy<T extends object>(
   sessionKey: string,
   wakeOptions: T,

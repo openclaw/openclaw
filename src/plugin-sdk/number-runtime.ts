@@ -1,5 +1,3 @@
-// Numeric coercion helpers for plugin runtime inputs.
-
 export {
   asDateTimestampMs,
   asFiniteNumberInRange,

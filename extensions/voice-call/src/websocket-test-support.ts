@@ -2,6 +2,7 @@ import { once } from "node:events";
 import http from "node:http";
 import { WebSocket } from "ws";
 
+/** Race a promise against a short test timeout and always clear the timer. */
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
@@ -17,15 +18,20 @@ export const withTimeout = async <T>(promise: Promise<T>, timeoutMs = 2000): Pro
   }
 };
 
+/** Starts a loopback HTTP server that delegates websocket upgrades to the caller. */
 export const startUpgradeWsServer = async (params: {
+  /** Path advertised in the returned websocket URL. */
   urlPath: string;
+  /** Upgrade handler under test; owns accepting or rejecting the socket. */
   onUpgrade: (
     request: http.IncomingMessage,
     socket: Parameters<http.Server["emit"]>[2],
     head: Buffer,
   ) => void;
 }): Promise<{
+  /** Loopback websocket URL bound to the ephemeral test port. */
   url: string;
+  /** Close the HTTP server and wait for the close callback. */
   close: () => Promise<void>;
 }> => {
   const server = http.createServer();
@@ -52,12 +58,14 @@ export const startUpgradeWsServer = async (params: {
   };
 };
 
+/** Open a websocket and wait until the connection reaches the open state. */
 export const connectWs = async (url: string): Promise<WebSocket> => {
   const ws = new WebSocket(url);
   await withTimeout(once(ws, "open") as Promise<[unknown]>);
   return ws;
 };
 
+/** Wait for websocket close and normalize the close reason buffer to text. */
 export const waitForClose = async (
   ws: WebSocket,
 ): Promise<{

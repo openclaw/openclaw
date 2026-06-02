@@ -15,6 +15,8 @@ export function extractToolSend(
   if (!to) {
     return null;
   }
+  // Keep account/thread fields optional so channel adapters can fall back to the
+  // active account or conversation binding when the model only supplied `to`.
   const accountId = readStringValue(args.accountId)?.trim();
   const threadIdRaw =
     typeof args.threadId === "number"

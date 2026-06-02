@@ -1,5 +1,7 @@
 function extractLastJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
+  // Gemini CLI can print logs before the final JSON response; parse only the
+  // trailing object so noisy preamble text does not break extraction.
   const start = trimmed.lastIndexOf("{");
   if (start === -1) {
     return null;
@@ -12,6 +14,7 @@ function extractLastJsonObject(raw: string): unknown {
   }
 }
 
+/** Extracts the final non-empty `response` string from Gemini CLI JSON output. */
 export function extractGeminiResponse(raw: string): string | null {
   const payload = extractLastJsonObject(raw);
   if (!payload || typeof payload !== "object") {

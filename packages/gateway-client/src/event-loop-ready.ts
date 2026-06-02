@@ -2,19 +2,29 @@ import { resolveFiniteTimeoutDelayMs } from "./timeouts.js";
 
 /** Readiness probe outcome with timing data for diagnosing event-loop stalls. */
 export type EventLoopReadyResult = {
+  /** True when enough consecutive timer checks stayed below the drift threshold. */
   ready: boolean;
+  /** Wall-clock time spent in the readiness probe. */
   elapsedMs: number;
+  /** Largest observed timer drift across all checks. */
   maxDriftMs: number;
+  /** Number of scheduled timer checks that fired before completion. */
   checks: number;
+  /** True when the supplied AbortSignal stopped the probe before readiness or timeout. */
   aborted: boolean;
 };
 
 /** Controls how aggressively the client waits for low-drift timer checks before starting IO. */
 export type EventLoopReadyOptions = {
+  /** Maximum wall-clock time to wait before reporting not ready. */
   maxWaitMs?: number;
+  /** Delay between drift samples; clamped to safe Node timer bounds. */
   intervalMs?: number;
+  /** Maximum acceptable timer drift for a sample to count as ready. */
   driftThresholdMs?: number;
+  /** Number of low-drift samples required before the event loop is considered ready. */
   consecutiveReadyChecks?: number;
+  /** Cancels the probe without starting client IO. */
   signal?: AbortSignal;
 };
 
@@ -104,6 +114,8 @@ export async function waitForEventLoopReady(
         if (driftMs > driftThresholdMs) {
           readyChecks = 0;
         } else {
+          // Require consecutive low-drift samples so one lucky timer after a
+          // blocked loop does not start IO while the process is still saturated.
           readyChecks += 1;
         }
         if (readyChecks >= consecutiveReadyChecks) {

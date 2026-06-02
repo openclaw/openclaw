@@ -69,6 +69,12 @@ function doesRuntimeContextWatcherMatch(params: {
   return true;
 }
 
+/**
+ * Create an in-memory registry for channel runtime contexts.
+ *
+ * Registrations are keyed by channel/account/capability; a newer registration for the same key
+ * replaces the previous value, and each lease can only unregister the value it created.
+ */
 export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegistry {
   const runtimeContexts = new Map<string, StoredRuntimeContext>();
   const runtimeContextWatchers = new Set<{
@@ -87,6 +93,8 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
       try {
         watcher.onEvent(event);
       } catch (error) {
+        // Watchers are observers; one broken bootstrap hook must not prevent registry mutation or
+        // other watchers from seeing the same lifecycle event.
         const message = error instanceof Error ? error.message : String(error);
         log.error(
           `runtime context watcher failed during ${event.type} ` +
@@ -115,6 +123,8 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
         disposed = true;
         const current = runtimeContexts.get(normalized.mapKey);
         if (!current || current.token !== token) {
+          // A newer same-key registration owns the slot now; do not unregister someone else's
+          // context when an older lease is disposed late.
           return;
         }
         runtimeContexts.delete(normalized.mapKey);
@@ -134,6 +144,7 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
         normalizedKey: normalized.normalizedKey,
       });
       if (disposed) {
+        // A watcher may abort the supplied signal while handling the registered event.
         return { dispose };
       }
       emitRuntimeContextEvent({

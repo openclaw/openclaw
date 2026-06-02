@@ -46,6 +46,8 @@ function resolveProviderEntry(
 ): Record<string, string> | undefined {
   const normalized =
     normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "";
+  // Accept both canonical channel ids and legacy/case-varied config keys so
+  // existing modelByChannel entries survive channel id normalization changes.
   return (
     modelByChannel?.[normalized] ??
     modelByChannel?.[
@@ -70,6 +72,9 @@ function buildChannelCandidates(
   const groupId = normalizeOptionalString(params.groupId);
   const rawParentConversation = parseRawSessionConversationRef(params.parentSessionKey);
   const channelPlugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : undefined;
+  // Some channels encode parent conversations differently from generic session
+  // keys; let the loaded plugin add candidates before falling back to bundled
+  // parsing so per-channel thread model overrides still match.
   const parentOverrideFallbacks =
     channelPlugin?.conversationBindings?.buildModelOverrideParentCandidates?.({
       parentConversationId: rawParentConversation?.rawId,
@@ -120,6 +125,8 @@ function buildGenericParentOverrideCandidates(sessionKey: string | null | undefi
     return [];
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw.rawId);
+  // Thread child sessions inherit from their base session key; non-thread
+  // parents keep the raw conversation id as the direct override candidate.
   return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
 }
 
@@ -178,6 +185,8 @@ export function resolveChannelModelOverride(
     parentSessionKey: params.parentSessionKey,
   });
   if (directMatch) {
+    // Direct group/session matches win before richer conversation fallback keys,
+    // preserving the old flat `modelByChannel[channel][groupId]` behavior.
     return {
       channel: normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
       model: directMatch.model,
@@ -188,6 +197,8 @@ export function resolveChannelModelOverride(
 
   const { keys, parentKeys } = buildChannelCandidates(params);
   if (keys.length === 0 && parentKeys.length === 0) {
+    // With no concrete conversation identity, only the channel wildcard can
+    // apply; avoid treating an empty key as a real configured override.
     const wildcardModel = normalizeOptionalString(providerEntries["*"]);
     if (wildcardModel) {
       return {

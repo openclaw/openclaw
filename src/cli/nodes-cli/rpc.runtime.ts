@@ -11,10 +11,12 @@ import type { NodesRpcOpts } from "./types.js";
 const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
 const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
+/** Resolve transport timeout from command opts, preserving explicit per-call overrides. */
 function resolveNodesTransportTimeoutMs(opts: NodesRpcOpts, overrideMs?: number): number {
   return overrideMs ?? parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS);
 }
 
+/** Call gateway as the normal CLI client, with progress disabled for JSON output. */
 export async function callGatewayCliRuntime(
   method: string,
   opts: NodesRpcOpts,
@@ -40,6 +42,7 @@ export async function callGatewayCliRuntime(
   );
 }
 
+/** Call pairing approval methods with backend identity and explicit operator scopes. */
 export async function callNodePairApprovalGatewayCliRuntime(
   method: "node.pair.list" | "node.pair.approve",
   opts: NodesRpcOpts,

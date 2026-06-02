@@ -120,6 +120,11 @@ function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): num
   return resolveExpiresAtMsFromDurationMs(Math.max(1_000, Math.trunc(expiresInMs)), { nowMs }) ?? 0;
 }
 
+/**
+ * Queue at most one pending item of each work type per node. Repeated requests
+ * return the existing item so wake/retry paths can be idempotent while preserving
+ * the original priority and expiration.
+ */
 export function enqueueNodePendingWork(params: {
   nodeId: string;
   type: NodePendingWorkType;
@@ -152,6 +157,11 @@ export function enqueueNodePendingWork(params: {
   return { revision: state.revision, item, deduped: false };
 }
 
+/**
+ * Drain pending node work in deterministic priority order. A synthetic baseline
+ * status request is included by default so idle nodes still refresh state without
+ * creating persistent queue entries.
+ */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -181,6 +191,10 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   };
 }
 
+/**
+ * Remove completed explicit work items for a node. The synthetic baseline status
+ * item is intentionally ignored because it is generated during drain, not stored.
+ */
 export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: string[] }): {
   revision: number;
   removedItemIds: string[];

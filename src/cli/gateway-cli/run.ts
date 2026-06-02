@@ -183,6 +183,7 @@ function warnInlinePasswordFlag() {
   );
 }
 
+/** Resolves password input from mutually exclusive CLI forms without logging the secret. */
 async function resolveGatewayPasswordOption(opts: GatewayRunOpts): Promise<string | undefined> {
   const direct = toOptionString(opts.password);
   const file = toOptionString(opts.passwordFile);
@@ -232,6 +233,7 @@ function shouldBlockGatewayBindWithoutExplicitAuth(params: {
   );
 }
 
+/** Logs when packaged Control UI assets are absent so startup latency has an actionable cause. */
 async function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): Promise<void> {
   if (cfg.gateway?.controlUi?.enabled === false) {
     return;
@@ -305,6 +307,7 @@ async function readGatewayStartupConfig(params: {
   };
 }
 
+/** Merges parent `gateway` flags into nested `gateway run` options after Commander parsing. */
 export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
   const resolved: GatewayRunOpts = { ...opts };
 
@@ -475,6 +478,7 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
   }
 }
 
+/** Starts the foreground Gateway process after validating config, bind, auth, and restart safety. */
 export async function runGatewayCommand(opts: GatewayRunOpts) {
   normalizeStateDirEnv(process.env);
   installQaParentWatchdog();

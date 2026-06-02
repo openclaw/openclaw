@@ -40,7 +40,9 @@ function shouldEagerlyStartAgentMemory(params: {
 
 /** Start qmd memory boot sync for eligible agents without eagerly loading every agent. */
 export async function startGatewayMemoryBackend(params: {
+  /** Startup config used to discover eligible qmd-backed agents. */
   cfg: OpenClawConfig;
+  /** Logger used for qmd startup sync success/failure reporting. */
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<void> {
   const agentIds = listAgentIds(params.cfg);

@@ -16,29 +16,45 @@ export type ChannelRouteThreadSource = "explicit" | "target" | "session" | "turn
 
 /** Normalized channel route used for comparison, binding, and dedupe helpers. */
 export type ChannelRouteRef = {
+  /** Lowercase channel/plugin id that owns the target namespace. */
   channel?: string;
+  /** Optional account identity; exact matching treats absence as different from a value. */
   accountId?: string;
   target?: {
+    /** Normalized provider destination id used for identity comparisons. */
     to: string;
+    /** Original provider grammar when it differs from the normalized destination. */
     rawTo?: string;
+    /** Coarse target shape for providers that route direct/group/channel differently. */
     chatType?: ChannelRouteChatType;
   };
   thread?: {
+    /** Provider thread/topic/reply id; numeric ids are preserved until key stringification. */
     id: string | number;
+    /** Provider thread semantics attached to the id. */
     kind?: ChannelRouteThreadKind;
+    /** Source that supplied the thread id, used when routes are projected across surfaces. */
     source?: ChannelRouteThreadSource;
   };
 };
 
 /** Loose route input accepted at SDK boundaries before normalization. */
 export type ChannelRouteRefInput = {
+  /** Channel/plugin id before lowercase normalization. */
   channel?: unknown;
+  /** Account id before account-id normalization. */
   accountId?: unknown;
+  /** Provider destination before string trimming. */
   to?: unknown;
+  /** Original destination grammar when a parser rewrites `to`. */
   rawTo?: unknown;
+  /** Optional coarse target shape retained on normalized targets. */
   chatType?: ChannelRouteChatType;
+  /** Provider thread/topic/reply id before thread normalization. */
   threadId?: unknown;
+  /** Optional thread semantic retained with the normalized thread id. */
   threadKind?: ChannelRouteThreadKind;
+  /** Optional source marker retained with the normalized thread id. */
   threadSource?: ChannelRouteThreadSource;
 };
 
@@ -53,8 +69,11 @@ export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
 /** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
 export type ChannelRouteExplicitTarget = {
+  /** Normalized destination emitted by a legacy provider parser. */
   to: string;
+  /** Optional parsed thread id; wins over fallback thread ids. */
   threadId?: string | number;
+  /** Optional parsed chat type when the target grammar carries it. */
   chatType?: ChannelRouteChatType;
 };
 
@@ -91,6 +110,8 @@ export function normalizeChannelRouteRef(
   if (!channel && !to && !accountId && threadId == null) {
     return undefined;
   }
+  // Keep rawTo only when it carries provider grammar that differs from the
+  // normalized destination; route equality and queue keys use target.to.
   return {
     ...(channel ? { channel } : {}),
     ...(accountId ? { accountId } : {}),
@@ -134,10 +155,15 @@ export function normalizeChannelRouteTarget(
 
 /** Parsed target shape retained for deprecated explicit-target parser adapters. */
 export type ChannelRouteParsedTarget = ChannelRouteTargetInput & {
+  /** Normalized lowercase channel id. */
   channel: string;
+  /** Original user/provider target string before parser rewrites. */
   rawTo: string;
+  /** Normalized destination after parser rewrite or raw fallback. */
   to: string;
+  /** Parsed or fallback thread id after thread normalization. */
   threadId?: string | number;
+  /** Parsed chat type retained for downstream route normalization. */
   chatType?: ChannelRouteChatType;
 };
 
@@ -154,6 +180,7 @@ export function resolveChannelRouteTargetWithParser(params: {
     return null;
   }
   const parsed = params.parseExplicitTarget(channel, rawTo);
+  // Parser-owned thread ids win; fallback preserves legacy callers that pass thread separately.
   const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
   return {
     channel,
@@ -167,6 +194,8 @@ export function resolveChannelRouteTargetWithParser(params: {
 /** Builds a JSON route dedupe key that remains unambiguous when route parts contain separators. */
 export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): string {
   const route = normalizeChannelRouteTarget(input);
+  // JSON avoids delimiter ambiguity for queue/dedupe keys; compact keys remain
+  // human-readable but are not the canonical collision-resistant identity.
   return JSON.stringify([
     route?.channel ?? "",
     route?.target?.to ?? "",
@@ -187,6 +216,8 @@ function threadIdsEqual(left?: string | number, right?: string | number): boolea
 }
 
 function accountsCompatible(left?: string, right?: string): boolean {
+  // Conversation-level comparisons treat a missing account as a wildcard for
+  // older callers that did not bind account identity into route metadata.
   return !left || !right || left === right;
 }
 
@@ -194,6 +225,7 @@ function accountsEqual(left?: string, right?: string): boolean {
   return (left ?? "") === (right ?? "");
 }
 
+/** Checks exact route identity, including account equality and thread equality. */
 export function channelRoutesMatchExact(params: {
   left?: ChannelRouteRef | null;
   right?: ChannelRouteRef | null;
@@ -231,6 +263,8 @@ export function channelRoutesShareConversation(params: {
     // Parent route matches any child thread once channel, target, and compatible account match.
     return true;
   }
+  // Once both sides carry thread ids, conversation sharing narrows to exact
+  // thread equality so sibling thread replies do not collapse together.
   return threadIdsEqual(left.thread.id, right.thread.id);
 }
 
@@ -266,6 +300,8 @@ function normalizeChannelRouteKeyInput(
   if (!route) {
     return undefined;
   }
+  // Normalized refs may carry rawTo/thread source metadata, but compact keys
+  // intentionally use only the stable routing identity fields.
   return isChannelRouteRef(route)
     ? normalizeChannelRouteRef({
         channel: route.channel,
@@ -282,6 +318,8 @@ export function channelRouteCompactKey(route?: ChannelRouteKeyInput | null): str
   if (!normalized?.channel || !normalized.target?.to) {
     return undefined;
   }
+  // Compact keys are for logs/UI and intentionally require channel+target so
+  // partial routes do not look like stable delivery identities.
   return [
     normalized.channel,
     normalized.target.to,

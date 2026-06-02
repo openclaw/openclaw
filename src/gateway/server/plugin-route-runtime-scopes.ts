@@ -8,6 +8,7 @@ import { CLI_DEFAULT_OPERATOR_SCOPES, WRITE_SCOPE } from "../method-scopes.js";
 
 export type PluginRouteRuntimeScopeSurface = "write-default" | "trusted-operator";
 
+/** Resolves operator scopes injected into plugin HTTP route runtime contexts. */
 export function resolvePluginRouteRuntimeOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,

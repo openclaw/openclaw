@@ -121,10 +121,14 @@ export async function createGatewayRuntimeState(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
+  // Runtime route registries are process-global lookup inputs for HTTP/plugin
+  // dispatch; pin them before handlers can lazily import plugin route modules.
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   if (params.pinChannelRegistry !== false) {
     pinActivePluginChannelRegistry(params.pluginRegistry);
   } else {
+    // Tests and narrow runtimes can opt out of channel pinning; clear any
+    // inherited pin so this runtime cannot observe a previous server's channels.
     releasePinnedPluginChannelRegistry();
   }
   try {
@@ -144,6 +148,8 @@ export async function createGatewayRuntimeState(params: {
       if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
         return false;
       }
+      // Re-read config before dispatch; hot reload can replace hooksConfig
+      // while keeping the already-created handler and HTTP server alive.
       if (!loadedHooksRequestHandler) {
         // Hooks are cold for most gateway starts; create the handler only after a request
         // matches the configured base path so startup avoids importing hook runtime code.

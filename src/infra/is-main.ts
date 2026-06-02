@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** Inputs for runtime entrypoint detection across Node, PM2, and wrapper launchers. */
 type IsMainModuleOptions = {
   currentFile: string;
   argv?: string[];
@@ -21,6 +22,7 @@ function normalizePathCandidate(candidate: string | undefined, cwd: string): str
   try {
     return fs.realpathSync.native(resolved);
   } catch {
+    // Missing wrapper paths can still be compared after cwd-relative resolution.
     return resolved;
   }
 }
@@ -33,6 +35,7 @@ function resolveDefaultCwd(currentFile: string): string {
   }
 }
 
+/** Return whether `currentFile` is the process entrypoint, including PM2/wrapper launches. */
 export function isMainModule({
   currentFile,
   argv = process.argv,

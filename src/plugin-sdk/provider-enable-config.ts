@@ -14,8 +14,11 @@ type ProviderEnableConfigCarrier = {
 };
 
 export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
+  /** Config to persist; unchanged when enabling is denied. */
   config: TConfig;
+  /** True when the plugin entry was enabled and allowlisted. */
   enabled: boolean;
+  /** Stable user-facing reason when the plugin could not be enabled. */
   reason?: string;
 };
 
@@ -28,9 +31,13 @@ export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier
   pluginId: string,
 ): PluginEnableResult<TConfig> {
   if (cfg.plugins?.enabled === false) {
+    // Global plugin disablement is authoritative; returning the original config
+    // keeps provider selection flows from accidentally re-enabling plugins.
     return { config: cfg, enabled: false, reason: "plugins disabled" };
   }
   if (cfg.plugins?.deny?.includes(pluginId)) {
+    // Denylist blocks even provider-contract selections, so preserve the source
+    // config and let callers surface the reason to setup/auth flows.
     return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
 

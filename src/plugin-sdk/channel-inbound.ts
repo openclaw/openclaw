@@ -130,6 +130,8 @@ export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): BuiltChannelTurnContext {
+  // Old channel plugins used inboundTurnKind; normalize it into inboundEventKind
+  // before delegating so the modern inbound-event builder remains canonical.
   const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
   const ctx = buildChannelInboundEventContext({
     ...params,
@@ -140,6 +142,8 @@ export function buildChannelTurnContext(
   });
   return {
     ...ctx,
+    // Preserve the historical capitalized field for compiled plugins that still
+    // read the turn-context alias after moving to the inbound-event internals.
     InboundTurnKind: ctx.InboundEventKind,
   };
 }

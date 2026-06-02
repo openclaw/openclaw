@@ -20,11 +20,13 @@ import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "
 
 export { COMMAND_CARRIER_EXECUTABLES, resolveCarrierCommandArgv, SOURCE_EXECUTABLES };
 
+/** Command carrier such as env/find/xargs plus the flag that turns arguments into commands. */
 export type CommandCarrierHit = {
   command: string;
   flag?: string;
 };
 
+/** Shell builtin carried through command/builtin/exec that can execute sourced text. */
 export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
 
 function commandArgvKey(argv: readonly string[]): string {
@@ -38,12 +40,14 @@ function isCommandCarrierExecutable(executable: string, options?: { includeExec?
   );
 }
 
+/** Build user-visible payload candidates after unwrapping env/sudo/exec and shell wrappers. */
 export function buildCommandPayloadCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
 ): string[] {
   const key = commandArgvKey(argv);
   if (seenArgv.has(key)) {
+    // Carrier recursion can re-form the same argv through env -S or shell wrappers.
     return argv.length > 0 ? [argv.join(" ")] : [];
   }
   seenArgv.add(key);
@@ -235,6 +239,7 @@ function detectCarrierInlineEvalArgvInternal(
   return detectInlineEvalArgvInternal(carriedArgv, seenArgv);
 }
 
+/** Detect inline eval hidden behind transparent carriers like sudo, env, command, doas, or exec. */
 export function detectCarrierInlineEvalArgv(argv: string[]): InterpreterInlineEvalHit | null {
   return detectCarrierInlineEvalArgvInternal(argv, new Set());
 }
@@ -253,6 +258,7 @@ function detectInlineEvalArgvInternal(
   );
 }
 
+/** Detect inline interpreter execution directly or through carrier/shell-wrapper argv forms. */
 export function detectInlineEvalArgv(
   argv: string[] | undefined | null,
 ): InterpreterInlineEvalHit | null {

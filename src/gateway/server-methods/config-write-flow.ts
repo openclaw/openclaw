@@ -213,12 +213,24 @@ async function tryWriteRestartSentinelPayload(
 
 /** Persists a gateway config write and returns follow-up work that must run after response. */
 export async function commitGatewayConfigWrite(params: {
+  /** Snapshot read before validation; used for response path and optimistic write metadata. */
   snapshot: ConfigWriteSnapshot;
+  /** Write options from the snapshot read, preserving unset-path and metadata behavior. */
   writeOptions: ConfigWriteOptions;
+  /** Runtime-expanded config object to persist. */
   nextConfig: OpenClawConfig;
+  /** Optional gateway context used only for queued post-response auth follow-up. */
   context?: GatewayRequestContext;
+  /** Whether active shared-auth clients should be disconnected after the success response. */
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+}): Promise<{
+  /** Config path reported to the caller. */
+  path: string;
+  /** Persisted config returned by the config writer after metadata/default stamping. */
+  config: OpenClawConfig;
+  /** Queues auth generation refresh/disconnect work after the RPC success payload is sent. */
+  queueFollowUp: () => void;
+}> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
     writeOptions: {
@@ -244,17 +256,28 @@ export async function commitGatewayConfigWrite(params: {
 
 /** Builds restart sentinel/queue state for config.patch and config.apply writes. */
 export async function resolveGatewayConfigRestartWriteResult(params: {
+  /** Original RPC params, including optional session/delivery restart routing hints. */
   requestParams: unknown;
+  /** Restart sentinel kind that identifies the config write flow. */
   kind: RestartSentinelPayload["kind"];
+  /** Gateway method name recorded in the sentinel and restart audit. */
   mode: "config.patch" | "config.apply";
+  /** Config path written into restart sentinel stats. */
   configPath: string;
+  /** Changed config paths used to decide whether the gateway owns the restart. */
   changedPaths: string[];
+  /** Persisted config used to resolve hot/hybrid restart behavior. */
   nextConfig: OpenClawConfig;
+  /** Control-plane actor recorded in restart audit logs. */
   actor: ControlPlaneActor;
+  /** Optional gateway context for coalesced-restart logging. */
   context?: GatewayRequestContext;
 }): Promise<{
+  /** Sentinel payload attempted for post-restart user/channel handoff. */
   payload: RestartSentinelPayload;
+  /** Written sentinel path, or null when sentinel persistence failed. */
   sentinelPath: string | null;
+  /** Scheduled restart details when this write requires a direct gateway restart. */
   restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =

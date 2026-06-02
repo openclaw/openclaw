@@ -18,30 +18,44 @@ export const sessionVisibilityGatewayTesting = {
   },
 };
 
+/** Session-tool visibility modes exposed through `tools.sessions.visibility`. */
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type AgentToAgentPolicy = {
+  /** Whether cross-agent access is globally enabled. */
   enabled: boolean;
+  /** True when an agent id matches the configured allow patterns. */
   matchesAllow: (agentId: string) => boolean;
+  /** True when requester and target agent ids may access each other. */
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
+/** Session-tool action used only to produce action-specific denial messages. */
 export type SessionAccessAction = "history" | "send" | "list" | "status";
 
 export type SessionAccessResult =
+  /** Target session is visible for the requested action. */
   | { allowed: true }
+  /** Target session is hidden and callers should surface the returned error. */
   | { allowed: false; error: string; status: "forbidden" };
 
 export type SessionVisibilityRow = {
+  /** Canonical target session key. */
   key: string;
+  /** Optional owner agent id, when already known by list/search callers. */
   agentId?: string;
+  /** Session that owns this row through persisted lineage metadata. */
   ownerSessionKey?: string;
+  /** Session that spawned this row through agent/subagent tooling. */
   spawnedBy?: string;
+  /** Parent session key from session tree metadata. */
   parentSessionKey?: string;
 };
 
 export async function listSpawnedSessionKeys(params: {
+  /** Session key whose spawned children should be listed. */
   requesterSessionKey: string;
+  /** Optional sessions.list cap; invalid values are treated as uncapped. */
   limit?: number;
 }): Promise<Set<string>> {
   const limit =
@@ -256,10 +270,15 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
 }
 
 export function createSessionVisibilityChecker(params: {
+  /** Action being authorized, used for action-specific denial text. */
   action: SessionAccessAction;
+  /** Requesting session key. */
   requesterSessionKey: string;
+  /** Effective visibility mode after sandbox clamping. */
   visibility: SessionToolsVisibility;
+  /** Agent-to-agent policy used only when visibility allows cross-agent access. */
   a2aPolicy: AgentToAgentPolicy;
+  /** Spawned child sessions for direct-key checks, or null when row metadata is available. */
   spawnedKeys: Set<string> | null;
 }): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
@@ -290,9 +309,13 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
 }
 
 export function createSessionVisibilityRowChecker(params: {
+  /** Action being authorized, used for action-specific denial text. */
   action: SessionAccessAction;
+  /** Requesting session key. */
   requesterSessionKey: string;
+  /** Effective visibility mode after sandbox clamping. */
   visibility: SessionToolsVisibility;
+  /** Agent-to-agent policy used only when visibility allows cross-agent access. */
   a2aPolicy: AgentToAgentPolicy;
 }): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
   const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
@@ -361,9 +384,13 @@ export function createSessionVisibilityRowChecker(params: {
 }
 
 export async function createSessionVisibilityGuard(params: {
+  /** Action being authorized, used for action-specific denial text. */
   action: SessionAccessAction;
+  /** Requesting session key. */
   requesterSessionKey: string;
+  /** Effective visibility mode after sandbox clamping. */
   visibility: SessionToolsVisibility;
+  /** Agent-to-agent policy used only when visibility allows cross-agent access. */
   a2aPolicy: AgentToAgentPolicy;
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;

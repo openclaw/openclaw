@@ -32,6 +32,13 @@ function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
   };
 }
 
+/**
+ * Build the single prompt string used by OpenAI-compatible gateway endpoints.
+ *
+ * The latest user/tool entry becomes the active request, with earlier entries
+ * folded into history context so HTTP callers get chat-like behavior through a
+ * single-message agent API.
+ */
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
   if (entries.length === 0) {
     return "";

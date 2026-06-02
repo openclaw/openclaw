@@ -72,6 +72,9 @@ function trimSessionCheckpoints(
       continue;
     }
     const checkpointBytes = checkpointSnapshotBytes(checkpoint, snapshotBytesByPath);
+    // Keep the newest checkpoint even when its snapshot exceeds the retained
+    // byte budget; otherwise a fresh compaction can lose its only rollback
+    // anchor before the next store read.
     const keepNewestCheckpoint = keptNewestFirst.length === 0;
     if (
       keepNewestCheckpoint ||
@@ -245,6 +248,8 @@ async function readTranscriptEntriesForForkAsync(params: {
   if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
     return null;
   }
+  // A requested leaf must be present in the transcript we are forking from.
+  // Missing it means the checkpoint metadata no longer matches this source file.
   if (stopAfterEntryId && !foundStopEntry) {
     return null;
   }
@@ -265,6 +270,8 @@ function trimTranscriptEntriesThroughLeaf(
   if (leafIndex < 1) {
     return null;
   }
+  // Restores should branch from the exact pre-compaction leaf, not from later
+  // turns appended to the same mutable source transcript.
   return entries.slice(0, leafIndex + 1);
 }
 
@@ -311,6 +318,8 @@ export async function readSessionLeafIdFromTranscriptAsync(
       if (readStart === 0) {
         return null;
       }
+      // Grow the tail window geometrically so normal transcripts take one small
+      // read while oversized final entries still get a bounded chance to parse.
       const nextReadLength = Math.min(maxReadableBytes, readLength * 2);
       if (nextReadLength === readLength) {
         return null;
@@ -558,6 +567,8 @@ export async function persistSessionCompactionCheckpoint(params: {
     return null;
   }
   const checkpointArtifactFile = snapshotSessionFile || postSessionFile || "";
+  // Cleanup happens after the atomic store update so disk pruning never removes
+  // the only artifact still referenced by the persisted checkpoint list.
   await cleanupTrimmedCompactionCheckpointFiles({
     removed: trimmedCheckpoints?.removed ?? [],
     retained: trimmedCheckpoints?.kept,

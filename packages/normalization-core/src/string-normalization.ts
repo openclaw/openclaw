@@ -2,6 +2,8 @@ import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./str
 
 /** Coerces entries to strings, trims them, and drops empty results. */
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
+  // Use String(entry) deliberately: allowlist/config callers preserve primitive ids
+  // and object-provided labels instead of accepting only pre-typed strings.
   return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);
 }
 

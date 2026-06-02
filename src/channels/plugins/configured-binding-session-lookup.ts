@@ -7,6 +7,7 @@ import {
   resolveCompiledBindingChannel,
 } from "./configured-binding-match.js";
 
+/** Resolves a configured binding record from an already compiled registry by target session key. */
 export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
   registry: CompiledConfiguredBindingRegistry;
   sessionKey: string;
@@ -56,9 +57,12 @@ export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
         }) ?? materializedTarget.record.targetSessionKey === sessionKey;
       if (matchesSessionKey) {
         if (accountMatchPriority === 2) {
+          // Exact/default account matches win over wildcard rules for the same session key.
           exactMatch = materializedTarget;
           break;
         }
+        // Keep scanning for an exact/default account rule before accepting a
+        // wildcard account match for the same parsed session key.
         wildcardMatch = materializedTarget;
       }
     }

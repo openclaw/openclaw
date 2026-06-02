@@ -23,6 +23,8 @@ type McpTextContent = {
 function normalizeToolCallContent(result: unknown): McpTextContent[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
+    // MCP tools may already return content blocks; coerce unknown blocks into
+    // text so loopback clients always receive a valid tool response envelope.
     return content.map((block: { type?: string; text?: string }) => ({
       type: (block.type ?? "text") as "text",
       text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
@@ -80,6 +82,8 @@ export async function handleMcpJsonRpc(params: {
           isError: true,
         });
       }
+      // Check both advertised schema and runtime registry so stale schemas
+      // cannot invoke a tool that was removed from the executable set.
       const tool = params.tools.find(
         (candidate) => readMcpLoopbackToolName(candidate) === toolName,
       );

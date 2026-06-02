@@ -9,6 +9,8 @@ type SecurityPathCanonicalization = {
   rawNormalizedPath: string;
 };
 
+// Decode depth is bounded so hostile routes cannot force unbounded repeated
+// percent-decoding while the protected-prefix checks still fail closed.
 const MAX_PATH_DECODE_PASSES = 32;
 
 function normalizePathSeparators(pathname: string): string {
@@ -46,6 +48,11 @@ function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value:
   candidates.push(normalized);
 }
 
+/**
+ * Build every normalized path variant observed while repeatedly decoding a URL
+ * path. Callers check all candidates so encoded traversal or encoded protected
+ * prefixes cannot hide behind an earlier undecoded form.
+ */
 export function buildCanonicalPathCandidates(
   pathname: string,
   maxDecodePasses = MAX_PATH_DECODE_PASSES,
@@ -93,6 +100,11 @@ export function buildCanonicalPathCandidates(
   };
 }
 
+/**
+ * Return the most-decoded normalized variant for display and compatibility
+ * checks. Security decisions should use `canonicalizePathForSecurity` or
+ * `isPathProtectedByPrefixes` so malformed and depth-limited paths fail closed.
+ */
 export function canonicalizePathVariant(pathname: string): string {
   const { candidates } = buildCanonicalPathCandidates(pathname);
   return candidates[candidates.length - 1] ?? "/";
@@ -107,6 +119,11 @@ function prefixMatch(pathname: string, prefix: string): boolean {
   );
 }
 
+/**
+ * Canonicalize a request path while preserving enough metadata for fail-closed
+ * authorization checks. The raw normalized path is retained for malformed
+ * encodings because a later decode candidate may not exist.
+ */
 export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
   const { candidates, decodePasses, decodePassLimitReached, malformedEncoding } =
     buildCanonicalPathCandidates(pathname);
@@ -133,6 +150,11 @@ function getNormalizedPrefixes(prefixes: readonly string[]): readonly string[] {
   return normalized;
 }
 
+/**
+ * Test whether a request path targets any protected prefix across raw, decoded,
+ * and normalized variants. Unresolved deep encodings and malformed protected
+ * prefixes are treated as protected rather than falling through.
+ */
 export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly string[]): boolean {
   const canonical = canonicalizePathForSecurity(pathname);
   const normalizedPrefixes = getNormalizedPrefixes(prefixes);
@@ -155,6 +177,7 @@ export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly s
 
 export const PROTECTED_PLUGIN_ROUTE_PREFIXES = ["/api/channels"] as const;
 
+/** Check whether a request path targets plugin-owned HTTP routes that need auth. */
 export function isProtectedPluginRoutePath(pathname: string): boolean {
   return isPathProtectedByPrefixes(pathname, PROTECTED_PLUGIN_ROUTE_PREFIXES);
 }

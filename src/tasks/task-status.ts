@@ -21,6 +21,8 @@ function isFailureTask(task: TaskRecord): boolean {
 }
 
 function resolveTaskReferenceAt(task: TaskRecord): number {
+  // Active tasks stay visible by their latest event, while terminal tasks use
+  // end time first so old completions age out predictably.
   if (isActiveTask(task)) {
     return task.lastEventAt ?? task.startedAt ?? task.createdAt;
   }
@@ -47,6 +49,8 @@ function truncateTaskStatusText(value: string, maxChars: number): string {
 }
 
 function stripInlineLeakedInternalContext(value: string): string {
+  // Task summaries may include serialized internal context from model output;
+  // strip the whole tail before generic user-facing sanitization runs.
   const beginIndex = value.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN);
   if (
     beginIndex !== -1 &&
@@ -94,6 +98,7 @@ function sanitizeTaskStatusValue(value: unknown, errorContext: boolean): unknown
   return value;
 }
 
+/** Sanitizes arbitrary task status payloads for user-visible surfaces. */
 export function sanitizeTaskStatusText(
   value: unknown,
   opts?: { errorContext?: boolean; maxChars?: number },
@@ -116,14 +121,17 @@ export function sanitizeTaskStatusText(
   return sanitized;
 }
 
+/** Formats a compact title for status surfaces, falling back when text strips empty. */
 export function formatTaskStatusTitleText(value: unknown, fallback = "Background task"): string {
   return sanitizeTaskStatusText(value, { maxChars: TASK_STATUS_TITLE_MAX_CHARS }) || fallback;
 }
 
+/** Formats the task label or prompt as a compact user-visible title. */
 export function formatTaskStatusTitle(task: TaskRecord): string {
   return formatTaskStatusTitleText(task.label?.trim() || task.task.trim());
 }
 
+/** Formats progress, error, or terminal summary text for status detail lines. */
 export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
   if (task.status === "running" || task.status === "queued") {
     return (
@@ -159,6 +167,7 @@ export type TaskStatusSnapshot = {
   recentFailureCount: number;
 };
 
+/** Builds the visible status slice for active and recently-terminal tasks. */
 export function buildTaskStatusSnapshot(
   tasks: TaskRecord[],
   opts?: { now?: number },
@@ -168,6 +177,8 @@ export function buildTaskStatusSnapshot(
   const active = visibleCandidates.filter(isActiveTask);
   const recentTerminal = visibleCandidates.filter((task) => isRecentTerminalTask(task, now));
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
+  // Prefer an active task, otherwise put recent failures ahead of successful
+  // completions so the compact status line shows the item needing attention.
   const focus =
     active[0] ?? recentTerminal.find((task) => isFailureTask(task)) ?? recentTerminal[0];
   return {

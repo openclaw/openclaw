@@ -32,24 +32,38 @@ export type MentionGateWithBypassResult = MentionGateResult & {
 };
 
 export type InboundImplicitMentionKind =
+  /** Message replied directly to a bot-authored message. */
   | "reply_to_bot"
+  /** Message quoted bot-authored content. */
   | "quoted_bot"
+  /** Message arrived in a thread where the bot is already a participant. */
   | "bot_thread_participant"
+  /** Channel-native mention signal normalized by legacy callers. */
   | "native";
 
 export type InboundMentionFacts = {
+  /** True when the channel can reliably detect explicit mentions. */
   canDetectMention: boolean;
+  /** True when the inbound message explicitly mentioned the bot. */
   wasMentioned: boolean;
+  /** True when the message mentioned anyone, used to avoid command bypass ambiguity. */
   hasAnyMention?: boolean;
+  /** Channel-derived implicit mention reasons that may satisfy mention gating. */
   implicitMentionKinds?: readonly InboundImplicitMentionKind[];
 };
 
 export type InboundMentionPolicy = {
+  /** True for group-like conversations where mention gating applies. */
   isGroup: boolean;
+  /** True when the channel/account requires bot mentions before responding. */
   requireMention: boolean;
+  /** Optional allowlist limiting which implicit mention reasons count as mentions. */
   allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
+  /** True when text control commands are enabled for this surface. */
   allowTextCommands: boolean;
+  /** True when the inbound text contains a recognized control command. */
   hasControlCommand: boolean;
+  /** True when access policy allows the sender to run the control command. */
   commandAuthorized: boolean;
 };
 
@@ -57,7 +71,9 @@ export type InboundMentionPolicy = {
 export type ResolveInboundMentionDecisionFlatParams = InboundMentionFacts & InboundMentionPolicy;
 
 export type ResolveInboundMentionDecisionNestedParams = {
+  /** Observed mention facts from the inbound message. */
   facts: InboundMentionFacts;
+  /** Channel/account policy used to interpret the mention facts. */
   policy: InboundMentionPolicy;
 };
 
@@ -66,8 +82,11 @@ export type ResolveInboundMentionDecisionParams =
   | ResolveInboundMentionDecisionNestedParams;
 
 export type InboundMentionDecision = MentionGateResult & {
+  /** True when at least one allowed implicit mention reason matched. */
   implicitMention: boolean;
+  /** Deduped implicit mention reasons accepted by policy. */
   matchedImplicitMentionKinds: InboundImplicitMentionKind[];
+  /** True when an authorized group control command bypassed explicit mention gating. */
   shouldBypassMention: boolean;
 };
 
@@ -168,10 +187,12 @@ function normalizeMentionDecisionParams(
   };
 }
 
+/** Resolves whether mention policy allows, skips, or command-bypasses one inbound message. */
 export function resolveInboundMentionDecision(
   params: ResolveInboundMentionDecisionParams,
 ): InboundMentionDecision {
   const { facts, policy } = normalizeMentionDecisionParams(params);
+  // Authorized text commands may bypass mention gating only when the message names no one else.
   const shouldBypassMention =
     policy.isGroup &&
     policy.requireMention &&

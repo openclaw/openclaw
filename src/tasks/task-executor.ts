@@ -281,6 +281,8 @@ function resolveRetryableBlockedFlowTask(flowId: string): {
       reason: "Flow is not blocked.",
     };
   }
+  // A blocked flow is retryable only when its latest child completed with the
+  // blocked terminal outcome; older blocked children must not be retried twice.
   if (latestTask.status !== "succeeded" || latestTask.terminalOutcome !== "blocked") {
     return {
       flowFound: true,
@@ -307,6 +309,8 @@ function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowR
   }
   const flow = getTaskFlowById(params.flowId);
   if (!flow) {
+    // The retry decision and task creation are split by registry reads, so keep
+    // the previous task in the result if the flow disappears between them.
     return {
       found: false,
       retried: false,
@@ -314,6 +318,8 @@ function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowR
       previousTask: resolved.latestTask,
     };
   }
+  // Retries stay in the original flow and point at the blocked child, preserving
+  // the flow's owner/origin while allowing callers to override the next run id.
   const task = createTaskRecord({
     runtime: resolved.latestTask.runtime,
     sourceId: params.sourceId ?? resolved.latestTask.sourceId,
@@ -351,6 +357,7 @@ function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowR
   };
 }
 
+/** Requeues the latest blocked TaskFlow child without starting work immediately. */
 export function retryBlockedFlowAsQueuedTaskRun(
   params: Omit<RetryBlockedFlowParams, "status" | "startedAt" | "lastEventAt" | "progressSummary">,
 ): RetryBlockedFlowResult {
@@ -360,6 +367,7 @@ export function retryBlockedFlowAsQueuedTaskRun(
   });
 }
 
+/** Starts a retry for the latest blocked TaskFlow child and records initial progress. */
 export function retryBlockedFlowAsRunningTaskRun(
   params: Omit<RetryBlockedFlowParams, "status">,
 ): RetryBlockedFlowResult {
@@ -491,6 +499,7 @@ function mapRunTaskInFlowCreateError(params: {
   throw params.error;
 }
 
+/** Spawns a managed child task inside a TaskFlow after validating flow state. */
 export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
   const flow = getTaskFlowById(params.flowId);
   if (!flow) {
@@ -525,6 +534,8 @@ export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult 
     };
   }
 
+  // Child tasks inherit the flow owner and requester origin so downstream task
+  // APIs can enforce the same session boundary as the parent flow.
   const common = {
     runtime: params.runtime,
     sourceId: params.sourceId,
@@ -585,6 +596,7 @@ export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult 
   };
 }
 
+/** Owner-scoped wrapper for managed child task creation. */
 export function runTaskInFlowForOwner(
   params: RunTaskInFlowParams & { callerOwnerKey: string },
 ): RunTaskInFlowResult {
@@ -619,6 +631,7 @@ export function runTaskInFlowForOwner(
   });
 }
 
+/** Requests cancellation for a TaskFlow, then cancels active children before closing it. */
 export async function cancelFlowById(params: {
   cfg: OpenClawConfig;
   flowId: string;
@@ -640,6 +653,8 @@ export async function cancelFlowById(params: {
       tasks: listTasksForFlowId(flow.flowId),
     };
   }
+  // Mark the flow first to prevent new children from being linked while the
+  // currently active child tasks are being cancelled asynchronously.
   const cancelRequestedFlow = markFlowCancelRequested(flow);
   if ("reason" in cancelRequestedFlow) {
     return {
@@ -672,6 +687,8 @@ export async function cancelFlowById(params: {
   const now = Date.now();
   const refreshedFlow = getTaskFlowById(flow.flowId) ?? cancelRequestedFlow;
   if (isTerminalFlowStatus(refreshedFlow.status)) {
+    // A child finalizer may have already closed the flow after observing the
+    // cancellation request, so report that terminal state instead of rewriting it.
     return {
       found: true,
       cancelled: refreshedFlow.status === "cancelled",
@@ -701,6 +718,7 @@ export async function cancelFlowById(params: {
   };
 }
 
+/** Owner-scoped TaskFlow cancellation entry point for plugin/runtime callers. */
 export async function cancelFlowByIdForOwner(params: {
   cfg: OpenClawConfig;
   flowId: string;

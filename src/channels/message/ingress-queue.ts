@@ -114,6 +114,7 @@ export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMeta
 
 /** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
+  /** Accepts a platform event id once and reports existing pending/claimed/tombstone duplicates. */
   enqueue(
     id: string,
     payload: TPayload,
@@ -123,38 +124,47 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
       laneKey?: string;
     },
   ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>;
+  /** Lists unclaimed pending events in receive order unless id ordering is requested. */
   listPending(options?: {
     limit?: number | "all";
     orderBy?: "received" | "id";
   }): Promise<Array<ChannelIngressQueueRecord<TPayload, TMetadata>>>;
+  /** Lists currently claimed events for recovery and worker diagnostics. */
   listClaims(): Promise<Array<ChannelIngressQueueClaim<TPayload, TMetadata>>>;
+  /** Claims the next available event while optionally skipping lane keys already in flight. */
   claimNext(options?: {
     ownerId?: string;
     blockedLaneKeys?: Iterable<string>;
     staleMs?: number;
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
+  /** Claims one pending event by id for targeted replay or repair work. */
   claim(
     id: string,
     options?: { ownerId?: string },
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
+  /** Converts a pending/claimed event into a completed tombstone for duplicate suppression. */
   complete(
     idOrClaim: string | ChannelIngressQueueClaimRef,
     options?: { metadata?: TCompletedMetadata; completedAt?: number },
   ): Promise<boolean>;
+  /** Releases a pending/claimed event for retry and records attempt/error metadata. */
   release(
     idOrClaim: string | ChannelIngressQueueClaimRef,
     options?: { lastError?: string; releasedAt?: number },
   ): Promise<boolean>;
+  /** Converts a pending/claimed event into a failed tombstone for diagnostics and dedupe. */
   fail(
     idOrClaim: string | ChannelIngressQueueClaimRef,
     options: { reason: string; message?: string; failedAt?: number },
   ): Promise<boolean>;
+  /** Deletes a pending/claimed event without leaving a duplicate-suppression tombstone. */
   delete(
     idOrClaim:
       | string
       | ChannelIngressQueueRecord<TPayload, TMetadata>
       | ChannelIngressQueueClaimRef,
   ): Promise<boolean>;
+  /** Releases stale claims after an optional caller veto for live worker ownership checks. */
   recoverStaleClaims(options?: {
     staleMs?: number;
     now?: number;
@@ -162,6 +172,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
       claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     ) => boolean | Promise<boolean>;
   }): Promise<number>;
+  /** Removes expired or over-limit pending/completed/failed rows while preserving protected ids. */
   prune(options?: ChannelIngressQueuePruneOptions): Promise<number>;
 };
 
@@ -281,6 +292,8 @@ function idFrom(idOrRecord: string | { id: string }): string {
 function claimTokenFrom(
   idOrClaim: string | { id: string; claim?: { token: string } },
 ): string | null {
+  // Mutations on claimed rows must carry the claim token so stale workers cannot complete or drop
+  // events after another worker recovered and claimed the same id.
   return typeof idOrClaim === "string" ? null : (idOrClaim.claim?.token ?? null);
 }
 
@@ -786,6 +799,8 @@ export function createChannelIngressQueue<
           const batchSize = 500;
           const protectedSet = new Set(protectIds);
           while (true) {
+            // Keep the newest rows by updated time; delete overflow in bounded batches so a large
+            // queue cannot build an unbounded SQL parameter list.
             const rowsToDelete = executeSqliteQuerySync(
               tx.db,
               kysely

@@ -2,10 +2,12 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
+/** Return whether a command path can run before config guard validation. */
 export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): boolean {
   return resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
 }
 
+/** Return whether route-mode startup should skip config guard output for this command. */
 export function shouldSkipRouteConfigGuardForCommandPath(params: {
   commandPath: string[];
   suppressDoctorStdout: boolean;
@@ -17,6 +19,7 @@ export function shouldSkipRouteConfigGuardForCommandPath(params: {
   );
 }
 
+/** Decide whether a command path needs plugins loaded before execution. */
 export function shouldLoadPluginsForCommandPath(params: {
   argv?: string[];
   commandPath: string[];
@@ -47,6 +50,7 @@ function shouldLoadPlugins(params: {
   return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
+/** Return whether banner output should be hidden for this command path/environment. */
 export function shouldHideCliBannerForCommandPath(
   commandPath: string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -57,10 +61,12 @@ export function shouldHideCliBannerForCommandPath(
   );
 }
 
+/** Return whether startup should ensure the `openclaw` binary is on PATH for this command. */
 export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolean {
   return commandPath.length === 0 || resolveCliCommandPathPolicy(commandPath).ensureCliPath;
 }
 
+/** Resolve the early startup policy consumed before command handlers run. */
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];

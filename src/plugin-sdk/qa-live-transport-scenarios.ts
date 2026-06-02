@@ -1,3 +1,4 @@
+/** Standard live-transport QA behaviors used to compare coverage across channels. */
 export type LiveTransportStandardScenarioId =
   | "canary"
   | "mention-gating"
@@ -9,10 +10,15 @@ export type LiveTransportStandardScenarioId =
   | "reaction-observation"
   | "help-command";
 
+/** Scenario descriptor consumed by live transport QA lanes. */
 export type LiveTransportScenarioDefinition<TId extends string = string> = {
+  /** Lane-specific scenario id passed on the command line. */
   id: TId;
+  /** Optional standard behavior this channel-specific scenario covers. */
   standardId?: LiveTransportStandardScenarioId;
+  /** Scenario timeout budget in milliseconds. */
   timeoutMs: number;
+  /** Human-readable title for QA output. */
   title: string;
 };
 
@@ -70,6 +76,7 @@ const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioD
   },
 ] as const;
 
+/** Minimum standard scenario set expected from mature live transport lanes. */
 export const LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS: readonly LiveTransportStandardScenarioId[] =
   [
     "canary",
@@ -91,9 +98,13 @@ function assertKnownStandardScenarioIds(ids: readonly LiveTransportStandardScena
   }
 }
 
+/** Selects requested live QA scenarios and errors on unknown ids. */
 export function selectLiveTransportScenarios<TDefinition extends { id: string }>(params: {
+  /** Optional scenario ids requested by CLI/test options. Empty means all scenarios. */
   ids?: string[];
+  /** Label included in unknown-id errors. */
   laneLabel: string;
+  /** Full ordered scenario catalog for the lane. */
   scenarios: readonly TDefinition[];
 }) {
   if (!params.ids || params.ids.length === 0) {
@@ -110,8 +121,11 @@ export function selectLiveTransportScenarios<TDefinition extends { id: string }>
   return selected;
 }
 
+/** Collects de-duplicated standard scenario coverage from always-on and explicit scenarios. */
 export function collectLiveTransportStandardScenarioCoverage<TId extends string>(params: {
+  /** Standard scenarios covered outside the selectable scenario catalog. */
   alwaysOnStandardScenarioIds?: readonly LiveTransportStandardScenarioId[];
+  /** Scenario catalog whose standardId fields contribute coverage. */
   scenarios: readonly LiveTransportScenarioDefinition<TId>[];
 }) {
   const coverage: LiveTransportStandardScenarioId[] = [];
@@ -120,6 +134,7 @@ export function collectLiveTransportStandardScenarioCoverage<TId extends string>
     if (!id || seen.has(id)) {
       return;
     }
+    // Preserve first-seen order so coverage reports stay stable across duplicate mappings.
     seen.add(id);
     coverage.push(id);
   };
@@ -137,8 +152,11 @@ export function collectLiveTransportStandardScenarioCoverage<TId extends string>
   return coverage;
 }
 
+/** Returns expected standard scenarios that are not covered by a lane. */
 export function findMissingLiveTransportStandardScenarios(params: {
+  /** Standard scenario ids already covered by the lane. */
   coveredStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
+  /** Required standard scenario ids to compare against coverage. */
   expectedStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
 }) {
   assertKnownStandardScenarioIds(params.coveredStandardScenarioIds);

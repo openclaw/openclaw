@@ -30,6 +30,7 @@ function riskLabel(risk: CommandRisk): string {
   }
 }
 
+/** Collapse rich command-explainer output into counts and deduped warning lines for UI display. */
 export function summarizeCommandExplanation(
   explanation: CommandExplanation,
 ): CommandExplanationSummary {
@@ -46,6 +47,7 @@ export function summarizeCommandExplanation(
   };
 }
 
+/** Summarize already-tokenized policy segments without loading the async shell explainer. */
 export function summarizeCommandSegmentsForDisplay(
   segments: readonly ExecCommandSegment[],
 ): CommandExplanationSummary {
@@ -77,6 +79,7 @@ export function summarizeCommandSegmentsForDisplay(
   };
 }
 
+/** Resolve the safest available display summary for shell text or Node argv executions. */
 export function resolveCommandAnalysisSummaryForDisplay(params: {
   host?: string | null;
   commandText: string;
@@ -106,6 +109,7 @@ export function resolveCommandAnalysisSummaryForDisplay(params: {
   if (!sanitizeText) {
     return summary;
   }
+  // Apply caller redaction after risk detection so matching still sees the original command text.
   return {
     commandCount: summary.commandCount,
     nestedCommandCount: summary.nestedCommandCount,
@@ -114,6 +118,7 @@ export function resolveCommandAnalysisSummaryForDisplay(params: {
   };
 }
 
+/** Load the rich shell explainer lazily for displays that can afford async parsing. */
 export async function explainCommandForDisplay(
   command: string,
 ): Promise<{ explanation: CommandExplanation; summary: CommandExplanationSummary } | null> {

@@ -6,10 +6,15 @@ export type RealtimeVoiceActivationNameMatchKind = "exact" | "fuzzy";
 export type RealtimeVoiceActivationNameTranscriptResult =
   | {
       allowed: true;
+      /** Transcript text after the activation name and nearby punctuation are removed. */
       text: string;
+      /** Configured activation name that matched. */
       activationName: string;
+      /** Transcript phrase heard at the leading or trailing edge. */
       heardName: string;
+      /** Exact compact match or bounded fuzzy speech-recognition match. */
       match: RealtimeVoiceActivationNameMatchKind;
+      /** Which transcript edge carried the activation phrase. */
       edge: RealtimeVoiceActivationNameEdge;
     }
   | { allowed: false; text: string };
@@ -36,11 +41,13 @@ export function realtimeVoiceActivationNameWordCount(value: string): number {
   return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
 }
 
+/** Lowercases and collapses whitespace in a configured activation name. */
 export function normalizeRealtimeVoiceActivationName(value: string): string | undefined {
   const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
   return normalized || undefined;
 }
 
+/** Returns the leading word prefix used for short wake-name previews and validation. */
 export function normalizeRealtimeVoiceActivationNamePrefix(
   value: string,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -52,6 +59,7 @@ export function normalizeRealtimeVoiceActivationNamePrefix(
   return words.slice(0, maxWords).join(" ");
 }
 
+/** True when an activation name fits the realtime voice word-count limits. */
 export function isSupportedRealtimeVoiceActivationName(
   value: string,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -60,6 +68,7 @@ export function isSupportedRealtimeVoiceActivationName(
   return wordCount >= 1 && wordCount <= maxWords;
 }
 
+/** Normalizes only activation names that are supported by realtime voice matching. */
 export function normalizeSupportedRealtimeVoiceActivationName(
   value: string | undefined,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -73,10 +82,12 @@ export function normalizeSupportedRealtimeVoiceActivationName(
     : undefined;
 }
 
+/** Sorts longer activation names first so "claw bot" wins before "claw". */
 export function sortRealtimeVoiceActivationNames(names: string[]): string[] {
   return names.toSorted((left, right) => right.length - left.length || left.localeCompare(right));
 }
 
+/** Matches a configured activation name at the transcript edge and returns text to process. */
 export function matchRealtimeVoiceActivationName(
   text: string,
   activationNames: string[],
@@ -318,6 +329,8 @@ function isFuzzyActivationNameMatch(
   }
   const distance = levenshteinDistance(heardCompact, activationCompact);
   if (candidate.edge === "trailing") {
+    // Trailing names are easier to hit in ambient speech, so fuzzy trailing matches are limited to
+    // same-length phonetic substitutions behind a question/direct-address boundary.
     return (
       heardCompact.length === activationCompact.length &&
       hasOnlyPhoneticSubstitutions(heardCompact, activationCompact)

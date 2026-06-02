@@ -74,6 +74,13 @@ function resolveTimingPolicy(
   };
 }
 
+/**
+ * Start the background channel self-healing loop.
+ *
+ * The monitor intentionally uses the shared `evaluateChannelHealth` policy,
+ * then applies cooldown and hourly caps before restarting an account so a
+ * flapping provider cannot enter an unbounded restart loop.
+ */
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,

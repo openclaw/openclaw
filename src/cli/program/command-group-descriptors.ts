@@ -1,25 +1,36 @@
 import type { Command } from "commander";
 
 export type NamedCommandDescriptor = {
+  /** Commander-safe command name used for placeholders and routing. */
   name: string;
+  /** Help text for the placeholder before lazy registration loads the real command. */
   description: string;
+  /** Whether the placeholder should be treated as a parent command. */
   hasSubcommands: boolean;
+  /** Whether invoking the parent without subcommands should render help. */
   parentDefaultHelp?: boolean;
 };
 
 export type CommandGroupDescriptorSpec<TRegister> = {
+  /** Descriptor names that should resolve to the same lazy-loaded command group. */
   commandNames: readonly string[];
+  /** Registrar callback or callback factory used after descriptor lookup. */
   register: TRegister;
 };
 
 export type ImportedCommandGroupDefinition<TRegisterArgs, TModule> = {
+  /** Descriptor names owned by the imported module. */
   commandNames: readonly string[];
+  /** Lazy module loader kept out of startup until the group is selected. */
   loadModule: () => Promise<TModule>;
+  /** Module-specific registrar invoked after lazy import resolves. */
   register: (module: TModule, args: TRegisterArgs) => Promise<void> | void;
 };
 
 export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
+  /** Descriptor objects resolved from `commandNames`; throws if any name is unknown. */
   placeholders: TDescriptor[];
+  /** Registrar carried through from the owning spec. */
   register: TRegister;
 };
 
@@ -51,6 +62,7 @@ export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescr
   }));
 }
 
+/** Resolve descriptor specs and adapt each registrar to the concrete command-group entry shape. */
 export function buildCommandGroupEntries<TRegister>(
   descriptors: readonly NamedCommandDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
@@ -62,6 +74,7 @@ export function buildCommandGroupEntries<TRegister>(
   }));
 }
 
+/** Define a lazy imported group while preserving the typed registrar arguments. */
 export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
   commandNames: readonly string[],
   loadModule: () => Promise<TModule>,
@@ -76,6 +89,7 @@ export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
   };
 }
 
+/** Map multiple imported group definitions into descriptor specs. */
 export function defineImportedCommandGroupSpecs<TRegisterArgs, TModule>(
   definitions: readonly ImportedCommandGroupDefinition<TRegisterArgs, TModule>[],
 ): CommandGroupDescriptorSpec<(args: TRegisterArgs) => Promise<void>>[] {
@@ -99,11 +113,15 @@ export type ImportedProgramCommandGroupDefinition<
   TModule extends Record<TKey, ProgramCommandRegistrar>,
   TKey extends keyof TModule & string,
 > = {
+  /** Descriptor names owned by the program command module. */
   commandNames: readonly string[];
+  /** Lazy module loader for the command module. */
   loadModule: () => Promise<TModule>;
+  /** Exported registrar name to call after import. */
   exportName: TKey;
 };
 
+/** Define a typed program command group that calls a named module export. */
 export function defineImportedProgramCommandGroupSpec<
   TModule extends Record<TKey, ProgramCommandRegistrar>,
   TKey extends keyof TModule & string,
@@ -117,6 +135,7 @@ export function defineImportedProgramCommandGroupSpec<
   );
 }
 
+/** Define program command groups from untyped module metadata with runtime export checks. */
 export function defineImportedProgramCommandGroupSpecs(
   definitions: readonly AnyImportedProgramCommandGroupDefinition[],
 ): CommandGroupDescriptorSpec<(program: Command) => Promise<void>>[] {

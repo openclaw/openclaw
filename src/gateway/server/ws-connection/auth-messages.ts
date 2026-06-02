@@ -7,6 +7,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+/** Formats unauthorized handshake messages with client-specific recovery hints. */
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;

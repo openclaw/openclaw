@@ -157,6 +157,11 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   return undefined;
 }
 
+/**
+ * Builds the effective realtime voice config shared by Talk entry points.
+ * Request-level provider choice wins, then talk.realtime, then the legacy
+ * voice-call plugin config used by existing installations.
+ */
 export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: string) {
   const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
   const talkRealtime = getRecord(config.talk?.realtime);
@@ -201,6 +206,10 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
   };
 }
 
+/**
+ * Builds the effective realtime transcription config from the legacy streaming
+ * section plus the optional request override used by browser-launched sessions.
+ */
 export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedProvider?: string) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -307,6 +316,10 @@ type RealtimeVoiceLaunchOptionInput = {
   reasoningEffort?: unknown;
 };
 
+/**
+ * Merges configured realtime launch defaults with per-request browser controls.
+ * Only primitive values accepted by realtime providers survive normalization.
+ */
 export function buildRealtimeVoiceLaunchOptions(params: {
   requested: RealtimeVoiceLaunchOptionInput;
   defaults: RealtimeVoiceLaunchOptions;
@@ -320,6 +333,11 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   };
 }
 
+/**
+ * Applies sanitized browser launch controls to a resolved provider config.
+ * Invalid or blank controls are ignored so untrusted UI payloads cannot erase
+ * configured provider defaults.
+ */
 export function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
   params: RealtimeVoiceLaunchOptionInput,

@@ -23,6 +23,12 @@ function requestMismatch(): SystemRunApprovalMatchResult {
 
 export { toSystemRunApprovalMismatchError } from "../infra/system-run-approval-binding.js";
 
+/**
+ * Compare a forwarded node `system.run` request against the binding captured by
+ * the original exec approval. All command, cwd, session, and env-key checks live
+ * here so gateway callers cannot accidentally approve a replay with a looser
+ * shape than the node host will execute.
+ */
 export function evaluateSystemRunApprovalMatch(params: {
   argv: string[];
   request: ExecApprovalRequestPayload;

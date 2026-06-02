@@ -20,6 +20,7 @@ export { formatRuntimeStatus };
 export { parsePort };
 export { resolveDaemonContainerContext };
 
+/** Create the install action response context with JSON mode derived from a CLI flag value. */
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
   const json = Boolean(jsonFlag);
   return {
@@ -28,6 +29,7 @@ export function createDaemonInstallActionContext(jsonFlag: unknown) {
   };
 }
 
+/** Fail daemon install early when state resolution indicates Nix-managed mode. */
 export function failIfNixDaemonInstallMode(
   fail: (message: string, hints?: string[]) => void,
   env: NodeJS.ProcessEnv = process.env,
@@ -39,6 +41,7 @@ export function failIfNixDaemonInstallMode(
   return true;
 }
 
+/** Create reusable color/style functions for daemon status text output. */
 export function createCliStatusTextStyles() {
   const rich = isRich();
   return {
@@ -52,6 +55,7 @@ export function createCliStatusTextStyles() {
   };
 }
 
+/** Resolve the terminal color function for a daemon runtime status label. */
 export function resolveRuntimeStatusColor(status: string | undefined): (value: string) => string {
   const runtimeStatus = status ?? "unknown";
   return runtimeStatus === "running"
@@ -63,6 +67,7 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
+/** Extract a valid gateway port from stored daemon program arguments. */
 export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
   if (!programArguments?.length) {
     return null;
@@ -87,6 +92,7 @@ export function parsePortFromArgs(programArguments: string[] | undefined): numbe
   return null;
 }
 
+/** Pick the local host that CLI probes should connect to for a configured bind mode. */
 export function pickProbeHostForBind(
   bindMode: string,
   tailnetIPv4: string | undefined,
@@ -115,6 +121,7 @@ const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_NIX_MODE",
 ];
 
+/** Keep only daemon environment keys safe to print or replay in CLI diagnostics. */
 export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
   if (!env) {
     return {};
@@ -130,11 +137,13 @@ export function filterDaemonEnv(env: Record<string, string> | undefined): Record
   return filtered;
 }
 
+/** Format the safe daemon environment as KEY=value entries. */
 export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   const filtered = filterDaemonEnv(env);
   return Object.entries(filtered).map(([key, value]) => `${key}=${value}`);
 }
 
+/** Normalize lsof/netstat listener address text before comparing or rendering. */
 export function normalizeListenerAddress(raw: string): string {
   let value = raw.trim();
   if (!value) {
@@ -145,6 +154,7 @@ export function normalizeListenerAddress(raw: string): string {
   return value.trim();
 }
 
+/** Build actionable hints for missing/stopped daemon runtime state. */
 export function renderRuntimeHints(
   runtime: { missingUnit?: boolean; missingSupervision?: boolean; status?: string } | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -186,6 +196,7 @@ export function renderRuntimeHints(
   return hints;
 }
 
+/** Build platform-specific next-step hints for starting an installed gateway service. */
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
   const container = resolveDaemonContainerContext(env);
@@ -202,6 +213,7 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
   return [`Restart the container or the service that manages it for ${container}.`];
 }
 
+/** Remove generic host-service hints when daemon state belongs to a container runtime. */
 export function filterContainerGenericHints(
   hints: string[],
   env: NodeJS.ProcessEnv = process.env,

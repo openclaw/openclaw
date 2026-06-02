@@ -12,6 +12,7 @@ import {
 } from "../../routing/session-key.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
+/** Creates account id listing/default helpers for one channel config namespace. */
 export function createAccountListHelpers(
   channelKey: string,
   options?: {
@@ -30,6 +31,7 @@ export function createAccountListHelpers(
     }
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
     for (const key of options?.implicitDefaultAccount?.channelKeys ?? []) {
+      // Root-level credentials imply a default account even when named accounts also exist.
       if (hasConfiguredAccountValue(channel?.[key])) {
         return true;
       }
@@ -93,6 +95,7 @@ export function createAccountListHelpers(
   return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
 }
 
+/** Returns whether a config/env value should count as an account being configured. */
 export function hasConfiguredAccountValue(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
@@ -100,6 +103,7 @@ export function hasConfiguredAccountValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/** Combines configured, extra, and implicit account ids into a sorted unique list. */
 export function listCombinedAccountIds(params: {
   configuredAccountIds: Iterable<string>;
   additionalAccountIds?: Iterable<string>;
@@ -128,6 +132,7 @@ export function listCombinedAccountIds(params: {
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
+/** Chooses the default account id from listed accounts and optional configured preference. */
 export function resolveListedDefaultAccountId(params: {
   accountIds: readonly string[];
   configuredDefaultAccountId?: string | undefined;
@@ -153,6 +158,7 @@ export function resolveListedDefaultAccountId(params: {
   return params.accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
+/** Merges channel-level config with an account override, omitting account container keys. */
 export function mergeAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accountConfig: Partial<TConfig> | undefined;
@@ -180,6 +186,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
       accountValue != null &&
       !Array.isArray(accountValue)
     ) {
+      // Selected nested objects merge shallowly so account overrides can tweak one subkey.
       (merged as Record<string, unknown>)[key] = {
         ...(baseValue as Record<string, unknown>),
         ...(accountValue as Record<string, unknown>),
@@ -189,6 +196,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
   return merged;
 }
 
+/** Resolves an account entry and returns the merged channel/account config. */
 export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accounts: Record<string, Partial<TConfig>> | undefined;
@@ -214,6 +222,7 @@ type AccountSnapshotInput = {
   name?: string | null | undefined;
 };
 
+/** Builds a normalized account status snapshot for status/catalog surfaces. */
 export function describeAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;
@@ -228,6 +237,7 @@ export function describeAccountSnapshot(params: {
   };
 }
 
+/** Builds a webhook-mode account snapshot with optional extra status metadata. */
 export function describeWebhookAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;

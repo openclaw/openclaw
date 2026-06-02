@@ -676,6 +676,12 @@ function addRequiredAgentHarnessPluginIds(
   }
 }
 
+/**
+ * Resolves the narrow installed-plugin scope needed for gateway startup.
+ *
+ * `undefined` means the installed index cannot prove the scope safely, so
+ * callers must load full plugin metadata instead of a partial snapshot.
+ */
 export function resolveGatewayStartupMetadataPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -697,9 +703,15 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     params.config.plugins?.bundledDiscovery === "compat" ||
     activationSourceConfig.plugins?.bundledDiscovery === "compat"
   ) {
+    // Compat bundled discovery can activate plugins from historical runtime
+    // rules that are not represented in the installed index. Use full metadata
+    // so startup cannot miss a legacy owner.
     return undefined;
   }
   if (pluginsConfig.allow.length === 0 && activationSourcePlugins.allow.length === 0) {
+    // Without an allowlist, startup can still depend on default-enabled plugins.
+    // The default decision is platform-sensitive and belongs to the full
+    // registry snapshot rather than a narrowed installed-index scope.
     return undefined;
   }
 
@@ -716,6 +728,8 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     scope.add(pluginId);
   }
   if (!lookup.hasCompleteConfigPathActivationMetadata()) {
+    // Config-path activation is pattern based; a partial installed index cannot
+    // prove that no bundled plugin owns a configured path.
     return undefined;
   }
   addConfiguredActivationPathPluginIds(scope, {
@@ -729,6 +743,8 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     env: params.env,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
+    // Channel config can pull in bundled channel owners even when the plugin id
+    // is absent from explicit config, so missing ownership metadata must widen.
     return undefined;
   }
   lookup.addDirectChannelOwners(scope, configuredChannelIds);
@@ -740,6 +756,8 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     ...collectValidationConfiguredProviderIds(activationSourceConfig),
   ]);
   if (!lookup.canResolveDirectProviderIds(configuredProviderIds, scope)) {
+    // Provider ids may be plugin-owned aliases or model API ids. Fall back when
+    // the scoped index cannot prove every configured provider owner.
     return undefined;
   }
   lookup.addDirectProviderOwners(scope, configuredProviderIds);
@@ -749,6 +767,8 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     ...collectValidationConfiguredShorthandModelIds(activationSourceConfig),
   ]);
   if (!lookup.hasShorthandModelOwners(configuredShorthandModelIds)) {
+    // Shorthand model refs are catalog-backed; incomplete ownership metadata
+    // would make a scoped snapshot silently omit the provider plugin.
     return undefined;
   }
   lookup.addShorthandModelOwners(scope, configuredShorthandModelIds);
@@ -786,6 +806,12 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   return sortUniquePluginIds(scope);
 }
 
+/**
+ * Creates the plugin-id scope used for gateway startup metadata snapshots.
+ *
+ * The scope key includes derived channel ids and platform because those inputs
+ * can change which bundled plugins must be present before the gateway listens.
+ */
 export function createGatewayStartupMetadataPluginIdScope(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -850,6 +876,12 @@ function addValidationPluginConfigReferences(
   }
 }
 
+/**
+ * Resolves the narrow installed-plugin scope needed for config validation.
+ *
+ * `undefined` keeps validation conservative when dynamic discovery or missing
+ * ownership metadata could otherwise hide plugin-owned diagnostics.
+ */
 export function resolveConfigValidationMetadataPluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -859,6 +891,8 @@ export function resolveConfigValidationMetadataPluginIds(params: {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
   if (params.config.plugins?.bundledDiscovery === "compat" || pluginsConfig.loadPaths.length > 0) {
+    // Validation reports must include dynamically discovered/load-path plugins;
+    // a static installed-index scope cannot prove that set.
     return undefined;
   }
 
@@ -869,6 +903,8 @@ export function resolveConfigValidationMetadataPluginIds(params: {
     normalizePluginId: lookup.normalizePluginId,
   });
   if (!lookup.hasCompleteConfigPathActivationMetadata()) {
+    // Config validation must inspect every bundled config-path owner so unknown
+    // paths do not skip plugin-specific schema checks.
     return undefined;
   }
   addConfiguredActivationPathPluginIds(scope, {
@@ -881,18 +917,24 @@ export function resolveConfigValidationMetadataPluginIds(params: {
     env: params.env,
   });
   if (!lookup.hasChannelContributionOwners(configuredChannelIds)) {
+    // Disabled channel config still needs validation diagnostics from its owner.
+    // Missing contribution ownership requires a full metadata snapshot.
     return undefined;
   }
   lookup.addChannelContributionOwners(scope, configuredChannelIds);
 
   const configuredProviderIds = collectValidationConfiguredProviderIds(params.config);
   if (!lookup.hasProviderContributionOwners(configuredProviderIds)) {
+    // Provider validation can be owned by plugin manifest contracts rather than
+    // explicit plugin config, so incomplete owner metadata is unsafe to scope.
     return undefined;
   }
   lookup.addProviderContributionOwners(scope, configuredProviderIds);
 
   const configuredShorthandModelIds = collectValidationConfiguredShorthandModelIds(params.config);
   if (!lookup.hasShorthandModelOwners(configuredShorthandModelIds)) {
+    // Shorthand model validation needs the provider owner even when the config
+    // does not mention that plugin id directly.
     return undefined;
   }
   lookup.addShorthandModelOwners(scope, configuredShorthandModelIds);
@@ -916,6 +958,7 @@ export function resolveConfigValidationMetadataPluginIds(params: {
   return sortUniquePluginIds(scope);
 }
 
+/** Creates the plugin-id scope used for config validation metadata snapshots. */
 export function createConfigValidationMetadataPluginIdScope(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -961,6 +1004,8 @@ export function isMetadataSnapshotScopedForGatewayStartup(params: {
     return snapshotPluginIds.length === 0;
   }
   const snapshotPluginIdSet = new Set(snapshotPluginIds);
+  // Startup scopes are minimum required sets; a wider compatible snapshot is
+  // safe, but one missing any expected id can skip required plugin metadata.
   return expectedPluginIds.every((pluginId) => snapshotPluginIdSet.has(pluginId));
 }
 
@@ -1471,6 +1516,12 @@ export function resolveChannelPluginIds(params: {
   return [...loadGatewayStartupPluginPlan(params).channelPluginIds];
 }
 
+/**
+ * Lists plugins that declare channel contributions in the manifest registry.
+ *
+ * This is broader than the startup set: callers use it to know which plugin
+ * metadata can expose channel surfaces, independent of current config.
+ */
 export function resolveChannelPluginIdsFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
@@ -1480,6 +1531,12 @@ export function resolveChannelPluginIdsFromRegistry(params: {
     .map((plugin) => plugin.id);
 }
 
+/**
+ * Finds configured channel plugins whose full load can wait until after listen.
+ *
+ * The result is a subset of configured startup channel owners and protects
+ * startup from eagerly loading channel runtimes that only need post-listen work.
+ */
 export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -1552,6 +1609,13 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   return [...loadGatewayStartupPluginPlan(params).configuredDeferredChannelPluginIds];
 }
 
+/**
+ * Builds the gateway startup plugin plan from prepared registry snapshots.
+ *
+ * The plan separates channel capability owners from plugins that must actually
+ * start, because channel metadata can be needed for routing even when a channel
+ * runtime is deferred or disabled.
+ */
 export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -1792,6 +1856,13 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
 }
 
+/**
+ * Loads or reuses plugin metadata for gateway startup, then resolves the plan.
+ *
+ * A caller-provided snapshot is reused only when its config/workspace inputs and
+ * scoped plugin ids cover this startup request; otherwise current metadata is
+ * resolved with the startup scope.
+ */
 export function loadGatewayStartupPluginPlan(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

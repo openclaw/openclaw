@@ -14,16 +14,22 @@ function accessGroupNames(entries: readonly (string | number)[]): string[] {
   );
 }
 
+/** Extracts every referenced access-group name from raw allowlist entry groups. */
 export function allReferencedAccessGroupNames(
   entries: Array<readonly (string | number)[]>,
 ): string[] {
   return uniqueStrings(entries.flatMap((entryGroup) => accessGroupNames(entryGroup)));
 }
 
+/** Normalizes direct entries while preserving access-group tokens for later expansion. */
 export async function normalizeEffectiveEntries(params: {
+  /** Channel adapter used only for direct entries; access-group tokens remain literal. */
   adapter: ChannelIngressAdapter;
+  /** Account scope passed to adapter normalization. */
   accountId: string;
+  /** Raw allowlist entries before adapter normalization. */
   entries: readonly (string | number)[];
+  /** Ingress phase whose normalization rules apply to direct entries. */
   context: "dm" | "group" | "route" | "command";
 }): Promise<string[]> {
   const rawEntries = normalizeStringEntries(params.entries);
@@ -45,9 +51,13 @@ export async function normalizeEffectiveEntries(params: {
   ]);
 }
 
+/** Resolves dynamic access-group facts before the state builder expands static sender groups. */
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {
+  /** Full ingress input so dynamic resolvers see the same subject/config as state resolution. */
   input: ResolveChannelMessageIngressParams;
+  /** Normalized channel id passed to dynamic access-group resolvers. */
   channelId: ChannelIngressChannelId;
+  /** Referenced group names gathered from every allowlist surface before state building. */
   names: readonly string[];
 }): Promise<AccessGroupMembershipFact[]> {
   if (!params.input.resolveAccessGroupMembership || params.names.length === 0) {
@@ -82,6 +92,8 @@ export async function resolveRuntimeAccessGroupMembershipFacts(params: {
             },
       );
     } catch {
+      // Resolver failures are recorded as facts instead of thrown so one flaky
+      // dynamic group fails closed without bypassing the rest of ingress state.
       facts.push({
         kind: "failed",
         groupName: name,

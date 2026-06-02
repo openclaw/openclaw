@@ -8,10 +8,12 @@ type JsonModeCommand = Command & {
   [jsonModeSymbol]?: JsonMode;
 };
 
+/** Check whether a command declares its own `--json` output flag. */
 function commandDefinesJsonOption(command: Command): boolean {
   return command.options.some((option) => option.long === "--json");
 }
 
+/** Walk parents so child commands inherit explicit JSON mode metadata. */
 function getDeclaredCommandJsonMode(command: Command): JsonMode | null {
   for (let current: Command | null = command; current; current = current.parent ?? null) {
     const metadata = (current as JsonModeCommand)[jsonModeSymbol];
@@ -25,6 +27,7 @@ function getDeclaredCommandJsonMode(command: Command): JsonMode | null {
   return null;
 }
 
+/** Detect selected `--json` through Commander state first, then raw argv fallback. */
 function commandSelectedJsonFlag(command: Command, argv: string[]): boolean {
   const commandWithGlobals = command as Command & {
     optsWithGlobals?: () => Record<string, unknown>;
@@ -38,6 +41,7 @@ function commandSelectedJsonFlag(command: Command, argv: string[]): boolean {
   return hasFlag(argv, "--json");
 }
 
+/** Mark a command as JSON-output or JSON-parse-only for preaction routing. */
 export function setCommandJsonMode(command: Command, mode: JsonMode): Command {
   (command as JsonModeCommand)[jsonModeSymbol] = mode;
   return command;

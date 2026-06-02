@@ -5,6 +5,7 @@ import { normalizeSecretInputString, resolveSecretInputRef } from "../config/typ
 const GATEWAY_ENV_TOKEN = "OPENCLAW_GATEWAY_TOKEN";
 const GATEWAY_SERVICE_KIND = "gateway";
 
+/** Doctor/status warning emitted when local env auth can shadow config auth. */
 export type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
   title: string;
@@ -14,6 +15,13 @@ export type GatewayAuthTokenSourceConflict = {
   diagnostic: string;
 };
 
+/**
+ * Detect local client token drift without flagging the managed Gateway service.
+ *
+ * The service intentionally prefers `gateway.auth.token`; interactive shells
+ * often prefer `OPENCLAW_GATEWAY_TOKEN`, so mismatches are only actionable for
+ * local clients in token-auth mode.
+ */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -41,6 +49,8 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     value: tokenInput,
     defaults: params.cfg.secrets?.defaults,
   });
+  // `${OPENCLAW_GATEWAY_TOKEN}` in config makes the env var canonical rather
+  // than conflicting, so warn only when another source owns the configured token.
   if (ref?.source === "env" && ref.id === GATEWAY_ENV_TOKEN) {
     return null;
   }

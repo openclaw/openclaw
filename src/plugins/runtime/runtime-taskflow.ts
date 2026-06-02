@@ -39,6 +39,8 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
 function asManagedTaskFlowRecord(
   flow: TaskFlowRecord | undefined,
 ): ManagedTaskFlowRecord | undefined {
+  // Only controller-owned managed flows may use the mutation facade; detached or
+  // registry-only flows can still be read through the DTO APIs.
   if (!flow || flow.syncMode !== "managed" || !flow.controllerId) {
     return undefined;
   }
@@ -51,6 +53,8 @@ function resolveManagedFlowForOwner(params: {
 }):
   | { ok: true; flow: ManagedTaskFlowRecord }
   | { ok: false; code: "not_found" | "not_managed"; current?: TaskFlowRecord } {
+  // Resolve through the owner gate first so mutation failure does not leak
+  // another session's flow shape or revision.
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.ownerKey,
@@ -69,6 +73,8 @@ function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutat
   if (result.applied) {
     const managed = asManagedTaskFlowRecord(result.flow);
     if (!managed) {
+      // Persistence returned a flow, but not one this managed facade can
+      // continue mutating. Surface a typed race result instead of throwing.
       return {
         applied: false,
         code: "not_managed",
@@ -303,6 +309,8 @@ function createBoundTaskFlowRuntime(params: {
       }
       const managed = asManagedTaskFlowRecord(created.flow);
       if (!managed) {
+        // Child task creation can target any owner-visible flow; the legacy
+        // managed facade only returns success for controller-owned flows.
         return {
           created: false,
           found: true,
@@ -327,6 +335,7 @@ function createBoundTaskFlowRuntime(params: {
   };
 }
 
+/** Creates the legacy managed TaskFlow runtime facade used by plugin runtimes. */
 export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
   return {
     bindSession: (params) =>

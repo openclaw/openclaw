@@ -7,6 +7,7 @@ export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistra
 
 let detachedTaskLifecycleRuntimeRegistration: DetachedTaskLifecycleRuntimeRegistration | undefined;
 
+/** Installs the process-wide detached task runtime registration. */
 export function registerDetachedTaskLifecycleRuntime(
   pluginId: string,
   runtime: DetachedTaskLifecycleRuntime,
@@ -17,6 +18,7 @@ export function registerDetachedTaskLifecycleRuntime(
   };
 }
 
+/** Returns a defensive registration wrapper so callers cannot mutate the slot metadata. */
 export function getDetachedTaskLifecycleRuntimeRegistration():
   | DetachedTaskLifecycleRuntimeRegistration
   | undefined {
@@ -29,12 +31,14 @@ export function getDetachedTaskLifecycleRuntimeRegistration():
   };
 }
 
+/** Returns the registered runtime instance, if any, for hot-path dispatch. */
 export function getRegisteredDetachedTaskLifecycleRuntime():
   | DetachedTaskLifecycleRuntime
   | undefined {
   return detachedTaskLifecycleRuntimeRegistration?.runtime;
 }
 
+/** Restores a previously captured registration after plugin activation rollback. */
 export function restoreDetachedTaskLifecycleRuntimeRegistration(
   registration: DetachedTaskLifecycleRuntimeRegistration | undefined,
 ): void {
@@ -46,6 +50,7 @@ export function restoreDetachedTaskLifecycleRuntimeRegistration(
     : undefined;
 }
 
+/** Clears the detached task runtime registration so core fallback behavior applies. */
 export function clearDetachedTaskLifecycleRuntimeRegistration(): void {
   detachedTaskLifecycleRuntimeRegistration = undefined;
 }

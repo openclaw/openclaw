@@ -4,6 +4,7 @@ import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelPairingAdapter } from "./pairing.types.js";
 import { getChannelPlugin, listChannelPlugins } from "./registry.js";
 
+/** Lists loaded channel ids that expose a pairing adapter. */
 export function listPairingChannels(): ChannelId[] {
   // Channel docking: pairing support is declared via plugin.pairing.
   return listChannelPlugins()
@@ -11,11 +12,13 @@ export function listPairingChannels(): ChannelId[] {
     .map((plugin) => plugin.id);
 }
 
+/** Returns the pairing adapter for a loaded channel, if pairing is supported. */
 export function getPairingAdapter(channelId: ChannelId): ChannelPairingAdapter | null {
   const plugin = getChannelPlugin(channelId);
   return plugin?.pairing ?? null;
 }
 
+/** Returns a channel pairing adapter or throws a setup-facing unsupported error. */
 export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
   const adapter = getPairingAdapter(channelId);
   if (!adapter) {
@@ -24,6 +27,7 @@ export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapt
   return adapter;
 }
 
+/** Notifies a channel after a pairing request is approved. */
 export async function notifyPairingApproved(params: {
   channelId: ChannelId;
   id: string;

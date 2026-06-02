@@ -7,6 +7,7 @@ export type ConfiguredLocalOriginManagedProxyBypass = {
   baseUrl: string;
 };
 
+/** Resolve only HTTP/S origins, normalizing trailing DNS dots before exact comparison. */
 function resolveHttpOrigin(value: string): string | undefined {
   try {
     const parsed = new URL(value.trim());
@@ -20,6 +21,7 @@ function resolveHttpOrigin(value: string): string | undefined {
   }
 }
 
+/** Accept only localhost or loopback IP literals for the managed-proxy bypass host. */
 function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
   const normalized = hostname
     .trim()
@@ -29,6 +31,7 @@ function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
   return normalized === "localhost" || isLoopbackIpAddress(normalized);
 }
 
+/** Match the configured local provider origin exactly before allowing a proxy bypass. */
 function isExactConfiguredLocalOriginBypass(params: {
   url: URL;
   managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
@@ -52,10 +55,15 @@ function isExactConfiguredLocalOriginBypass(params: {
   return resolveHttpOrigin(params.url.toString()) === baseOrigin;
 }
 
+/** Require every resolved address to stay loopback so DNS rebinding cannot escape. */
 function isPinnedLoopbackTarget(addresses: readonly string[]): boolean {
   return addresses.length > 0 && addresses.every((address) => isLoopbackIpAddress(address));
 }
 
+/**
+ * Decide whether a configured local provider may bypass the managed proxy.
+ * The bypass is origin-exact, loopback-pinned, and still honors active loopback mode.
+ */
 export function shouldUseConfiguredLocalOriginManagedProxyBypass(params: {
   url: URL;
   managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;

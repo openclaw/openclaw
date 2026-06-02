@@ -1,7 +1,3 @@
-/**
- * @deprecated Compatibility subpath for shipped approval reaction helpers.
- * New plugin code should use the focused approval runtime/reply subpaths.
- */
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
@@ -38,45 +34,70 @@ type InMemoryApprovalReactionTarget<TTarget> = {
 };
 
 export type ApprovalReactionTargetStore<TTarget> = {
+  /** Track a message/reaction key in memory and, when configured, the persistent store. */
   register(key: string, target: TTarget, opts?: { ttlMs?: number }): void;
+  /** Resolve a target by key, returning null for missing, expired, invalid, or store-error cases. */
   lookup(key: string): Promise<TTarget | null>;
+  /** Remove a target from both memory and persistent storage. */
   delete(key: string): void;
   clearForTest(): void;
 };
 
+/** Product-ordered mapping from approval decisions to channel reaction labels. */
 export type ApprovalReactionDecisionBinding = {
+  /** Approval decision submitted when this reaction is accepted. */
   decision: ExecApprovalReplyDecision;
+  /** Canonical emoji sent to users and matched after normalization. */
   emoji: string;
+  /** Human-readable label shown next to the emoji in fallback text. */
   label: string;
 };
 
+/** Result of matching one normalized reaction key to an allowed approval decision. */
 export type ApprovalReactionDecisionResolution = {
+  /** Decision resolved from the reaction binding. */
   decision: ExecApprovalReplyDecision;
+  /** Emoji after variation selector and skin-tone normalization. */
   normalizedEmoji: string;
 };
 
+/** Channel-owned target metadata attached to an outbound approval prompt. */
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
+  /** Approval id passed back to the approval resolver. */
   approvalId: string;
+  /** Optional explicit kind; omitted values are inferred from plugin-prefixed ids. */
   approvalKind?: ApprovalKind;
+  /** Decisions this prompt permits; reactions outside this set are ignored. */
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  /** Channel route metadata needed to verify and complete the inbound reaction. */
   route?: TRoute;
+  /** Optional expiry mirrored from the underlying approval request. */
   expiresAtMs?: number;
 };
 
 export type ApprovalReactionTargetResolution<TRoute = unknown> =
   ApprovalReactionDecisionResolution & {
+    /** Approval id after blank-id validation. */
     approvalId: string;
+    /** Resolved exec/plugin kind used by reaction handlers. */
     approvalKind: ApprovalKind;
+    /** Channel route metadata copied from the registered target. */
     route?: TRoute;
   };
 
+/** Reply payload enriched with reaction affordances for channels that support emoji decisions. */
 export type ApprovalReactionPromptPayload = ReplyPayload & {
+  /** Decisions available for this approval after policy/action filtering. */
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  /** Reaction bindings filtered to `allowedDecisions` in product order. */
   reactionBindings: readonly ApprovalReactionDecisionBinding[];
 };
 
+/** Reaction prompt plus manual fallback prompt for channels with mixed delivery support. */
 export type ApprovalReactionPendingContent = {
+  /** Rich prompt that channels can render with reaction decision affordances. */
   reactionPayload: ApprovalReactionPromptPayload;
+  /** Plain approval prompt retained for channels/users that cannot react. */
   manualFallbackPayload: ReplyPayload;
 };
 
@@ -97,6 +118,7 @@ function normalizeDecisionList(
   return APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision));
 }
 
+/** List reaction bindings in stable product order while filtering unavailable decisions. */
 export function listApprovalReactionBindings(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): ApprovalReactionDecisionBinding[] {
@@ -110,6 +132,7 @@ export function listApprovalReactionBindings(params: {
   );
 }
 
+/** Build the compact reaction hint shown near approval prompts. */
 export function buildApprovalReactionHint(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string | null {
@@ -120,6 +143,7 @@ export function buildApprovalReactionHint(params: {
   return `React with:\n\n${bindings.map((binding) => `${binding.emoji} ${binding.label}`).join("\n")}`;
 }
 
+/** Normalize equivalent emoji variants before matching reaction decisions. */
 export function normalizeApprovalReactionEmoji(reactionKey: string): string {
   const normalized = reactionKey
     .trim()
@@ -131,6 +155,7 @@ export function normalizeApprovalReactionEmoji(reactionKey: string): string {
   return normalized;
 }
 
+/** Resolve one reaction key to an allowed approval decision. */
 export function resolveApprovalReactionDecision(params: {
   reactionKey: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -147,6 +172,7 @@ export function resolveApprovalReactionDecision(params: {
   return null;
 }
 
+/** Combine a stored channel target with the reaction decision it permits. */
 export function resolveApprovalReactionTarget<TRoute = unknown>(params: {
   target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
   reactionKey: string;
@@ -328,6 +354,7 @@ function buildMetadataPayload(params: {
   );
 }
 
+/** Build the reaction-first approval prompt from an already prepared approval view. */
 export function buildApprovalPendingPromptPayload(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
@@ -352,6 +379,7 @@ export function buildApprovalPendingPromptPayload(params: {
   };
 }
 
+/** Build the reaction-first approval prompt directly from an approval request. */
 export function buildApprovalReactionPromptPayloadForRequest(params: {
   request: ApprovalRequest;
   nowMs: number;
@@ -367,6 +395,7 @@ function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: stri
   return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
 }
 
+/** Build reaction and manual fallback content from an already prepared approval view. */
 export function buildApprovalReactionPendingContent(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
@@ -407,6 +436,7 @@ export function buildApprovalReactionPendingContent(params: {
   return { reactionPayload, manualFallbackPayload };
 }
 
+/** Build reaction and manual fallback content directly from an approval request. */
 export function buildApprovalReactionPendingContentForRequest(params: {
   request: ApprovalRequest;
   nowMs: number;
@@ -418,17 +448,24 @@ export function buildApprovalReactionPendingContentForRequest(params: {
   });
 }
 
+/** Create a bounded target store with in-memory TTLs and optional best-effort persistence. */
 export function createApprovalReactionTargetStore<TTarget>(params: {
+  /** Persistent-store namespace for this channel/plugin's approval reaction targets. */
   namespace: string;
+  /** Maximum in-memory target count before oldest keys are pruned. */
   maxEntries: number;
+  /** TTL used when register callers do not supply a per-target TTL. */
   defaultTtlMs: number;
   openStore?: (params: {
     namespace: string;
     maxEntries: number;
     defaultTtlMs: number;
   }) => KeyedStore<PersistedApprovalReactionTarget<TTarget>> | undefined;
+  /** Receives persistent-store failures before persistence is disabled for the process. */
   logPersistentError?: (error: unknown) => void;
+  /** Validates/deserializes persisted targets before they are returned to handlers. */
   readPersistedTarget?: (target: unknown) => TTarget | null;
+  /** Clock injection for TTL tests and deterministic pruning. */
   nowMs?: () => number;
 }): ApprovalReactionTargetStore<TTarget> {
   const nowMs = params.nowMs ?? Date.now;

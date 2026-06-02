@@ -15,12 +15,19 @@ type CpuUsage = ReturnType<typeof process.cpuUsage>;
 export type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type GatewayEventLoopHealth = {
+  /** True when one or more reasons crossed the gateway degradation threshold. */
   degraded: boolean;
+  /** Stable reason codes surfaced in health snapshots. */
   reasons: GatewayEventLoopHealthReason[];
+  /** Wall-clock sample window used for utilization and CPU ratios. */
   intervalMs: number;
+  /** Event-loop delay p99 over the last monitor window, in milliseconds. */
   delayP99Ms: number;
+  /** Maximum event-loop delay over the last monitor window, in milliseconds. */
   delayMaxMs: number;
+  /** Node event-loop utilization ratio for the sample window. */
   utilization: number;
+  /** Process CPU milliseconds divided by wall milliseconds for the sample. */
   cpuCoreRatio: number;
 };
 
@@ -128,6 +135,8 @@ export function createGatewayEventLoopHealthMonitor(
         delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS || delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS;
 
       if (!hasDelayWarning && intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
+        // Keep load-only probes from churning baselines on sub-second samples;
+        // return the last stable snapshot until enough wall time has elapsed.
         return lastSnapshot;
       }
 

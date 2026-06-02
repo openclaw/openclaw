@@ -28,7 +28,11 @@ export {
   type OperatorScope,
 };
 
-/** Default scopes granted to CLI/operator clients when no narrower local policy is known. */
+/**
+ * Default scopes granted to CLI/operator clients when no narrower local policy
+ * is known. This is intentionally broad for local CLI compatibility, while
+ * remote clients should present the least privilege set resolved per method.
+ */
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
   READ_SCOPE,
@@ -141,7 +145,11 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   return [WRITE_SCOPE];
 }
 
-/** Returns the narrowest known operator scopes needed to call a gateway method. */
+/**
+ * Return the narrowest known operator scopes needed to call a gateway method.
+ * Dynamic methods may inspect params and live plugin registrations; unclassified
+ * methods return an empty set so callers do not accidentally mint broad tokens.
+ */
 export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
@@ -157,7 +165,12 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   return [];
 }
 
-/** Checks whether a presented operator scope set authorizes a gateway method call. */
+/**
+ * Check whether a presented operator scope set authorizes a gateway method call.
+ * Admin always wins, write satisfies read-only methods, and malformed dynamic
+ * params are allowed through only far enough for handlers to return precise
+ * validation errors.
+ */
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
@@ -198,7 +211,10 @@ export function authorizeOperatorScopesForMethod(
   return { allowed: false, missingScope: requiredScope };
 }
 
-/** Returns true when a method has any core, node, dynamic, reserved, or plugin scope policy. */
+/**
+ * Return true when a method has any core, node, dynamic, reserved, or plugin
+ * scope policy. This is used as a guardrail against exposing unclassified RPCs.
+ */
 export function isGatewayMethodClassified(method: string): boolean {
   if (isNodeRoleMethod(method)) {
     return true;

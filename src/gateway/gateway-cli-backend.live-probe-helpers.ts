@@ -181,6 +181,7 @@ function assertLoopbackObjectSchemasHaveProperties(params: {
   }
 }
 
+/** Calls the in-process MCP loopback with owner auth and bounded response reads. */
 async function callLoopbackJsonRpc(params: {
   sessionKey: string;
   messageProvider?: string;
@@ -244,6 +245,7 @@ async function callLoopbackJsonRpc(params: {
   return parsed;
 }
 
+/** Reads response bodies defensively so broken loopback servers cannot exhaust memory. */
 async function readBoundedResponseText(response: Response, byteLimit: number): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -266,6 +268,7 @@ async function readBoundedResponseText(response: Response, byteLimit: number): P
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
+/** Verifies the MCP loopback exposes cron and can create a job before asking an agent to do it. */
 export async function verifyCliCronMcpLoopbackPreflight(params: {
   sessionKey: string;
   port: number;
@@ -387,6 +390,7 @@ function getCliBackendProbeThinking(providerId: string): "low" | undefined {
   return normalizeLowercaseStringOrEmpty(providerId) === "codex-cli" ? "low" : undefined;
 }
 
+/** Sends a live image attachment through the CLI backend and checks the final answer. */
 export async function verifyCliBackendImageProbe(params: {
   client: GatewayClient;
   providerId: string;
@@ -425,6 +429,7 @@ export async function verifyCliBackendImageProbe(params: {
   assertLiveImageProbeReply(extractPayloadText(imageProbe?.result));
 }
 
+/** Exercises cron MCP creation through an agent, retrying known cancellation-only replies. */
 export async function verifyCliCronMcpProbe(params: {
   client: GatewayClient;
   providerId: string;

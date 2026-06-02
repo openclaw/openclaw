@@ -2,6 +2,7 @@ import type { Dispatcher } from "undici";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
+/** Request init accepted by undici runtime fetch when callers need a pinned dispatcher. */
 export type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -10,6 +11,7 @@ type RuntimeFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 
 type FormDataEntryValueWithOptionalName = FormDataEntryValue & { name?: string };
 
+/** Detect FormData across global/undici constructor boundaries. */
 function isFormDataLike(value: unknown): value is FormData {
   return (
     typeof value === "object" &&
@@ -19,6 +21,10 @@ function isFormDataLike(value: unknown): value is FormData {
   );
 }
 
+/**
+ * Rebuild global FormData into the undici runtime FormData implementation so
+ * dispatcher-aware fetch can stream multipart bodies in the same runtime realm.
+ */
 function normalizeRuntimeFormData(
   body: unknown,
   RuntimeFormData: RuntimeFormDataCtor | undefined,
@@ -49,6 +55,10 @@ function normalizeRuntimeFormData(
   return next as unknown as BodyInit;
 }
 
+/**
+ * Normalize headers/body before passing init into undici. Rebuilt FormData owns
+ * its boundary, so stale caller-supplied multipart headers must be stripped.
+ */
 function normalizeRuntimeRequestInit(
   init: DispatcherAwareRequestInit | undefined,
   RuntimeFormData: RuntimeFormDataCtor | undefined,

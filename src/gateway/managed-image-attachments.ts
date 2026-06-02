@@ -43,9 +43,13 @@ export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
 } as const;
 
 export type ManagedImageAttachmentLimits = {
+  /** Maximum original image byte size accepted before resizing/storage. */
   maxBytes: number;
+  /** Maximum post-orientation image width in pixels. */
   maxWidth: number;
+  /** Maximum post-orientation image height in pixels. */
   maxHeight: number;
+  /** Maximum total pixel count after applying orientation metadata. */
   maxPixels: number;
 };
 
@@ -111,6 +115,7 @@ function buildSessionManagedOutgoingAttachmentIndexCacheKey(
   return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
 }
 
+/** Merges configured managed-image limits with the Gateway defaults. */
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {

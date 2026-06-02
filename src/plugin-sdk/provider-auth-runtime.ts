@@ -1,5 +1,3 @@
-// Public runtime auth helpers for provider plugins.
-
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
@@ -285,6 +283,8 @@ function resolveRuntimeModelAuthModuleHref(): string {
   const baseDir = path.dirname(fileURLToPath(import.meta.url));
   for (const relativeBase of RUNTIME_MODEL_AUTH_CANDIDATES) {
     for (const ext of RUNTIME_MODEL_AUTH_EXTENSIONS) {
+      // The SDK facade runs from built JS and tsx/vitest source contexts; probe both layouts
+      // so provider plugins can import the runtime subpath without knowing the checkout shape.
       const candidate = path.resolve(baseDir, `${relativeBase}${ext}`);
       if (fs.existsSync(candidate)) {
         return pathToFileURL(candidate).href;

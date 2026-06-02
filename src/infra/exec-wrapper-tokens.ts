@@ -12,6 +12,7 @@ function stripWindowsExecutableSuffix(value: string): string {
   return value;
 }
 
+/** Returns the lowercase basename for either POSIX or Windows-style executable tokens. */
 export function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
@@ -19,6 +20,7 @@ export function basenameLower(token: string): string {
   return normalizeLowercaseStringOrEmpty(base);
 }
 
+/** Normalizes executable tokens for policy comparisons, including Windows suffix removal. */
 export function normalizeExecutableToken(token: string): string {
   return stripWindowsExecutableSuffix(basenameLower(token));
 }

@@ -11,6 +11,7 @@ const StateOrder: readonly CallState[] = [
   "listening",
 ];
 
+/** Applies monotonic call-state transitions while allowing speaking/listening turn cycles. */
 export function transitionState(call: CallRecord, newState: CallState): void {
   // No-op for same state or already terminal.
   if (call.state === newState || TerminalStates.has(call.state)) {
@@ -37,6 +38,7 @@ export function transitionState(call: CallRecord, newState: CallState): void {
   }
 }
 
+/** Appends a final transcript entry with a fresh timestamp. */
 export function addTranscriptEntry(call: CallRecord, speaker: "bot" | "user", text: string): void {
   const entry: TranscriptEntry = {
     timestamp: Date.now(),

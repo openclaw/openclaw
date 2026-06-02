@@ -25,6 +25,8 @@ function hasDurableGatewayPasswordEnvForInstall(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  // Install-time auth cannot depend on transient shell env; only durable
+  // service env survives the managed Gateway process restart.
   const durableServiceEnv = collectDurableServiceEnvVars({ env, config: cfg });
   return Boolean(
     normalizeOptionalString(durableServiceEnv.OPENCLAW_GATEWAY_PASSWORD) ||
@@ -32,6 +34,12 @@ function hasDurableGatewayPasswordEnvForInstall(
   );
 }
 
+/**
+ * Decide whether install/doctor flows must materialize a Gateway token.
+ *
+ * Password, trusted-proxy, and no-auth modes do not need a generated token;
+ * implicit mode still requires one unless a durable password source exists.
+ */
 export function shouldRequireGatewayTokenForInstall(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,

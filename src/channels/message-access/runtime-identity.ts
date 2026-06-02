@@ -14,6 +14,7 @@ type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | 
 
 /** Build an identity descriptor for channels with one stable id and optional aliases. */
 export function defineStableChannelIngressIdentity(
+  /** Primary stable-id field plus optional alias, wildcard, match, and entry-id hooks. */
   params: StableChannelIngressIdentityParams = {},
 ): ChannelIngressIdentityDescriptor {
   const { entryIdPrefix, resolveEntryId, aliases, isWildcardEntry, matchEntry, ...primary } =
@@ -95,7 +96,9 @@ function adapterEntry(params: {
   };
 }
 
+/** Creates the normalization/matching adapter used by the ingress decision engine. */
 export function createIdentityAdapter(
+  /** Channel identity descriptor that owns entry/subject normalization and matching hooks. */
   identity: ChannelIngressIdentityDescriptor,
 ): ChannelIngressAdapter {
   const fields = identityFields(identity);
@@ -144,6 +147,7 @@ export function createIdentityAdapter(
       const matchedEntryIds = entries
         .filter((entry) => {
           const fallback = entry.value === "*" || subjectKeys.has(identityMatchKey(entry));
+          // Custom identity hooks may widen or narrow matches; undefined preserves default matching.
           return identity.matchEntry?.({ subject, entry, context }) ?? fallback;
         })
         .map((entry) => entry.opaqueEntryId);
@@ -155,8 +159,11 @@ export function createIdentityAdapter(
   };
 }
 
+/** Converts raw channel sender ids into redaction-aware subject identifiers. */
 export function createIdentitySubject(
+  /** Same descriptor used by the adapter so aliases and sensitivity line up. */
   identity: ChannelIngressIdentityDescriptor,
+  /** Raw stable id and aliases from the inbound channel event. */
   input: ChannelIngressIdentitySubjectInput,
 ): ChannelIngressSubject {
   const fields = identityFields(identity);
@@ -166,6 +173,8 @@ export function createIdentitySubject(
       return [];
     }
     const value = String(rawValue);
+    // Subject material stays unnormalized here; matchSubject applies subject-side
+    // normalization so diagnostics can still carry the original redacted field.
     return [
       {
         opaqueId: field.key,

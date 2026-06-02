@@ -41,6 +41,12 @@ const unavailableCron: CronServiceContract = {
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
 
+/**
+ * Build a minimal GatewayRequestContext for embedded local agent execution.
+ *
+ * It supplies in-process method dependencies while making unavailable services
+ * fail loudly instead of pretending cron, channels, or onboarding are running.
+ */
 export function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
@@ -144,6 +150,12 @@ export function createLocalGatewayRequestContext(
   };
 }
 
+/**
+ * Run with an embedded Gateway request scope unless one already exists.
+ *
+ * Reusing the existing scope preserves webchat/plugin caller metadata for nested
+ * in-process dispatches.
+ */
 export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context) {

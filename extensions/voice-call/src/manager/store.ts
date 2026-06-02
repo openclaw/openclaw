@@ -4,13 +4,20 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 
+/** Keyed-store namespace for call snapshot metadata rows. */
 export const CALL_RECORD_EVENTS_NAMESPACE = "call-record-events";
+/** Keyed-store namespace for base64 chunks that hold serialized call snapshots. */
 export const CALL_RECORD_EVENT_CHUNKS_NAMESPACE = "call-record-event-chunks";
+/** Retain a bounded replay log of the newest call snapshots in plugin state. */
 export const MAX_CALL_RECORD_EVENTS = 1000;
+/** Metadata store capacity includes prune headroom so a write can land before old rows drop. */
 export const CALL_RECORD_EVENT_META_MAX_ENTRIES = MAX_CALL_RECORD_EVENTS + 100;
+/** Keep each persisted call within the per-record plugin-state chunk ceiling. */
 export const MAX_CHUNKS_PER_CALL_RECORD_EVENT = 48;
+/** Chunk store capacity covers all retained snapshots plus one in-flight over-capacity write. */
 export const CALL_RECORD_CHUNK_MAX_ENTRIES =
   MAX_CALL_RECORD_EVENTS * MAX_CHUNKS_PER_CALL_RECORD_EVENT + MAX_CHUNKS_PER_CALL_RECORD_EVENT;
+/** Raw bytes per chunk leave room for base64 overhead under keyed-store value limits. */
 export const RAW_CALL_RECORD_CHUNK_BYTES = 47 * 1024;
 let callRecordEventSequence = 0;
 
@@ -27,9 +34,13 @@ type CallRecordEventChunk = {
 };
 
 export type PersistedCallRecord = {
+  /** Parsed call snapshot payload. */
   call: CallRecord;
+  /** Snapshot write time used to replay records in canonical order. */
   persistedAt: number;
+  /** Same-millisecond tie-breaker assigned by this process. */
   sequence: number;
+  /** Deterministic final tie-breaker for migrated or malformed metadata. */
   orderKey: string;
 };
 
@@ -38,6 +49,7 @@ type CallRecordStateStores = {
   chunks: PluginStateSyncKeyedStore<CallRecordEventChunk>;
 };
 
+/** Resolves the retired JSONL call-log path without reading it during normal restore. */
 export function resolveVoiceCallLegacyCallLogPath(storePath: string): string {
   return path.join(storePath, "calls.jsonl");
 }
@@ -79,12 +91,14 @@ function buildChunkKey(eventKey: string, index: number): string {
   return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
 }
 
+/** Builds a deterministic key for old JSONL lines when migration tooling needs replay order. */
 export function buildVoiceCallLegacyJsonlEventKey(line: string, index: number): string {
   return `jsonl:${String(index).padStart(8, "0")}:${createHash("sha256").update(line).digest("hex")}`;
 }
 
 function nextCallRecordOrder(): { persistedAt: number; sequence: number } {
   const sequence = callRecordEventSequence;
+  // Sequence disambiguates multiple snapshots written in the same millisecond.
   callRecordEventSequence = (callRecordEventSequence + 1) % 1_000_000;
   return { persistedAt: Date.now(), sequence };
 }
@@ -98,6 +112,7 @@ function parseEventKeySequence(key: string): number {
   return match ? Number.parseInt(match[1], 10) : 0;
 }
 
+/** Parses v2 envelopes or bare legacy call records without throwing on corrupt history lines. */
 export function parseVoiceCallRecordLine(line: string, sequence = 0): PersistedCallRecord | null {
   if (!line.trim()) {
     return null;
@@ -142,6 +157,7 @@ function countCallRecordChunks(call: CallRecord): number {
   );
 }
 
+/** Trims oversized call snapshots before SQLite chunking so history writes remain bounded. */
 export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
   if (countCallRecordChunks(call) <= MAX_CHUNKS_PER_CALL_RECORD_EVENT) {
     return call;
@@ -155,6 +171,7 @@ export function prepareVoiceCallRecordForStorage(call: CallRecord): CallRecord {
     },
   };
   const candidateInputs = [
+    // Preserve the newest transcript context first; older turns are least useful after restore.
     { transcript: call.transcript.slice(-20), metadata },
     { transcript: [], metadata },
     {
@@ -244,6 +261,8 @@ function readCallRecordEvent(stores: CallRecordStateStores, eventKey: string): C
   for (let index = 0; index < meta.chunkCount; index += 1) {
     const chunk = stores.chunks.lookup(buildChunkKey(eventKey, index));
     if (!chunk || chunk.index !== index) {
+      // A partially pruned or corrupt chunk set should drop only that snapshot;
+      // older/newer snapshots can still restore the call.
       return null;
     }
     chunks.push(Buffer.from(chunk.dataBase64, "base64"));
@@ -255,6 +274,8 @@ function readCallRecordEvent(stores: CallRecordStateStores, eventKey: string): C
 function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
   const sqliteCalls: PersistedCallRecord[] = stores.events
     .entries()
+    // First sort by keyed-store creation order to make equal metadata stable
+    // before reconstructing each chunked snapshot.
     .toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key))
     .map((entry) => {
       const call = readCallRecordEvent(stores, entry.key);
@@ -271,6 +292,8 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
   return sqliteCalls
     .toSorted(
       (a, b) =>
+        // persistedAt + sequence are the canonical write order; orderKey is a
+        // final deterministic tie-breaker for migrated or malformed metadata.
         a.persistedAt - b.persistedAt ||
         a.sequence - b.sequence ||
         a.orderKey.localeCompare(b.orderKey),
@@ -278,6 +301,7 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
     .map((entry) => entry.call);
 }
 
+/** Appends one canonical SQLite-backed call snapshot; runtime never writes JSONL fallback logs. */
 export function persistCallRecord(storePath: string, call: CallRecord): void {
   try {
     const stores = createCallRecordStateStores(storePath);
@@ -292,10 +316,12 @@ export function persistCallRecord(storePath: string, call: CallRecord): void {
   }
 }
 
+/** Test hook retained because call-record persistence used to have async writers. */
 export async function flushPendingCallRecordWritesForTest(): Promise<void> {
   await Promise.resolve();
 }
 
+/** Restores non-terminal calls and replay dedupe keys from the plugin-state snapshot log. */
 export function loadActiveCallsFromStore(storePath: string): {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
@@ -319,6 +345,8 @@ export function loadActiveCallsFromStore(storePath: string): {
   }
   const callMap = new Map<CallId, CallRecord>();
   for (const call of calls) {
+    // Replaying the ordered snapshot log into a map leaves the newest snapshot
+    // per callId, matching the old append-only JSONL restore behavior.
     callMap.set(call.callId, call);
   }
 
@@ -343,6 +371,7 @@ export function loadActiveCallsFromStore(storePath: string): {
   return { activeCalls, providerCallIdMap, processedEventIds, rejectedProviderCallIds };
 }
 
+/** Returns newest call history snapshots from plugin state, bounded by the requested limit. */
 export async function getCallHistoryFromStore(
   storePath: string,
   limit = 50,

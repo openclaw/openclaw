@@ -1,10 +1,12 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 
+/** Commander variadic option collector that preserves argument order. */
 export function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
 
+/** Parse optional positive integer values, treating empty option input as absent. */
 export function parsePositiveIntOrUndefined(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -12,10 +14,12 @@ export function parsePositiveIntOrUndefined(value: unknown): number | undefined 
   return parseStrictPositiveInteger(value);
 }
 
+/** Parse positive integer values without the loose empty-string special case. */
 export function parseStrictPositiveIntOrUndefined(value: unknown): number | undefined {
   return parseStrictPositiveInteger(value);
 }
 
+/** Commander option parser that reports invalid positive integers as argument errors. */
 export function parseStrictPositiveIntOption(value: string, flag: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
@@ -24,6 +28,7 @@ export function parseStrictPositiveIntOption(value: string, flag: string): numbe
   return parsed;
 }
 
+/** Read positional action args from Commander without depending on private fields elsewhere. */
 export function resolveActionArgs(actionCommand?: Command): string[] {
   if (!actionCommand) {
     return [];

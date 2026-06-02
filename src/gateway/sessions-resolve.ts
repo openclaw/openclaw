@@ -18,6 +18,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
+/** Canonical session-key lookup result returned by Gateway resolve methods. */
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
@@ -64,6 +65,8 @@ function isResolvedSessionKeyVisible(params: {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
     return true;
   }
+  // Exact-key lookups still honor spawnedBy visibility, but must not inherit the
+  // paginated list limit or older sessions can disappear behind newer siblings.
   return filterAndSortSessionEntries({
     cfg: params.cfg,
     store: params.store,
@@ -90,8 +93,11 @@ function findVisibleSessionIdMatches(params: {
   );
 }
 
+/** Resolve a Gateway session selector into the canonical store key used by mutation methods. */
 export async function resolveSessionKeyFromResolveParams(params: {
+  /** Active config used for agent existence, default-agent, and store-target checks. */
   cfg: OpenClawConfig;
+  /** Wire-protocol selector; exactly one of key, sessionId, or label is accepted. */
   p: SessionsResolveParams;
 }): Promise<SessionsResolveResult> {
   const { cfg, p } = params;

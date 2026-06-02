@@ -5,6 +5,8 @@ import {
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES = 18;
+// Slack echoes external menu option values back as plain strings; keep tokens URL-safe
+// and fixed-length so readToken can reject forged or malformed values before lookup.
 const SLACK_EXTERNAL_ARG_MENU_TOKEN_LENGTH = Math.ceil(
   (SLACK_EXTERNAL_ARG_MENU_TOKEN_BYTES * 8) / 6,
 );
@@ -28,6 +30,7 @@ function pruneSlackExternalArgMenuStore(
 ): void {
   const now = asDateTimestampMs(rawNow);
   if (now === undefined) {
+    // An invalid clock makes every expiry comparison untrustworthy, so fail closed.
     store.clear();
     return;
   }
@@ -46,6 +49,7 @@ function createSlackExternalArgMenuToken(store: Map<string, SlackExternalArgMenu
   return token;
 }
 
+/** Creates the short-lived in-memory store used for Slack external select arguments. */
 export function createSlackExternalArgMenuStore() {
   const store = new Map<string, SlackExternalArgMenuEntry>();
 

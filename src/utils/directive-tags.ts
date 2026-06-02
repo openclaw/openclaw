@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Parsed inline control tags that steer audio and reply behavior outside message text. */
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -81,6 +82,7 @@ export type DisplayMessageWithContent = {
   content?: unknown;
 } & Record<string, unknown>;
 
+/** Strip control tags from display text while preserving the caller's whitespace choices. */
 export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
@@ -105,6 +107,7 @@ function stripUnsafeReplyDirectiveChars(value: string): string {
   return next;
 }
 
+/** Normalize explicit reply ids from directive tags before they enter routing state. */
 export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
   const trimmed = rawReplyToId?.trim();
   if (!trimmed) {
@@ -120,6 +123,7 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   return sanitized;
 }
 
+/** Strip control tags from delivery text and collapse padding left by removed tags. */
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
@@ -178,6 +182,7 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
   return { ...message, content: cleaned };
 }
 
+/** Parse inline tags, optionally stripping them while preserving readable prose spacing. */
 export function parseInlineDirectives(
   text?: string,
   options: InlineDirectiveParseOptions = {},

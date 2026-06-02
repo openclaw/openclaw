@@ -6,6 +6,7 @@ import {
 
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
+/** Normalizes optional Control UI mount paths to an empty string or leading-slash path. */
 export function normalizeControlUiBasePath(basePath?: string): string {
   if (!basePath) {
     return "";
@@ -26,15 +27,20 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   return normalized;
 }
 
+/** Builds the Gateway-served assistant avatar route for an already-normalized base path. */
 export function buildControlUiAvatarUrl(basePath: string, agentId: string): string {
   return basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/${agentId}`
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;
 }
 
+/** Resolves config avatar values to browser-usable URLs without rewriting absolute/data URLs. */
 export function resolveAssistantAvatarUrl(params: {
+  /** Configured avatar value: absolute URL, data URL, local path, or legacy avatar path. */
   avatar?: string | null;
+  /** Agent id used when a configured path should route through the Gateway avatar endpoint. */
   agentId?: string | null;
+  /** Optional Control UI mount path that prefixes Gateway-owned avatar routes. */
   basePath?: string;
 }): string | undefined {
   const avatar = params.avatar?.trim();

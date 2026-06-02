@@ -6,9 +6,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isContainerEnvironment } from "./net.js";
 
 export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
+  /** Loaded startup config before runtime-only Control UI origin seeding. */
   config: OpenClawConfig;
+  /** Startup logger used when runtime origins are seeded. */
   log: { info: (msg: string) => void; warn: (msg: string) => void };
+  /** Runtime bind override used to decide whether loopback protections apply. */
   runtimeBind?: unknown;
+  /** Runtime port override used when constructing seeded origins. */
   runtimePort?: unknown;
 }): Promise<{ config: OpenClawConfig; seededAllowedOrigins: boolean }> {
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {

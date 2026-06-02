@@ -19,16 +19,23 @@ export {
 } from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
+  /** Plain text body or caption. */
   text?: string;
+  /** Ordered media attachments for modern multi-media delivery paths. */
   mediaUrls?: string[];
+  /** Legacy single media attachment field. */
   mediaUrl?: string;
+  /** Rich presentation payload for channels that support structured replies. */
   presentation?: InternalReplyPayload["presentation"];
   /**
    * @deprecated Use presentation. Runtime support remains for legacy producers.
    */
   interactive?: InternalReplyPayload["interactive"];
+  /** Channel-specific metadata preserved through outbound normalization. */
   channelData?: InternalReplyPayload["channelData"];
+  /** Marks media as sensitive so channels can avoid unsafe previews or persistence. */
   sensitiveMedia?: boolean;
+  /** Platform message id/thread id to reply to when the channel supports it. */
   replyToId?: string;
 };
 
@@ -38,9 +45,13 @@ export type ReasoningReplyPayload = {
 };
 
 export type SendableOutboundReplyParts = {
+  /** Original text chosen from options or payload. */
   text: string;
+  /** Text after delivery-time trimming. */
   trimmedText: string;
+  /** Normalized, non-empty media URL list. */
   mediaUrls: string[];
+  /** Count of normalized media URLs. */
   mediaCount: number;
   hasText: boolean;
   hasMedia: boolean;
@@ -225,6 +236,7 @@ export async function sendPayloadWithChunkedTextAndMedia<
   return lastResult!;
 }
 
+/** Send each media URL in order and return the last successful send result. */
 export async function sendPayloadMediaSequence<TResult>(params: {
   text: string;
   mediaUrls: readonly string[];
@@ -242,6 +254,8 @@ export async function sendPayloadMediaSequence<TResult>(params: {
       continue;
     }
     lastResult = await params.send({
+      // Most channel transports only accept one caption; keep it on the first
+      // media item and send the rest as attachment-only messages.
       text: i === 0 ? params.text : "",
       mediaUrl,
       index: i,
@@ -251,6 +265,7 @@ export async function sendPayloadMediaSequence<TResult>(params: {
   return lastResult;
 }
 
+/** Send all media items, or return/send a fallback when no media exists. */
 export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
   text: string;
   mediaUrls: readonly string[];
@@ -269,6 +284,7 @@ export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
   return (await sendPayloadMediaSequence(params)) ?? params.fallbackResult;
 }
 
+/** Send optional media first, then run a caller-owned finalization step. */
 export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>(params: {
   text: string;
   mediaUrls: readonly string[];
@@ -286,6 +302,7 @@ export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>
   return await params.finalize();
 }
 
+/** Implement sendPayload using text/media adapter hooks plus reply-to fanout semantics. */
 export async function sendTextMediaPayload(params: {
   channel: string;
   ctx: SendPayloadContext;
@@ -398,6 +415,7 @@ export async function sendMediaWithLeadingCaption(params: {
   return true;
 }
 
+/** Deliver media with a leading caption first, otherwise fall back to chunked text. */
 export async function deliverTextOrMediaReply(params: {
   payload: OutboundReplyPayload;
   text: string;
@@ -439,6 +457,7 @@ export async function deliverTextOrMediaReply(params: {
   return sentText ? "text" : "empty";
 }
 
+/** Collapse attachments into plain text for channels without native media sends. */
 export async function deliverFormattedTextWithAttachments(params: {
   payload: OutboundReplyPayload;
   send: (params: { text: string; replyToId?: string }) => Promise<void>;

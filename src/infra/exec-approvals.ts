@@ -19,14 +19,20 @@ export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
+/** Concrete runtime that can execute a command. */
 export type ExecHost = "sandbox" | "gateway" | "node";
+/** User-facing execution target, including automatic host selection. */
 export type ExecTarget = "auto" | ExecHost;
+/** Security boundary applied before command execution. */
 export type ExecSecurity = "deny" | "allowlist" | "full";
+/** Approval prompt policy layered on top of the security boundary. */
 export type ExecAsk = "off" | "on-miss" | "always";
+/** Compact preset combining exec security and approval behavior. */
 export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 
 export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
+/** Normalizes a concrete exec host value. */
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
@@ -35,6 +41,7 @@ export function normalizeExecHost(value?: string | null): ExecHost | null {
   return null;
 }
 
+/** Normalizes an exec target, preserving the `auto` target when present. */
 export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "auto") {
@@ -43,6 +50,7 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
   return normalizeExecHost(normalized);
 }
 
+/** Validates config/input exec target values and throws with allowed values on invalid input. */
 export function requireValidExecTarget(value?: unknown): ExecTarget | null {
   if (value == null) {
     return null;
@@ -70,6 +78,7 @@ export function requireValidExecTarget(value?: unknown): ExecTarget | null {
 /** Coerce a raw JSON field to string, returning undefined for non-string types. */
 const toStringOrUndefined = readStringValue;
 
+/** Normalizes an exec security boundary value. */
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
@@ -78,6 +87,7 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
   return null;
 }
 
+/** Normalizes an exec approval prompt policy value. */
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
@@ -86,6 +96,7 @@ export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   return null;
 }
 
+/** Normalizes a compact exec mode preset. */
 export function normalizeExecMode(value?: string | null): ExecMode | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (
@@ -100,6 +111,7 @@ export function normalizeExecMode(value?: string | null): ExecMode | null {
   return null;
 }
 
+/** Collapses explicit security/ask policy fields into the equivalent compact exec mode. */
 export function resolveExecModeFromPolicy(params: {
   security: ExecSecurity;
   ask: ExecAsk;
@@ -116,6 +128,7 @@ export function resolveExecModeFromPolicy(params: {
   return "ask";
 }
 
+/** Expands a compact exec mode into security, ask, and autoreview policy fields. */
 export function resolveExecPolicyForMode(mode: ExecMode): {
   security: ExecSecurity;
   ask: ExecAsk;
@@ -161,6 +174,7 @@ export function resolveExecModePolicy(params: {
   };
 }
 
+/** Stable command identity captured for matching a system-run approval to execution. */
 export type SystemRunApprovalBinding = {
   argv: string[];
   cwd: string | null;
@@ -169,12 +183,14 @@ export type SystemRunApprovalBinding = {
   envHash: string | null;
 };
 
+/** Mutable file operand included in an approval plan so later execution can verify content. */
 export type SystemRunApprovalFileOperand = {
   argvIndex: number;
   path: string;
   sha256: string;
 };
 
+/** Prepared system-run command approval plan carried from parsing to approval registration. */
 export type SystemRunApprovalPlan = {
   argv: string[];
   cwd: string | null;
@@ -185,11 +201,13 @@ export type SystemRunApprovalPlan = {
   mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
+/** Character span for command text that UI clients can highlight in approval prompts. */
 export type ExecApprovalCommandSpan = {
   startIndex: number;
   endIndex: number;
 };
 
+/** Payload shown to humans and forwarded to approval surfaces for a pending exec command. */
 export type ExecApprovalRequestPayload = {
   command: string;
   commandPreview?: string | null;
@@ -216,6 +234,7 @@ export type ExecApprovalRequestPayload = {
   turnSourceThreadId?: string | number | null;
 };
 
+/** Pending exec approval record with creation and expiry timestamps. */
 export type ExecApprovalRequest = {
   id: string;
   request: ExecApprovalRequestPayload;
@@ -223,6 +242,7 @@ export type ExecApprovalRequest = {
   expiresAtMs: number;
 };
 
+/** Resolved approval decision stored or broadcast after a human acts. */
 export type ExecApprovalResolved = {
   id: string;
   decision: ExecApprovalDecision;
@@ -231,6 +251,7 @@ export type ExecApprovalResolved = {
   request?: ExecApprovalRequest["request"];
 };
 
+/** Persisted default exec approval policy fields shared by defaults, wildcard, and agents. */
 export type ExecApprovalsDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
@@ -238,10 +259,12 @@ export type ExecApprovalsDefaults = {
   autoAllowSkills?: boolean;
 };
 
+/** Per-agent exec approval policy plus optional allowlist entries. */
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
 };
 
+/** Versioned on-disk exec approval policy file. */
 export type ExecApprovalsFile = {
   version: 1;
   socket?: {
@@ -252,6 +275,7 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
+/** Raw approval file snapshot used to restore temporary policy mutations. */
 export type ExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
@@ -260,6 +284,7 @@ export type ExecApprovalsSnapshot = {
   hash: string;
 };
 
+/** Effective approval policy after defaults, wildcard, agent overrides, and socket state. */
 export type ExecApprovalsResolved = {
   path: string;
   socketPath: string;
@@ -275,11 +300,12 @@ export type ExecApprovalsResolved = {
   file: ExecApprovalsFile;
 };
 
-// Keep CLI + gateway defaults in sync.
+/** Default lifetime for pending exec approval requests; keep CLI and gateway uses aligned. */
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "full";
 const DEFAULT_ASK: ExecAsk = "off";
+/** Security mode used when an approval request cannot be completed through the ask path. */
 export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
@@ -292,10 +318,12 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
+/** Resolves the canonical approval policy file path with home expansion applied. */
 export function resolveExecApprovalsPath(): string {
   return expandHomePrefix(DEFAULT_FILE);
 }
 
+/** Resolves the canonical local approval JSONL socket path with home expansion applied. */
 export function resolveExecApprovalsSocketPath(): string {
   return expandHomePrefix(DEFAULT_SOCKET);
 }
@@ -657,6 +685,7 @@ function sanitizeExecApprovalPolicy(
   };
 }
 
+/** Normalizes persisted exec approval config without creating files or socket credentials. */
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
@@ -702,6 +731,7 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
   return normalized;
 }
 
+/** Applies existing or default socket credentials after config normalization. */
 export function mergeExecApprovalsSocketDefaults(params: {
   normalized: ExecApprovalsFile;
   current?: ExecApprovalsFile;
@@ -724,6 +754,7 @@ function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");
 }
 
+/** Reads the raw approvals file plus normalized content for temporary restore flows. */
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
   if (!fs.existsSync(filePath)) {
@@ -756,6 +787,7 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   };
 }
 
+/** Loads persisted approvals defensively, returning an empty normalized file on absence or parse failure. */
 export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
   try {
@@ -773,6 +805,7 @@ export function loadExecApprovals(): ExecApprovalsFile {
   }
 }
 
+/** Atomically writes the approvals file with restricted permissions where the platform supports them. */
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
   const raw = `${JSON.stringify(file, null, 2)}\n`;
@@ -805,6 +838,7 @@ function writeExecApprovalsRaw(filePath: string, raw: string) {
   }
 }
 
+/** Restores or removes the approvals file using a snapshot captured before a temporary mutation. */
 export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
   if (!snapshot.exists) {
     fs.rmSync(snapshot.path, { force: true });
@@ -817,6 +851,7 @@ export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): v
   saveExecApprovals(snapshot.file);
 }
 
+/** Ensures the approvals file exists with socket path and token credentials populated. */
 export function ensureExecApprovals(): ExecApprovalsFile {
   const loaded = loadExecApprovals();
   const next = normalizeExecApprovals(loaded);
@@ -993,6 +1028,7 @@ export type ExecApprovalsDefaultOverrides = {
   requireSocket?: boolean;
 };
 
+/** Resolves effective approval policy for an agent, creating socket credentials only when needed. */
 export function resolveExecApprovals(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
@@ -1027,6 +1063,7 @@ export function resolveExecApprovals(
   });
 }
 
+/** Resolves effective agent approval settings from a supplied normalized-or-raw config file. */
 export function resolveExecApprovalsFromFile(params: {
   file: ExecApprovalsFile;
   agentId?: string;
@@ -1114,6 +1151,7 @@ export function resolveExecApprovalsFromFile(params: {
   };
 }
 
+/** Decides whether current ask/security policy needs a human approval prompt. */
 export function requiresExecApproval(params: {
   ask: ExecAsk;
   security: ExecSecurity;
@@ -1239,6 +1277,7 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
   return textMentionsSecurityAuditSuppressions(params.command);
 }
 
+/** Checks whether allow-always state already provides durable trust for this command. */
 export function hasDurableExecApproval(params: {
   analysisOk: boolean;
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
@@ -1290,6 +1329,7 @@ function hasSegmentDurableExecApproval(params: {
   );
 }
 
+/** Updates last-use metadata for a single matched allowlist entry. */
 export function recordAllowlistUse(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
@@ -1323,6 +1363,7 @@ function buildAllowlistEntryMatchKey(
   return `${entry.pattern}\x00${entry.argPattern?.trim() ?? ""}`;
 }
 
+/** Updates last-use metadata for each unique matched allowlist entry. */
 export function recordAllowlistMatchesUse(params: {
   approvals: ExecApprovalsFile;
   agentId: string | undefined;
@@ -1353,6 +1394,7 @@ export function recordAllowlistMatchesUse(params: {
   }
 }
 
+/** Adds or refreshes an agent allowlist entry, keyed by pattern and optional argv pattern. */
 export function addAllowlistEntry(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
@@ -1404,6 +1446,7 @@ export function addAllowlistEntry(
   saveExecApprovals(approvals);
 }
 
+/** Stores an exact-command allow-always approval as a digest instead of plaintext command text. */
 export function addDurableCommandApproval(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
@@ -1418,6 +1461,7 @@ export function addDurableCommandApproval(
   });
 }
 
+/** Persists executable and argv patterns derived from approved command segments. */
 export function persistAllowAlwaysPatterns(params: {
   approvals: ExecApprovalsFile;
   agentId: string | undefined;
@@ -1446,23 +1490,29 @@ export function persistAllowAlwaysPatterns(params: {
   return patterns;
 }
 
+/** Returns the stricter of two exec security boundaries. */
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
   const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
   return order[a] <= order[b] ? a : b;
 }
 
+/** Returns the more aggressive approval prompt policy. */
 export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
   const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
   return order[a] >= order[b] ? a : b;
 }
 
+/** Decisions a human approval surface can return for a pending exec request. */
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+/** Full decision set used when policy allows durable approval. */
 export const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
+/** Resolves the decisions that should be offered for a policy ask mode. */
 export function resolveExecApprovalAllowedDecisions(params?: {
   ask?: string | null;
 }): readonly ExecApprovalDecision[] {
@@ -1473,6 +1523,7 @@ export function resolveExecApprovalAllowedDecisions(params?: {
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
+/** Returns explicit request decisions when present, otherwise falls back to ask-mode policy. */
 export function resolveExecApprovalRequestAllowedDecisions(params?: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
@@ -1486,6 +1537,7 @@ export function resolveExecApprovalRequestAllowedDecisions(params?: {
   return explicit.length > 0 ? explicit : resolveExecApprovalAllowedDecisions({ ask: params?.ask });
 }
 
+/** Checks whether a returned approval decision is allowed by the current ask policy. */
 export function isExecApprovalDecisionAllowed(params: {
   decision: ExecApprovalDecision;
   ask?: string | null;
@@ -1493,6 +1545,7 @@ export function isExecApprovalDecisionAllowed(params: {
   return resolveExecApprovalAllowedDecisions({ ask: params.ask }).includes(params.decision);
 }
 
+/** Sends an approval request over the local JSONL socket and waits for a decision response. */
 export async function requestExecApprovalViaSocket(params: {
   socketPath: string;
   token: string;

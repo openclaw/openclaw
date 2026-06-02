@@ -1,6 +1,9 @@
 export type ScopedExpiringIdCache<TScope extends string | number, TId extends string | number> = {
+  /** Stores or refreshes an id timestamp inside one scope. */
   record: (scope: TScope, id: TId, now?: number) => void;
+  /** Checks the scoped id after pruning expired entries for that scope. */
   has: (scope: TScope, id: TId, now?: number) => boolean;
+  /** Clears every scope sharing the backing store. */
   clear: () => void;
 };
 

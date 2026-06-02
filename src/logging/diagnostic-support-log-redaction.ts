@@ -53,6 +53,8 @@ export function sanitizeSupportLogRecord(
   }
 
   const sanitized = createLogRecord();
+  // Accept both normal structured logger fields and logtape's split metadata /
+  // numeric-argument format so support bundles keep useful context across log backends.
   addNamedLogFields(sanitized, source, redaction);
   addLogTapeMetaFields(sanitized, source, redaction);
   addLogTapeArgFields(sanitized, source, redaction);
@@ -133,6 +135,8 @@ function addLogTapeMessageField(
   redaction: SupportRedactionContext,
 ): void {
   const message = sanitizeLogString(value, redaction);
+  // Free-form log messages often contain prompts or tool payloads. Keep only
+  // messages that pass the unsafe-content heuristic, otherwise expose counts.
   if (sanitized.msg === undefined && message && !UNSAFE_LOG_MESSAGE_RE.test(message)) {
     sanitized.msg = message;
     return;
@@ -179,6 +183,8 @@ function addSafeLogField(
   value: unknown,
   redaction: SupportRedactionContext,
 ): void {
+  // The allowlist is intentionally narrow: support logs should retain routing
+  // and timing facts, not arbitrary payload-shaped fields from structured logs.
   if (OMITTED_LOG_FIELD_RE.test(key)) {
     return;
   }

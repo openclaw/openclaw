@@ -52,6 +52,7 @@ type BuildAccessFacts = Omit<AccessFacts, "commands"> & {
   commands?: Partial<NonNullable<AccessFacts["commands"]>>;
 };
 
+/** Normalized channel facts used to build the legacy templating context for one inbound event. */
 export type BuildChannelInboundEventContextParams = {
   channel: string;
   accountId?: string;
@@ -87,6 +88,7 @@ type UntrustedStructuredContextEntries = NonNullable<
   FinalizedMsgContext["UntrustedStructuredContext"]
 >;
 
+/** Finalized context shape consumed by auto-reply templating and channel turn dispatch. */
 export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
   BodyForAgent: string;
@@ -156,6 +158,7 @@ function keepSupplementalContext(params: {
   });
 }
 
+/** Apply visibility policy to quote, forwarded, and thread supplemental context. */
 export function filterChannelInboundSupplementalContext(params: {
   supplemental?: SupplementalContextFacts;
   contextVisibility?: ContextVisibilityMode;
@@ -194,6 +197,7 @@ export function filterChannelInboundSupplementalContext(params: {
   };
 }
 
+/** Filter only quoted-message context while preserving the shared visibility policy. */
 export function filterChannelInboundQuoteContext(
   contextVisibility: ContextVisibilityMode | undefined,
   quote: SupplementalContextFacts["quote"] | undefined,
@@ -250,6 +254,7 @@ function resolveChannelInboundSupplementalForFinalizer(params: {
   const suppressSelfQuoteBody = params.suppressSelfQuoteBody ?? true;
   const suppressSelfQuoteMedia = params.suppressSelfQuoteMedia ?? true;
   const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
+    // Self-quote media is already present on the current message; appending it would duplicate attachments.
     if (!(selfQuote && suppressSelfQuoteMedia)) {
       media.push(...(quoteMedia ?? []));
     }
@@ -381,6 +386,7 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
   return isPromiseLike(prepared) ? prepared.then(finish) : finish(prepared);
 }
 
+/** Prefer explicit authorization, then legacy authorizer arrays for older channel callers. */
 function resolveAccessFactsCommandAuthorized(
   access: BuildAccessFacts | undefined,
 ): boolean | undefined {
@@ -425,6 +431,7 @@ function resolveUntrustedStructuredContext(params: {
   return entries.length > 0 ? entries : undefined;
 }
 
+/** Build command-turn metadata exposed to agents from normalized inbound command facts. */
 function resolveChannelCommandContext(params: {
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
@@ -449,6 +456,7 @@ function resolveChannelCommandContext(params: {
   });
 }
 
+/** Build and finalize the full inbound event context passed into channel turns. */
 export function buildChannelInboundEventContext(
   params: BuildChannelInboundEventContextAsyncParams,
 ): Promise<BuiltChannelInboundEventContext>;

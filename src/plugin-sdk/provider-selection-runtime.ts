@@ -1,33 +1,45 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type AutoSelectableProvider = {
+  /** Stable provider id used in config and provider registries. */
   id: string;
+  /** Lower values win when no provider is explicitly configured. */
   autoSelectOrder?: number;
 };
 
 export type ProviderSelection<TProvider> = {
+  /** Trimmed configured provider id, when one was supplied. */
   configuredProviderId?: string;
+  /** True when config names a provider that is not registered. */
   missingConfiguredProvider: boolean;
+  /** Explicit provider when valid, otherwise the first auto-selected provider. */
   provider: TProvider | undefined;
 };
 
 export type ResolvedConfiguredProvider<TProvider, TConfig> =
   | {
       ok: true;
+      /** Trimmed configured provider id, when selection was explicit. */
       configuredProviderId?: string;
       provider: TProvider;
       providerConfig: TConfig;
     }
   | {
       ok: false;
+      /** Stable failure code used by provider/tool setup surfaces. */
       code: "missing-configured-provider" | "no-registered-provider" | "provider-not-configured";
+      /** Trimmed configured provider id, when selection was explicit. */
       configuredProviderId?: string;
+      /** First registered but unconfigured provider, when available. */
       provider?: TProvider;
     };
 
 export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableProvider>(params: {
+  /** User/config-selected provider id; whitespace is ignored. */
   configuredProviderId?: string;
+  /** Lookup for explicit provider ids only. */
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
+  /** Provider registry used for auto-selection fallback. */
   listProviders: () => Iterable<TProvider>;
 }): ProviderSelection<TProvider> {
   const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
@@ -62,6 +74,7 @@ export function resolveProviderRawConfig(params: {
   );
 
   return {
+    // Alias/selection-specific config wins over canonical provider defaults.
     ...canonicalProviderConfig,
     ...selectedProviderConfig,
   };
@@ -124,6 +137,8 @@ export function resolveConfiguredCapabilityProvider<
     if (resolution.ok) {
       return resolution;
     }
+    // Preserve the first attempted provider for diagnostics instead of the
+    // last failure, so user-facing setup hints match auto-selection order.
     firstUnconfigured ??= provider;
   }
 

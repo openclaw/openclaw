@@ -8,10 +8,14 @@ export type MediaGenerationCatalogKind =
 export type MediaGenerationCatalogSource = "static" | "live" | "cache" | "configured";
 
 export type MediaGenerationCatalogEntry<TCapabilities = unknown> = {
+  /** Capability family the row belongs to, such as image or video generation. */
   kind: MediaGenerationCatalogKind;
+  /** Provider id that owns the model. */
   provider: string;
+  /** Provider model id. */
   model: string;
   label?: string;
+  /** Origin of this catalog row: static metadata, live fetch, cache, or user config. */
   source: MediaGenerationCatalogSource;
   default?: boolean;
   configured?: boolean;
@@ -37,6 +41,7 @@ function uniqueModels(provider: { defaultModel?: string; models?: readonly strin
   return uniqueTrimmedStrings([provider.defaultModel, ...(provider.models ?? [])]);
 }
 
+/** Builds stable static catalog rows from a provider default model plus advertised models. */
 export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   kind: MediaGenerationCatalogKind;
   provider: MediaGenerationCatalogProvider<TCapabilities>;
@@ -63,6 +68,7 @@ export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   });
 }
 
+/** Lists unique provider models in display order, with the default model first when present. */
 export function listMediaGenerationProviderModels(provider: {
   defaultModel?: string;
   models?: readonly string[];

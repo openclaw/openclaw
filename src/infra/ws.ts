@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type WebSocket from "ws";
 
+/** Normalize ws RawData payloads into text for JSON frame parsing and close reasons. */
 export function rawDataToString(
   data: WebSocket.RawData,
   encoding: BufferEncoding = "utf8",

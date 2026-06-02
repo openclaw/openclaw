@@ -1,28 +1,7 @@
-/**
- * In-memory sliding-window rate limiter for gateway authentication attempts.
- *
- * Tracks failed auth attempts by {scope, clientIp}. A scope lets callers keep
- * independent counters for different credential classes (for example, shared
- * gateway token/password vs device-token auth) while still sharing one
- * limiter instance.
- *
- * Design decisions:
- * - Pure in-memory Map – no external dependencies; suitable for a single
- *   gateway process.  The Map is periodically pruned to avoid unbounded
- *   growth.
- * - Loopback addresses (127.0.0.1 / ::1) are exempt by default so that local
- *   CLI sessions are never locked out.
- * - The module is side-effect-free: callers create an instance via
- *   {@link createAuthRateLimiter} and pass it where needed.
- */
-
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
+/** Runtime knobs for one in-memory Gateway auth limiter instance. */
 export interface RateLimitConfig {
   /** Maximum failed attempts before blocking.  @default 10 */
   maxAttempts?: number;
@@ -65,6 +44,7 @@ export interface RateLimitCheckResult {
   retryAfterMs: number;
 }
 
+/** Sliding-window auth limiter shared by HTTP, WebSocket, and hook surfaces. */
 export interface AuthRateLimiter {
   /** Check whether `ip` is currently allowed to attempt authentication. */
   check(ip: string | undefined, scope?: string): RateLimitCheckResult;
@@ -80,18 +60,10 @@ export interface AuthRateLimiter {
   dispose(): void;
 }
 
-// ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
-
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
 
 /**
  * Canonicalize client IPs used for auth throttling so all call sites
@@ -114,6 +86,12 @@ function resolvePruneIntervalMs(value: number | undefined): number {
   return resolveTimerTimeoutMs(value, PRUNE_INTERVAL_MS);
 }
 
+/**
+ * Create a process-local sliding-window limiter keyed by `{scope, clientIp}`.
+ *
+ * Scopes isolate credential classes that share an IP, while the periodic prune
+ * keeps failed-login maps bounded for long-lived Gateway processes.
+ */
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
@@ -123,9 +101,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
   const entries = new Map<string, RateLimitEntry>();
 
-  // Periodic cleanup to avoid unbounded map growth.
   const pruneTimer = pruneIntervalMs > 0 ? setInterval(() => prune(), pruneIntervalMs) : null;
-  // Allow the Node.js process to exit even if the timer is still active.
   if (pruneTimer?.unref) {
     pruneTimer.unref();
   }
@@ -162,6 +138,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
   function check(rawIp: string | undefined, rawScope?: string): RateLimitCheckResult {
     const { key, ip } = resolveKey(rawIp, rawScope);
+    // Local CLI/control paths must not lock themselves out while recovering
+    // Gateway auth config; public surfaces opt out with `exemptLoopback: false`.
     if (isExempt(ip)) {
       return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
     }
@@ -173,7 +151,6 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
     }
 
-    // Still locked out?
     if (entry.lockedUntil && now < entry.lockedUntil) {
       return {
         allowed: false,
@@ -182,7 +159,6 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       };
     }
 
-    // Lockout expired – clear it.
     if (entry.lockedUntil && now >= entry.lockedUntil) {
       entry.lockedUntil = undefined;
       entry.attempts = [];
@@ -195,6 +171,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
   function recordFailure(rawIp: string | undefined, rawScope?: string): void {
     const { key, ip } = resolveKey(rawIp, rawScope);
+    // Mirror `check` so exempt callers do not accumulate stale entries that
+    // later become active if config changes within the same process.
     if (isExempt(ip)) {
       return;
     }
@@ -207,7 +185,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       entries.set(key, entry);
     }
 
-    // If currently locked, do nothing (already blocked).
+    // Locked callers stay on the original retry deadline; repeated failures
+    // during lockout should not starve legitimate follow-up attempts forever.
     if (entry.lockedUntil && now < entry.lockedUntil) {
       return;
     }

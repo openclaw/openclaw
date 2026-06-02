@@ -95,6 +95,8 @@ function parseVoiceCallIntOption(
 ): number {
   const min = opts?.min ?? 0;
   const value = raw?.trim() ?? "";
+  // CLI numeric flags intentionally accept only plain decimal integers so
+  // values like 0x10 or 1e3 cannot surprise operators or tests.
   const parsed = parseStrictNonNegativeInteger(value);
   if (parsed === undefined || parsed < min || (opts?.max !== undefined && parsed > opts.max)) {
     throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
@@ -104,6 +106,8 @@ function parseVoiceCallIntOption(
 
 function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
   const message = formatErrorMessage(err);
+  // These errors mean the local Gateway cannot service the request; callers can
+  // safely fall back to a standalone runtime without hiding command failures.
   return (
     message.includes("ECONNREFUSED") ||
     message.includes("ECONNRESET") ||
@@ -140,6 +144,8 @@ async function callVoiceCallGateway(
 }
 
 function resolveGatewayOperationTimeoutMs(config: VoiceCallConfig): number {
+  // Outbound calls need at least the ring timeout plus grace, but never less
+  // than the baseline gateway operation budget.
   return Math.max(
     VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS,
     addTimerTimeoutGraceMs(config.ringTimeoutMs) ?? 1,
@@ -147,6 +153,8 @@ function resolveGatewayOperationTimeoutMs(config: VoiceCallConfig): number {
 }
 
 function resolveGatewayContinueTimeoutMs(config: VoiceCallConfig): number {
+  // Continue waits for playback, caller transcript, and a buffer for gateway
+  // async-operation polling.
   return (
     clampTimerTimeoutMs(
       config.transcriptTimeoutMs +
@@ -173,6 +181,8 @@ function readGatewayOperationId(payload: unknown): string {
 
 function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
   if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
+    // The gateway can return a dynamic poll budget; clamp it before using it as
+    // a client-side deadline.
     return clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs;
   }
   return fallbackTimeoutMs;

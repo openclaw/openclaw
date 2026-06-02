@@ -79,6 +79,8 @@ function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
     return existing;
   }
   const state = createDiagnosticTraceScopeState();
+  // Keep one AsyncLocalStorage instance across module reloads so nested callers
+  // share the same active diagnostic scope within the process.
   Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, {
     configurable: true,
     enumerable: false,
@@ -88,14 +90,17 @@ function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
   return state;
 }
 
+/** Validates a W3C trace id and rejects the all-zero sentinel value. */
 export function isValidDiagnosticTraceId(value: unknown): value is string {
   return typeof value === "string" && TRACE_ID_RE.test(value) && isNonZeroHex(value);
 }
 
+/** Validates a W3C span id and rejects the all-zero sentinel value. */
 export function isValidDiagnosticSpanId(value: unknown): value is string {
   return typeof value === "string" && SPAN_ID_RE.test(value) && isNonZeroHex(value);
 }
 
+/** Validates W3C trace flags as two lowercase hex characters. */
 export function isValidDiagnosticTraceFlags(value: unknown): value is string {
   return typeof value === "string" && TRACE_FLAGS_RE.test(value);
 }
@@ -124,6 +129,7 @@ function normalizeTraceFlags(value: unknown): string | undefined {
   return isValidDiagnosticTraceFlags(normalized) ? normalized : undefined;
 }
 
+/** Parses bounded W3C traceparent header values into normalized diagnostic context. */
 export function parseDiagnosticTraceparent(
   traceparent: string | undefined,
 ): DiagnosticTraceContext | undefined {
@@ -155,6 +161,7 @@ export function parseDiagnosticTraceparent(
   };
 }
 
+/** Formats a diagnostic trace context as a W3C traceparent header value. */
 export function formatDiagnosticTraceparent(
   context: DiagnosticTraceContext | undefined,
 ): string | undefined {
@@ -170,6 +177,7 @@ export function formatDiagnosticTraceparent(
   return `${TRACEPARENT_VERSION}-${traceId}-${spanId}-${traceFlags}`;
 }
 
+/** Creates a normalized trace context from explicit fields, traceparent, or generated ids. */
 export function createDiagnosticTraceContext(
   input: DiagnosticTraceContextInput = {},
 ): DiagnosticTraceContext {
@@ -185,6 +193,7 @@ export function createDiagnosticTraceContext(
   };
 }
 
+/** Creates a child trace context that keeps the parent's trace id and current span as parent. */
 export function createChildDiagnosticTraceContext(
   parent: DiagnosticTraceContext,
   input: Omit<DiagnosticTraceContextInput, "traceId" | "traceparent"> = {},
@@ -198,6 +207,7 @@ export function createChildDiagnosticTraceContext(
   });
 }
 
+/** Creates a child of the active diagnostic scope, or a fresh context when none is active. */
 export function createDiagnosticTraceContextFromActiveScope(
   input: Omit<DiagnosticTraceContextInput, "traceId" | "traceparent"> = {},
 ): DiagnosticTraceContext {
@@ -208,6 +218,7 @@ export function createDiagnosticTraceContextFromActiveScope(
   return createChildDiagnosticTraceContext(active, input);
 }
 
+/** Freezes a compact defensive copy before storing or sharing trace context. */
 export function freezeDiagnosticTraceContext(
   context: DiagnosticTraceContext,
 ): DiagnosticTraceContext {
@@ -219,10 +230,12 @@ export function freezeDiagnosticTraceContext(
   });
 }
 
+/** Returns the AsyncLocalStorage-bound diagnostic trace context for this async flow. */
 export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
   return getDiagnosticTraceScopeState().storage.getStore();
 }
 
+/** Runs a callback with a frozen diagnostic trace context bound to async descendants. */
 export function runWithDiagnosticTraceContext<T>(
   trace: DiagnosticTraceContext,
   callback: () => T,
@@ -230,6 +243,7 @@ export function runWithDiagnosticTraceContext<T>(
   return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
 }
 
+/** Clears trace AsyncLocalStorage state between tests. */
 export function resetDiagnosticTraceContextForTest(): void {
   getDiagnosticTraceScopeState().storage.disable();
 }

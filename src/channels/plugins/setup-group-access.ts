@@ -3,14 +3,17 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
+/** Parses comma, semicolon, or newline-separated allowlist entries. */
 export function parseAllowlistEntries(raw: string): string[] {
   return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
+/** Formats allowlist entries for a compact setup prompt default. */
 export function formatAllowlistEntries(entries: string[]): string {
   return normalizeStringEntries(entries).join(", ");
 }
 
+/** Prompts for the group/channel access policy allowed by the caller. */
 export async function promptChannelAccessPolicy(params: {
   prompter: WizardPrompter;
   label: string;
@@ -35,6 +38,7 @@ export async function promptChannelAccessPolicy(params: {
   });
 }
 
+/** Prompts for allowlist entries and normalizes the delimited response. */
 export async function promptChannelAllowlist(params: {
   prompter: WizardPrompter;
   label: string;
@@ -53,6 +57,10 @@ export async function promptChannelAllowlist(params: {
   return parseAllowlistEntries(raw);
 }
 
+/**
+ * Prompts for an access policy plus allowlist entries when the selected policy
+ * requires them; returns null when the user skips configuration.
+ */
 export async function promptChannelAccessConfig(params: {
   prompter: WizardPrompter;
   label: string;

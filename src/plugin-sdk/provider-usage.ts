@@ -1,5 +1,3 @@
-// Public usage fetch helpers for provider plugins.
-
 export type {
   ProviderUsageSnapshot,
   UsageProviderId,

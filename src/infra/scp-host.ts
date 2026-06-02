@@ -15,6 +15,10 @@ function hasControlOrWhitespace(value: string): boolean {
   return false;
 }
 
+/**
+ * Normalize an SCP host token while rejecting shell flags, paths, whitespace,
+ * and unsafe user@host forms.
+ */
 export function normalizeScpRemoteHost(value: string | null | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -61,6 +65,10 @@ export function isSafeScpRemoteHost(value: string | null | undefined): boolean {
   return normalizeScpRemoteHost(value) !== undefined;
 }
 
+/**
+ * Normalize an absolute remote path token that can be passed to SCP without
+ * shell metacharacters.
+ */
 export function normalizeScpRemotePath(value: string | null | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed || !trimmed.startsWith("/")) {

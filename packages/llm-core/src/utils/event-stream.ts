@@ -22,6 +22,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     });
   }
 
+  /** Pushes one event, resolving `result()` when the event is terminal. */
   push(event: T): void {
     if (this.done) {
       return;
@@ -32,6 +33,8 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
       this.resolveFinalResult(this.extractResult(event));
     }
 
+    // Deliver directly to one pending iterator before queuing so live streams
+    // do not accumulate unbounded buffered events while a consumer is waiting.
     const waiter = this.waiting.shift();
     if (waiter) {
       waiter({ value: event, done: false });
@@ -40,6 +43,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     }
   }
 
+  /** Ends iteration and optionally resolves the final result for streams without a terminal event. */
   end(result?: R): void {
     this.done = true;
     if (result !== undefined) {
@@ -69,6 +73,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     }
   }
 
+  /** Resolves to the provider's final assistant message/error when the stream completes. */
   result(): Promise<R> {
     return this.finalResultPromise;
   }

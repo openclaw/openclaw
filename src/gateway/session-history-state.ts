@@ -18,20 +18,29 @@ type SessionHistoryMessage = Record<string, unknown> & {
 };
 
 type PaginatedSessionHistory = {
+  /** Preferred history array name for newer clients. */
   items: SessionHistoryMessage[];
+  /** Back-compatible alias for clients that still read messages. */
   messages: SessionHistoryMessage[];
+  /** Cursor for the next older page, when more history exists. */
   nextCursor?: string;
+  /** Whether an older page is available before the returned window. */
   hasMore: boolean;
 };
 
 type SessionHistorySnapshot = {
+  /** Display-projected, cursor-paginated history payload. */
   history: PaginatedSessionHistory;
+  /** Raw transcript sequence used to detect and stream later appends. */
   rawTranscriptSeq: number;
 };
 
 type InlineSessionHistoryAppend = {
+  /** Projected message ready to emit without a transcript reread. */
   message?: unknown;
+  /** Raw transcript sequence assigned to the emitted message. */
   messageSeq?: number;
+  /** Whether the stream must reread history instead of appending inline. */
   shouldRefresh?: boolean;
 };
 
@@ -47,8 +56,11 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
 };
 
+/** Convert a visible history limit into a bounded raw transcript tail read window. */
 export function resolveSessionHistoryTailReadOptions(limit: number): {
+  /** Maximum projected messages to collect from the transcript tail. */
   maxMessages: number;
+  /** Maximum raw transcript lines to scan while collecting the tail. */
   maxLines: number;
 } {
   const requested = Math.max(1, Math.floor(limit));
@@ -128,12 +140,19 @@ function paginateSessionMessages(
   });
 }
 
+/** Build a cursor-paginated, display-projected session history snapshot. */
 export function buildSessionHistorySnapshot(params: {
+  /** Raw transcript messages before chat-display projection. */
   rawMessages: unknown[];
+  /** Per-message text truncation budget for projected display messages. */
   maxChars?: number;
+  /** Maximum number of visible messages to return from the end/cursor window. */
   limit?: number;
+  /** Sequence cursor identifying the exclusive upper bound for older pages. */
   cursor?: string;
+  /** Raw transcript sequence for the last known transcript line. */
   rawTranscriptSeq?: number;
+  /** Total raw messages when rawMessages is only a bounded tail. */
   totalRawMessages?: number;
 }): SessionHistorySnapshot {
   const visibleMessages = toSessionHistoryMessages(
@@ -164,6 +183,7 @@ export function buildSessionHistorySnapshot(params: {
   };
 }
 
+/** Mutable SSE history state for incremental session history streaming. */
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
@@ -173,12 +193,19 @@ export class SessionHistorySseState {
   private rawTranscriptSeq: number;
 
   static fromRawSnapshot(params: {
+    /** Transcript target used for later refreshes. */
     target: SessionHistoryTranscriptTarget;
+    /** Initial raw transcript messages already read by the HTTP handler. */
     rawMessages: unknown[];
+    /** Raw transcript sequence for the initial tail snapshot. */
     rawTranscriptSeq?: number;
+    /** Total raw messages when rawMessages is only a bounded tail. */
     totalRawMessages?: number;
+    /** Per-message text truncation budget for projected display messages. */
     maxChars?: number;
+    /** Maximum visible messages for the initial and refreshed history page. */
     limit?: number;
+    /** Sequence cursor for paginated reads; disables inline append optimization. */
     cursor?: string;
   }): SessionHistorySseState {
     return new SessionHistorySseState({
@@ -230,13 +257,18 @@ export class SessionHistorySseState {
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
   }
 
+  /** Return the last history payload sent or prepared for this SSE stream. */
   snapshot(): PaginatedSessionHistory {
     return this.sentHistory;
   }
 
+  /** Try to append one transcript update without rereading the transcript file. */
   appendInlineMessage(update: {
+    /** Raw transcript message from the update event. */
     message: unknown;
+    /** Optional transcript message id to carry into OpenClaw metadata. */
     messageId?: string;
+    /** Optional transcript sequence already assigned by the append path. */
     messageSeq?: number;
   }): InlineSessionHistoryAppend | null {
     if (this.limit !== undefined || this.cursor !== undefined) {
@@ -245,6 +277,8 @@ export class SessionHistorySseState {
     const carriedSeq = asPositiveSafeInteger(update.messageSeq);
     if (carriedSeq !== undefined) {
       if (carriedSeq <= this.rawTranscriptSeq) {
+        // A repeated or out-of-order sequence means the stream missed a write
+        // ordering edge; reread the transcript instead of emitting duplicates.
         return { shouldRefresh: true };
       }
       this.rawTranscriptSeq = carriedSeq;
@@ -263,6 +297,8 @@ export class SessionHistorySseState {
     if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (addedMessages.length > 1) {
+        // Projection can turn one raw write into multiple visible messages
+        // (for example message-tool mirrors). Refresh to preserve cursors.
         this.sentHistory = buildPaginatedSessionHistory({
           messages: projectedMessages,
           hasMore: false,
@@ -321,6 +357,7 @@ export class SessionHistorySseState {
     };
   }
 
+  /** Reread the transcript target and replace the stream's current history snapshot. */
   async refreshAsync(): Promise<PaginatedSessionHistory> {
     const rawSnapshot = await this.readRawSnapshotAsync();
     const snapshot = buildSessionHistorySnapshot({

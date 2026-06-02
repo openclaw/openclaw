@@ -1,5 +1,3 @@
-// Public auth/onboarding helpers for provider plugins.
-
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -403,6 +401,8 @@ function resolveUsableProviderAuthProfiles(params: {
     return { agentDir, profileIds, store };
   }
 
+  // External CLI discovery is optional and may produce an empty overlay store; fall back to the
+  // persisted auth-profile store so saved API keys still resolve for ordinary provider checks.
   const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
   });

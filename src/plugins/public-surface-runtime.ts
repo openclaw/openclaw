@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 
+/** Source extensions accepted when resolving a bundled plugin public surface before build output. */
 export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -12,6 +13,7 @@ export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".cjs",
 ] as const;
 
+/** Normalizes a plugin-local artifact subpath and rejects absolute or escaping paths. */
 export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (
     path.posix.isAbsolute(artifactBasename) ||
@@ -39,6 +41,7 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   return normalized;
 }
 
+/** Normalizes a bundled plugin directory name to a single non-empty path segment. */
 export function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
@@ -54,6 +57,7 @@ export function normalizeBundledPluginDirName(dirName: string): string {
   return normalized;
 }
 
+/** Resolves a public surface artifact from a source checkout, trying known TS/JS extensions. */
 export function resolveBundledPluginSourcePublicSurfacePath(params: {
   sourceRoot: string;
   dirName: string;
@@ -83,6 +87,8 @@ function resolvePackageFallbackForBundledDir(params: {
     path.join(normalizedRootDir, "dist", "extensions"),
     path.join(normalizedRootDir, "dist-runtime", "extensions"),
   ];
+  // Package installs may carry either dist or dist-runtime. If the selected bundled root
+  // is missing a narrow public surface, check the sibling package root before source fallback.
   if (!packageBundledDirs.includes(normalizedBundledDir)) {
     return null;
   }
@@ -153,6 +159,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
+/** Resolves a bundled plugin public artifact across source, explicit roots, and package dist roots. */
 export function resolveBundledPluginPublicSurfacePath(params: {
   rootDir: string;
   dirName: string;
@@ -169,6 +176,8 @@ export function resolveBundledPluginPublicSurfacePath(params: {
     params.bundledPluginsDirMode === "auto"
       ? resolveExplicitEnvBundledPluginsDir(env)
       : (params.bundledPluginsDir ?? resolveExplicitEnvBundledPluginsDir(env));
+  // Explicit roots are operator-selected and may point at built plugin packages, so they win
+  // over local source checkout probes.
   if (explicitBundledPluginsDir) {
     return resolvePublicSurfaceFromBundledDir({
       rootDir: params.rootDir,

@@ -33,11 +33,15 @@ export function readBundleJsonObject(params: {
     return { ok: true, raw: result.value };
   }
   if (result.reason === "open") {
+    // Bundle JSON files are optional for some plugin formats. Let callers decide
+    // whether an open failure means "empty config" or a hard diagnostic while
+    // still enforcing root-boundary and hardlink checks above.
     return params.onOpenFailure?.(result.failure) ?? { ok: true, raw: {} };
   }
   return { ok: false, error: result.error };
 }
 
+/** Converts a root-file open failure into bundle-config read semantics. */
 export function resolveBundleJsonOpenFailure(params: {
   failure: RootFileOpenFailure;
   relativePath: string;
@@ -57,6 +61,12 @@ export function resolveBundleJsonOpenFailure(params: {
   });
 }
 
+/**
+ * Checks whether a loaded bundle config exposes any runnable server entries.
+ *
+ * A server without a command is kept as unsupported diagnostics data rather than
+ * making the whole bundle unreadable.
+ */
 export function inspectBundleServerRuntimeSupport<TConfig>(params: {
   loaded: { config: TConfig; diagnostics: string[] };
   resolveServers: (config: TConfig) => Record<string, Record<string, unknown>>;
@@ -80,6 +90,12 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
   };
 }
 
+/**
+ * Loads and merges bundle configs from activated bundle-format plugins.
+ *
+ * Disabled plugin config returns the empty config immediately; otherwise each
+ * activated bundle contributes a merge patch and plugin-scoped diagnostics.
+ */
 export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -126,6 +142,8 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
       rootDir: record.rootDir,
       bundleFormat: record.bundleFormat,
     });
+    // Bundle configs are partial documents. Merge patches preserve prior bundle
+    // contributions while allowing later activated bundles to override fields.
     merged = applyMergePatch(merged, loaded.config) as TConfig;
     for (const message of loaded.diagnostics) {
       diagnostics.push(params.createDiagnostic(record.id, message));

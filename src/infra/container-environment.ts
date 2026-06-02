@@ -13,6 +13,7 @@ import fs from "node:fs";
  */
 let containerEnvironmentCache: boolean | undefined;
 
+/** Returns whether the current process appears to run inside a containerized host. */
 export function isContainerEnvironment(): boolean {
   if (containerEnvironmentCache !== undefined) {
     return containerEnvironmentCache;
@@ -51,7 +52,7 @@ function detectContainerEnvironment(): boolean {
   return false;
 }
 
-/** @internal test helper */
+/** Clears the cached container-detection result between tests. */
 export function resetContainerEnvironmentCacheForTest(): void {
   containerEnvironmentCache = undefined;
 }

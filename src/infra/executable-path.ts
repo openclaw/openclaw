@@ -7,6 +7,11 @@ function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
 }
 
+/**
+ * Normalize a raw executable token into a path candidate without checking
+ * executability. Relative path tokens are resolved against the supplied cwd,
+ * while bare command names are left bare for PATH lookup.
+ */
 export function resolveExecutablePathCandidate(
   rawExecutable: string,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv; requirePathSeparator?: boolean },
@@ -70,6 +75,10 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   );
 }
 
+/**
+ * Checks whether a filesystem path names an executable file for the current platform.
+ * Windows accepts PATHEXT-style extensions; POSIX requires executable permission.
+ */
 export function isExecutableFile(filePath: string): boolean {
   try {
     const stat = fs.statSync(filePath);
@@ -90,6 +99,11 @@ export function isExecutableFile(filePath: string): boolean {
   }
 }
 
+/**
+ * Resolve a bare executable through an explicit PATH string and Windows PATHEXT
+ * policy. The caller supplies PATH so sandboxed/env-specific launches can avoid
+ * accidentally consulting the parent process environment.
+ */
 export function resolveExecutableFromPathEnv(
   executable: string,
   pathEnv: string,
@@ -109,6 +123,11 @@ export function resolveExecutableFromPathEnv(
   return undefined;
 }
 
+/**
+ * Resolve a raw executable token to an executable filesystem path when possible.
+ * Path-like tokens must already point to executable files; bare names are
+ * searched through PATH and PATHEXT.
+ */
 export function resolveExecutablePath(
   rawExecutable: string,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv },
@@ -128,7 +147,7 @@ export function resolveExecutablePath(
 const KNOWN_PATHEXT = new Set([".com", ".exe", ".bat", ".cmd"]);
 
 /**
- * On Windows, resolves a bare command name to its full .cmd or .exe path by
+ * On Windows, resolve a bare command name to its full .cmd or .exe path by
  * probing PATH/PATHEXT without executing another resolver. On non-Windows this
  * is a no-op.
  */

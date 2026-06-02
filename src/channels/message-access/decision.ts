@@ -85,6 +85,8 @@ function commandGate(params: {
   const useAccessGroups = command.useAccessGroups ?? true;
   const owner = applyMutableIdentifierPolicy(params.state.allowlists.commandOwner, params.policy);
   const group = applyMutableIdentifierPolicy(params.state.allowlists.commandGroup, params.policy);
+  // Command auth merges owner and group authorizers, but blocking applies only
+  // when a text control command is actually present.
   const authorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     modeWhenAccessGroupsOff: command.modeWhenAccessGroupsOff,
@@ -254,7 +256,9 @@ function activationGate(params: {
 }
 
 export function decideChannelIngress(
+  /** Fully resolved ingress state with normalized gates and redacted diagnostics. */
   state: ChannelIngressState,
+  /** Policy projection for sender, route, command, event, and activation gates. */
   policy: ChannelIngressPolicyInput,
 ): ChannelIngressDecision {
   const gates: AccessGraphGate[] = routeGates(state);
@@ -275,6 +279,8 @@ export function decideChannelIngress(
           commandGate: commandGate({ state, policy: { ...policy, command: undefined } }),
         })
       : null;
+  // Pre-sender activation cannot depend on command auth, so command facts are deliberately absent.
+  // Text-command activation waits until after sender and command gates so it can use auth state.
   if (activationBeforeSender) {
     gates.push(activationBeforeSender);
     if (activationBeforeSender.effect === "skip") {

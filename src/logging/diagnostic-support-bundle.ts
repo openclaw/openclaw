@@ -3,14 +3,20 @@ import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 
 export type DiagnosticSupportBundleFile = {
+  /** Safe relative path inside the support bundle. */
   path: string;
+  /** MIME type recorded in the bundle manifest. */
   mediaType: string;
+  /** UTF-8 text payload written into the bundle. */
   content: string;
 };
 
 export type DiagnosticSupportBundleContent = {
+  /** Bundle-relative file path. */
   path: string;
+  /** MIME type copied from the file descriptor. */
   mediaType: string;
+  /** UTF-8 byte length of the stored content. */
   bytes: number;
 };
 
@@ -63,6 +69,8 @@ export function supportBundleContents(
 
 function assertSafeBundleRelativePath(pathName: string): string {
   const normalized = pathName.replaceAll("\\", "/");
+  // Bundle paths are portable archive entries, never filesystem paths. Reject
+  // absolute, empty, dot, and parent segments before any write or zip insert.
   if (
     !normalized ||
     normalized.startsWith("/") ||
@@ -82,6 +90,8 @@ function resolveSupportBundleFilePath(outputDir: string, pathName: string): stri
   const safePath = assertSafeBundleRelativePath(pathName);
   const resolvedBase = path.resolve(outputDir);
   const resolvedFile = path.resolve(resolvedBase, safePath);
+  // Re-check containment after path.resolve so crafted relative paths cannot
+  // escape the output directory even if validation changes later.
   if (resolvedFile === resolvedBase || !isPathInside(resolvedBase, resolvedFile)) {
     throw new Error(`Bundle file path escaped output directory: ${pathName}`);
   }
@@ -102,7 +112,9 @@ async function writeSupportBundleFile(
 }
 
 export async function writeSupportBundleDirectory(params: {
+  /** Directory to create and fill with support bundle files. */
   outputDir: string;
+  /** Files to write; existing files cause the write to fail. */
   files: readonly DiagnosticSupportBundleFile[];
 }): Promise<DiagnosticSupportBundleContent[]> {
   await prepareSupportBundleDirectory(params.outputDir);
@@ -113,8 +125,11 @@ export async function writeSupportBundleDirectory(params: {
 }
 
 export async function writeSupportBundleZip(params: {
+  /** Zip file path to create or replace. */
   outputPath: string;
+  /** Files to store using safe bundle-relative paths. */
   files: readonly DiagnosticSupportBundleFile[];
+  /** DEFLATE compression level, defaulting to a balanced level. */
   compressionLevel?: number;
 }): Promise<number> {
   const { default: JSZip } = await import("jszip");

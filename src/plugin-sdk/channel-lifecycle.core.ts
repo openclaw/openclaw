@@ -7,24 +7,34 @@ type CloseAwareServer = {
 };
 
 type PassiveAccountLifecycleParams<Handle> = {
+  /** Shared lifecycle signal; abort keeps start/stop ordering deterministic. */
   abortSignal?: AbortSignal;
+  /** Starts the passive resource and returns the handle later passed to stop. */
   start: () => Promise<Handle>;
+  /** Stops the handle returned by start after lifecycle abort. */
   stop?: (handle: Handle) => void | Promise<void>;
+  /** Runs after stop, even when no stop hook is configured. */
   onStop?: () => void | Promise<void>;
 };
 
 export type ChannelRunQueueTaskContext = {
+  /** Lifecycle signal forwarded to queued handlers so they can stop cooperatively. */
   lifecycleSignal?: AbortSignal;
 };
 
 export type ChannelRunQueue = {
+  /** Enqueue one task behind other tasks with the same key. */
   enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  /** Stop accepting useful work and clear busy/heartbeat status accounting. */
   deactivate: () => void;
 };
 
 export type ChannelRunQueueParams = {
+  /** Receives busy/active-run patches from the shared run-state machine. */
   setStatus?: RunStateStatusSink;
+  /** Deactivates the run queue and is forwarded to task contexts. */
   abortSignal?: AbortSignal;
+  /** Best-effort reporting hook for task failures and reporter-safe queue errors. */
   onError?: (error: unknown) => void;
 };
 
@@ -129,8 +139,11 @@ export async function runPassiveAccountLifecycle<Handle>(
  * trigger server shutdown. The returned promise resolves only after `close`.
  */
 export async function keepHttpServerTaskAlive(params: {
+  /** Server-like object that emits close exactly once when shutdown completes. */
   server: CloseAwareServer;
+  /** Optional lifecycle signal that should trigger graceful server shutdown. */
   abortSignal?: AbortSignal;
+  /** Invoked once on lifecycle abort; should call close/shutdown on the server. */
   onAbort?: () => void | Promise<void>;
 }): Promise<void> {
   const { server, abortSignal, onAbort } = params;

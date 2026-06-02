@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
+/** Node identity fields used by CLI/API node lookup and disambiguation. */
 export type NodeMatchCandidate = {
   nodeId: string;
   displayName?: string;

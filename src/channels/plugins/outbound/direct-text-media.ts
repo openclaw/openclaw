@@ -45,6 +45,7 @@ export {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 
+/** Resolves an account-aware media byte limit from a channel-specific MB resolver. */
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -57,6 +58,7 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
+/** Creates a media byte-limit resolver that reads account-level config before channel defaults. */
 export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
@@ -73,6 +75,7 @@ export function createScopedChannelMediaMaxBytesResolver(channel: string) {
     });
 }
 
+/** Builds a direct outbound adapter that can send text, media, and reply payload media sequences. */
 export function createDirectTextMediaOutbound<
   TOpts extends Record<string, unknown>,
   TResult extends DirectSendResult,

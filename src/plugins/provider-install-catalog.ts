@@ -69,6 +69,9 @@ const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   workspace: 3,
 };
 
+// Prefer the most authoritative source for install instructions when the same
+// plugin appears through multiple registry roots. Config wins over bundled,
+// global, and workspace records because it is the operator's explicit intent.
 function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | undefined): boolean {
   return !current || INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
 }
@@ -205,6 +208,9 @@ function resolvePreferredInstallsByPluginId(
     ) {
       continue;
     }
+    // Installed-index records preserve the exact spec/integrity used at install
+    // time. Package-source metadata is only a fallback for plugins not yet in the
+    // installed index or manifests that carry their own install hints.
     const install = resolveInstallInfoFromRegistryRecord({
       record,
       installRecord: index.installRecords[record.pluginId],
@@ -224,6 +230,9 @@ function resolvePreferredInstallsByPluginId(
   return { installedPluginIds, installsByPluginId: preferredByPluginId };
 }
 
+// Provider-index entries are only suggestions for providers whose plugin is not
+// installed. Existing manifest choices take precedence and mark their choice ids
+// as seen before this fallback runs.
 function resolveProviderIndexInstallCatalogEntries(params: {
   installedPluginIds: ReadonlySet<string>;
   seenChoiceIds: ReadonlySet<string>;
@@ -309,6 +318,8 @@ function normalizeProviderAuthChoiceScopes(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+// Official external catalog entries bridge known provider setup flows to plugin
+// install metadata before a user has installed that plugin locally.
 function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   installedPluginIds: ReadonlySet<string>;
   seenChoiceIds: ReadonlySet<string>;
@@ -369,6 +380,14 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   return entries;
 }
 
+/**
+ * Lists installable provider auth choices from installed plugins and catalogs.
+ *
+ * Installed manifest choices are preferred, official external catalog entries
+ * come next, and the provider index is the final fallback. Duplicate choice ids
+ * are suppressed in that order so setup flows do not offer the same provider
+ * install path twice.
+ */
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
@@ -411,6 +430,7 @@ export function resolveProviderInstallCatalogEntries(
   );
 }
 
+/** Resolves one install catalog entry by provider auth choice id. */
 export function resolveProviderInstallCatalogEntry(
   choiceId: string,
   params?: ProviderInstallCatalogParams,

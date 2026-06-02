@@ -1,15 +1,3 @@
-// Boot-run echo guard: tracks the active boot prompt per session key so that
-// downstream user-visible delivery paths (currently the message tool) can
-// suppress fallback-model echoes that copy substantial portions of the boot
-// prompt without preserving the internal-runtime-context delimiters.
-//
-// The marker-based strip in `stripInternalRuntimeContext` only catches
-// echoes that include the delimiter lines verbatim. A model that paraphrases
-// out the wrapper but reproduces a long contiguous chunk of the BOOT.md
-// content would slip past the marker strip and reach the user. This module
-// adds a defense-in-depth substantial-echo check using the active boot prompt
-// as the comparison source. Refs #53732.
-
 const MIN_ECHO_CHARS = 80;
 
 type BootEchoContext = {
@@ -42,6 +30,12 @@ function getBootPromptChunks(normalizedBootPrompt: string, minLen: number): Set<
   return chunks;
 }
 
+/**
+ * Register the active boot prompt for user-visible send guards on this session.
+ *
+ * The marker-based internal-context strip only catches delimiter-preserving
+ * echoes; this context lets delivery paths suppress long raw BOOT.md excerpts.
+ */
 export function setBootEchoContextForSession(sessionKey: string, bootPrompt: string): void {
   if (!sessionKey || !bootPrompt) {
     return;
@@ -53,6 +47,7 @@ export function setBootEchoContextForSession(sessionKey: string, bootPrompt: str
   bootContextBySessionKey.set(sessionKey, { bootPrompt, normalizedBootPrompt });
 }
 
+/** Clear boot echo state when a boot run finishes or a session is discarded. */
 export function clearBootEchoContextForSession(sessionKey: string): void {
   if (!sessionKey) {
     return;
@@ -64,6 +59,7 @@ export function clearBootEchoContextForSession(sessionKey: string): void {
   bootContextBySessionKey.delete(sessionKey);
 }
 
+/** Return the active boot prompt text for delivery paths that need echo suppression. */
 export function getBootEchoContextForSession(sessionKey: string | undefined): string | undefined {
   if (!sessionKey) {
     return undefined;
@@ -113,6 +109,7 @@ export function stripBootEchoFromOutboundText(
   return containsSubstantialBootEcho(outboundText, bootPrompt) ? "" : outboundText;
 }
 
+/** Reset module-local boot echo caches between tests. */
 export function resetBootEchoContextForTests(): void {
   bootContextBySessionKey.clear();
   bootChunksByNormalizedPrompt.clear();

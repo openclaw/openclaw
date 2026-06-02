@@ -36,6 +36,7 @@ type ChannelPresenceSignal = {
   source: ChannelPresenceSignalSource;
 };
 
+/** Returns true when a channel config section has operator data beyond an enabled toggle. */
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
@@ -43,6 +44,7 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
+/** Lists channel ids explicitly disabled in config, normalized for status/activation checks. */
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (!channels) {
@@ -77,6 +79,7 @@ function listPersistedAuthStateChannelIds(options: ChannelPresenceOptions): read
   if (options.discovery) {
     return listBundledChannelIdsWithPersistedAuthState(options.discovery);
   }
+  // Bundled persisted-auth metadata is process-stable; cache it outside hot status/plugin lookups.
   if (persistedAuthStateChannelIds) {
     return persistedAuthStateChannelIds;
   }
@@ -102,6 +105,7 @@ function hasPersistedAuthState(params: {
   });
 }
 
+/** Lists channel ids that appear configured through config, env vars, or persisted auth state. */
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -114,6 +118,7 @@ export function listPotentialConfiguredChannelIds(
   );
 }
 
+/** Lists deduped configured-channel signals while preserving their source type. */
 export function listPotentialConfiguredChannelPresenceSignals(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -192,6 +197,7 @@ function hasEnvConfiguredChannel(
   );
 }
 
+/** Fast boolean check for any configured channel signal without materializing full plugin state. */
 export function hasPotentialConfiguredChannels(
   cfg: OpenClawConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,

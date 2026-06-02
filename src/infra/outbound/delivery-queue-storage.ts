@@ -21,6 +21,7 @@ import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_NAME = "outbound";
 
+/** Replayable rendered-payload summary stored with a queued delivery. */
 export type QueuedRenderedMessageBatchPlan = {
   payloadCount: number;
   textCount: number;
@@ -32,6 +33,7 @@ export type QueuedRenderedMessageBatchPlan = {
   items: readonly RenderedMessageBatchPlanItem[];
 };
 
+/** Serialized hook context needed to replay reply-payload sending hooks. */
 export type QueuedReplyPayloadSendingHook = {
   kind: ReplyDispatchKind;
   channel?: string;
@@ -40,6 +42,7 @@ export type QueuedReplyPayloadSendingHook = {
   context: PluginHookReplyPayloadSendingContext;
 };
 
+/** Durable outbound delivery intent persisted before platform send starts. */
 export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -70,6 +73,7 @@ export type QueuedDeliveryPayload = {
   gatewayClientScopes?: readonly string[];
 };
 
+/** Stored outbound delivery entry with retry and recovery bookkeeping. */
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
   enqueuedAt: number;
@@ -151,6 +155,7 @@ function updateQueuedDelivery(
   updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => update(entry as QueuedDelivery));
 }
 
+/** Marks that platform I/O may have begun, so recovery must avoid blind replay. */
 export async function markDeliveryPlatformSendAttemptStarted(
   id: string,
   stateDir?: string,
@@ -162,6 +167,7 @@ export async function markDeliveryPlatformSendAttemptStarted(
   }));
 }
 
+/** Marks a send whose platform outcome is unknown until adapter reconciliation. */
 export async function markDeliveryPlatformOutcomeUnknown(
   id: string,
   stateDir?: string,

@@ -1,6 +1,7 @@
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { detectMime } from "@openclaw/media-core/mime";
 
+/** Canonicalizes a base64 payload and returns a detected MIME type from its decoded prefix. */
 export async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
   const trimmed = base64.trim();
   const canonicalBase64 = trimmed ? canonicalizeBase64(trimmed) : undefined;
@@ -9,6 +10,8 @@ export async function sniffMimeFromBase64(base64: string): Promise<string | unde
   }
 
   const take = Math.min(256, canonicalBase64.length);
+  // Decode only complete base64 quads from the prefix; MIME magic bytes live at the front and
+  // decoding a partial quad would make otherwise valid payloads look malformed.
   const sliceLen = take - (take % 4);
   if (sliceLen < 8) {
     return undefined;

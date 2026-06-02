@@ -36,6 +36,8 @@ function shouldAnnounceHookRunResult(params: {
   if (params.result.status !== "ok") {
     return true;
   }
+  // Silent hooks should stay silent when the isolated run completed and did
+  // not need a delivery fallback through the main Gateway transcript.
   return (
     params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
   );
@@ -84,6 +86,7 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
+/** Attach hook HTTP ingress to Gateway wake and isolated-agent dispatch behavior. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -141,6 +144,8 @@ export function createGatewayHooksRequestHandler(params: {
     };
 
     let hookEventSessionKey: string | undefined;
+    // The HTTP request receives a run id immediately; the isolated agent turn
+    // continues in the background and reports only failures/fallbacks.
     void (async () => {
       try {
         const cfg = getRuntimeConfig();

@@ -97,6 +97,10 @@ const AUDIO_FILE_EXTENSIONS = new Set([
 
 const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
 
+/**
+ * Canonicalize caller/provider MIME strings by dropping parameters and
+ * normalizing known aliases.
+ */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -176,6 +180,10 @@ export function isAudioFileName(fileName?: string | null): boolean {
   return AUDIO_FILE_EXTENSIONS.has(ext);
 }
 
+/**
+ * Resolve the best MIME hint from bytes, path, and headers while avoiding generic
+ * container sniffs overriding more specific document extensions.
+ */
 export function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
@@ -232,6 +240,7 @@ async function detectMimeImpl(opts: {
   return undefined;
 }
 
+/** Return the preferred file extension for a canonical or alias MIME type. */
 export function extensionForMime(mime?: string | null): string | undefined {
   const normalized = normalizeMimeType(mime);
   if (!normalized) {

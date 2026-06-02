@@ -9,11 +9,15 @@ import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
 
 type EnsureOpenClawPathOpts = {
+  /** Runtime executable whose directory should stay ahead of hardened PATH entries. */
   execPath?: string;
+  /** Working directory used only when project-local bins are explicitly allowed. */
   cwd?: string;
+  /** Home directory used for user tool shims and package-manager bin fallbacks. */
   homeDir?: string;
   platform?: NodeJS.Platform;
   pathEnv?: string;
+  /** Opt in to appending cwd/node_modules/.bin; never prepends project-local bins. */
   allowProjectLocalBin?: boolean;
 };
 
@@ -140,6 +144,7 @@ function candidateBinDirs(
   append.push(path.join(homeDir, ".yarn", "bin"));
 
   return {
+    // Existing PATH entries count as known even when the test/runtime cannot stat them.
     prepend: prepend.filter((candidate) => isKnownPathDir(existingPathParts, candidate)),
     append: append.filter((candidate) => isKnownPathDir(existingPathParts, candidate)),
   };

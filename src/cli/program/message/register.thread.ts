@@ -4,6 +4,7 @@ import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Let channel plugins translate thread-create CLI options into channel-owned actions. */
 function resolveThreadCreateRequest(opts: Record<string, unknown>) {
   const channel = normalizeLowercaseStringOrEmpty(opts.channel);
   if (channel) {
@@ -24,6 +25,7 @@ function resolveThreadCreateRequest(opts: Record<string, unknown>) {
   };
 }
 
+/** Register thread create/list/reply message subcommands. */
 export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 

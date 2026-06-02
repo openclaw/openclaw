@@ -37,12 +37,19 @@ import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {
+  /** Normalized voice-call config used for provider, webhook, and manager setup. */
   config: VoiceCallConfig;
+  /** Provider implementation selected from the normalized config. */
   provider: VoiceCallProvider;
+  /** Call manager owning active calls, persistence, and provider event handling. */
   manager: CallManager;
+  /** HTTP/websocket webhook server bound for provider callbacks. */
   webhookServer: VoiceCallWebhookServer;
+  /** Provider-facing webhook URL after public URL, tunnel, or local fallback resolution. */
   webhookUrl: string;
+  /** Externally reachable origin when a public URL/tunnel/Tailscale route is active. */
   publicUrl: string | null;
+  /** Idempotent cleanup for tunnel/Tailscale exposure and the webhook server. */
   stop: () => Promise<void>;
 };
 
@@ -108,6 +115,7 @@ function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
   return realtimeHandlerPromise;
 }
 
+/** Resolves the agent consult session to the same phone/call scope used by classic responses. */
 function resolveVoiceCallConsultSessionKey(call: {
   config: VoiceCallConfig;
   sessionKey?: string;
@@ -127,6 +135,7 @@ function resolveVoiceCallConsultSessionKey(call: {
   });
 }
 
+/** Converts durable call transcript plus one optional live partial into consult-agent messages. */
 function mapVoiceCallConsultTranscript(
   call: {
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
@@ -141,11 +150,14 @@ function mapVoiceCallConsultTranscript(
   );
   const partial = context?.partialUserTranscript?.trim();
   if (partial && transcript.at(-1)?.text !== partial) {
+    // Tool calls can arrive before the final STT commit; include the latest
+    // partial once without duplicating already-committed transcript text.
     transcript.push({ role: "user", text: partial });
   }
   return transcript;
 }
 
+/** Owns shutdown order for provider-facing exposure and the local webhook listener. */
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
   webhookServer: VoiceCallWebhookServer;
@@ -174,6 +186,8 @@ function createRuntimeResourceLifecycle(params: {
       }
       stopped = true;
       const suppressErrors = opts?.suppressErrors ?? false;
+      // Stop in reverse exposure order so provider-facing routes disappear
+      // before the local webhook server is torn down.
       await runStep(async () => {
         if (tunnelResult) {
           await tunnelResult.stop();
@@ -189,6 +203,7 @@ function createRuntimeResourceLifecycle(params: {
   };
 }
 
+/** Instantiates the selected provider after config/env/default resolution has completed. */
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
@@ -261,13 +276,25 @@ async function resolveRealtimeProvider(params: {
   });
 }
 
+/**
+ * Starts the provider, webhook server, optional realtime bridge, and cleanup lifecycle.
+ * The returned runtime is fully initialized: manager state restored, exposure
+ * chosen, provider URLs wired, and realtime/TTS integrations attached when enabled.
+ */
 export async function createVoiceCallRuntime(params: {
+  /** Raw plugin config; normalized and validated before any provider is started. */
   config: VoiceCallConfig;
+  /** Narrow core config bridge used by legacy response/TTS call sites. */
   coreConfig: CoreConfig;
+  /** Full host config used for provider/plugin lookup and realtime resolution. */
   fullConfig?: OpenClawConfig;
+  /** Embedded agent runtime used for classic and realtime voice consults. */
   agentRuntime: CoreAgentDeps;
+  /** Optional plugin state runtime installed before manager restore. */
   stateRuntime?: VoiceCallStateRuntime["state"];
+  /** Optional core TTS runtime used for Twilio streaming telephony speech. */
   ttsRuntime?: TelephonyTtsRuntime;
+  /** Optional logger; console methods are used when omitted. */
   logger?: Logger;
 }): Promise<VoiceCallRuntime> {
   const {
@@ -287,6 +314,8 @@ export async function createVoiceCallRuntime(params: {
   };
 
   const config = resolveVoiceCallConfig(rawConfig);
+  // fullConfig carries the complete host config for provider/plugin lookups; coreConfig
+  // is the narrowed voice-call bridge used by older call sites and tests.
   const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
 
   if (!config.enabled) {
@@ -309,6 +338,8 @@ export async function createVoiceCallRuntime(params: {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
   const manager = new CallManager(config);
+  // Resolve realtime lazily only when enabled so normal TTS/STT call flows do
+  // not load provider runtimes or validate realtime credentials.
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
@@ -382,6 +413,8 @@ export async function createVoiceCallRuntime(params: {
           if (fastContext.handled) {
             return fastContext.result;
           }
+          // Slow consults reuse the normal embedded-agent lane, but fork from the
+          // requester session when an outbound call came from another channel.
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
             voiceConfig: effectiveConfig,
             agentRuntime,
@@ -434,7 +467,6 @@ export async function createVoiceCallRuntime(params: {
   // keeps the port bound while the runtime promise rejects, causing
   // EADDRINUSE on the next attempt.  See: #32387
   try {
-    // Determine public URL - priority: config.publicUrl > tunnel > legacy tailscale
     let publicUrl: string | null = config.publicUrl ?? null;
 
     if (!publicUrl && config.tunnel?.provider && config.tunnel.provider !== "none") {
@@ -474,11 +506,15 @@ export async function createVoiceCallRuntime(params: {
       provider.setPublicUrl?.(publicUrl);
     }
     if (publicUrl && realtimeProvider) {
+      // Realtime stream TwiML must use the same externally reachable origin as
+      // provider webhooks, not the local bind URL.
       webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
     }
 
     const realtimeHandler = webhookServer.getRealtimeHandler();
     if (realtimeHandler) {
+      // Providers that attach streams during answer/initiate get one-time WS
+      // tokens from the realtime handler and echo them on upgrade.
       manager.streamSessionIssuer = (request) => realtimeHandler.issueStreamSession(request);
     }
 

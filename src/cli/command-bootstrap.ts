@@ -10,6 +10,7 @@ function loadConfigGuardModule() {
   return configGuardModuleLoader.load();
 }
 
+/** Run config guard and optional plugin-registry loading before a command handler executes. */
 export async function ensureCliCommandBootstrap(params: {
   runtime: RuntimeEnv;
   commandPath: string[];

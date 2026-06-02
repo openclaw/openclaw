@@ -3,13 +3,16 @@ import type { OpenClawConfig } from "./config-runtime.js";
 
 type ApprovalKind = "exec" | "plugin";
 type ApprovalAuthorizationResult = {
+  /** True when the sender may resolve the approval action. */
   authorized: boolean;
+  /** User-facing denial reason returned to the channel, when authorization fails. */
   reason?: string;
 };
 const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
   "openclaw.implicitSameChatApprovalAuthorization",
 );
 
+/** Marks an allow result as the implicit same-chat fallback rather than explicit approver auth. */
 export function markImplicitSameChatApprovalAuthorization(
   result: ApprovalAuthorizationResult,
 ): ApprovalAuthorizationResult {
@@ -24,6 +27,7 @@ export function markImplicitSameChatApprovalAuthorization(
   return result;
 }
 
+/** Checks whether an authorization result came from implicit same-chat fallback auth. */
 export function isImplicitSameChatApprovalAuthorization(
   result: ApprovalAuthorizationResult | null | undefined,
 ): boolean {
@@ -38,8 +42,11 @@ export function isImplicitSameChatApprovalAuthorization(
 }
 
 export function createResolvedApproverActionAuthAdapter(params: {
+  /** Human-readable channel label used in denial replies. */
   channelLabel: string;
+  /** Returns normalized approver ids for the evaluated config/account. */
   resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  /** Optional sender normalization hook for channel-specific id grammar. */
   normalizeSenderId?: (value: string) => string | undefined;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;

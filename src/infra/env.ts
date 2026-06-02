@@ -33,6 +33,7 @@ function formatEnvValue(value: string, redact?: boolean): string {
   return `${singleLine.slice(0, 160)}…`;
 }
 
+/** Log an accepted environment override once, with redaction and test-mode suppression. */
 export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
@@ -52,16 +53,18 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
       );
     })
     .catch(() => {
-      // Best-effort diagnostics only.
+      // Environment logging must not make startup fail if the logger cannot initialize.
     });
 }
 
+/** Preserve the old Z_AI_API_KEY spelling as a one-way alias for ZAI_API_KEY. */
 export function normalizeZaiEnv(): void {
   if (!process.env.ZAI_API_KEY?.trim() && process.env.Z_AI_API_KEY?.trim()) {
     process.env.ZAI_API_KEY = process.env.Z_AI_API_KEY;
   }
 }
 
+/** Parse common opt-in environment values without treating "0"/"false" as truthy. */
 export function isTruthyEnvValue(value?: string): boolean {
   if (typeof value !== "string") {
     return false;
@@ -77,6 +80,7 @@ export function isTruthyEnvValue(value?: string): boolean {
   }
 }
 
+/** Detect Vitest from either its explicit env flags or the conventional test NODE_ENV. */
 export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     env.VITEST === "true" ||
@@ -87,6 +91,7 @@ export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolea
   );
 }
 
+/** Apply process-wide environment aliases before config/runtime initialization. */
 export function normalizeEnv(): void {
   normalizeZaiEnv();
 }

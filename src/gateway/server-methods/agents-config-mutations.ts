@@ -17,7 +17,11 @@ export type AgentDeleteMutationResult = {
   removedBindings: number;
 };
 
-/** Typed precondition failure surfaced by agent mutation handlers as gateway errors. */
+/**
+ * Typed precondition failure for config mutations that require a specific agent
+ * presence state. Gateway handlers convert the kind into stable RPC errors
+ * without parsing exception messages.
+ */
 export class AgentConfigPreconditionError extends Error {
   constructor(
     readonly kind: "already-exists" | "not-found",
@@ -32,12 +36,20 @@ export class AgentConfigPreconditionError extends Error {
   }
 }
 
-/** Checks the current config snapshot for a concrete agent entry. */
+/**
+ * Check whether a config snapshot contains an agent entry with this id. This is
+ * intentionally snapshot-only so callers can use it inside retrying config
+ * mutations without performing a second disk read.
+ */
 export function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
 
-/** Adds a new agent entry through the retrying config mutation path. */
+/**
+ * Add a new agent entry through the retrying config mutation path. The
+ * precondition is checked inside the write transaction so concurrent edits
+ * cannot create duplicate agent ids.
+ */
 export async function createAgentConfigEntry(params: {
   agentId: string;
   name: string;
@@ -65,7 +77,11 @@ export async function createAgentConfigEntry(params: {
   });
 }
 
-/** Updates an existing agent entry while preserving omitted fields. */
+/**
+ * Update an existing agent entry while preserving omitted fields. Empty optional
+ * fields are treated as absent; callers that need clearing semantics must use a
+ * more explicit config mutation.
+ */
 export async function updateAgentConfigEntry(params: {
   agentId: string;
   name?: string;
@@ -91,7 +107,11 @@ export async function updateAgentConfigEntry(params: {
   });
 }
 
-/** Removes an agent entry and returns filesystem roots the caller should clean up. */
+/**
+ * Remove an agent entry and return the filesystem roots the caller should clean
+ * up after the config write succeeds. Cleanup stays outside the mutation so a
+ * failed write cannot delete still-referenced agent data.
+ */
 export async function deleteAgentConfigEntry(params: { agentId: string }): Promise<{
   nextConfig: OpenClawConfig;
   result: AgentDeleteMutationResult | undefined;

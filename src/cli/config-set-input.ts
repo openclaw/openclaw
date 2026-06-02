@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 
+/** Raw Commander options accepted by `openclaw config set`. */
 export type ConfigSetOptions = {
   strictJson?: boolean;
   /** @deprecated Use strictJson. */
@@ -36,6 +37,7 @@ export type ConfigSetOptions = {
   batchFile?: string;
 };
 
+/** One batch config mutation; exactly one of value/ref/provider is present. */
 export type ConfigSetBatchEntry = {
   path: string;
   value?: unknown;
@@ -43,16 +45,19 @@ export type ConfigSetBatchEntry = {
   provider?: unknown;
 };
 
+/** Return whether config set should read a batch payload instead of a single value. */
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
   return Boolean(
     normalizeOptionalString(opts.batchJson) || normalizeOptionalString(opts.batchFile),
   );
 }
 
+/** Return whether any --ref-* builder flag was supplied. */
 export function hasRefBuilderOptions(opts: ConfigSetOptions): boolean {
   return Boolean(opts.refProvider || opts.refSource || opts.refId);
 }
 
+/** Return whether any --provider-* builder flag was supplied. */
 export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
   return Boolean(
     opts.providerSource ||
@@ -116,6 +121,7 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   return out;
 }
 
+/** Parse inline/file batch mutations, validating each entry has one write mode. */
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
   const batchJson = normalizeOptionalString(opts.batchJson);
   const batchFile = normalizeOptionalString(opts.batchFile);

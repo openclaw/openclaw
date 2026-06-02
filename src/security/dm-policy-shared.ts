@@ -11,8 +11,11 @@ import type { GroupPolicy } from "../config/types.base.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 
 export function resolvePinnedMainDmOwnerFromAllowlist(params: {
+  /** DM scope that may pin a single main-thread owner. */
   dmScope?: string | null;
+  /** Raw configured DM allowlist entries. */
   allowFrom?: Array<string | number> | null;
+  /** Channel-specific normalizer used before owner uniqueness checks. */
   normalizeEntry: (entry: string) => string | undefined;
 }): string | null {
   if ((params.dmScope ?? "main") !== "main") {
@@ -94,13 +97,21 @@ export function resolveOpenDmAllowlistAccess(params: {
 }
 
 type DmGroupAccessInputParams = {
+  /** Whether the current inbound context is a group/channel conversation. */
   isGroup: boolean;
+  /** Direct-message policy used when `isGroup` is false. */
   dmPolicy?: string | null;
+  /** Group sender policy used when `isGroup` is true. */
   groupPolicy?: string | null;
+  /** Configured DM sender allowlist. */
   allowFrom?: Array<string | number> | null;
+  /** Configured group sender allowlist. */
   groupAllowFrom?: Array<string | number> | null;
+  /** Pairing-store DM allowlist; never grants group command ownership. */
   storeAllowFrom?: Array<string | number> | null;
+  /** Lets group policy fall back to DM allowlist when no group list exists. */
   groupAllowFromFallbackToAllowFrom?: boolean | null;
+  /** Channel-specific sender matcher against already-normalized entries. */
   isSenderAllowed: (allowFrom: string[]) => boolean;
 };
 
@@ -281,7 +292,8 @@ export function resolveDmGroupAccessWithCommandGate(
       fallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom ?? undefined,
     }),
   );
-  // Group command authorization must not inherit DM pairing-store approvals.
+  // Group command authorization must not inherit DM pairing-store approvals; only
+  // configured owner/group allowlists should authorize control commands in rooms.
   const commandDmAllowFrom = params.isGroup ? configuredAllowFrom : access.effectiveAllowFrom;
   const commandGroupAllowFrom = params.isGroup
     ? configuredGroupAllowFrom

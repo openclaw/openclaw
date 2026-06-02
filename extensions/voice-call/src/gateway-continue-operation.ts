@@ -65,13 +65,23 @@ type VoiceCallContinueOperationRequest = {
   message: string;
 };
 
+/**
+ * Creates a short-lived async operation store for gateway-driven continue-call requests.
+ *
+ * `start` returns an operation id immediately while the call continues in the
+ * background; `read` returns pending state or consumes one terminal result.
+ */
 export function createVoiceCallContinueOperationStore(params: {
+  /** Resolved voice-call config used as fallback for transcript and TTS polling windows. */
   config: VoiceCallConfig;
+  /** Core config fallback for global TTS timeout defaults. */
   coreConfig: CoreConfig;
 }) {
   const operations = new Map<string, VoiceCallContinueOperation>();
 
   const resolvePollTimeoutMs = (rt: VoiceCallRuntime): number => {
+    // The client waits for both assistant transcript generation and TTS playback
+    // preparation, plus a buffer for provider webhook latency.
     const ttsTimeoutMs =
       rt.config.tts?.timeoutMs ??
       params.config.tts?.timeoutMs ??
@@ -86,12 +96,15 @@ export function createVoiceCallContinueOperationStore(params: {
   };
 
   const scheduleCleanup = (operationId: string) => {
+    // Completed operations are readable once, but still get a delayed cleanup in
+    // case the caller disconnects before polling the terminal state.
     const timer = setTimeout(() => {
       operations.delete(operationId);
     }, VOICE_CALL_CONTINUE_OPERATION_CLEANUP_MS);
     timer.unref?.();
   };
 
+  /** Starts an async continue-call operation and returns the poll token plus timeout budget. */
   const start = (
     request: VoiceCallContinueOperationRequest,
   ): VoiceCallContinueOperationStartPayload => {
@@ -110,6 +123,8 @@ export function createVoiceCallContinueOperationStore(params: {
       .continueCall(request.callId, request.message)
       .then((result) => {
         const current = operations.get(operationId);
+        // A poller may have consumed or cleanup may have removed the operation
+        // before the async continue call resolves.
         if (!current || current.status !== "pending") {
           return;
         }
@@ -157,6 +172,7 @@ export function createVoiceCallContinueOperationStore(params: {
     return { operationId, status: "pending", pollTimeoutMs };
   };
 
+  /** Reads an operation state; completed/failed operations are removed after this call. */
   const read = (
     operationId: string,
   ):
@@ -177,6 +193,8 @@ export function createVoiceCallContinueOperationStore(params: {
       };
     }
     if (operation.status === "failed") {
+      // Terminal states are single-consume so repeated polls cannot replay stale
+      // call results after the gateway has already returned them.
       operations.delete(operationId);
       return {
         ok: true,

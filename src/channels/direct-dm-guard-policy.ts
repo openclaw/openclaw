@@ -1,10 +1,15 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
 export type DirectDmPreCryptoGuardPolicy = {
+  /** Provider message kinds accepted before decrypted content is available. */
   allowedKinds: readonly number[];
+  /** Maximum future timestamp skew accepted before rejecting a message. */
   maxFutureSkewSec: number;
+  /** Maximum encrypted payload bytes accepted before crypto work starts. */
   maxCiphertextBytes: number;
+  /** Maximum decrypted plaintext bytes accepted after crypto succeeds. */
   maxPlaintextBytes: number;
+  /** Per-sender and global limits applied before expensive crypto/decode work. */
   rateLimit: {
     windowMs: number;
     maxPerSenderPerWindow: number;
@@ -16,11 +21,13 @@ export type DirectDmPreCryptoGuardPolicy = {
 export type DirectDmPreCryptoGuardPolicyOverrides = Partial<
   Omit<DirectDmPreCryptoGuardPolicy, "rateLimit">
 > & {
+  /** Partial rate-limit override; omitted or invalid fields keep hardened defaults. */
   rateLimit?: Partial<DirectDmPreCryptoGuardPolicy["rateLimit"]>;
 };
 
 /** Shared policy object for DM-style pre-crypto guardrails. */
 export function createDirectDmPreCryptoGuardPolicy(
+  /** Adapter-specific caps layered over the shared pre-crypto defaults. */
   overrides: DirectDmPreCryptoGuardPolicyOverrides = {},
 ): DirectDmPreCryptoGuardPolicy {
   const defaultMaxFutureSkewSec = 120;
@@ -30,6 +37,8 @@ export function createDirectDmPreCryptoGuardPolicy(
   const defaultMaxPerSenderPerWindow = 20;
   const defaultMaxGlobalPerWindow = 200;
   const defaultMaxTrackedSenderKeys = 4096;
+  // Every numeric override is clamped through resolveIntegerOption so a bad
+  // plugin/config value cannot disable pre-crypto size, skew, or rate limits.
   return {
     allowedKinds: overrides.allowedKinds ?? [4],
     maxFutureSkewSec: resolveIntegerOption(overrides.maxFutureSkewSec, defaultMaxFutureSkewSec, {

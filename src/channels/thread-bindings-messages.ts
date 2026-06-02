@@ -15,6 +15,7 @@ function normalizeThreadBindingDurationMs(raw: unknown): number {
   return durationMs;
 }
 
+/** Formats a thread-binding timeout duration for short user-facing lifecycle messages. */
 export function formatThreadBindingDurationLabel(durationMs: number): string {
   if (durationMs <= 0) {
     return "disabled";
@@ -29,8 +30,11 @@ export function formatThreadBindingDurationLabel(durationMs: number): string {
   return `${totalMinutes}m`;
 }
 
+/** Resolves the thread name used for a focused session binding. */
 export function resolveThreadBindingThreadName(params: {
+  /** Agent id used when no human label is available. */
   agentId?: string;
+  /** Human label preferred for the thread title. */
   label?: string;
 }): string {
   const label = normalizeOptionalString(params.label);
@@ -39,12 +43,19 @@ export function resolveThreadBindingThreadName(params: {
   return raw.slice(0, 100);
 }
 
+/** Builds the system-prefixed intro message posted when a thread binding starts. */
 export function resolveThreadBindingIntroText(params: {
+  /** Agent id used when no human label is available. */
   agentId?: string;
+  /** Human label preferred in the intro text. */
   label?: string;
+  /** Idle timeout displayed when configured. */
   idleTimeoutMs?: number;
+  /** Maximum binding age displayed when configured. */
   maxAgeMs?: number;
+  /** Session cwd appended as a detail line. */
   sessionCwd?: string;
+  /** Additional non-empty detail lines appended below the intro. */
   sessionDetails?: string[];
 }): string {
   const label = normalizeOptionalString(params.label);
@@ -57,6 +68,7 @@ export function resolveThreadBindingIntroText(params: {
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   if (cwd) {
+    // Keep cwd first so operators can scan the most actionable session detail immediately.
     details.unshift(`cwd: ${cwd}`);
   }
 
@@ -81,10 +93,15 @@ export function resolveThreadBindingIntroText(params: {
   return prefixSystemMessage(`${intro}\n${details.join("\n")}`);
 }
 
+/** Builds the system-prefixed farewell message posted when a thread binding ends. */
 export function resolveThreadBindingFarewellText(params: {
+  /** End reason used to pick timeout-specific copy. */
   reason?: string;
+  /** Caller-provided farewell text that overrides generated timeout/default copy. */
   farewellText?: string;
+  /** Idle timeout used when reason is idle-expired. */
   idleTimeoutMs: number;
+  /** Maximum binding age used when reason is max-age-expired. */
   maxAgeMs: number;
 }): string {
   const custom = normalizeOptionalString(params.farewellText);

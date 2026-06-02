@@ -130,20 +130,29 @@ function hasGatewayPasswordOverrideCandidate(params: {
 
 /** Ensure startup has effective Gateway auth, generating only an ephemeral token if needed. */
 export async function ensureGatewayStartupAuth(params: {
+  /** Effective config before startup-generated auth is applied. */
   cfg: OpenClawConfig;
+  /** Env snapshot used for Gateway auth credential candidates. */
   env?: NodeJS.ProcessEnv;
+  /** Runtime auth override layered over persisted config. */
   authOverride?: GatewayAuthConfig;
+  /** Runtime Tailscale override used for auth-mode inference. */
   tailscaleOverride?: GatewayTailscaleConfig;
   /**
    * Legacy startup option retained for external callers. Startup-generated auth
    * is runtime-only; durable auth changes must go through explicit config tools.
    */
   persist?: boolean;
+  /** Config snapshot hash retained for legacy external callers. */
   baseHash?: string;
 }): Promise<{
+  /** Config after runtime-only startup auth materialization. */
   cfg: OpenClawConfig;
+  /** Resolved Gateway auth policy for server startup. */
   auth: ReturnType<typeof resolveGatewayAuth>;
+  /** Runtime-generated token when startup had to synthesize token auth. */
   generatedToken?: string;
+  /** Always false; startup-generated auth is not written durably. */
   persistedGeneratedToken: boolean;
 }> {
   assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
@@ -232,7 +241,9 @@ export async function ensureGatewayStartupAuth(params: {
 
 /** Prevent hook ingress and Gateway auth from sharing the same bearer token. */
 export function assertHooksTokenSeparateFromGatewayAuth(params: {
+  /** Config containing hook ingress token settings. */
   cfg: OpenClawConfig;
+  /** Resolved Gateway auth policy being started. */
   auth: ResolvedGatewayAuth;
 }): void {
   if (params.cfg.hooks?.enabled !== true) {

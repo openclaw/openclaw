@@ -8,12 +8,17 @@ import {
 } from "./routed-command-definitions.js";
 
 export type RouteSpec = {
+  /** Returns true when the resolved command path belongs to this route. */
   matches: (path: string[]) => boolean;
+  /** Optional raw argv guard for routes that only support a subset of flags. */
   canRun?: (argv: string[]) => boolean;
+  /** Whether plugin preload is required before running this route. */
   loadPlugins?: boolean | ((argv: string[]) => boolean);
+  /** Execute the route and return false when argv no longer parses. */
   run: (argv: string[]) => Promise<boolean>;
 };
 
+/** Resolve route-specific plugin preload policy from the command catalog. */
 function createCommandLoadPlugins(commandPath: readonly string[]): (argv: string[]) => boolean {
   return (argv) => {
     const loadPlugins = resolveCliCommandPathPolicy([...commandPath]).loadPlugins;
@@ -21,6 +26,7 @@ function createCommandLoadPlugins(commandPath: readonly string[]): (argv: string
   };
 }
 
+/** Convert a catalog route definition into the executable route spec. */
 function createParsedRoute(params: {
   entry: CliCommandCatalogEntry;
   definition: AnyRoutedCommandDefinition;
@@ -43,6 +49,7 @@ function createParsedRoute(params: {
   };
 }
 
+/** Route table generated from the CLI command catalog and typed route definitions. */
 export const routedCommands: RouteSpec[] = cliCommandCatalog
   .filter(
     (

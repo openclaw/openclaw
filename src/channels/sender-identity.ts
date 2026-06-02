@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
 
+/** Validates normalized sender identity fields before channel messages enter shared routing. */
 export function validateSenderIdentity(ctx: MsgContext): string[] {
   const issues: string[] = [];
 
@@ -15,6 +16,8 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
 
   if (!isDirect) {
     if (!senderId && !senderName && !senderUsername && !senderE164) {
+      // Group-style messages need at least one sender handle so replies, logs, and allowlists
+      // can distinguish the actor from the conversation itself.
       issues.push("missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)");
     }
   }

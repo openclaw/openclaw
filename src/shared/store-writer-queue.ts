@@ -1,14 +1,20 @@
 /** Pending exclusive store write plus the promise hooks for its caller. */
 export type StoreWriterTask = {
+  /** Write operation that must run after earlier tasks for the same store path. */
   fn: () => Promise<unknown>;
+  /** Resolves the caller's promise with the write result. */
   resolve: (value: unknown) => void;
+  /** Rejects the caller's promise when the write operation fails or test cleanup cancels it. */
   reject: (reason: unknown) => void;
 };
 
 /** Per-store-path FIFO queue that serializes file writes within one process. */
 export type StoreWriterQueue = {
+  /** True while a drain loop owns this queue. */
   running: boolean;
+  /** FIFO tasks waiting for the current or next drain loop. */
   pending: StoreWriterTask[];
+  /** Active drain promise reused by concurrent drain requests. */
   drainPromise: Promise<void> | null;
 };
 

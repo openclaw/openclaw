@@ -1,6 +1,3 @@
-// Narrow SSRF helpers for extensions that need pinned-dispatcher and policy
-// utilities without loading the full infra-runtime surface.
-
 export {
   closeDispatcher,
   createPinnedDispatcher,

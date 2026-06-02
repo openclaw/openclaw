@@ -64,33 +64,49 @@ export type ChannelIngressStateInput = MessageAccessChannelIngressStateInput;
 
 declare const CHANNEL_INGRESS_PLUGIN_ID: unique symbol;
 
+/** Branded plugin id used when channel ingress state needs to retain plugin ownership. */
 export type ChannelIngressPluginId = string & {
   readonly [CHANNEL_INGRESS_PLUGIN_ID]: true;
 };
 
 export type ChannelIngressGateSelector = {
+  /** Decision graph phase to inspect, such as sender, command, activation, or event. */
   phase: IngressGatePhase;
+  /** Gate kind inside the selected phase. */
   kind: IngressGateKind;
 };
 
 export type ChannelIngressDecisionBundle = {
+  /** Base policy applied to direct-message state. */
   dm: ChannelIngressDecision;
+  /** Base policy applied to group-message state. */
   group: ChannelIngressDecision;
+  /** Command policy applied to direct-message state. */
   dmCommand: ChannelIngressDecision;
+  /** Command policy applied to group-message state. */
   groupCommand: ChannelIngressDecision;
 };
 
 export type ChannelIngressSideEffectResult =
+  /** No reply, history write, or local event handler consumed the admission. */
   | { kind: "none" }
+  /** Pairing was requested and the caller successfully notified the sender. */
   | { kind: "pairing-reply-sent" }
+  /** Pairing was required, but the notification path failed. */
   | { kind: "pairing-reply-failed"; errorCode?: string }
+  /** A denied/handled command produced a reply, so the turn is consumed. */
   | { kind: "command-reply-sent" }
+  /** Command handling intended to reply, but delivery failed. */
   | { kind: "command-reply-failed"; errorCode?: string }
+  /** The caller recorded skipped pending history and no model turn should run. */
   | { kind: "pending-history-recorded" }
+  /** Local event handling fully consumed the event before model dispatch. */
   | { kind: "local-event-handled" };
 
 export type RedactedIngressDiagnostics = {
+  /** Gate id that made the final decision, safe for logs after policy redaction. */
   decisiveGateId?: string;
+  /** Stable machine reason for telemetry, logs, and support diagnostics. */
   reasonCode: IngressReasonCode;
 };
 
@@ -103,42 +119,65 @@ export const CHANNEL_INGRESS_GATE_SELECTORS = {
 } as const satisfies Record<string, ChannelIngressGateSelector>;
 
 export type ChannelIngressSubjectIdentifierInput = {
+  /** Raw identifier before adapter normalization, for example a sender id or address. */
   value: string;
+  /** Caller-stable id used in diagnostics instead of exposing the raw value. */
   opaqueId?: string;
+  /** Identifier namespace; only entries with the same kind can match by default. */
   kind?: ChannelIngressIdentifierKind;
+  /** Marks values that should be treated cautiously in diagnostics or policy output. */
   dangerous?: boolean;
+  /** Redaction hint for identifiers that may carry PII. */
   sensitivity?: "normal" | "pii";
 };
 
 export type CreateChannelIngressStringAdapterParams = {
+  /** Identifier namespace produced for every normalized allowlist entry. */
   kind?: ChannelIngressIdentifierKind;
+  /** Normalizes stored allowlist entries; null/empty results are ignored. */
   normalizeEntry?: (value: string) => string | null | undefined;
+  /** Normalizes subject identifiers before matching; defaults to `normalizeEntry`. */
   normalizeSubject?: (value: string) => string | null | undefined;
+  /** Detects wildcard entries before normal entry normalization runs. */
   isWildcardEntry?: (value: string) => boolean;
+  /** Provides opaque ids for diagnostics; defaults to stable entry positions. */
   resolveEntryId?: (params: { entry: string; index: number }) => string;
+  /** Propagates dangerous-value metadata from raw entries into normalized entries. */
   dangerous?: boolean | ((entry: string) => boolean);
+  /** Redaction hint attached to every normalized entry from this adapter. */
   sensitivity?: "normal" | "pii";
 };
 
 export type CreateChannelIngressMultiIdentifierAdapterParams = {
+  /** Expands one stored entry into one or more matchable identifiers. */
   normalizeEntry: (entry: string, index: number) => readonly ChannelIngressAdapterEntry[];
+  /** Converts a normalized entry to a comparison key; null makes the entry unmatchable. */
   getEntryMatchKey?: (entry: ChannelIngressAdapterEntry) => string | null | undefined;
+  /** Converts a subject identifier to all comparison keys it may satisfy. */
   getSubjectMatchKeys?: (
     identifier: ChannelIngressSubjectIdentifier,
   ) => readonly (string | null | undefined)[];
+  /** Detects entries that should match every subject regardless of comparison keys. */
   isWildcardEntry?: (entry: ChannelIngressAdapterEntry) => boolean;
 };
 
 export type ChannelIngressDmGroupAccessProjection = {
+  /** Legacy allow/block/pairing decision projected from the ingress graph. */
   decision: DmGroupAccessDecision;
+  /** Legacy reason code for callers that have not migrated to graph gates. */
   reasonCode: DmGroupAccessReasonCode;
+  /** Human-readable policy explanation used by older diagnostics. */
   reason: string;
 };
 
 export type ChannelIngressSenderGroupAccessProjection = {
+  /** True only when the sender gate reason is allowed and the decision itself allowed. */
   allowed: boolean;
+  /** Effective group policy used for the sender decision. */
   groupPolicy: ChannelIngressPolicyInput["groupPolicy"];
+  /** True when a provider without route facts fell back to missing-provider policy. */
   providerMissingFallbackApplied: boolean;
+  /** Compact legacy reason for group sender authorization. */
   reason: "allowed" | "disabled" | "empty_allowlist" | "sender_not_allowlisted";
 };
 
@@ -151,15 +190,22 @@ export type ResolveChannelIngressAccessParams = ChannelIngressStateInput & {
 
 /** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export type ResolvedChannelIngressAccess = {
+  /** Normalized state passed to the ingress decision engine. */
   state: ChannelIngressState;
+  /** Full ingress graph and final decision. */
   ingress: ChannelIngressDecision;
+  /** True when the source conversation is any non-direct channel. */
   isGroup: boolean;
+  /** Sender gate reason projected for legacy callers. */
   senderReasonCode: IngressReasonCode;
+  /** Legacy DM/group policy projection plus caller-supplied effective allowlists. */
   access: ChannelIngressDmGroupAccessProjection & {
     effectiveAllowFrom: string[];
     effectiveGroupAllowFrom: string[];
   };
+  /** Whether the command gate allowed the control command path. */
   commandAuthorized: boolean;
+  /** Whether command handling should stop before model dispatch. */
   shouldBlockControlCommand: boolean;
 };
 
@@ -198,6 +244,7 @@ export function findChannelIngressGate(
   );
 }
 
+/** Finds the sender gate that applies to direct or group policy checks. */
 export function findChannelIngressSenderGate(
   decision: ChannelIngressDecision,
   params: { isGroup: boolean },
@@ -210,16 +257,22 @@ export function findChannelIngressSenderGate(
   );
 }
 
+/** Finds the command gate used to decide control-command handling. */
 export function findChannelIngressCommandGate(
   decision: ChannelIngressDecision,
 ): AccessGraphGate | undefined {
   return findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.command);
 }
 
+/** Resolves base and command decisions for direct and group state in one pass. */
 export function decideChannelIngressBundle(params: {
+  /** Direct-message state resolved from the same event facts. */
   directState: ChannelIngressState;
+  /** Group/channel state resolved from the same event facts. */
   groupState: ChannelIngressState;
+  /** Normal message policy without command-specific overrides. */
   basePolicy: ChannelIngressPolicyInput;
+  /** Command policy with control-command authorizer overrides applied. */
   commandPolicy: ChannelIngressPolicyInput;
 }): ChannelIngressDecisionBundle {
   return {
@@ -268,7 +321,11 @@ function projectDmDecision(
   return decision.admission === "drop" ? "deny" : "allow";
 }
 
-export function projectIngressAccessFacts(decision: ChannelIngressDecision): AccessFacts {
+/** Projects the detailed ingress graph into the older turn access-facts shape. */
+export function projectIngressAccessFacts(
+  /** Detailed ingress decision graph to expose through the legacy AccessFacts API. */
+  decision: ChannelIngressDecision,
+): AccessFacts {
   const command = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.command);
   const activation = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.activation);
   const dmSender = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.dmSender);
@@ -299,6 +356,8 @@ export function projectIngressAccessFacts(decision: ChannelIngressDecision): Acc
           useAccessGroups: command.command.useAccessGroups,
           allowTextCommands: command.command.allowTextCommands,
           modeWhenAccessGroupsOff: command.command.modeWhenAccessGroupsOff,
+          // Legacy AccessFacts requires authorizer rows, but the ingress graph
+          // only exposes redacted aggregate matches. Keep the field present and empty.
           authorizers: [],
         }
       : undefined,
@@ -313,6 +372,7 @@ export function projectIngressAccessFacts(decision: ChannelIngressDecision): Acc
   };
 }
 
+/** Combines the ingress admission and caller side effects into turn-queue admission. */
 export function mapChannelIngressDecisionToTurnAdmission(
   decision: ChannelIngressDecision,
   sideEffect: ChannelIngressSideEffectResult,
@@ -340,6 +400,7 @@ export function mapChannelIngressDecisionToTurnAdmission(
     : { kind: "drop", reason: decision.reasonCode };
 }
 
+/** Creates a non-empty branded id for SDK call sites that track plugin ownership. */
 export function createChannelIngressPluginId(id: string): ChannelIngressPluginId {
   const trimmed = id.trim();
   if (!trimmed) {
@@ -348,6 +409,7 @@ export function createChannelIngressPluginId(id: string): ChannelIngressPluginId
   return trimmed as ChannelIngressPluginId;
 }
 
+/** Builds a match subject from one or more raw identifiers with opaque defaults. */
 export function createChannelIngressSubject(
   input:
     | ChannelIngressSubjectIdentifierInput
@@ -365,6 +427,7 @@ export function createChannelIngressSubject(
   };
 }
 
+/** Creates an adapter for one identifier kind with simple string normalization. */
 export function createChannelIngressStringAdapter(
   params: CreateChannelIngressStringAdapterParams = {},
 ): ChannelIngressAdapter {
@@ -416,6 +479,7 @@ export function createChannelIngressStringAdapter(
   };
 }
 
+/** Creates an adapter for entries that can expand to multiple identifier kinds. */
 export function createChannelIngressMultiIdentifierAdapter(
   params: CreateChannelIngressMultiIdentifierAdapterParams,
 ): ChannelIngressAdapter {

@@ -1,17 +1,15 @@
 import type { WebhookSecurityConfig } from "../config.js";
 
-/**
- * Twilio Voice API provider options.
- */
+/** Runtime options for Twilio webhook verification, media stream URLs, and dev-only bypasses. */
 export interface TwilioProviderOptions {
-  /** Allow ngrok free tier compatibility mode (loopback only, less secure) */
+  /** Allows unsigned loopback callbacks produced by ngrok's free interstitial flow. */
   allowNgrokFreeTierLoopbackBypass?: boolean;
-  /** Override public URL for signature verification */
+  /** Canonical external origin used when Twilio signs a URL different from the local request. */
   publicUrl?: string;
-  /** Path for media stream WebSocket (e.g., /voice/stream) */
+  /** WebSocket path advertised in generated TwiML stream responses. */
   streamPath?: string;
-  /** Skip webhook signature verification (development only) */
+  /** Development-only escape hatch; production should verify every Twilio callback. */
   skipVerification?: boolean;
-  /** Webhook security options (forwarded headers/allowlist) */
+  /** Forwarded-header trust and host allowlist controls for signature URL reconstruction. */
   webhookSecurity?: WebhookSecurityConfig;
 }

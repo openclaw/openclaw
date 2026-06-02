@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
+/** Options for shaping env used by OpenClaw-managed npm project installs. */
 export type NpmProjectInstallEnvOptions = {
   cacheDir?: string;
   npmConfigCwd?: string;
@@ -253,6 +254,7 @@ function resolveNpmFreshnessBypassMode(
   return hasRawNpmConfigKey(env, "before", scope) ? "before" : "min-release-age";
 }
 
+/** Creates npm CLI args that bypass stale before/min-release-age install policies. */
 export function createNpmFreshnessBypassArgs(
   env: NodeJS.ProcessEnv = process.env,
   now = new Date(),
@@ -264,6 +266,7 @@ export function createNpmFreshnessBypassArgs(
   return [`--before=${now.toISOString()}`];
 }
 
+/** Applies env overrides matching createNpmFreshnessBypassArgs for child npm calls. */
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),
@@ -284,6 +287,7 @@ export function applyNpmFreshnessBypassEnv(
   }
 }
 
+/** Builds a project-scoped npm install env with global/workspace flags reset. */
 export function createNpmProjectInstallEnv(
   env: NodeJS.ProcessEnv,
   options: NpmProjectInstallEnvOptions = {},
@@ -291,6 +295,8 @@ export function createNpmProjectInstallEnv(
 ): NodeJS.ProcessEnv {
   const nextEnv = { ...env };
   for (const key of Object.keys(nextEnv)) {
+    // Parent npm config can force global/workspace installs or disable scripts;
+    // reset those keys so OpenClaw-managed installs stay project-local.
     if (NPM_CONFIG_KEYS_TO_RESET.has(key.toLowerCase())) {
       delete nextEnv[key];
     }
@@ -313,10 +319,12 @@ export function createNpmProjectInstallEnv(
   return installEnv;
 }
 
+/** Checks both npm script-shell env spellings before setting a default. */
 export function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
   return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
 }
 
+/** Resolves a POSIX shell for npm lifecycle scripts without affecting Windows. */
 export function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
   if (process.platform === "win32") {
     return null;
@@ -328,6 +336,7 @@ export function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | nul
   return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
 }
 
+/** Adds a POSIX npm script shell when npm has not already been configured. */
 export function applyPosixNpmScriptShellEnv(env: NodeJS.ProcessEnv): void {
   if (hasNpmScriptShellSetting(env)) {
     return;

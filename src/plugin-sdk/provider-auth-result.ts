@@ -120,17 +120,29 @@ function normalizeProviderAuthConfigPatchModelRefs(
 
 /** Build the standard auth result payload for OAuth-style provider login flows. */
 export function buildOauthProviderAuthResult(params: {
+  /** Provider id used for auth profile ids and credentials. */
   providerId: string;
+  /** Default model to expose after login; retired refs are normalized before persistence. */
   defaultModel: string;
+  /** OAuth access token stored in the generated auth profile. */
   access: string;
+  /** Optional refresh token stored when the provider supports renewal. */
   refresh?: string | null;
+  /** Expiry timestamp in any Date-safe format accepted by asDateTimestampMs. */
   expires?: number | null;
+  /** Account email used as profile identity when no explicit profileName is supplied. */
   email?: string | null;
+  /** Display label stored with the credential for status/UI surfaces. */
   displayName?: string | null;
+  /** Explicit auth profile name, overriding email-derived naming. */
   profileName?: string | null;
+  /** Optional profile id prefix for providers with multiple OAuth modes. */
   profilePrefix?: string;
+  /** Provider-specific credential fields merged into the OAuth credential. */
   credentialExtra?: Record<string, unknown>;
+  /** Config patch emitted alongside the auth profile; model refs are normalized. */
   configPatch?: Partial<OpenClawConfig>;
+  /** Human-readable setup notes returned to auth callers. */
   notes?: string[];
 }): ProviderAuthResult {
   const email = params.email ?? undefined;
@@ -156,6 +168,8 @@ export function buildOauthProviderAuthResult(params: {
 
   return {
     profiles: [{ profileId, credential }],
+    // Auth result patches may be copied directly into user config, so normalize
+    // retired model aliases here before setup flows persist stale references.
     configPatch: normalizeProviderAuthConfigPatchModelRefs(
       params.configPatch ??
         ({

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 
+/** Return whether Commander saw any of the named options explicitly on the CLI. */
 export function hasExplicitOptions(command: Command, names: readonly string[]): boolean {
   if (typeof command.getOptionValueSource !== "function") {
     return false;
@@ -18,6 +19,7 @@ function getOptionSource(command: Command, name: string): string | undefined {
 const MAX_INHERIT_DEPTH = 2;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Commander option values are typed by the caller.
+/** Inherit an option value from a parent/grandparent command when the child kept its default. */
 export function inheritOptionFromParent<T = unknown>(
   command: Command | undefined,
   name: string,

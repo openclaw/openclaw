@@ -28,6 +28,7 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
+/** Parse the camera facing option shared by snap/clip commands. */
 const parseFacing = (value: string): CameraFacing => {
   const v = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value) ?? "");
   if (v === "front" || v === "back") {
@@ -36,12 +37,14 @@ const parseFacing = (value: string): CameraFacing => {
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
+/** Extract the node.invoke payload envelope returned by the gateway. */
 function getGatewayInvokePayload(raw: unknown): unknown {
   return typeof raw === "object" && raw !== null
     ? (raw as { payload?: unknown }).payload
     : undefined;
 }
 
+/** Register camera discovery, photo, and clip capture commands for paired nodes. */
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 

@@ -25,12 +25,19 @@ function comparePluginProvidersAlphabetically(
   return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
 }
 
+/** Sorts provider entries deterministically for CLI output and prompt payloads. */
 export function sortPluginProviders<T extends Pick<WebProviderSortEntry, "id" | "pluginId">>(
   providers: T[],
 ): T[] {
   return providers.toSorted(comparePluginProvidersAlphabetically);
 }
 
+/**
+ * Sorts provider entries for auto-detection.
+ *
+ * Manifest order wins when present; alphabetical fallback keeps equivalent
+ * providers stable across registry and filesystem enumeration order.
+ */
 export function sortPluginProvidersForAutoDetect<T extends WebProviderSortEntry>(
   providers: T[],
 ): T[] {
@@ -52,6 +59,9 @@ function pluginManifestDeclaresProviderConfig(
   if ((record.contracts?.[contract]?.length ?? 0) > 0) {
     return true;
   }
+  // Older manifests exposed web provider config before declaring the formal
+  // contract. Treat config UI/schema ownership as declaration evidence so those
+  // plugins still participate in provider setup and discovery.
   const configUiHintKeys = Object.keys(record.configUiHints ?? {});
   if (configUiHintKeys.some((key) => key === configKey || key.startsWith(`${configKey}.`))) {
     return true;
@@ -75,6 +85,12 @@ function loadInstalledWebProviderManifestRecords(params: {
   return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
 
+/**
+ * Resolves plugin ids whose manifests can provide the requested web-provider contract.
+ *
+ * Returns `undefined` when an unconstrained scan found no declaration so callers
+ * can fall back to runtime discovery; explicit scopes return an empty list.
+ */
 export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   contract: WebProviderContract;
   configKey: WebProviderConfigKey;
@@ -87,6 +103,12 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
 
+/**
+ * Resolves manifest web-provider candidates plus the snapshot used for the scan.
+ *
+ * The returned snapshot lets callers reuse manifest metadata after deciding
+ * whether runtime provider loading is necessary.
+ */
 export function resolveManifestDeclaredWebProviderCandidates(params: {
   contract: WebProviderContract;
   configKey: WebProviderConfigKey;
@@ -153,6 +175,9 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
+  // Bundled web providers predate manifest-only discovery. Resolve the compat
+  // activation config here so legacy bundled providers are auto-enabled before
+  // provider enumeration without teaching callers plugin-specific defaults.
   const activation = resolveBundledPluginCompatibleLoadValues({
     rawConfig: params.config,
     env: params.env,
@@ -176,6 +201,12 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   };
 }
 
+/**
+ * Maps registry provider entries into the public provider shape.
+ *
+ * The `pluginId` is attached after filtering so later selection logic can trace
+ * provider ids back to the owning plugin without re-reading the registry.
+ */
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {
   entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];

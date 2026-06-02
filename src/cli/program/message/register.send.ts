@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register message send with text/media/presentation delivery options. */
 export function registerMessageSendCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(

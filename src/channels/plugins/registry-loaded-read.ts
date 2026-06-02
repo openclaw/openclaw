@@ -12,11 +12,17 @@ function coerceLoadedChannelPlugin(
     return undefined;
   }
   if (!plugin.meta || typeof plugin.meta !== "object") {
+    // Active registry state is serialized as a generic runtime shape; normalize
+    // the meta object before exposing it through the ChannelPlugin read facade.
     plugin.meta = {};
   }
   return plugin as ChannelPlugin;
 }
 
+/**
+ * Reads a channel plugin from the active plugin registry without triggering
+ * bundled plugin bootstrap or broader registry loading.
+ */
 export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

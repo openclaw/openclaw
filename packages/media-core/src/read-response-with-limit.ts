@@ -23,6 +23,8 @@ async function readChunkWithIdleTimeout(
         onIdleTimeout?.({ chunkTimeoutMs: resolvedChunkTimeoutMs }) ??
         new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`);
       clear();
+      // Cancel the response body on idle timeout so remote media downloads do
+      // not keep sockets open after the caller has already failed the read.
       void reader.cancel(error).catch(() => undefined);
       reject(error);
     }, resolvedChunkTimeoutMs);
@@ -123,6 +125,7 @@ async function readResponsePrefix(
   };
 }
 
+/** Reads a Response body into memory, enforcing byte and optional per-chunk idle limits. */
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
@@ -146,6 +149,7 @@ export async function readResponseWithLimit(
   return prefix.buffer;
 }
 
+/** Reads a bounded, whitespace-collapsed response prefix for diagnostics. */
 export async function readResponseTextSnippet(
   res: Response,
   opts?: {

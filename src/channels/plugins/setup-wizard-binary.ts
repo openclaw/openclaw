@@ -9,6 +9,7 @@ import type {
 type SetupTextInputParams = Parameters<NonNullable<ChannelSetupWizardTextInput["currentValue"]>>[0];
 type SetupStatusParams = Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0];
 
+/** Builds setup status resolvers for channels that depend on a local CLI binary. */
 export function createDetectedBinaryStatus(params: {
   channelLabel: string;
   binaryLabel: string;
@@ -70,6 +71,7 @@ export function createDetectedBinaryStatus(params: {
   };
 }
 
+/** Builds a text input that reuses one resolver for the current and initial CLI path. */
 export function createCliPathTextInput(params: {
   inputKey: ChannelSetupWizardTextInput["inputKey"];
   message: string;
@@ -91,6 +93,7 @@ export function createCliPathTextInput(params: {
   };
 }
 
+/** Forwards optional status resolvers through a lazy setup wizard loader. */
 export function createDelegatedSetupWizardStatusResolvers(
   loadWizard: () => Promise<ChannelSetupWizard>,
 ): Pick<
@@ -110,6 +113,7 @@ export function createDelegatedSetupWizardStatusResolvers(
   };
 }
 
+/** Creates a shouldPrompt hook that delegates to a lazily loaded text input. */
 export function createDelegatedTextInputShouldPrompt(params: {
   loadWizard: () => Promise<ChannelSetupWizard>;
   inputKey: ChannelSetupWizardTextInput["inputKey"];

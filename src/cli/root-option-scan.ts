@@ -8,6 +8,7 @@ type CliRootOptionVisitResult =
   | { kind: "handled"; consumedNext?: boolean }
   | { kind: "error"; error: string };
 
+/** Scan argv after the executable/subcommand prefix, letting callers rewrite selected root flags. */
 export function scanCliRootOptions(
   argv: string[],
   visit: (params: {

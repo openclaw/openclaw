@@ -2,6 +2,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveNonNegativeIntegerOption } from "./numeric-options.js";
 
+/** Small TTL/max-size cache used to suppress repeated work for string keys. */
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
   peek: (key: string | undefined | null, now?: number) => boolean;
@@ -10,6 +11,7 @@ export type DedupeCache = {
   size: () => number;
 };
 
+/** Bounds for a dedupe cache; non-integer/negative values are floored safely. */
 export type DedupeCacheOptions = {
   ttlMs: number;
   maxSize: number;
@@ -18,16 +20,19 @@ export type DedupeCacheOptions = {
 /** @deprecated Use resolveNonNegativeIntegerOption for new internal numeric option normalization. */
 export { resolveNonNegativeIntegerOption as resolveDedupeNonNegativeInteger };
 
+/** Creates a cache where check() records misses and refreshes duplicate hits. */
 export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const maxSize = resolveNonNegativeIntegerOption(options.maxSize, 0);
   const cache = new Map<string, number>();
 
+  /** Reinsert the key so max-size pruning treats recent duplicate hits as newest. */
   const touch = (key: string, now: number) => {
     cache.delete(key);
     cache.set(key, now);
   };
 
+  /** Drops expired entries first, then caps the live window by insertion order. */
   const prune = (now: number) => {
     const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
     if (cutoff !== undefined) {
@@ -44,6 +49,7 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     pruneMapToMaxSize(cache, maxSize);
   };
 
+  /** Shared hit test for check() and peek(); only check() refreshes recency. */
   const hasUnexpired = (key: string, now: number, touchOnRead: boolean): boolean => {
     const existing = cache.get(key);
     if (existing === undefined) {
@@ -90,6 +96,7 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   };
 }
 
+/** Resolves a process-wide dedupe cache for callers that need shared suppression. */
 export function resolveGlobalDedupeCache(key: symbol, options: DedupeCacheOptions): DedupeCache {
   return resolveGlobalSingleton(key, () => createDedupeCache(options));
 }

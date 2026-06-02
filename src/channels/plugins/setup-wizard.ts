@@ -223,6 +223,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             cfg: next,
             accountId,
           });
+          // Env shortcuts can populate all required credentials in one write.
+          // Skip credential prompts afterward so users are not asked to re-enter them.
           usedEnvShortcut = true;
         }
       }
@@ -253,6 +255,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           next = prepared.cfg;
         }
         if (prepared?.credentialValues) {
+          // Credential values are an in-memory bridge between setup steps; the
+          // source of truth remains `next`, but later prompts may need raw secrets.
           credentialValues = {
             ...credentialValues,
             ...prepared.credentialValues,
@@ -280,6 +284,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             if (resolvedCredentialValue) {
               credentialValues[credential.inputKey] = resolvedCredentialValue;
             } else {
+              // Keep the transient cache aligned with config after custom
+              // credential writers so allowlist/finalize hooks do not see stale data.
               delete credentialValues[credential.inputKey];
             }
             continue;
@@ -493,6 +499,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
       };
 
       if (wizard.stepOrder === "text-first") {
+        // Some channels need non-secret text fields before credential prompts
+        // can inspect account-scoped config; default keeps credentials first.
         await runTextInputSteps();
         await runCredentialSteps();
       } else {
@@ -543,6 +551,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
       if (forceAllowFrom && wizard.allowFrom) {
         const allowFrom = wizard.allowFrom;
+        // Allowlist resolution commonly needs the freshly entered credential;
+        // fall back to the first credential key for older wizard definitions.
         const allowFromCredentialValue = normalizeOptionalString(
           credentialValues[allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey],
         );

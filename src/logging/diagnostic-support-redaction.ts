@@ -36,7 +36,9 @@ const DEFAULT_TRUNCATION_SUFFIX = "...<truncated>";
 const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 
 export type SupportRedactionContext = {
+  /** Environment used to discover user-home path prefixes. */
   env: NodeJS.ProcessEnv;
+  /** OpenClaw state directory that should be rendered as $OPENCLAW_STATE_DIR. */
   stateDir: string;
 };
 
@@ -197,6 +199,7 @@ function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionP
   addPathPrefixVariants(prefixes, options.stateDir, "$OPENCLAW_STATE_DIR");
   addPathPrefixVariants(prefixes, options.env.HOME, "~");
   addPathPrefixVariants(prefixes, options.env.USERPROFILE, "~");
+  // Longest first prevents HOME from swallowing a more specific stateDir path.
   return [...prefixes.values()].toSorted((a, b) => b.prefix.length - a.prefix.length);
 }
 
@@ -280,6 +283,7 @@ function redactKnownPathPrefixesForSupport(
   return next;
 }
 
+/** Applies support-bundle text redaction for credentials, service ids, contacts, and long ids. */
 export function redactTextForSupport(value: string): string {
   let redacted = redactCommonCredentialTextForSupport(value);
   redacted = redactSensitiveTextForSupport(redacted);
@@ -364,6 +368,7 @@ function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionCo
   });
 }
 
+/** Sanitizes runtime/support snapshots while preserving non-private diagnostic structure. */
 export function sanitizeSupportSnapshotValue(
   value: unknown,
   redaction: SupportRedactionContext,
@@ -397,6 +402,8 @@ export function sanitizeSupportSnapshotValue(
     return "<unsupported>";
   }
   if (PRIVATE_MAP_SUPPORT_FIELD_RE.test(key)) {
+    // Maps keyed by user/account/thread ids expose cardinality only; entry keys
+    // are identifiers even when nested values are otherwise safe.
     return { count: countOwnObjectEntries(record) };
   }
   const sanitized = createSupportRecord();
@@ -410,6 +417,7 @@ export function sanitizeSupportSnapshotValue(
   return sanitized;
 }
 
+/** Sanitizes config exports, redacting private config fields more aggressively than snapshots. */
 export function sanitizeSupportConfigValue(
   value: unknown,
   redaction: SupportRedactionContext,

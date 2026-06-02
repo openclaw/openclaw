@@ -39,6 +39,7 @@ type ResolvedSystemRunCommand =
       details?: Record<string, unknown>;
     };
 
+/** Formats argv into canonical approval text without invoking shell quoting logic. */
 export function formatExecCommand(argv: string[]): string {
   return argv
     .map((arg) => {
@@ -54,6 +55,7 @@ export function formatExecCommand(argv: string[]): string {
     .join(" ");
 }
 
+/** Extracts a bindable inline shell payload from argv when wrapper analysis allows it. */
 export function extractShellCommandFromArgv(argv: string[]): string | null {
   return extractShellWrapperCommand(argv).command;
 }
@@ -107,6 +109,8 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
     (wrapper === "powershell" || wrapper === "pwsh") &&
     isPowerShellInlineRestCommandFlag(wrapperArgv[inlineCommandIndex - 1] ?? "")
   ) {
+    // PowerShell -CommandWithArgs style flags intentionally bind the rest of argv
+    // to the inline command, so trailing tokens are not a separate positional carrier.
     return false;
   }
   return wrapperArgv.slice(inlineCommandIndex + 1).some((entry) => entry.trim().length > 0);
@@ -141,6 +145,7 @@ function normalizeRawCommandText(rawCommand?: unknown): string | null {
   return typeof rawCommand === "string" && rawCommand.trim().length > 0 ? rawCommand.trim() : null;
 }
 
+/** Validates rawCommand against canonical argv text and derives safe display previews. */
 export function validateSystemRunCommandConsistency(params: {
   argv: string[];
   rawCommand?: string | null;
@@ -177,6 +182,7 @@ export function validateSystemRunCommandConsistency(params: {
   };
 }
 
+/** Resolves strict system-run command input; rawCommand must match canonical argv text. */
 export function resolveSystemRunCommand(params: {
   command?: unknown;
   rawCommand?: unknown;
@@ -184,6 +190,7 @@ export function resolveSystemRunCommand(params: {
   return resolveSystemRunCommandWithMode(params, false);
 }
 
+/** Resolves request input while accepting legacy rawCommand shell-payload text. */
 export function resolveSystemRunCommandRequest(params: {
   command?: unknown;
   rawCommand?: unknown;

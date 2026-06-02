@@ -63,6 +63,7 @@ const UNKNOWN_PLATFORM_COMMANDS = [
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
+/** Built-in high-risk node commands that require explicit allowCommands opt-in. */
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
@@ -213,6 +214,7 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   return byFamily ?? "unknown";
 }
 
+/** List plugin-declared node commands that should not be enabled by default. */
 export function listDangerousPluginNodeCommands(): string[] {
   const registry = getActiveRuntimePluginRegistry();
   if (!registry) {
@@ -244,6 +246,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   return normalizeUniqueStringEntries(commands);
 }
 
+/** Return whether a plugin command is iOS foreground-restricted. */
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
   const registry = getActiveRuntimePluginRegistry();
   if (!registry) {
@@ -353,6 +356,7 @@ function resolveNodeCommandAllowlistInternal(
   return allow;
 }
 
+/** Resolve the effective runtime node command allowlist for a node. */
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
@@ -360,6 +364,7 @@ export function resolveNodeCommandAllowlist(
   return resolveNodeCommandAllowlistInternal(cfg, node);
 }
 
+/** Resolve the pairing-time allowlist, including desktop host commands for approval. */
 export function resolveNodePairingCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
@@ -386,8 +391,11 @@ function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
   return normalized;
 }
 
+/** Normalize node-declared commands and drop entries outside the allowlist. */
 export function normalizeDeclaredNodeCommands(params: {
+  /** Commands reported by the node during connect/pairing. */
   declaredCommands?: readonly string[];
+  /** Effective command allowlist for this node. */
   allowlist: Set<string>;
 }): string[] {
   return normalizeDeclaredCommands(params.declaredCommands).filter((command) =>
@@ -395,9 +403,13 @@ export function normalizeDeclaredNodeCommands(params: {
   );
 }
 
+/** Validate a requested node command against allowlist and node declarations. */
 export function isNodeCommandAllowed(params: {
+  /** Command being invoked. */
   command: string;
+  /** Commands the node declared support for. */
   declaredCommands?: string[];
+  /** Effective command allowlist for this node. */
   allowlist: Set<string>;
 }): { ok: true } | { ok: false; reason: string } {
   const command = params.command.trim();

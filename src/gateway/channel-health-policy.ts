@@ -28,14 +28,21 @@ type ChannelHealthEvaluationReason =
   | "stale-socket";
 
 export type ChannelHealthEvaluation = {
+  /** True when the account should be treated as ready and not restartable. */
   healthy: boolean;
+  /** Stable policy reason used by readiness, health output, and restart monitors. */
   reason: ChannelHealthEvaluationReason;
 };
 
+/** Time-window inputs shared by readiness checks and background restarts. */
 export type ChannelHealthPolicy = {
+  /** Channel being evaluated; retained for future channel-specific policy branches. */
   channelId: ChannelId;
+  /** Wall-clock timestamp used to compute lifecycle and activity ages. */
   now: number;
+  /** Maximum transport inactivity before a connected channel is considered stale. */
   staleEventThresholdMs: number;
+  /** Startup window where not-yet-connected channels remain healthy. */
   channelConnectGraceMs: number;
 };
 
@@ -51,6 +58,13 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
+/**
+ * Classify one channel account snapshot without mutating channel state.
+ *
+ * Callers reuse this pure policy for UI readiness, CLI health output, and the
+ * restart monitor so all surfaces agree on startup grace, stuck runs, and stale
+ * transport detection.
+ */
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
@@ -127,6 +141,7 @@ export function evaluateChannelHealth(
   return { healthy: true, reason: "healthy" };
 }
 
+/** Convert a failed health evaluation into the restart reason recorded by the monitor. */
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,

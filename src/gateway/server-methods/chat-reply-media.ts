@@ -24,6 +24,11 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
   return payload.trustedLocalMedia === true;
 }
 
+/**
+ * Normalizes reply media for WebChat display by staging local files into
+ * Gateway-managed media storage while preserving media that is already safe to
+ * render directly, such as data URLs and trust-scoped local audio.
+ */
 export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -62,6 +67,9 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       normalized.push(payload);
       continue;
     }
+    // Mixed replies keep directly renderable media in-place while normalizing
+    // only the unsafe local entries, so one bad attachment cannot suppress a
+    // surviving inline image or trust-scoped audio item.
     const mergedMediaUrls: string[] = [];
     const text = payload.text;
     for (const mediaUrl of mediaUrls) {

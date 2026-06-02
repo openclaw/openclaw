@@ -20,6 +20,8 @@ function listManifestModelCatalogSuppressions(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  // Suppressions are control-plane metadata, but only active/eligible manifest
+  // owners should affect built-in model lookup for the current configuration.
   const registry = {
     diagnostics: snapshot.diagnostics,
     plugins: snapshot.plugins.filter((plugin) =>
@@ -93,6 +95,9 @@ function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
+  // Provider ids may alias a different API implementation in config. Match the
+  // effective API so a provider-specific suppression does not hide unrelated
+  // custom endpoints using the same model id.
   if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
     const effectiveApi = configuredProvider
@@ -103,6 +108,8 @@ function manifestSuppressionMatchesConditions(params: {
     }
   }
   if (when.baseUrlHosts?.length) {
+    // Base URL conditions compare hosts only and ignore trailing dots/case so
+    // config spelling differences do not change suppression behavior.
     const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
     if (!baseUrlHost) {
       return false;
@@ -115,6 +122,12 @@ function manifestSuppressionMatchesConditions(params: {
   return true;
 }
 
+/**
+ * Builds a reusable resolver for manifest-declared built-in model suppressions.
+ *
+ * The manifest snapshot is read once here, making this the preferred API for
+ * model-catalog and prompt hot paths that check many provider/model pairs.
+ */
 export function buildManifestBuiltInModelSuppressionResolver(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;

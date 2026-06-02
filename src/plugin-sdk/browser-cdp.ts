@@ -1,6 +1,8 @@
 import { redactSensitiveText } from "../logging/redact.js";
 
 function hasRawExplicitPort(raw: string): boolean {
+  // URL normalizes default ports away, so inspect the raw authority first when
+  // callers need to distinguish omitted ports from explicit :80/:443.
   const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
   const hostPort = authority.includes("@")
     ? authority.slice(authority.lastIndexOf("@") + 1)
@@ -13,6 +15,7 @@ function hasRawExplicitPort(raw: string): boolean {
   return /:\d+$/.test(hostPort);
 }
 
+/** Parse an HTTP(S)/WS(S) browser endpoint and preserve explicit default-port intent. */
 export function parseBrowserHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
@@ -38,6 +41,8 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
   const normalized = parsed.toString().replace(/\/$/, "");
   let normalizedWithPort: string;
   if (hasExplicitPort && !parsed.port) {
+    // Reinsert default ports that URL stripped so diagnostics and downstream
+    // profile comparisons can preserve the operator-provided endpoint shape.
     const proto = parsed.protocol + "//";
     const rest = normalized.slice(proto.length);
     const atIdx = rest.indexOf("@");
@@ -64,6 +69,7 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
   };
 }
 
+/** Redact credentials and known secret-like fragments from a CDP or WebSocket URL. */
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
   if (typeof cdpUrl !== "string") {
     return cdpUrl;

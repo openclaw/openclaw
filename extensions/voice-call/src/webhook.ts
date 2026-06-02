@@ -74,6 +74,7 @@ type WebhookHeaderGateResult =
       reason: string;
     };
 
+/** Sanitizes and bounds STT text before logs so transcripts cannot inject control output. */
 function sanitizeTranscriptForLog(value: string): string {
   const sanitized = value
     .replace(/\p{Cc}/gu, " ")
@@ -85,6 +86,7 @@ function sanitizeTranscriptForLog(value: string): string {
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
 
+/** Stores a bounded realtime talk-event trail on the call without growing metadata unboundedly. */
 function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
   const metadata = call.metadata ?? {};
   const recent = Array.isArray(metadata.recentTalkEvents)
@@ -129,6 +131,7 @@ function normalizeProxyIp(value: string | undefined): string | undefined {
   return normalized;
 }
 
+/** Resolves the original client IP from trusted proxy headers for media-stream rate limits. */
 function resolveForwardedClientIp(
   request: http.IncomingMessage,
   trustedProxyIPs: readonly string[],
@@ -157,6 +160,7 @@ function resolveForwardedClientIp(
   return realIp || undefined;
 }
 
+/** Converts provider parse output into a complete HTTP response payload. */
 function normalizeWebhookResponse(parsed: {
   statusCode?: number;
   providerResponseHeaders?: Record<string, string>;
@@ -202,10 +206,7 @@ function cloneWebhookResponsePayload(payload: WebhookResponsePayload): WebhookRe
   };
 }
 
-/**
- * HTTP server for receiving voice call webhooks from providers.
- * Supports WebSocket upgrades for media streams when streaming is enabled.
- */
+/** HTTP/WebSocket ingress for voice provider callbacks, media streams, and replay-safe replies. */
 export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
   private listeningUrl: string | null = null;
@@ -220,7 +221,7 @@ export class VoiceCallWebhookServer {
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
-  /** Media stream handler for bidirectional audio (when streaming enabled) */
+  /** Optional STT media-stream bridge used by providers that connect by WebSocket. */
   private mediaStreamHandler: MediaStreamHandler | null = null;
   /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
   private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
@@ -252,17 +253,17 @@ export class VoiceCallWebhookServer {
     };
   }
 
-  /**
-   * Get the media stream handler (for wiring to provider).
-   */
+  /** Exposes the stream bridge so providers can attach carrier-specific media controls. */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
   }
 
+  /** Returns the realtime duplex handler when realtime voice mode is configured. */
   getRealtimeHandler(): RealtimeCallHandler | null {
     return this.realtimeHandler;
   }
 
+  /** Sends operator text into an active realtime voice call through the duplex handler. */
   speakRealtime(callId: string, instructions: string): { success: boolean; error?: string } {
     if (!this.realtimeHandler) {
       return { success: false, error: "Realtime voice handler is not configured" };
@@ -270,6 +271,7 @@ export class VoiceCallWebhookServer {
     return this.realtimeHandler.speak(callId, instructions);
   }
 
+  /** Installs a realtime handler created outside the server startup path. */
   setRealtimeHandler(handler: RealtimeCallHandler): void {
     this.realtimeHandler = handler;
   }
@@ -298,6 +300,8 @@ export class VoiceCallWebhookServer {
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 
     if (shouldTrustForwardingHeaders) {
+      // Media stream limits are keyed by client IP, so forwarded headers are
+      // accepted only from a configured trusted proxy, never from arbitrary callers.
       const forwardedIp = resolveForwardedClientIp(request, trustedProxyIPs);
       if (forwardedIp) {
         return forwardedIp;
@@ -327,9 +331,7 @@ export class VoiceCallWebhookServer {
     return initialMessage.length > 0;
   }
 
-  /**
-   * Initialize media streaming with the selected realtime transcription provider.
-   */
+  /** Initializes provider-selected STT media streaming and binds callbacks into call state. */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
     const pluginConfig =
@@ -411,12 +413,12 @@ export class VoiceCallWebhookServer {
           return;
         }
 
-        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
+        // Caller speech interrupts queued Twilio playback unless the initial greeting is protected.
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
 
-        // Create a speech event and process it through the manager
+        // Media transcripts bypass provider webhooks, so synthesize the normalized event here.
         const event: NormalizedEvent = {
           id: `stream-transcript-${Date.now()}`,
           type: "call.speech",
@@ -428,7 +430,7 @@ export class VoiceCallWebhookServer {
         };
         this.manager.processEvent(event);
 
-        // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
+        // Notify-mode outbound calls record transcripts but do not trigger an agent reply.
         const callMode = call.metadata?.mode as string | undefined;
         const shouldRespond = call.direction === "inbound" || callMode === "conversation";
         if (shouldRespond) {
@@ -478,6 +480,8 @@ export class VoiceCallWebhookServer {
         }
 
         this.clearPendingDisconnectHangup(callId);
+        // Twilio can reconnect a media stream for the same call; delay hangup
+        // briefly and re-check provider stream state before ending the call.
         const timer = setTimeout(() => {
           this.pendingDisconnectHangups.delete(callId);
           const disconnectedCall = this.manager.getCallByProviderCallId(callId);
@@ -743,6 +747,8 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
       if (!verification.verifiedRequestKey) {
+        // Replay protection depends on a provider-stable request identity. Treat
+        // verification without a key as unauthenticated rather than best-effort.
         console.warn("[voice-call] Webhook verification succeeded without request identity key");
         return { statusCode: 401, body: "Unauthorized" };
       }
@@ -804,6 +810,8 @@ export class VoiceCallWebhookServer {
         return await buildResponse();
       }
 
+      // Twilio retries initial TwiML fetches; do not cache those responses here
+      // because replayed realtime requests must not mint fresh stream tokens.
       if (this.provider.name === "twilio") {
         return await buildResponse();
       }
@@ -864,6 +872,8 @@ export class VoiceCallWebhookServer {
         this.replayResponses.delete(key);
         throw err;
       });
+    // Store the in-flight promise so simultaneous duplicate provider retries
+    // share one parsed response and one set of manager side effects.
     if (expiresAt !== undefined) {
       this.replayResponses.set(key, {
         expiresAt,
@@ -876,6 +886,7 @@ export class VoiceCallWebhookServer {
     return cloneWebhookResponsePayload(await response);
   }
 
+  /** Rejects obviously unsigned carrier webhooks before reading attacker-controlled bodies. */
   private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): WebhookHeaderGateResult {
     if (this.config.skipSignatureVerification) {
       return { ok: true };
@@ -935,16 +946,21 @@ export class VoiceCallWebhookServer {
     }
 
     if (ctx.query?.type === "status") {
+      // Status callbacks only carry lifecycle notifications; returning realtime
+      // TwiML here would cause Twilio to open media streams from notification retries.
       return null;
     }
 
     const callStatus = params.get("CallStatus");
     if (callStatus && isProviderStatusTerminal(callStatus)) {
+      // Terminal callbacks must be parsed as events so local cleanup/finalization
+      // happens instead of attempting to reconnect a dead call.
       return null;
     }
 
     // Initial TwiML fetches without gathered input may enter realtime handling.
     // Replay checks run before this helper so retries cannot mint new stream tokens.
+    // Gathered speech/DTMF callbacks must stay on the provider event path.
     return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
   }
 

@@ -18,6 +18,7 @@ type TrajectoryPointer = {
   runtimeFile: string;
 };
 
+/** Resolves paths for deletion checks while tolerating already-removed files. */
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
@@ -27,12 +28,14 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
+/** Checks descendant paths after realpath normalization to avoid symlink escapes. */
 function isPathWithinDir(parentDir: string, filePath: string): boolean {
   const resolvedParent = canonicalizePathForComparison(parentDir);
   const resolvedFile = canonicalizePathForComparison(filePath);
   return resolvedFile !== resolvedParent && isPathInside(resolvedParent, resolvedFile);
 }
 
+/** Accepts only regular files so cleanup never follows a sidecar symlink target. */
 function isRegularNonSymlinkFile(filePath: string): boolean {
   try {
     const lst = fs.lstatSync(filePath);
@@ -45,6 +48,7 @@ function isRegularNonSymlinkFile(filePath: string): boolean {
   }
 }
 
+/** Reads a trajectory pointer only when it matches the deleted session contract. */
 function readTrajectoryPointerFile(
   pointerPath: string,
   sessionId: string,
@@ -72,6 +76,7 @@ function readTrajectoryPointerFile(
   }
 }
 
+/** Reads a small prefix to identify sidecar ownership without loading large traces. */
 function readFirstNonEmptyLine(filePath: string): string | null {
   let fd: number | null = null;
   try {
@@ -101,6 +106,7 @@ function readFirstNonEmptyLine(filePath: string): string | null {
   }
 }
 
+/** Confirms an external-looking runtime file starts with the target session event. */
 function runtimeFileStartsWithSessionEvent(filePath: string, sessionId: string): boolean {
   if (!isRegularNonSymlinkFile(filePath)) {
     return false;
@@ -123,6 +129,7 @@ function runtimeFileStartsWithSessionEvent(filePath: string, sessionId: string):
   }
 }
 
+/** Removes one validated sidecar and reports the absolute path that was deleted. */
 async function removeRegularFile(
   filePath: string,
   kind: RemovedTrajectoryArtifact["kind"],
@@ -134,6 +141,7 @@ async function removeRegularFile(
   return { kind, path: path.resolve(filePath) };
 }
 
+/** Reconstructs the session file path from cleanup metadata, returning null on stale inputs. */
 function resolveRemovedSessionFile(params: {
   sessionId: string;
   sessionFile?: string;
@@ -150,6 +158,7 @@ function resolveRemovedSessionFile(params: {
   }
 }
 
+/** Enforces which runtime sidecars are safe to delete for a removed session. */
 function mayRemoveRuntimeTarget(params: {
   defaultRuntimePath: string;
   filePath: string;
@@ -172,6 +181,7 @@ function mayRemoveRuntimeTarget(params: {
   return runtimeFileStartsWithSessionEvent(resolved, params.sessionId);
 }
 
+/** Removes trajectory pointer/runtime sidecars for one deleted session. */
 export async function removeSessionTrajectoryArtifacts(params: {
   sessionId: string;
   sessionFile?: string;
@@ -225,6 +235,7 @@ export async function removeSessionTrajectoryArtifacts(params: {
   return removed;
 }
 
+/** Removes trajectory sidecars for sessions no longer referenced by the store. */
 export async function removeRemovedSessionTrajectoryArtifacts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;

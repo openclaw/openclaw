@@ -40,9 +40,13 @@ function normalizeQmdSessionStem(stem: string): string {
 }
 
 export type SessionTranscriptHitIdentity = {
+  /** Transcript stem used to match live session ids/files. */
   stem: string;
+  /** QMD/export stem when it differs from the original live JSONL stem. */
   liveStem?: string;
+  /** Owner agent id encoded in `sessions/<agent>/<file>` paths, when present. */
   ownerAgentId?: string;
+  /** True for reset/deleted/archive transcript hits. */
   archived: boolean;
 };
 
@@ -112,9 +116,13 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
  * `createSessionVisibilityGuard`), including cross-agent cases.
  */
 export function resolveTranscriptStemToSessionKeys(params: {
+  /** Combined session store keyed by canonical session key. */
   store: Record<string, SessionEntry>;
+  /** Transcript stem extracted from a sessions memory hit. */
   stem: string;
+  /** Owner agent id used to synthesize a fallback key for archived-only hits. */
   archivedOwnerAgentId?: string;
+  /** Allow slug-normalized QMD names to match live JSONL session ids/files. */
   allowQmdSlugFallback?: boolean;
 }): string[] {
   const { store } = params;

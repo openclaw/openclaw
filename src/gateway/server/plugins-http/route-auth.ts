@@ -6,12 +6,14 @@ import {
 } from "./path-context.js";
 import { findMatchingPluginHttpRoutes } from "./route-match.js";
 
+/** Returns true when any matched plugin route declares Gateway auth. */
 export function matchedPluginRoutesRequireGatewayAuth(
   routes: readonly Pick<NonNullable<PluginRegistry["httpRoutes"]>[number], "auth">[],
 ): boolean {
   return routes.some((route) => route.auth === "gateway");
 }
 
+/** Decides whether a plugin HTTP path must pass Gateway auth before route dispatch. */
 export function shouldEnforceGatewayAuthForPluginPath(
   registry: PluginRegistry,
   pathnameOrContext: string | PluginRoutePathContext,

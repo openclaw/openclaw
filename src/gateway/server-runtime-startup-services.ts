@@ -22,6 +22,7 @@ function createNoopHeartbeatRunner() {
   };
 }
 
+/** Start channel self-healing health checks, or return null when disabled by config. */
 export function startGatewayChannelHealthMonitor(params: {
   cfg: OpenClawConfig;
   channelManager: GatewayChannelManager;
@@ -42,6 +43,7 @@ export function startGatewayChannelHealthMonitor(params: {
   });
 }
 
+/** Start the early runtime services that must exist before post-ready sidecars attach. */
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
@@ -52,6 +54,8 @@ export function startGatewayRuntimeServices(params: {
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
+  // Minimal and full gateways share this path; keep the returned handles inert
+  // and stoppable so shutdown/reload code can treat both modes the same.
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,

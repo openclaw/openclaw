@@ -15,6 +15,7 @@ export type GatewayServerLiveState = GatewayServerMutableState & {
   gatewayMethods: string[];
 };
 
+/** Creates the mutable live-state bag owned by one Gateway server process. */
 export function createGatewayServerLiveState(params: {
   hooksConfig: HooksConfigResolved | null;
   hookClientIpConfig: HookClientIpConfig;

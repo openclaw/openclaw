@@ -80,6 +80,7 @@ function collectGenericRuntimeStatusIssues(
   return issues;
 }
 
+/** Collects generic runtime health issues plus plugin-specific channel status warnings. */
 export function collectChannelStatusIssues(payload: Record<string, unknown>): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
@@ -90,6 +91,8 @@ export function collectChannelStatusIssues(payload: Record<string, unknown>): Ch
     }
     const accounts = raw as ChannelAccountSnapshot[];
     issues.push(...collectGenericRuntimeStatusIssues(plugin.id, accounts));
+    // Plugin-specific collectors run after generic runtime checks so output
+    // keeps the same channel order while preserving base health warnings.
     const collect = plugin.status?.collectStatusIssues;
     if (collect) {
       issues.push(...collect(accounts));

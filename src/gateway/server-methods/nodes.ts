@@ -472,6 +472,12 @@ function emitTalkPttNodeEvent(params: {
   );
 }
 
+/**
+ * Send a best-effort APNs background wake for a disconnected node. Attempts are
+ * deduped per node while in flight and throttled after a deliverable send; calls
+ * that cannot even find registration/auth report unavailable without poisoning
+ * later retry state.
+ */
 export async function maybeWakeNodeWithApns(
   nodeId: string,
   opts?: { force?: boolean; wakeReason?: string; cfg?: OpenClawConfig },
@@ -588,6 +594,11 @@ export async function maybeWakeNodeWithApns(
   }
 }
 
+/**
+ * Send a foreground alert nudge when background wake did not reconnect the node.
+ * The throttle is separate from background wakes so a failed silent delivery can
+ * still escalate once without causing repeated user-visible alerts.
+ */
 export async function maybeSendNodeWakeNudge(
   nodeId: string,
   opts?: { cfg?: OpenClawConfig },
@@ -675,6 +686,11 @@ export async function maybeSendNodeWakeNudge(
   }
 }
 
+/**
+ * Poll the live node registry for a short reconnect window after a wake. The
+ * final registry check after the loop catches reconnects that land exactly at
+ * the timeout boundary.
+ */
 export async function waitForNodeReconnect(params: {
   nodeId: string;
   context: { nodeRegistry: { get: (nodeId: string) => unknown } };
@@ -694,6 +710,10 @@ export async function waitForNodeReconnect(params: {
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
+/**
+ * Gateway node RPC handlers for pairing, discovery, plugin-surface refresh,
+ * pending foreground actions, command invocation, and node-originated events.
+ */
 export const nodeHandlers: GatewayRequestHandlers = {
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {

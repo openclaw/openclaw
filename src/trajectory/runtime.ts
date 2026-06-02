@@ -71,6 +71,7 @@ type TrajectoryRuntimeWriter = Omit<QueuedFileWriter, "describeQueue"> & {
   nextSourceSeq?: () => number;
 };
 
+/** Writes a session-adjacent pointer to locate runtime traces stored in override dirs. */
 function writeTrajectoryPointerBestEffort(params: {
   filePath: string;
   sessionFile?: string;
@@ -119,6 +120,7 @@ function writeTrajectoryPointerBestEffort(params: {
   }
 }
 
+/** Keeps the process-local writer cache bounded across many historical sessions. */
 function trimTrajectoryWriterCache(): void {
   while (writers.size >= MAX_TRAJECTORY_WRITERS) {
     const oldestKey = writers.keys().next().value;
@@ -129,6 +131,7 @@ function trimTrajectoryWriterCache(): void {
   }
 }
 
+/** Replaces too-large events with a compact marker that still fits one JSONL row. */
 function truncateOversizedTrajectoryEvent(
   event: TrajectoryEvent,
   line: string,
@@ -152,6 +155,7 @@ function truncateOversizedTrajectoryEvent(
   return undefined;
 }
 
+/** Produces a stable truncation marker for bounded trajectory payload fields. */
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
   return {
     truncated: true,
@@ -160,6 +164,7 @@ function truncatedTrajectoryValue(reason: string, details: Record<string, unknow
   };
 }
 
+/** Bounds nested payload size/depth before secret redaction and serialization. */
 function limitTrajectoryPayloadValue(
   value: unknown,
   depth = 0,
@@ -217,6 +222,7 @@ function limitTrajectoryPayloadValue(
   return limited;
 }
 
+/** Applies payload bounding, diagnostic sanitization, and secret redaction in order. */
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
   return redactSecrets(sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(data))) as Record<
     string,
@@ -224,6 +230,7 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
   >;
 }
 
+/** Formats writer queue state for timeout/debug logs without exposing payload data. */
 function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {
   const diagnostics = writer.describeQueue?.();
   if (!diagnostics) {
@@ -247,6 +254,7 @@ function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): st
   return parts.join(" ");
 }
 
+/** Trims the oldest JSONL rows until the rolling runtime window fits the byte budget. */
 function trimJsonlWindow(lines: string[], maxBytes: number): number {
   let bytes = 0;
   for (const line of lines) {
@@ -261,6 +269,7 @@ function trimJsonlWindow(lines: string[], maxBytes: number): number {
   return bytes;
 }
 
+/** Orders window rows by timestamp and source sequence before rewriting the sidecar. */
 function compareTrajectoryWindowLines(left: string, right: string): number {
   const leftEvent = parseTrajectoryWindowLine(left);
   const rightEvent = parseTrajectoryWindowLine(right);
@@ -271,6 +280,7 @@ function compareTrajectoryWindowLines(left: string, right: string): number {
   return leftEvent.seq - rightEvent.seq;
 }
 
+/** Extracts sortable metadata from one JSONL row, pushing malformed rows to the end. */
 function parseTrajectoryWindowLine(line: string): { ts: number; seq: number } {
   try {
     const parsed = JSON.parse(line) as { ts?: unknown; sourceSeq?: unknown; seq?: unknown };
@@ -286,6 +296,7 @@ function parseTrajectoryWindowLine(line: string): { ts: number; seq: number } {
   }
 }
 
+/** Finds the next source sequence after process restarts or recorder recreation. */
 function readMaxTrajectorySourceSeq(filePath: string): number {
   return readTrajectoryWindowLines(filePath, TRAJECTORY_RUNTIME_FILE_MAX_BYTES).reduce(
     (max, line) => {
@@ -306,6 +317,7 @@ function readMaxTrajectorySourceSeq(filePath: string): number {
   );
 }
 
+/** Reads the current bounded JSONL window and drops oldest rows if the file is oversized. */
 function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[] {
   try {
     const raw = readRegularFileSync({
@@ -323,6 +335,7 @@ function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[]
   }
 }
 
+/** Atomically rewrites the rolling trajectory sidecar after symlink-parent checks. */
 async function replaceTrajectoryWindow(params: {
   filePath: string;
   maxFileBytes: number;
@@ -357,6 +370,7 @@ async function replaceTrajectoryWindow(params: {
   });
 }
 
+/** Serializes concurrent flushes per file so stale recorders merge instead of overwrite. */
 async function queueTrajectoryWindowFlush(params: {
   filePath: string;
   maxFileBytes: number;
@@ -377,6 +391,7 @@ async function queueTrajectoryWindowFlush(params: {
   await current;
 }
 
+/** Creates a rolling-window writer that batches rows until flush. */
 function createTrajectoryWindowWriter(
   filePath: string,
   maxFileBytes: number,
@@ -440,6 +455,7 @@ function createTrajectoryWindowWriter(
   };
 }
 
+/** Reuses one rolling-window writer per runtime sidecar path. */
 function getTrajectoryWindowWriter(
   filePath: string,
   maxFileBytes: number,
@@ -454,6 +470,7 @@ function getTrajectoryWindowWriter(
   return writer;
 }
 
+/** Normalizes tool definitions for prompt/runtime capture without leaking large schemas. */
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -474,6 +491,7 @@ export function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
+/** Creates the default-on runtime trajectory recorder for one agent session run. */
 export function createTrajectoryRuntimeRecorder(
   params: TrajectoryRuntimeInit,
 ): TrajectoryRuntimeRecorder | null {

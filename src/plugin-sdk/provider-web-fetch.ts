@@ -1,5 +1,3 @@
-// Public web-fetch registration helpers for provider plugins.
-
 import type {
   WebFetchCredentialResolutionSource,
   WebFetchProviderPlugin,

@@ -10,6 +10,7 @@ export type ControlUiAuthPolicy = {
   device: ConnectParams["device"] | null | undefined;
 };
 
+/** Resolves Control UI-specific device-auth bypass flags and the effective device payload. */
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
   controlUiConfig:
@@ -34,6 +35,7 @@ export function resolveControlUiAuthPolicy(params: {
   };
 }
 
+/** Returns whether Control UI can skip the pairing flow for this role/auth combination. */
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
@@ -60,6 +62,7 @@ export function shouldSkipControlUiPairing(
   return role === "operator" && policy.allowBypass;
 }
 
+/** Detects trusted-proxy Control UI operator connections that already satisfied proxy auth. */
 export function isTrustedProxyControlUiOperatorAuth(params: {
   isControlUi: boolean;
   role: GatewayRole;
@@ -82,6 +85,7 @@ export type MissingDeviceIdentityDecision =
   | { kind: "reject-unauthorized" }
   | { kind: "reject-device-required" };
 
+/** Decides whether shared/trusted auth scopes must be cleared when no device identity is bound. */
 export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
   decision: MissingDeviceIdentityDecision;
   controlUiAuthPolicy: ControlUiAuthPolicy;
@@ -99,6 +103,7 @@ export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
   );
 }
 
+/** Classifies missing-device handshakes into allow/reject reasons before auth failure formatting. */
 export function evaluateMissingDeviceIdentity(params: {
   hasDeviceIdentity: boolean;
   role: GatewayRole;

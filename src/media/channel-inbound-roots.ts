@@ -4,10 +4,12 @@ import type { OpenClawConfig } from "../config/types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 
 type ChannelMediaContractApi = {
+  /** Local host roots where a channel stores downloaded inbound attachments. */
   resolveInboundAttachmentRoots?: (params: {
     cfg: OpenClawConfig;
     accountId?: string;
   }) => readonly string[] | undefined;
+  /** Remote/guest-visible roots used when staging channel inbound attachments into sandboxes. */
   resolveRemoteInboundAttachmentRoots?: (params: {
     cfg: OpenClawConfig;
     accountId?: string;
@@ -27,6 +29,8 @@ function loadChannelMediaContractApi(
   }
 
   try {
+    // Media roots are a hot path during inbound staging; load the narrow media contract artifact
+    // instead of bootstrapping the full channel plugin or broad contract API.
     const loaded = loadBundledPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
       dirName: channelId,
       artifactBasename: "media-contract-api.js",
@@ -73,6 +77,7 @@ export function resolveChannelInboundAttachmentRoots(params: {
   });
 }
 
+/** Resolves local inbound attachment roots when only channel/account ids are available. */
 export function resolveChannelInboundAttachmentRootsForChannel(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
@@ -91,6 +96,7 @@ export function resolveChannelInboundAttachmentRootsForChannel(params: {
   return undefined;
 }
 
+/** Resolves sandbox/remote inbound attachment roots from the channel media contract artifact. */
 export function resolveChannelRemoteInboundAttachmentRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;

@@ -28,6 +28,12 @@ function resolveRuntimeContextRegistry(params: {
   return params.channelRuntime?.runtimeContexts ?? null;
 }
 
+/**
+ * Registers a channel/account/capability runtime context when a runtime surface is available.
+ *
+ * Returns null when the caller is running without a channel runtime, letting plugin code offer
+ * optional runtime capabilities without branching at every call site.
+ */
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
@@ -49,6 +55,11 @@ export function registerChannelRuntimeContext(
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
+/**
+ * Reads a typed runtime context for a channel/account/capability key.
+ *
+ * The registry stores unknown values; callers own the type by agreeing on the capability key.
+ */
 export function getChannelRuntimeContext<T = unknown>(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
@@ -65,6 +76,12 @@ export function getChannelRuntimeContext<T = unknown>(
   });
 }
 
+/**
+ * Subscribes to runtime context registration changes for one channel/account/capability key.
+ *
+ * Returns null when no runtime surface exists; otherwise the returned function only unregisters
+ * this watcher and does not dispose the context lease itself.
+ */
 export function watchChannelRuntimeContexts(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
@@ -83,6 +100,12 @@ export function watchChannelRuntimeContexts(
   });
 }
 
+/**
+ * Wraps a channel runtime so contexts registered during one task are disposed together.
+ *
+ * Contexts registered through the scoped wrapper are tracked and disposed by the returned cleanup,
+ * while contexts registered directly on the base runtime remain persistent.
+ */
 export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(params: {
   channelRuntime?: T;
 }): {

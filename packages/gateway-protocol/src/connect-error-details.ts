@@ -152,6 +152,7 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
   "metadata-upgrade": "device metadata change pending approval",
 };
 
+/** Maps server auth failure reasons into stable protocol detail codes for clients. */
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
@@ -191,6 +192,7 @@ export function resolveAuthConnectErrorDetailCode(
   }
 }
 
+/** Maps device-auth verification failures into stable protocol detail codes. */
 export function resolveDeviceAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
@@ -212,6 +214,7 @@ export function resolveDeviceAuthConnectErrorDetailCode(
   }
 }
 
+/** Reads the opaque gateway error detail code without trusting the rest of the payload. */
 export function readConnectErrorDetailCode(details: unknown): string | null {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return null;
@@ -220,6 +223,7 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   return typeof code === "string" && code.trim().length > 0 ? code : null;
 }
 
+/** Extracts client retry hints while dropping unknown or malformed advice fields. */
 export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return {};
@@ -249,6 +253,7 @@ function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredRe
     : undefined;
 }
 
+/** Keeps pairing request ids log/close-reason safe before echoing them to clients. */
 export function normalizePairingConnectRequestId(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
@@ -319,6 +324,7 @@ export function buildPairingConnectRecoveryTitle(
     : "Gateway pairing approval required.";
 }
 
+/** Builds the structured PAIRING_REQUIRED details payload shared by HTTP and WS handshakes. */
 export function buildPairingConnectErrorDetails(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
@@ -356,6 +362,7 @@ export function buildPairingConnectErrorDetails(params: {
   });
 }
 
+/** Formats the compact WebSocket close reason while preserving a safe request id when present. */
 export function buildPairingConnectCloseReason(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
@@ -365,6 +372,7 @@ export function buildPairingConnectCloseReason(params: {
   return requestId ? `${message} (requestId: ${requestId})` : message;
 }
 
+/** Normalizes structured pairing details received by clients from untrusted gateway errors. */
 export function readPairingConnectErrorDetails(
   details: unknown,
 ): PairingConnectErrorDetails | null {
@@ -430,6 +438,7 @@ export function readConnectPairingRequiredDetails(
   };
 }
 
+/** Recovers pairing details from older string-only close reasons. */
 export function readConnectPairingRequiredMessage(
   message: string | null | undefined,
 ): ConnectPairingRequiredDetails | null {
@@ -471,6 +480,7 @@ export function formatConnectPairingRequiredMessage(details: unknown): string {
   return pairing?.requestId ? `${base} (requestId: ${pairing.requestId})` : base;
 }
 
+/** Formats gateway connect failures with pairing/protocol detail-aware client text. */
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
   if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);

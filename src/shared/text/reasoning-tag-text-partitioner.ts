@@ -23,6 +23,7 @@ const REASONING_TAG_NAMES = [
   "antml:reasoning",
 ] as const;
 
+/** Stateful stream splitter that keeps model reasoning tags out of visible text. */
 export interface ReasoningTagTextPartitioner {
   markStrict(): void;
   push(chunk: string): ReasoningTagTextDelta[];
@@ -32,6 +33,7 @@ export interface ReasoningTagTextPartitioner {
   isInsideReasoning(): boolean;
 }
 
+/** Creates a streaming partitioner for visible text and hidden reasoning deltas. */
 export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner {
   let buffer = "";
   let reasoningDepth = 0;
@@ -43,6 +45,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
   let hiddenFenceState: FenceScanState | undefined;
   let recoverableOpenTagText: string | undefined;
 
+  /** Consumes buffered text while preserving partial tags/code spans for later chunks. */
   const consume = (final: boolean, recoverFullUnclosed: boolean): ReasoningTagTextDelta[] => {
     const output: ReasoningTagTextDelta[] = [];
     const emit = (kind: ReasoningTagTextDelta["kind"], text: string) => {
@@ -96,6 +99,8 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           recoverFullUnclosed &&
           (!emittedVisibleText || recoverableOpenTagText)
         ) {
+          // Visible-mode streams may be fully wrapped in an unclosed reasoning tag;
+          // hold the buffer until flush can decide whether to recover it as text.
           return output;
         }
         if (hasUnclosedCode && hasRawReasoning) {
@@ -131,6 +136,8 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           buffer.slice(0, keepFrom).trim().length > 0 &&
           isReasoningCloseTagPrefix(buffer.slice(keepFrom))
         ) {
+          // In strict mode, wait for a split orphan close tag plus visible suffix
+          // so the hidden prefix can be dropped without leaking it first.
           return output;
         }
         if (keepFrom > 0) {
@@ -169,6 +176,8 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         }
       } else {
         if (reasoningDepth === 0) {
+          // Only recover a later-unclosed open tag as visible prose after real
+          // visible text has already appeared; fully wrapped output stays hidden.
           recoverableOpenTagText = recoverFullUnclosed && emittedVisibleText ? tag.text : undefined;
           hiddenInlineCodeState = createInlineCodeState();
           hiddenFenceState = undefined;
@@ -204,11 +213,13 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
   };
 }
 
+/** Finds any complete reasoning tag in raw text, including split-stream aliases. */
 function hasRawReasoningTag(text: string): boolean {
   REASONING_TAG_RE.lastIndex = 0;
   return REASONING_TAG_RE.test(text);
 }
 
+/** Checks whether a buffer contains a complete closing reasoning tag. */
 function hasRawReasoningCloseTag(text: string): boolean {
   REASONING_TAG_RE.lastIndex = 0;
   for (;;) {
@@ -222,6 +233,7 @@ function hasRawReasoningCloseTag(text: string): boolean {
   }
 }
 
+/** Finds the next complete reasoning tag outside code spans/fences. */
 function findNextReasoningTag(
   text: string,
   isIndexInsideCode: (index: number) => boolean,
@@ -242,6 +254,7 @@ function findNextReasoningTag(
   }
 }
 
+/** Returns the start of a trailing partial reasoning tag that must stay buffered. */
 function reasoningTagPrefixSuffixIndex(
   text: string,
   isIndexInsideCode: (index: number) => boolean,
@@ -258,6 +271,7 @@ function reasoningTagPrefixSuffixIndex(
   return -1;
 }
 
+/** Accepts partial opening or closing tag names while chunks are still arriving. */
 function isReasoningTagPrefix(text: string): boolean {
   const name = normalizeReasoningTagPrefixName(text);
   return REASONING_TAG_NAMES.some((tagName) => {
@@ -272,6 +286,7 @@ function isReasoningTagPrefix(text: string): boolean {
   });
 }
 
+/** Detects a partial closing tag so strict mode can hold hidden text. */
 function isReasoningCloseTagPrefix(text: string): boolean {
   const normalized = text
     .replace(/^<\s*/, "<")
@@ -281,6 +296,7 @@ function isReasoningCloseTagPrefix(text: string): boolean {
   return normalized.startsWith("</") && isReasoningTagPrefix(text);
 }
 
+/** Normalizes a partial tag prefix enough to compare against known tag aliases. */
 function normalizeReasoningTagPrefixName(text: string): string {
   const normalized = text
     .replace(/^<\s*/, "<")
@@ -291,6 +307,7 @@ function normalizeReasoningTagPrefixName(text: string): string {
   return rawName.trimStart();
 }
 
+/** Finds the earliest unclosed inline-code or fence context in the buffered suffix. */
 function findOpenCodeContextStart(text: string): number {
   const fence = findOpenFenceStart(text);
   const inline = findOpenInlineCodeStart(text);
@@ -303,6 +320,7 @@ function findOpenCodeContextStart(text: string): number {
   return Math.min(fence, inline);
 }
 
+/** Finds an unmatched backtick run in a buffered inline-code suffix. */
 function findOpenInlineCodeStart(text: string): number {
   let openStart = -1;
   let openTicks = 0;
@@ -329,6 +347,7 @@ function findOpenInlineCodeStart(text: string): number {
   return openStart;
 }
 
+/** Finds an unmatched fenced-code opener in a buffered markdown suffix. */
 function findOpenFenceStart(text: string): number {
   const fenceRe = /(^|\n)(```|~~~)[^\n]*(?:\n|$)/g;
   let open: { marker: string; index: number } | null = null;
@@ -344,6 +363,7 @@ function findOpenFenceStart(text: string): number {
   return open?.index ?? -1;
 }
 
+/** Holds a split fence marker so reasoning-looking examples remain visible. */
 function findTrailingFenceFragmentStart(
   text: string,
   inlineState: InlineCodeState,

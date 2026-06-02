@@ -21,12 +21,14 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
   ),
 );
 
+/** Return whether argv contains root or subcommand help/version flags. */
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
     argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
   );
 }
 
+/** Return whether argv should take the fast help/version path before command registration. */
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
   if (hasRootVersionAlias(argv)) {
     return true;
@@ -80,6 +82,7 @@ function parsePositiveInt(value: string): number | undefined {
   return parseStrictPositiveInteger(value);
 }
 
+/** Return true when a flag appears before the `--` positional terminator. */
 export function hasFlag(argv: string[], name: string): boolean {
   const args = argv.slice(2);
   for (const arg of args) {
@@ -93,6 +96,7 @@ export function hasFlag(argv: string[], name: string): boolean {
   return false;
 }
 
+/** Detect root-level `-v` as the OpenClaw version alias, ignoring root options. */
 export function hasRootVersionAlias(argv: string[]): boolean {
   const args = argv.slice(2);
   let hasAlias = false;
@@ -121,6 +125,7 @@ export function hasRootVersionAlias(argv: string[]): boolean {
   return hasAlias;
 }
 
+/** Return whether argv is only a root version request plus optional root options. */
 export function isRootVersionInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, VERSION_FLAGS, { includeVersionAlias: true });
 }
@@ -158,6 +163,7 @@ function isRootInvocationForFlags(
   return hasTarget;
 }
 
+/** Return whether argv is only a root help request plus optional root options. */
 export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
@@ -202,6 +208,7 @@ function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult 
   return { ok: true, positionals, rootOptions, helpFlagIndex };
 }
 
+/** Rewrite generated `command help target` forms into Commander-compatible `command target --help`. */
 export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   const scan = scanHelpNormalizationArgv(argv);
   if (!scan.ok) {
@@ -232,6 +239,7 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
 }
 
+/** Rewrite root `help <path>` forms into `<path> --help` while preserving root options. */
 export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   const scan = scanHelpNormalizationArgv(argv);
   if (!scan.ok) {
@@ -252,6 +260,7 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
 }
 
+/** Read a flag value from `--flag value` or `--flag=value`, returning null for a missing value. */
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
@@ -271,6 +280,7 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   return undefined;
 }
 
+/** Return whether verbose logging was explicitly requested. */
 export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
   if (hasFlag(argv, "--verbose")) {
     return true;
@@ -281,6 +291,7 @@ export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolea
   return false;
 }
 
+/** Parse a positive integer flag value, preserving null/undefined missing-value semantics. */
 export function getPositiveIntFlagValue(argv: string[], name: string): number | null | undefined {
   const raw = getFlagValue(argv, name);
   if (raw === null || raw === undefined) {
@@ -289,10 +300,12 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   return parsePositiveInt(raw);
 }
 
+/** Return positional command path segments without skipping root options. */
 export function getCommandPath(argv: string[], depth = 2): string[] {
   return getCommandPathInternal(argv, depth, { skipRootOptions: false });
 }
 
+/** Return positional command path segments after consuming recognized root options. */
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
   return getCommandPathInternal(argv, depth, { skipRootOptions: true });
 }
@@ -330,6 +343,7 @@ function getCommandPathInternal(
   return path;
 }
 
+/** Return the primary command after recognized root options, if present. */
 export function getPrimaryCommand(argv: string[]): string | null {
   const [primary] = getCommandPathWithRootOptions(argv, 1);
   return primary ?? null;
@@ -371,6 +385,7 @@ function consumeKnownOptionToken(
   return isValueToken(args[index + 1]) ? 2 : 0;
 }
 
+/** Extract command-specific positionals after matching a command path and known command options. */
 export function getCommandPositionalsWithRootOptions(
   argv: string[],
   options: CommandPositionalsParseOptions,
@@ -420,6 +435,7 @@ export function getCommandPositionalsWithRootOptions(
   return positionals;
 }
 
+/** Build Commander-compatible argv from raw args, preserving existing Node/Bun invocations. */
 export function buildParseArgv(params: {
   programName?: string;
   rawArgs?: string[];
@@ -447,6 +463,7 @@ export function buildParseArgv(params: {
   return ["node", programName || "openclaw", ...normalizedArgv];
 }
 
+/** Return whether startup should run state migration for a parsed command path. */
 export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (path.length === 0) {
     return true;
@@ -464,6 +481,7 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   return true;
 }
 
+/** Return whether startup should run state migration for this raw argv. */
 export function shouldMigrateState(argv: string[]): boolean {
   return shouldMigrateStateFromPath(getCommandPathWithRootOptions(argv, 2));
 }

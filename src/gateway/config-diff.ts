@@ -1,6 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../utils.js";
 
+/**
+ * Return dotted config paths whose effective values changed.
+ *
+ * Reload planning consumes these paths directly, so object recursion keeps
+ * sibling settings independent while arrays remain atomic unless structurally
+ * identical.
+ */
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
     return [];

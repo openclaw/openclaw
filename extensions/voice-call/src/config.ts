@@ -503,8 +503,11 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
+/** Voice-call config after applying an optional per-number inbound route override. */
 export type VoiceCallEffectiveConfigResult = {
+  /** Effective config for the call, with route overrides merged when matched. */
   config: VoiceCallConfig;
+  /** Canonical configured phone route key that matched the caller/dialed number. */
   numberRouteKey?: string;
 };
 type DeepPartial<T> = T extends SecretInput
@@ -514,12 +517,9 @@ type DeepPartial<T> = T extends SecretInput
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }
       : T;
+/** Partial config shape accepted at plugin boundaries before defaults and env fallbacks apply. */
 export type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
-
-// -----------------------------------------------------------------------------
-// Configuration Helpers
-// -----------------------------------------------------------------------------
 
 const DEFAULT_VOICE_CALL_CONFIG = VoiceCallConfigSchema.parse({});
 
@@ -542,6 +542,8 @@ function normalizeWebhookLikePath(pathname: string): string {
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
   const normalized = normalizeWebhookLikePath(servePath);
   if (normalized.endsWith("/webhook")) {
+    // Keep the realtime route next to the webhook route so reverse-proxy rules
+    // for custom voice paths can forward both HTTP callbacks and WS upgrades.
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }
   if (normalized === "/") {
@@ -558,6 +560,8 @@ function normalizeVoiceCallTtsConfig(
     return undefined;
   }
 
+  // TTS route overrides are partial by design; preserve global provider knobs
+  // while letting per-number routes replace only the nested fields they own.
   return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
 }
 
@@ -565,6 +569,7 @@ function normalizePhoneRouteKey(phone: string | undefined): string {
   return phone?.replace(/\D/g, "") ?? "";
 }
 
+/** Resolves the canonical per-number route key for exact or normalized phone input. */
 export function resolveVoiceCallNumberRouteKey(
   config: Pick<VoiceCallConfig, "numbers">,
   phone: string | undefined,
@@ -577,6 +582,8 @@ export function resolveVoiceCallNumberRouteKey(
     return phone;
   }
 
+  // Config keys are E.164, but callers can arrive with formatted phone text.
+  // Normalize only for lookup; keep the canonical configured route key in the result.
   const normalizedPhone = normalizePhoneRouteKey(phone);
   if (!normalizedPhone) {
     return undefined;
@@ -586,6 +593,7 @@ export function resolveVoiceCallNumberRouteKey(
   );
 }
 
+/** Applies per-number route overrides while preserving global route registry and TTS defaults. */
 export function resolveVoiceCallEffectiveConfig(
   config: VoiceCallConfig,
   phoneOrRouteKey: string | undefined,
@@ -637,6 +645,7 @@ function sanitizeVoiceCallNumberRoutes(
   );
 }
 
+/** Resolves Twilio auth tokens from SecretInput while preserving clear config-path errors. */
 export function resolveTwilioAuthToken(
   config: Pick<VoiceCallConfig, "twilio">,
 ): string | undefined {
@@ -646,6 +655,7 @@ export function resolveTwilioAuthToken(
   });
 }
 
+/** Normalizes partial voice-call config by applying nested defaults that Zod cannot infer alone. */
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   const serve = { ...defaults.serve, ...config.serve };
@@ -667,6 +677,8 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...config.realtime?.agentContext,
     files: config.realtime?.agentContext?.files ?? defaults.realtime.agentContext.files,
   };
+  // Zod defaults only apply to complete subtrees. Normalize here so callers can
+  // provide partial nested config without losing defaults from sibling fields.
   return {
     ...defaults,
     ...config,
@@ -697,6 +709,8 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
       provider: realtimeProvider,
       streamPath:
         config.realtime?.streamPath ??
+        // Realtime stream defaults depend on the normalized serve path, not the
+        // schema default, because callers can override serve.path with partial config.
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
@@ -712,6 +726,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   };
 }
 
+/** Builds the memory/session key for voice conversations based on configured session scope. */
 export function resolveVoiceCallSessionKey(params: {
   config: Pick<VoiceCallConfig, "sessionScope">;
   callId: string;
@@ -726,13 +741,12 @@ export function resolveVoiceCallSessionKey(params: {
     return `voice:call:${params.callId}`;
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
+  // Per-phone scope intentionally strips formatting so the same caller keeps
+  // one memory thread across inbound/outbound formatting differences.
   return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
 }
 
-/**
- * Resolves the configuration by merging environment variables into missing fields.
- * Returns a new configuration object with environment variables applied.
- */
+/** Resolves config defaults plus provider environment fallbacks into the canonical runtime shape. */
 export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const resolved = normalizeVoiceCallConfig(config);
 
@@ -783,9 +797,7 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   return normalizeVoiceCallConfig(resolved);
 }
 
-/**
- * Validate that the configuration has all required fields for the selected provider.
- */
+/** Validates provider credentials and incompatible realtime/streaming policy combinations. */
 export function validateProviderConfig(config: VoiceCallConfig): {
   valid: boolean;
   errors: string[];
@@ -858,6 +870,8 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
+  // Realtime and streaming both own the live audio WebSocket path; allowing both
+  // would create two competing handlers for a single telephony media stream.
   if (config.realtime.enabled && config.streaming.enabled) {
     errors.push(
       "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",

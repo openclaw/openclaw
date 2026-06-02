@@ -11,6 +11,7 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   debounceMs: 300,
 };
 
+/** Normalize user reload settings before the file watcher schedules work. */
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
   const mode =

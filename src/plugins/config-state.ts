@@ -66,6 +66,8 @@ function normalizePluginIdWithLookup(
 
 function createScopedPluginIdNormalizer(): NormalizePluginId {
   let lookup: ReadonlyMap<string, string> | undefined;
+  // Config normalization can touch many ids. Build the bundled alias lookup on
+  // first miss for this normalization pass instead of rebuilding it per id.
   return (id) =>
     normalizePluginIdWithLookup(id, () => {
       lookup ??= getBundledPluginAliasLookup();
@@ -73,16 +75,22 @@ function createScopedPluginIdNormalizer(): NormalizePluginId {
     });
 }
 
+/** Normalizes a configured plugin id, including built-in legacy aliases. */
 export function normalizePluginId(id: string): string {
   return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }
 
+/** Normalizes the `plugins` config block into policy-ready lookup sets. */
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
   return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
+/**
+ * Creates the activation source object used to distinguish effective config
+ * from the raw user config that justified a plugin activation decision.
+ */
 export function createPluginActivationSource(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
@@ -102,6 +110,12 @@ const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);
 
+/**
+ * Applies Vitest-only plugin defaults to keep tests isolated from bundled plugins.
+ *
+ * Explicit plugin config remains authoritative; when tests do not configure
+ * plugins, this disables plugins globally and turns the memory slot off.
+ */
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -140,6 +154,7 @@ export function applyTestPluginDefaults(
   };
 }
 
+/** Returns whether Vitest defaults implicitly disabled the memory slot. */
 export function isTestDefaultMemorySlotDisabled(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -154,6 +169,12 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
+/**
+ * Resolves activation state for one plugin against normalized plugin config.
+ *
+ * Bundled channel config is allowed to prove explicit activation even when the
+ * plugin allowlist is restrictive, matching channel-first setup flows.
+ */
 export function resolvePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
@@ -199,6 +220,10 @@ export const resolveEffectiveEnableState =
     resolveEffectivePluginActivationState,
   );
 
+/**
+ * Resolves final effective activation state for callers that do not need the
+ * lower-level enable-state resolver shape.
+ */
 export function resolveEffectivePluginActivationState(params: {
   id: EffectiveActivationParams["id"];
   origin: EffectiveActivationParams["origin"];
@@ -211,6 +236,7 @@ export function resolveEffectivePluginActivationState(params: {
   return resolvePluginActivationState(params);
 }
 
+/** Resolves the special memory slot enablement decision shared by plugin setup. */
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: string | string[];

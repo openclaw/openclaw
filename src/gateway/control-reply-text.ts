@@ -26,16 +26,17 @@ function normalizeSuppressedControlReplyFragment(text: string): string {
   return normalized;
 }
 
-/**
- * Return true when a chat-visible reply is exactly an internal control token.
- */
+/** Detect complete internal reply-control tokens before they reach chat display. */
 export function isSuppressedControlReplyText(text: string): boolean {
   const normalized = text.trim();
   return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
 }
 
 /**
- * Return true when streamed assistant text looks like the leading fragment of a control token.
+ * Detect partial streamed control tokens before enough text arrives to hide them exactly.
+ *
+ * Bare prefixes require a minimum length/case match so ordinary short words do
+ * not disappear while `ANNOUNCE_SKIP` / `REPLY_SKIP` are still being streamed.
  */
 export function isSuppressedControlReplyLeadFragment(text: string): boolean {
   const trimmed = text.trim();

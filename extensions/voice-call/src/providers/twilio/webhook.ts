@@ -2,6 +2,7 @@ import type { WebhookContext, WebhookVerificationResult } from "../../types.js";
 import { verifyTwilioWebhook } from "../../webhook-security.js";
 import type { TwilioProviderOptions } from "../twilio.types.js";
 
+/** Verifies Twilio callbacks using the externally visible URL and configured proxy trust policy. */
 export function verifyTwilioProviderWebhook(params: {
   ctx: WebhookContext;
   authToken: string;

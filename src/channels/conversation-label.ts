@@ -10,11 +10,15 @@ function extractConversationId(from?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
+  // Channel From values are often provider:scope:id; the final segment is the only stable
+  // disambiguator shared across channels for generic group labels.
   const parts = trimmed.split(":").filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : trimmed;
 }
 
 function shouldAppendId(id: string): boolean {
+  // Append only ids that are opaque enough to disambiguate generic labels without making
+  // human-readable room names noisy.
   if (/^[0-9]+$/.test(id)) {
     return true;
   }
@@ -24,6 +28,7 @@ function shouldAppendId(id: string): boolean {
   return false;
 }
 
+/** Resolves a concise conversation label for session lists, logs, and route summaries. */
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {
@@ -69,5 +74,7 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   if (base.startsWith("#") || base.startsWith("@")) {
     return base;
   }
+  // Numeric and address-like ids disambiguate generic group labels, but avoid appending them to
+  // explicit handles/channels or labels that already carry an id.
   return `${base} id:${id}`;
 }

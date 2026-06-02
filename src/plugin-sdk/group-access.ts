@@ -15,9 +15,13 @@ export type SenderGroupAccessReason =
   | "empty_allowlist"
   | "sender_not_allowlisted";
 export type SenderGroupAccessDecision = {
+  /** Whether the sender may enter the group route. */
   allowed: boolean;
+  /** Effective group policy after provider/default fallback resolution. */
   groupPolicy: GroupPolicy;
+  /** True when runtime policy fell back because provider config was missing. */
   providerMissingFallbackApplied: boolean;
+  /** Stable denial/allowance reason for logging and compatibility projections. */
   reason: SenderGroupAccessReason;
 };
 export type GroupRouteAccessReason =
@@ -27,8 +31,11 @@ export type GroupRouteAccessReason =
   | "route_not_allowlisted"
   | "route_disabled";
 export type GroupRouteAccessDecision = {
+  /** Whether the route may receive group messages under the current policy. */
   allowed: boolean;
+  /** Effective group policy used for the route decision. */
   groupPolicy: GroupPolicy;
+  /** Stable denial/allowance reason for logs and user-facing hints. */
   reason: GroupRouteAccessReason;
 };
 export type MatchedGroupAccessReason =
@@ -38,8 +45,11 @@ export type MatchedGroupAccessReason =
   | "empty_allowlist"
   | "not_allowlisted";
 export type MatchedGroupAccessDecision = {
+  /** Whether the matched sender/route may access the group. */
   allowed: boolean;
+  /** Effective group policy used for the matched access decision. */
   groupPolicy: GroupPolicy;
+  /** Stable denial/allowance reason for compatibility projections. */
   reason: MatchedGroupAccessReason;
 };
 

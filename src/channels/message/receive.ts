@@ -11,18 +11,31 @@ export type MessageAckState = "pending" | "acked" | "nacked";
 
 /** Mutable receive context passed through durable inbound message processing. */
 export type MessageReceiveContext<TMessage = unknown> = {
+  /** Provider-native inbound message id. */
   id: string;
+  /** Channel id that received the inbound message. */
   channel: string;
+  /** Optional account scope for multi-account channels. */
   accountId?: string;
+  /** Provider-native or normalized inbound message payload. */
   message: TMessage;
+  /** Policy controlling when the message should be acknowledged. */
   ackPolicy: MessageAckPolicy;
+  /** Current acknowledgement state. */
   ackState: MessageAckState;
+  /** Timestamp recorded when ack succeeds. */
   ackedAt?: number;
+  /** Human-readable nack error when acknowledgement fails. */
   nackErrorMessage?: string;
+  /** Timestamp when core accepted the inbound message for processing. */
   receivedAt: number;
+  /** Cancellation signal for downstream receive processing. */
   signal: AbortSignal;
+  /** Returns whether the current policy wants an ack after the supplied pipeline stage. */
   shouldAckAfter(stage: MessageAckStage): boolean;
+  /** Marks the message acknowledged and runs the adapter ack hook at most once. */
   ack(): Promise<void>;
+  /** Marks the message negatively acknowledged and records the normalized failure message. */
   nack(error: unknown): Promise<void>;
 };
 
@@ -33,6 +46,8 @@ export function shouldAckMessageAfterStage(
   policy: MessageAckPolicy,
   stage: MessageAckStage,
 ): boolean {
+  // Ack stages intentionally map one-to-one to policies; "manual" never auto-acks so channel
+  // adapters can own platform-specific acknowledgement timing themselves.
   switch (policy) {
     case "after_receive_record":
       return stage === "receive_record";

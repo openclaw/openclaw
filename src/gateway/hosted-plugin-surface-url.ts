@@ -61,6 +61,7 @@ const parseForwardedHost = (value: HostSource | HostSource[]) => {
   return raw?.split(",")[0]?.trim();
 };
 
+/** Resolves the externally reachable base URL for plugin-hosted HTTP surfaces. */
 export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlParams) {
   const port = params.port;
   if (!port) {
@@ -87,6 +88,7 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
     return undefined;
   }
 
+  // When the Gateway is behind a proxy on the default port, advertise the client-facing port.
   let exposedPort = port;
   if (!override && (forwardedHost || requestHost) && port === 18789) {
     if (advertisedHost.port && advertisedHost.port > 0) {

@@ -54,6 +54,12 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   },
 };
 
+/**
+ * Normalizes configured safe-bin names to executable-family identifiers.
+ *
+ * Config may contain bare names, POSIX paths, Windows paths, or PATHEXT-style suffixes; semantic
+ * rules always match the executable family name so aliases like gawk/gsed get the same treatment.
+ */
 export function normalizeSafeBinName(raw: string): string {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
@@ -69,10 +75,22 @@ function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefin
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }
 
+/**
+ * Applies command-family semantic deny rules that path trust and argv token checks cannot cover.
+ *
+ * Unknown command families pass here; profile validation and trusted-path checks decide whether the
+ * invocation is eligible for safe-bin handling before this semantic layer runs.
+ */
 export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {
   return getSafeBinSemanticRule(params.binName)?.validate?.(params) ?? true;
 }
 
+/**
+ * Lists configured safe bins that are risky enough to warn operators at config time.
+ *
+ * Warnings are deduped after executable-family normalization so equivalent path/suffix spellings do
+ * not produce repeated diagnostics for the same configured command family.
+ */
 export function listRiskyConfiguredSafeBins(entries: Iterable<string>): Array<{
   bin: string;
   warning: string;

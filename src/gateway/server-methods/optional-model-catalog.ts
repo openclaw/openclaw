@@ -5,6 +5,11 @@ const OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 const loggedSlowCatalogKeys = new Set<string>();
 
+/**
+ * Opportunistically load the model catalog for metadata-rich RPC responses.
+ * Server methods must remain responsive when providers are slow or unavailable,
+ * so timeout/failure returns `undefined` and logs a per-surface debug line once.
+ */
 export async function loadOptionalServerMethodModelCatalog(
   context: GatewayRequestContext,
   surface: string,

@@ -4,6 +4,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 
+/** Session and requester metadata carried across outbound delivery hooks and policy checks. */
 export type OutboundSessionContext = {
   /**
    * Canonical session key used for internal hook dispatch.

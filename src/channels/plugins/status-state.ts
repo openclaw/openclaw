@@ -1,3 +1,4 @@
+/** Maps internal channel status codes to user-facing status text. */
 export function formatChannelStatusState(statusState: string): string {
   switch (statusState) {
     case "linked":

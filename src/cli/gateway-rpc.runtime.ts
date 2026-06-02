@@ -18,6 +18,7 @@ type CallGatewayFromCliRuntimeExtra = {
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 
+/** Runtime half of the CLI Gateway RPC wrapper after the lazy import boundary has been crossed. */
 export async function callGatewayFromCliRuntime(
   method: string,
   opts: GatewayRpcOpts,

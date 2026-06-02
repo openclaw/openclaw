@@ -13,23 +13,34 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Handles authenticated POST+JSON Gateway endpoints with optional operator-scope enforcement. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
   opts: {
+    /** Exact request path owned by the endpoint. */
     pathname: string;
+    /** Resolved Gateway auth policy for this HTTP surface. */
     auth: ResolvedGatewayAuth;
+    /** Maximum JSON request body size accepted before returning 413. */
     maxBodyBytes: number;
+    /** Trusted proxy CIDRs/hosts used when deriving caller identity. */
     trustedProxies?: string[];
+    /** Whether direct remote addresses may be used when proxy headers are absent. */
     allowRealIpFallback?: boolean;
+    /** Optional auth failure budget shared with the wider Gateway HTTP layer. */
     rateLimiter?: AuthRateLimiter;
+    /** Gateway method whose operator scopes gate this endpoint. */
     requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
+    /** Optional override for deriving operator scopes from an authorized request. */
     resolveOperatorScopes?: (
       req: IncomingMessage,
       requestAuth: AuthorizedGatewayHttpRequest,
     ) => string[];
   },
 ): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
+  // Return false only when this helper does not own the path; undefined means
+  // the helper consumed the request by writing an error response.
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== opts.pathname) {
     return false;
@@ -66,6 +77,8 @@ export async function handleGatewayPostJsonEndpoint(
     }
   }
 
+  // Scope checks run before body parsing so unauthorized callers cannot force
+  // large JSON reads on endpoints they are not allowed to use.
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);
   if (body === undefined) {
     return undefined;

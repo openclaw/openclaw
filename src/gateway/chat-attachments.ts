@@ -58,6 +58,7 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+/** Resolve the Gateway attachment byte ceiling from agent defaults. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =
@@ -108,6 +109,8 @@ function isGenericContainerMime(mime?: string): boolean {
 }
 
 function shouldIgnoreImageMimeHint(params: { sniffedMime?: string; hintedMime?: string }): boolean {
+  // Generic container bytes (zip/octet-stream) can be mislabeled as images by
+  // filename or caller metadata; trust the sniffed container shape over hints.
   return isGenericContainerMime(params.sniffedMime) && isImageMime(params.hintedMime);
 }
 
@@ -168,6 +171,9 @@ function ensureExtension(label: string, mime: string): string {
 }
 
 function assertSavedMedia(value: unknown, label: string): SavedMedia {
+  // The media store result later becomes a media:// path segment. Validate its
+  // shape and id here so offloaded attachments cannot smuggle path separators
+  // into prompt-visible refs.
   if (
     value === null ||
     typeof value !== "object" ||
@@ -235,6 +241,13 @@ function validateAttachmentBase64OrThrow(
   return sizeBytes;
 }
 
+/**
+ * Normalize inbound chat attachments into inline model images or media refs.
+ *
+ * Images stay inline when the target supports them and they are small enough;
+ * non-images and large/text-only images are offloaded so the agent can read
+ * them through media paths instead of lossy prompt text.
+ */
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
@@ -361,6 +374,8 @@ export async function parseMessageWithAttachments(
 
       if (!shouldOffload) {
         images.push({ type: "image", data: b64, mimeType: finalMime });
+        // imageOrder covers only image inputs. Non-image offloads travel through
+        // offloadedRefs/MediaPaths and must not consume an image ordering slot.
         imageOrder.push("inline");
         continue;
       }
@@ -415,6 +430,8 @@ export async function parseMessageWithAttachments(
     }
   } catch (err) {
     if (savedMediaIds.length > 0) {
+      // Attachment parsing is all-or-nothing for a request: remove media files
+      // already written by earlier attachments before surfacing the failure.
       await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
     }
     throw err;
@@ -428,6 +445,7 @@ export async function parseMessageWithAttachments(
   };
 }
 
+/** Sniff one attachment with the same MIME precedence used by the parser. */
 export async function resolveChatAttachmentLooksLikeImage(
   attachment: ChatAttachment,
   index = 0,

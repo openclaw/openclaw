@@ -208,13 +208,18 @@ type PostCorePluginUpdateResult = NonNullable<
 >;
 
 type PreUpdateConfigRestoreInput = {
+  /** Materialized config used for runtime decisions before the core package swap. */
   sourceConfig: OpenClawConfig;
+  /** Authored config shape to preserve direct user-written channel entries. */
   authoredConfig: OpenClawConfig;
 };
 
 type MissingPluginInstallPayload = {
+  /** Plugin install record id whose payload no longer matches the on-disk index. */
   pluginId: string;
+  /** Resolved install directory when the record had enough path data to resolve it. */
   installPath?: string;
+  /** Small closed code that drives post-update guidance and warning grouping. */
   reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
 };
 
@@ -259,6 +264,7 @@ function normalizeChannelConfigMap(value: unknown): Record<string, unknown> | nu
   return value;
 }
 
+/** Accept only directly authored channel maps; included maps need source preservation. */
 function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string, unknown> | null {
   const channels = normalizeChannelConfigMap(value);
   if (!channels || Object.hasOwn(channels, "$include")) {
@@ -267,6 +273,7 @@ function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string,
   return channels;
 }
 
+/** Restore model overrides only for channel ids that were restored from the pre-update config. */
 function restorePreUpdateChannelModelOverrides(params: {
   channels: Record<string, unknown>;
   preUpdateChannels: Record<string, unknown>;
@@ -312,6 +319,7 @@ function restorePreUpdateChannelModelOverrides(params: {
     : { channels: params.channels, changed: false };
 }
 
+/** Rehydrate channels dropped by package migration while preserving the snapshot hash guard. */
 function restoreDroppedPreUpdateChannels(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput | undefined,
@@ -374,6 +382,7 @@ function restoreDroppedPreUpdateChannels(
   };
 }
 
+/** Cheap preflight used before rewriting config during post-core finalization. */
 function hasRestorablePreUpdateChannels(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput,
@@ -391,6 +400,7 @@ function hasRestorablePreUpdateChannels(
   );
 }
 
+/** Choose the authored `channels` value that preserves includes and direct user edits. */
 function resolveRestoredAuthoredChannels(params: {
   currentChannels: unknown;
   currentAuthoredChannels: unknown;
@@ -450,6 +460,7 @@ function resolveRestoredAuthoredChannels(params: {
   return changed ? restoredChannels : undefined;
 }
 
+/** Collect active plugin install records whose package payload is missing on disk. */
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
@@ -518,6 +529,7 @@ function formatPostUpdatePluginInspectGuidance(pluginId: string): string {
   return `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`;
 }
 
+/** Build a user-facing plugin warning with repair and inspection follow-ups attached. */
 function createPostUpdatePluginWarning(params: {
   pluginId?: string;
   reason: string;
@@ -537,6 +549,7 @@ function createPostUpdatePluginWarning(params: {
   };
 }
 
+/** Upgrade per-plugin post-update outcomes with guidance without changing success outcomes. */
 function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
   outcome: PluginUpdateOutcome;
   warning?: PostUpdatePluginWarning;
@@ -617,6 +630,7 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   return params.serviceLoaded;
 }
 
+/** Package updates need fresh process/service restart; source updates can reuse legacy restart. */
 export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];
 }): boolean {

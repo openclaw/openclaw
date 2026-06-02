@@ -1,10 +1,14 @@
 export type ByteStreamLimitOverflow = {
+  /** Bytes observed after including the chunk that crossed the limit. */
   size: number;
+  /** Maximum bytes the caller allowed before aborting the stream. */
   maxBytes: number;
 };
 
 export type ReadByteStreamWithLimitOptions = {
+  /** Maximum bytes to retain before aborting and throwing. */
   maxBytes: number;
+  /** Optional error factory used when the stream crosses maxBytes. */
   onOverflow?: (params: ByteStreamLimitOverflow) => Error;
 };
 
@@ -42,6 +46,7 @@ function destroyReadableOnOverflow(stream: unknown, err: Error): void {
   }
 }
 
+/** Reads an async byte stream into one Buffer while destroying/canceling it on overflow. */
 export async function readByteStreamWithLimit(
   stream: AsyncIterable<unknown>,
   opts: ReadByteStreamWithLimitOptions,

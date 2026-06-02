@@ -5,6 +5,7 @@ import {
   type GatewayDiscoveryResolvedEndpoint,
 } from "./bonjour-discovery.js";
 
+/** Canonical target shape shared by discovery CLI, remote onboarding, and status output. */
 type GatewayDiscoveryTarget = {
   title: string;
   domain: string;
@@ -20,6 +21,11 @@ function pickSshPort(beacon: GatewayBonjourBeacon): number | null {
     : null;
 }
 
+/**
+ * Resolve a Bonjour beacon into connection-ready Gateway URLs and optional SSH
+ * target text. TXT-only metadata stays non-routable until endpoint resolution
+ * proves a host/port, preventing status/onboarding from trusting hints alone.
+ */
 export function buildGatewayDiscoveryTarget(
   beacon: GatewayBonjourBeacon,
   opts?: { sshUser?: string | null },
@@ -28,6 +34,8 @@ export function buildGatewayDiscoveryTarget(
   const sshPort = pickSshPort(beacon);
   const sshUser = normalizeOptionalString(opts?.sshUser) ?? "";
   const baseSshTarget = endpoint ? (sshUser ? `${sshUser}@${endpoint.host}` : endpoint.host) : null;
+  // Keep default SSH port implicit so copy/paste targets match normal ssh UX,
+  // while non-standard Bonjour-advertised ports remain visible.
   const sshTarget =
     baseSshTarget && sshPort && sshPort !== 22 ? `${baseSshTarget}:${sshPort}` : baseSshTarget;
   return {
@@ -41,12 +49,17 @@ export function buildGatewayDiscoveryTarget(
   };
 }
 
+/** Build the interactive discovery label with a resolved host hint when available. */
 export function buildGatewayDiscoveryLabel(beacon: GatewayBonjourBeacon): string {
   const target = buildGatewayDiscoveryTarget(beacon);
   const hint = target.endpoint ? `${target.endpoint.host}:${target.endpoint.port}` : "host unknown";
   return `${target.title} (${hint})`;
 }
 
+/**
+ * Serialize discovery output for status JSON while reusing the same endpoint
+ * resolution as human-facing labels and SSH auto-targets.
+ */
 export function serializeGatewayDiscoveryBeacon(beacon: GatewayBonjourBeacon) {
   const target = buildGatewayDiscoveryTarget(beacon);
   return {

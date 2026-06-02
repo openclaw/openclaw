@@ -16,6 +16,7 @@ import type { NodesRpcOpts } from "./types.js";
 
 const BLOCKED_NODE_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 
+/** Register generic node.invoke while routing shell execution through the exec tool instead. */
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
     nodes

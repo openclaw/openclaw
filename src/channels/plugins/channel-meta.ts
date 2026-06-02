@@ -5,6 +5,11 @@ import type { ChannelMeta } from "./types.core.js";
 type ArrayFieldMode = "defined" | "non-empty";
 type OptionalStringMode = "defined" | "truthy";
 
+/**
+ * Normalizes manifest channel metadata into the runtime/UI channel meta shape.
+ * Callers choose whether empty array/string fields are preserved or omitted so
+ * catalog and plugin-runtime surfaces can keep their historical semantics.
+ */
 export function buildManifestChannelMeta(params: {
   id: string;
   channel: PluginPackageChannel;

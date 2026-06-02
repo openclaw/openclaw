@@ -28,13 +28,18 @@ import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type DeviceIdentity = {
+  /** Stable gateway device id associated with this keypair. */
   deviceId: string;
+  /** PEM private key used by host deps to sign device-auth payloads. */
   privateKeyPem: string;
+  /** PEM public key sent to the gateway during device pairing/auth. */
   publicKeyPem: string;
 };
 
 export type DeviceAuthTokenRecord = {
+  /** Stored device bearer token returned by the gateway. */
   token?: string;
+  /** Scopes granted to the stored token; reused only when still sufficient. */
   scopes?: string[];
 };
 
@@ -306,8 +311,11 @@ type Pending = {
 };
 
 export type GatewayClientRequestOptions = {
+  /** Wait for an accepted response followed by a final response. */
   expectFinal?: boolean;
+  /** Per-request timeout; null disables request timeout scheduling. */
   timeoutMs?: number | null;
+  /** Cancels the request and removes its pending response handler. */
   signal?: AbortSignal;
   /** Called once for expectFinal requests after an accepted response, before the final result. */
   onAccepted?: (payload: unknown) => void;
@@ -355,11 +363,15 @@ const DEFAULT_GATEWAY_CLIENT_URL = "ws://127.0.0.1:18789";
 const DEFAULT_CLIENT_VERSION = "0.0.0";
 
 export type GatewayReconnectPausedInfo = {
+  /** WebSocket close code that paused reconnect attempts. */
   code: number;
+  /** Raw close reason supplied by the gateway/socket. */
   reason: string;
+  /** Structured connect-error detail code when the close came from gateway auth/startup. */
   detailCode: string | null;
 };
 
+/** Error wrapper for gateway response frames that preserves retry metadata for callers. */
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -397,8 +409,10 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
   );
 }
 
+/** Construction options for GatewayClient connections, auth, protocol bounds, and callbacks. */
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  /** Client-side watchdog for receiving the connect challenge. */
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
@@ -450,6 +464,7 @@ export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
   1013: "try again later",
 };
 
+/** Returns the short operator-facing description for common gateway close codes. */
 export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
@@ -490,6 +505,8 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
     "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
+  // Keep the legacy connectDelayMs alias feeding the same clamp path until the
+  // public option is removed; explicit challenge timeout still wins.
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
     configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
   });

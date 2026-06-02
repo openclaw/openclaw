@@ -6,12 +6,14 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeJson } from "./json-files.js";
 
+/** Captured process-output tail for restart/update steps; full logs stay out of the sentinel. */
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
   stderrTail?: string | null;
   exitCode?: number | null;
 };
 
+/** One restart/update step recorded for post-restart diagnostics. */
 export type RestartSentinelStep = {
   name: string;
   command: string;
@@ -20,6 +22,7 @@ export type RestartSentinelStep = {
   log?: RestartSentinelLog | null;
 };
 
+/** Structured before/after metadata persisted across a Gateway process restart. */
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
@@ -31,6 +34,7 @@ export type RestartSentinelStats = {
   durationMs?: number | null;
 };
 
+/** Deferred post-restart action consumed by the next Gateway process. */
 export type RestartSentinelContinuation =
   | {
       kind: "systemEvent";
@@ -41,6 +45,10 @@ export type RestartSentinelContinuation =
       message: string;
     };
 
+/**
+ * Payload written before restart-like operations so the next Gateway process can
+ * report the outcome and optionally resume the originating session/channel.
+ */
 export type RestartSentinelPayload = {
   kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
@@ -60,6 +68,7 @@ export type RestartSentinelPayload = {
   stats?: RestartSentinelStats | null;
 };
 
+/** Versioned restart sentinel envelope stored on disk for forward-compatible parsing. */
 export type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
@@ -67,6 +76,7 @@ export type RestartSentinel = {
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
+/** Build the approvals-capable follow-up hint shown when doctor cannot run inline. */
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
@@ -76,10 +86,15 @@ export function formatDoctorNonInteractiveHint(
   )} in a terminal or approvals-capable OpenClaw surface.`;
 }
 
+/** Resolve the process-state sentinel path from the active OpenClaw state dir. */
 export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), SENTINEL_FILENAME);
 }
 
+/**
+ * Persist a versioned restart sentinel with private state-dir permissions so the
+ * next Gateway process can consume it exactly once.
+ */
 export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
   env: NodeJS.ProcessEnv = process.env,
@@ -94,6 +109,8 @@ function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSe
   return structuredClone(payload);
 }
 
+// Rewrite via a clone so helper callbacks cannot mutate the cached/current
+// payload if they decide the sentinel kind does not apply.
 async function rewriteRestartSentinel(
   rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
   env: NodeJS.ProcessEnv = process.env,
@@ -113,6 +130,7 @@ async function rewriteRestartSentinel(
   };
 }
 
+/** Record the running service version after an update restart completes. */
 export async function finalizeUpdateRestartSentinelRunningVersion(
   version = resolveRuntimeServiceVersion(process.env),
   env: NodeJS.ProcessEnv = process.env,
@@ -132,6 +150,7 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
   }, env);
 }
 
+/** Mark an update sentinel as failed and drop any continuation that should no longer resume. */
 export async function markUpdateRestartSentinelFailure(
   reason: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -152,6 +171,7 @@ export async function markUpdateRestartSentinelFailure(
   }, env);
 }
 
+/** Best-effort cleanup for a sentinel path captured before launching a restart command. */
 export async function removeRestartSentinelFile(filePath: string | null | undefined) {
   if (!filePath) {
     return;
@@ -159,6 +179,7 @@ export async function removeRestartSentinelFile(filePath: string | null | undefi
   await fs.unlink(filePath).catch(() => {});
 }
 
+/** Convert an optional post-restart message into an agent continuation request. */
 export function buildRestartSuccessContinuation(params: {
   sessionKey?: string;
   continuationMessage?: string | null;
@@ -170,6 +191,10 @@ export function buildRestartSuccessContinuation(params: {
   return null;
 }
 
+/**
+ * Read and validate the restart sentinel. Malformed or unsupported files are
+ * deleted so stale state cannot replay on every Gateway start.
+ */
 export async function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
@@ -193,6 +218,7 @@ export async function readRestartSentinel(
   }
 }
 
+/** Read the sentinel and remove the backing file after a successful parse. */
 export async function consumeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
@@ -205,6 +231,7 @@ export async function consumeRestartSentinel(
   return parsed;
 }
 
+/** Format the user-facing restart/update notification without volatile timestamps. */
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
   const message = payload.message?.trim();
   if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {
@@ -224,6 +251,7 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
+/** Build the stable one-line restart/update summary used by status and notifications. */
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
@@ -234,6 +262,7 @@ export function summarizeRestartSentinel(payload: RestartSentinelPayload): strin
   return `Gateway restart ${kind} ${status}${mode}`.trim();
 }
 
+/** Trim captured logs from the front so the newest failure context is preserved. */
 export function trimLogTail(input?: string | null, maxChars = 8000) {
   if (!input) {
     return null;

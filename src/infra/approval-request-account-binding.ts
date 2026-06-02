@@ -12,11 +12,13 @@ import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
 
+/** Channel/account binding recovered from a persisted session store entry. */
 type ApprovalRequestSessionBinding = {
   channel?: string;
   accountId?: string;
 };
 
+/** Persisted session entry paired with the exact approval request session key. */
 type PersistedApprovalRequestSessionEntry = {
   sessionKey: string;
   entry: SessionEntry;
@@ -26,6 +28,7 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
   return normalizeMessageChannel(value);
 }
 
+/** Load the persisted session entry addressed by an approval request's session key. */
 export function resolvePersistedApprovalRequestSessionEntry(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -36,6 +39,8 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
+  // Placeholder store paths need the session-key agent first; older approval payloads may only
+  // carry request.agentId, so keep that as the fallback before defaulting to main.
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath, {
     maintenanceConfig: resolveMaintenanceConfigFromInput(params.cfg.session?.maintenance),
@@ -61,6 +66,12 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   return channel || accountId ? { channel, accountId } : null;
 }
 
+/**
+ * Resolve the freshest account id that owns an approval request.
+ *
+ * Turn-source account metadata wins when its channel matches the requested channel; otherwise
+ * callers may fall back to the persisted session binding from the approval's session key.
+ */
 export function resolveApprovalRequestAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -69,6 +80,7 @@ export function resolveApprovalRequestAccountId(params: {
   const expectedChannel = normalizeOptionalChannel(params.channel);
   const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
   if (expectedChannel && turnSourceChannel && turnSourceChannel !== expectedChannel) {
+    // Turn-source metadata is the freshest signal; never borrow a session account across channels.
     return null;
   }
 
@@ -88,6 +100,12 @@ export function resolveApprovalRequestAccountId(params: {
   return sessionBinding?.accountId ?? null;
 }
 
+/**
+ * Resolve the account id for one concrete approval channel.
+ *
+ * This variant can recover a session-bound account even when the live turn source came from a
+ * different channel, which lets explicit channel routes verify their own persisted binding.
+ */
 export function resolveApprovalRequestChannelAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -102,10 +120,18 @@ export function resolveApprovalRequestChannelAccountId(params: {
     return resolveApprovalRequestAccountId(params);
   }
 
+  // If the live turn came from another channel, only a persisted binding for the requested
+  // channel can prove this account relationship.
   const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
   return sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
 }
 
+/**
+ * Check whether an approval request is eligible for a channel/account-specific route.
+ *
+ * Explicit turn-source accounts are authoritative; persisted accounts only narrow the match when
+ * no fresher account metadata is present.
+ */
 export function doesApprovalRequestMatchChannelAccount(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -127,6 +153,8 @@ export function doesApprovalRequestMatchChannelAccount(params: {
   );
   const expectedAccountId = normalizeOptionalAccountId(params.accountId);
   if (turnSourceAccountId) {
+    // Explicit turn-source account ids are authoritative; they should not be broadened by stale
+    // session-store account data.
     return !expectedAccountId || expectedAccountId === turnSourceAccountId;
   }
 

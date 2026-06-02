@@ -21,23 +21,38 @@ const DEFAULT_TALK_HANDOFF_TTL_MS = 10 * 60 * 1000;
 const MAX_TALK_HANDOFF_TTL_MS = 60 * 60 * 1000;
 
 export type TalkHandoffCreateParams = {
+  /** Gateway session key that owns this talk handoff. */
   sessionKey: string;
+  /** Optional run/session id for observability and client display. */
   sessionId?: string;
+  /** Source channel label for the handoff origin. */
   channel?: string;
+  /** Source target label for the handoff origin. */
   target?: string;
+  /** Realtime provider id requested by the handoff. */
   provider?: string;
+  /** Realtime model id requested by the handoff. */
   model?: string;
+  /** Realtime voice id requested by the handoff. */
   voice?: string;
+  /** Talk mode exposed to clients joining the room. */
   mode?: TalkMode;
+  /** Talk transport exposed to clients joining the room. */
   transport?: TalkTransport;
+  /** Brain/runtime owner for the talk room. */
   brain?: TalkBrain;
+  /** Requested time to live; clamped to handoff bounds. */
   ttlMs?: number;
 };
 
 export type TalkHandoffRecord = {
+  /** Stable handoff id used with the bearer token to join. */
   id: string;
+  /** Room id exposed to browser clients. */
   roomId: string;
+  /** Relative room URL exposed to browser clients. */
   roomUrl: string;
+  /** SHA-256 hash of the join token; plaintext tokens are returned once only. */
   tokenHash: string;
   sessionKey: string;
   sessionId?: string;
@@ -63,6 +78,7 @@ export type TalkHandoffPublicRecord = Omit<TalkHandoffRecord, "tokenHash" | "roo
 };
 
 export type TalkHandoffCreateResult = TalkHandoffPublicRecord & {
+  /** Plaintext bearer token returned only at creation time. */
   token: string;
 };
 
@@ -103,6 +119,7 @@ type TalkHandoffRoomState = {
 
 const handoffs = new Map<string, TalkHandoffRecord>();
 
+/** Create an expiring managed-room talk handoff and return its one-time join token. */
 export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffCreateResult {
   pruneExpiredTalkHandoffs();
   const rawCreatedAt = Date.now();
@@ -146,11 +163,13 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
   return { ...toPublicTalkHandoffRecord(record), token };
 }
 
+/** Return a stored talk handoff if it exists and has not expired. */
 export function getTalkHandoff(id: string): TalkHandoffRecord | undefined {
   pruneExpiredTalkHandoffs();
   return handoffs.get(id);
 }
 
+/** Join a talk handoff room using its bearer token, replacing any active client. */
 export function joinTalkHandoff(
   id: string,
   token: string,
@@ -181,6 +200,7 @@ export function joinTalkHandoff(
   };
 }
 
+/** Start a talk turn for the active handoff room client. */
 export function startTalkHandoffTurn(
   id: string,
   token: string,
@@ -207,6 +227,7 @@ export function startTalkHandoffTurn(
   };
 }
 
+/** End the active talk turn for a handoff room. */
 export function endTalkHandoffTurn(
   id: string,
   token: string,
@@ -232,6 +253,7 @@ export function endTalkHandoffTurn(
   };
 }
 
+/** Cancel the active talk turn for a handoff room. */
 export function cancelTalkHandoffTurn(
   id: string,
   token: string,
@@ -257,6 +279,7 @@ export function cancelTalkHandoffTurn(
   };
 }
 
+/** Revoke a talk handoff and emit the final room close event. */
 export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   pruneExpiredTalkHandoffs();
   const record = handoffs.get(id);
@@ -277,10 +300,12 @@ export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   };
 }
 
+/** Verify a plaintext handoff token against the stored token hash. */
 export function verifyTalkHandoffToken(record: TalkHandoffRecord, token: string): boolean {
   return record.tokenHash === hashTalkHandoffToken(token);
 }
 
+/** Clear all in-memory handoffs for test isolation. */
 export function clearTalkHandoffsForTest(): void {
   handoffs.clear();
 }

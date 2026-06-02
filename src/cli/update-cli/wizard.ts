@@ -21,6 +21,7 @@ import {
 } from "./shared.js";
 import { updateCommand } from "./update-command.js";
 
+/** Interactive channel/restart selector that delegates all mutation to `updateCommand`. */
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(

@@ -21,6 +21,7 @@ type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[
 
 export { registerPluginHttpRoute };
 
+/** Plugin HTTP route options supplied by webhook target registration helpers. */
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
   "path" | "fallbackPath"
@@ -47,6 +48,8 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
 const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
 
 function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () => void> {
+  // Teardowns are scoped to the caller-owned target map so independent webhook
+  // registries can reuse the same path without sharing route lifecycle state.
   const mapKey = targetsByPath as unknown as Map<string, unknown[]>;
   const existing = pathTeardownByTargetMap.get(mapKey);
   if (existing) {
@@ -68,6 +71,8 @@ export function registerWebhookTarget<T extends { path: string }>(
   const existing = targetsByPath.get(key) ?? [];
 
   if (existing.length === 0) {
+    // Install expensive route state only for the first target on a normalized
+    // path; later targets share the same route until the last registration exits.
     const onFirstPathResult = opts?.onFirstPathTarget?.({
       path: key,
       target: normalizedTarget,
@@ -142,6 +147,8 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
     typeof params.inFlightKey === "function"
       ? params.inFlightKey({ req: params.req, path: resolved.path, targets: resolved.targets })
       : (params.inFlightKey ?? `${resolved.path}:${params.req.socket?.remoteAddress ?? "unknown"}`);
+  // The default in-flight key isolates concurrency by webhook path and peer IP;
+  // account-aware callers can supply a function once auth context is derivable.
   const requestLifecycle = beginWebhookRequestPipelineOrReject({
     req: params.req,
     res: params.res,
@@ -163,6 +170,8 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
     await params.handle(resolved);
     return true;
   } finally {
+    // Release on both success and handler throw so one failed webhook cannot
+    // permanently consume a per-key in-flight slot.
     requestLifecycle.release();
   }
 }
@@ -177,6 +186,8 @@ function updateMatchedWebhookTarget<T>(
   target: T,
 ): { ok: true; matched: T } | { ok: false; result: WebhookTargetMatchResult<T> } {
   if (matched) {
+    // Multi-match auth is fail-closed: the caller must make target selection
+    // unique instead of silently choosing the first matching credential.
     return { ok: false, result: { kind: "ambiguous" } };
   }
   return { ok: true, matched: target };

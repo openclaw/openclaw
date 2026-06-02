@@ -31,6 +31,7 @@ function findExistingDiskSpacePath(targetPath: string): string | null {
   }
 }
 
+/** Reads filesystem capacity for a target or its nearest existing ancestor. */
 export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
   if (typeof fs.statfsSync !== "function") {
     return null;
@@ -58,6 +59,7 @@ export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
   }
 }
 
+/** Formats disk-space byte counts for short CLI/log warnings. */
 export function formatDiskSpaceBytes(bytes: number): string {
   const mib = bytes / (1024 * 1024);
   if (mib < 1024) {
@@ -67,6 +69,7 @@ export function formatDiskSpaceBytes(bytes: number): string {
   return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;
 }
 
+/** Builds a non-fatal low-disk-space warning for setup/staging operations. */
 export function createLowDiskSpaceWarning(params: {
   targetPath: string;
   purpose: string;

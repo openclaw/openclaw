@@ -7,8 +7,11 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
+  /** Original config token that the channel-specific resolver attempted to map. */
   input: string;
+  /** True only when the resolver positively identified the input. */
   resolved: boolean;
+  /** Stable channel/user id to store when resolution succeeded. */
   id?: string;
 };
 
@@ -30,6 +33,7 @@ function dedupeAllowlistEntries(entries: string[]): string[] {
   return deduped;
 }
 
+/** Appends resolved ids to an allowlist while preserving first-seen casing/order. */
 export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
@@ -37,6 +41,7 @@ export function mergeAllowlist(params: {
   return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
 }
 
+/** Builds resolved/unresolved summaries plus id additions from resolver output. */
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
   opts?: { formatResolved?: (entry: T) => string; formatUnresolved?: (entry: T) => string },
@@ -47,6 +52,7 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   additions: string[];
 } {
   const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
+  // Missing ids are treated as unresolved even when a resolver marks the input as resolved.
   const resolvedOk = (entry: T) => Boolean(entry.resolved && entry.id);
   const formatResolved = opts?.formatResolved ?? ((entry: T) => `${entry.input}→${entry.id}`);
   const formatUnresolved = opts?.formatUnresolved ?? ((entry: T) => entry.input);
@@ -83,6 +89,7 @@ export function canonicalizeAllowlistWithResolvedIds<
     if (!trimmed) {
       continue;
     }
+    // `*` is a wildcard policy marker, not a user alias; never try to resolve it as an id.
     if (trimmed === "*") {
       canonicalized.push(trimmed);
       continue;
@@ -93,6 +100,7 @@ export function canonicalizeAllowlistWithResolvedIds<
   return dedupeAllowlistEntries(canonicalized);
 }
 
+/** Rewrites nested `users` arrays in channel config entries after allowlist resolution. */
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
@@ -110,6 +118,7 @@ export function patchAllowlistUsersInConfigEntries<
     if (!Array.isArray(users) || users.length === 0) {
       continue;
     }
+    // Merge keeps user-facing aliases; canonicalize replaces aliases with stable ids when possible.
     const resolvedUsers =
       params.strategy === "canonicalize"
         ? canonicalizeAllowlistWithResolvedIds({
@@ -131,6 +140,7 @@ export function patchAllowlistUsersInConfigEntries<
   return nextEntries as TEntries;
 }
 
+/** Collects resolvable user aliases from one config entry, excluding wildcard entries. */
 export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entry: unknown): void {
   if (!entry || typeof entry !== "object") {
     return;
@@ -147,6 +157,7 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
   }
 }
 
+/** Logs compact allowlist resolution mapping output when there is anything to report. */
 export function summarizeMapping(
   label: string,
   mapping: string[],

@@ -1,5 +1,6 @@
 import { normalizeAgentId } from "../routing/session-key.js";
 
+/** Normalize hook allowlist config; undefined means unrestricted, "*" means all agents. */
 export function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
@@ -12,6 +13,8 @@ export function resolveAllowedAgentIds(raw: string[] | undefined): Set<string> |
       continue;
     }
     if (trimmed === "*") {
+      // Wildcard is represented as undefined so callers share the same fast
+      // unrestricted branch as missing config.
       hasWildcard = true;
       break;
     }

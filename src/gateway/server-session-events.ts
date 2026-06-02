@@ -28,6 +28,8 @@ function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string
   if (sessionKey === "global") {
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
     if (normalizedAgentId) {
+      // Agent-scoped global sessions subscribe under agent:<id>:global; the
+      // default agent also mirrors the legacy unscoped global subscription.
       const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
       return normalizeAgentId(normalizedAgentId) === defaultAgentId
         ? [scopedKey, sessionKey]
@@ -111,13 +113,19 @@ function buildGatewaySessionSnapshot(params: {
   };
 }
 
+/** Create the Gateway fanout handler for low-level transcript write events. */
 export function createTranscriptUpdateBroadcastHandler(params: {
+  /** Transport-specific broadcast function for the selected websocket ids. */
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  /** Subscribers that receive aggregate sessions.changed updates. */
   sessionEventSubscribers: SessionEventSubscribers;
+  /** Subscribers scoped to one session's message stream. */
   sessionMessageSubscribers: SessionMessageSubscribers;
 }) {
   let broadcastQueue = Promise.resolve();
   return (update: SessionTranscriptUpdate): void => {
+    // Preserve transcript update order per process; broadcasts may need async
+    // sequence fallback reads before they can be emitted.
     broadcastQueue = broadcastQueue
       .then(() => handleTranscriptUpdateBroadcast(params, update))
       .catch(() => undefined);
@@ -158,6 +166,8 @@ async function handleTranscriptUpdateBroadcast(
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
+    // Archive/repair paths may emit only a message payload and file path. Fall
+    // back to the current store row so clients still get monotonic cursors.
     const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
@@ -215,8 +225,11 @@ async function handleTranscriptUpdateBroadcast(
   );
 }
 
+/** Create the Gateway fanout handler for session lifecycle metadata events. */
 export function createLifecycleEventBroadcastHandler(params: {
+  /** Transport-specific broadcast function for all session-event subscribers. */
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  /** Subscribers that receive aggregate sessions.changed updates. */
   sessionEventSubscribers: SessionEventSubscribers;
 }) {
   return (event: SessionLifecycleEvent): void => {

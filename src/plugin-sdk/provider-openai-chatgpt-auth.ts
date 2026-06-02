@@ -5,12 +5,17 @@ const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 const OPENAI_CODEX_PROFILE_CLAIM = "https://api.openai.com/profile";
 
 export type OpenAICodexAuthIdentity = {
+  /** ChatGPT account id from the OpenAI auth claim or an explicit import override. */
   accountId?: string;
+  /** Plan tier surfaced by ChatGPT auth claims when present. */
   chatgptPlanType?: string;
+  /** Email from the profile claim; omitted when tokens only carry opaque ids. */
   email?: string;
+  /** Stable profile name used for imported auth profiles. */
   profileName?: string;
 };
 
+/** Decode an OpenAI/Codex JWT payload without validating signatures or throwing on bad input. */
 export function decodeOpenAICodexJwtPayload(token: string): Record<string, unknown> | undefined {
   const payload = token.split(".")[1];
   if (!payload) {
@@ -57,6 +62,8 @@ export function resolveOpenAICodexAuthIdentity(params: {
     normalizeOptionalString(auth.user_id) ??
     normalizeOptionalString(payload?.sub) ??
     accountId;
+  // When email is absent, derive a non-reversible id-based profile name so imports remain
+  // stable without exposing opaque subject ids directly in profile names.
   return {
     ...(accountId ? { accountId } : {}),
     ...(chatgptPlanType ? { chatgptPlanType } : {}),

@@ -19,6 +19,7 @@ async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
   return gatewayRpcRuntimeLoader.load();
 }
 
+/** Adds the shared Gateway connection flags without pulling in the runtime WebSocket client. */
 export function addGatewayClientOptions(cmd: Command) {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -27,6 +28,12 @@ export function addGatewayClientOptions(cmd: Command) {
     .option("--expect-final", "Wait for final response (agent)", false);
 }
 
+/**
+ * Invokes a Gateway RPC from CLI code while keeping the heavy transport runtime lazy-loaded.
+ *
+ * Callers can override client identity/scopes for operator flows, but the default remains a
+ * plain CLI client so shared subcommands produce consistent Gateway audit metadata.
+ */
 export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,

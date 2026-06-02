@@ -7,6 +7,7 @@ function formatModeChoices(modes: readonly string[]): string {
   return modes.map((mode) => `"${mode}"`).join("|");
 }
 
+/** Registers the shared foreground Gateway run flags used by root and nested gateway commands. */
 export function addGatewayRunCommand(cmd: Command): Command {
   return cmd
     .option("--port <port>", "Port for the gateway WebSocket")

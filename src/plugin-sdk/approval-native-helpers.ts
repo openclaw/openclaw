@@ -74,16 +74,24 @@ type ApprovalOriginOrSessionTargetChecker =
   ChannelApprovalForwardingEvaluatorParams["hasOriginOrSessionTarget"];
 
 export type ChannelApprovalForwardingEligibilityParams = {
+  /** Resolved config used to evaluate approval forwarding settings and filters. */
   cfg: OpenClawConfig;
+  /** Channel account being evaluated; omitted means account-agnostic/default routing. */
   accountId?: string | null;
+  /** Approval family whose exec/plugin forwarding config should be inspected. */
   approvalKind: ApprovalKind;
+  /** Pending approval request being tested against filters and route/account ownership. */
   request: ApprovalRequest;
 };
 
 export type ChannelApprovalPotentialRouteParams = {
+  /** Resolved config used to inspect whether this channel can receive approvals. */
   cfg: OpenClawConfig;
+  /** Channel account being evaluated; omitted means any/default account. */
   accountId?: string | null;
+  /** Approval family whose forwarding config should be inspected. */
   approvalKind: ApprovalKind;
+  /** When true, target-only forwarding does not make the route eligible. */
   nativeSessionOnly?: boolean;
 };
 
@@ -215,8 +223,11 @@ type CustomOriginResolverParams<TTarget> = BaseOriginResolverParams<TTarget> & {
 };
 
 export type NativeApprovalTarget = {
+  /** Native channel destination id used for exact target matching. */
   to: string;
+  /** Optional account id that scopes the destination to one configured account. */
   accountId?: string | null;
+  /** Optional thread/topic id; exact matching treats missing and present ids differently. */
   threadId?: string | number | null;
 };
 
@@ -580,6 +591,8 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     const targetAccountId = normalizeOptionalString(input.targetAccountId);
     const accountId = normalizeOptionalString(input.accountId);
     if (targetAccountId) {
+      // Explicit target account ids are authoritative, but account-agnostic
+      // checks may still accept them when the caller is asking "could any route match?".
       return !accountId || normalizeAccountId(targetAccountId) === normalizeAccountId(accountId);
     }
     if (!accountId) {
@@ -599,6 +612,8 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
         }),
       )
       .map((candidateAccountId) => normalizeAccountId(candidateAccountId));
+    // Legacy target configs without account ids are unambiguous when only one
+    // enabled account exists; otherwise require exact account proof.
     return enabledAccountIds.length === 1 && enabledAccountIds[0] === normalizedAccountId;
   };
 

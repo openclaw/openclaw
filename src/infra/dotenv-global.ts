@@ -102,6 +102,10 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
   }
 }
 
+/**
+ * Loads trusted runtime dotenv files from the active state dir and legacy global
+ * config path, preserving the first value seen for each unset environment key.
+ */
 export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
   const quiet = opts?.quiet ?? true;
   const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");

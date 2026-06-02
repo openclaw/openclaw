@@ -124,6 +124,7 @@ function buttonCapacityAfterReservedSelects(
   const remainingActions =
     maxActions === undefined ? undefined : Math.max(0, maxActions - reservedSelects);
   const remainingRows = maxRows === undefined ? undefined : Math.max(0, maxRows - reservedSelects);
+  // Select controls consume one action row, so reserve rows before distributing button capacity.
   const rowCapacity =
     remainingRows !== undefined && maxActionsPerRow !== undefined
       ? remainingRows * maxActionsPerRow
@@ -433,6 +434,7 @@ function createGlobalButtonSelection(params: {
     candidates
       .map((candidate, index) => ({ candidate, index }))
       .toSorted((left, right) => {
+        // Global selection lets high-priority buttons win across multiple authored button blocks.
         const priorityDelta =
           (right.candidate.adapted.priority ?? 0) - (left.candidate.adapted.priority ?? 0);
         return priorityDelta || left.index - right.index;
@@ -479,6 +481,7 @@ export function adaptMessagePresentationForChannel(params: {
   for (const block of params.presentation.blocks) {
     if (block.type === "buttons") {
       if (capabilities?.buttons === false) {
+        // Unsupported controls degrade to visible labels so users still see available choices.
         const fallback = fallbackListBlock({
           blockType: fallbackBlockType,
           heading: "Actions",

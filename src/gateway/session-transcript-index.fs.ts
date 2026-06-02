@@ -10,10 +10,15 @@ const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message
 type ParsedTranscriptRecord = Record<string, unknown>;
 
 export type IndexedTranscriptEntry = {
+  /** One-based visible-message sequence after active-tree projection. */
   seq: number;
+  /** Transcript record id when the JSONL entry carries one. */
   id?: string;
+  /** Byte offset of the raw JSONL line in the transcript file. */
   offset: number;
+  /** Byte length of the raw JSONL line, excluding the newline separator. */
   byteLength: number;
+  /** Parsed transcript record or an oversized-message placeholder record. */
   record: ParsedTranscriptRecord;
 };
 
@@ -141,6 +146,8 @@ function buildOversizedIndexedRawEntry(params: {
   offset: number;
   byteLength: number;
 }): IndexedRawEntry | null {
+  // Oversized transcript rows are too large to JSON.parse safely on hot history
+  // reads, but their id/parentId metadata still decides active-branch ordering.
   const prefix = params.line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
@@ -233,6 +240,8 @@ function buildActiveTreeEntries(params: {
     out.push(entry);
     currentId = entry.parentId ?? undefined;
   }
+  // The JSONL file can contain abandoned branches after edits/compaction; only
+  // the leaf-to-root path belongs in cursor sequences shown to clients.
   return out.toReversed();
 }
 
@@ -346,6 +355,9 @@ export async function readSessionTranscriptIndex(
     return touchCachedIndex(filePath, cached);
   }
   const inFlight = transcriptIndexBuilds.get(filePath);
+  // Coalesce concurrent readers for the same stable file snapshot; history SSE
+  // and artifact reads often ask for the same transcript immediately after a
+  // write event.
   if (inFlight && inFlight.mtimeMs === stat.mtimeMs && inFlight.size === stat.size) {
     return await inFlight.promise;
   }

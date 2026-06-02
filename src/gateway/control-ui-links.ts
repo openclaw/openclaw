@@ -5,11 +5,17 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { isValidIPv4 } from "./net.js";
 
+/** Resolves user-facing Control UI HTTP and WebSocket URLs for the configured bind mode. */
 export function resolveControlUiLinks(params: {
+  /** Gateway listener port. */
   port: number;
+  /** Bind mode used to choose the displayed host. */
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  /** IPv4 host used only when bind is custom. */
   customBindHost?: string;
+  /** Optional Control UI mount path. */
   basePath?: string;
+  /** Whether to emit https/wss links instead of http/ws links. */
   tlsEnabled?: boolean;
 }): { httpUrl: string; wsUrl: string } {
   // Current BYOH truth: lan, tailnet, and custom bind resolve through IPv4-only helpers.
@@ -31,6 +37,8 @@ export function resolveControlUiLinks(params: {
     return "127.0.0.1";
   })();
   const basePath = normalizeControlUiBasePath(params.basePath);
+  // HTTP links point at the UI root while WebSocket links point at the Gateway
+  // origin/base path; callers append protocol-specific paths themselves.
   const uiPath = basePath ? `${basePath}/` : "/";
   const wsPath = basePath ? basePath : "";
   const httpScheme = params.tlsEnabled === true ? "https" : "http";

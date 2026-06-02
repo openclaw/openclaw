@@ -1,11 +1,3 @@
-/**
- * OpenResponses HTTP Handler
- *
- * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
- *
- * @see https://www.open-responses.com/
- */
-
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
@@ -109,6 +101,9 @@ function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
 }): string {
+  // `previous_response_id` reuse is scoped to the caller identity we can
+  // prove from auth; bearer values are hashed so live secrets never enter
+  // process-local response continuity state.
   const bearer = getBearerToken(params.req);
   if (bearer) {
     return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
@@ -462,7 +457,6 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
-  // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
@@ -490,7 +484,6 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
   const fileContexts: string[] = [];
   let urlParts = 0;
@@ -646,13 +639,11 @@ export async function handleOpenResponsesHttpRequest(
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
 
-  // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
 
-  // Handle instructions + file context as extra system prompt
   const extraSystemPrompt = [
     payload.instructions,
     prompt.extraSystemPrompt,
@@ -861,10 +852,6 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Streaming mode
-  // ─────────────────────────────────────────────────────────────────────────
-
   setSseHeaders(res);
 
   let accumulatedText = "";
@@ -942,7 +929,6 @@ export async function handleOpenResponsesHttpRequest(
     maybeFinalize();
   };
 
-  // Send initial events
   const initialResponse = createResponseResource({
     id: responseId,
     model,
@@ -953,7 +939,6 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, { type: "response.created", response: initialResponse });
   writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
 
-  // Add output item
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
@@ -966,7 +951,6 @@ export async function handleOpenResponsesHttpRequest(
     item: outputItem,
   });
 
-  // Add content part
   writeSseEvent(res, {
     type: "response.content_part.added",
     item_id: outputItemId,

@@ -12,6 +12,7 @@ import {
 } from "../plugin-node-capability.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
+/** Authorizes plugin-node capability requests by Gateway bearer auth first, then scoped token. */
 export async function authorizePluginNodeCapabilityRequest(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
@@ -41,6 +42,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
+    // Capability URLs must not inherit Tailscale allowance from the normal Gateway auth path.
     const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
       connectAuth: { token, password: token },

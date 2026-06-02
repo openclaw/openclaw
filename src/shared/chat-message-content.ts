@@ -55,7 +55,9 @@ export function parseAssistantTextSignature(
 
 /** Encodes versioned assistant text metadata stored alongside streamed text blocks. */
 export function encodeAssistantTextSignature(params: {
+  /** Stable text block id carried through stream/update events. */
   id: string;
+  /** Optional assistant visibility phase for the text block. */
   phase?: AssistantPhase;
 }): string {
   return JSON.stringify({
@@ -119,8 +121,11 @@ export function resolveAssistantEventPhase(data: unknown): AssistantPhase | unde
 export function extractAssistantTextForPhase(
   message: unknown,
   options?: {
+    /** Requested assistant phase; omitted means only legacy unphased text is returned. */
     phase?: AssistantPhase;
+    /** Optional sanitizer applied before presence checks and joining. */
     sanitizeText?: (text: string) => string;
+    /** Separator used when multiple matching text blocks are joined. */
     joinWith?: string;
   },
 ): string | undefined {
@@ -190,6 +195,8 @@ export function extractAssistantTextForPhase(
       const signature = parseAssistantTextSignature(record.textSignature);
       const resolvedPhase =
         signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+      // When any block uses explicit phase metadata, unphased sibling blocks stay invisible to
+      // phase-specific extraction so commentary/final text cannot be blended accidentally.
       if (!shouldIncludeContent(resolvedPhase)) {
         return null;
       }

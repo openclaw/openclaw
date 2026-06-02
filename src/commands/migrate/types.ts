@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan } from "../../plugins/types.js";
 
+/** Config patch handling mode used by embedded/onboarding migration flows. */
 export type MigrationConfigPatchMode = "return";
 
+/** Shared options accepted by migration plan, apply, and default command flows. */
 export type MigrateCommonOptions = {
   provider?: string;
   source?: string;
@@ -26,6 +28,7 @@ export type MigrateCommonOptions = {
   configPatchMode?: MigrationConfigPatchMode;
 };
 
+/** Options for applying a migration, including backup and preflight-plan reuse controls. */
 export type MigrateApplyOptions = MigrateCommonOptions & {
   yes?: boolean;
   noBackup?: boolean;
@@ -34,6 +37,7 @@ export type MigrateApplyOptions = MigrateCommonOptions & {
   preflightPlan?: MigrationPlan;
 };
 
+/** Options for the default `openclaw migrate` command that can preview or apply. */
 export type MigrateDefaultOptions = MigrateApplyOptions & {
   dryRun?: boolean;
 };

@@ -43,15 +43,25 @@ export type DurableFinalDeliveryPayloadShape = {
 
 /** Raw platform result shape normalized into a message receipt. */
 export type MessageReceiptSourceResult = {
+  /** Provider/channel id that produced the platform result. */
   channel?: string;
+  /** Generic platform message id returned by most send APIs. */
   messageId?: string;
+  /** Chat-scoped id used by some channel APIs as the sent message id. */
   chatId?: string;
+  /** Channel-scoped id returned by workspace-style APIs. */
   channelId?: string;
+  /** Room-scoped id returned by room-based providers. */
   roomId?: string;
+  /** Conversation-scoped id returned by conversation-first providers. */
   conversationId?: string;
+  /** WhatsApp/JID-style destination id used as a fallback receipt key. */
   toJid?: string;
+  /** Poll id returned when the send created a platform poll. */
   pollId?: string;
+  /** Platform send timestamp when the adapter exposes it. */
   timestamp?: number;
+  /** Provider-native metadata retained for reconciliation/debugging. */
   meta?: Record<string, unknown>;
 };
 
@@ -67,24 +77,39 @@ export type MessageReceiptPartKind =
 
 /** One platform message produced by a logical outbound send. */
 export type MessageReceiptPart = {
+  /** Platform message id for this concrete sent part. */
   platformMessageId: string;
+  /** Logical content kind that produced this part. */
   kind: MessageReceiptPartKind;
+  /** Stable order within the logical send. */
   index: number;
+  /** Thread/topic id used by the platform for this part. */
   threadId?: string;
+  /** Platform message id this part replied to. */
   replyToId?: string;
+  /** Raw adapter result retained when built from legacy send output. */
   raw?: MessageReceiptSourceResult;
 };
 
 /** Normalized receipt for all platform messages that make up a logical send. */
 export type MessageReceipt = {
+  /** Preferred platform id for edits/deletes when a logical send has multiple parts. */
   primaryPlatformMessageId?: string;
+  /** Unique platform ids in send order. */
   platformMessageIds: string[];
+  /** Per-part receipts for multipart sends. */
   parts: MessageReceiptPart[];
+  /** Thread/topic id shared by the logical send when available. */
   threadId?: string;
+  /** Reply target shared by the logical send when available. */
   replyToId?: string;
+  /** Provider token required to edit the sent message. */
   editToken?: string;
+  /** Provider token required to delete the sent message. */
   deleteToken?: string;
+  /** Millisecond timestamp when core considers the logical send complete. */
   sentAt: number;
+  /** Raw adapter results used to construct this normalized receipt. */
   raw?: readonly MessageReceiptSourceResult[];
 };
 
@@ -410,24 +435,40 @@ export type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
 /** Inputs used to derive durable final-delivery requirements for a planned send. */
 export type DeriveDurableFinalDeliveryRequirementsParams = {
   payload: DurableFinalDeliveryPayloadShape;
+  /** Reply target means the adapter needs reply-to durability support. */
   replyToId?: string | null;
+  /** Thread target means the adapter needs thread durability support. */
   threadId?: string | number | null;
+  /** Silent sends require adapters to declare silent final-delivery support. */
   silent?: boolean;
+  /** Whether lifecycle hooks around sends must be preserved by durable delivery. */
   messageSendingHooks?: boolean;
+  /** Whether the planned send uses the structured payload adapter path. */
   payloadTransport?: boolean;
+  /** Whether multiple rendered payloads must be delivered as one durable logical batch. */
   batch?: boolean;
+  /** Whether unknown platform-send outcomes require adapter reconciliation. */
   reconcileUnknownSend?: boolean;
+  /** Whether post-send success hooks must run before the send is considered durable. */
   afterSendSuccess?: boolean;
+  /** Whether commit hooks must run before the final receipt is trusted. */
   afterCommit?: boolean;
+  /** Caller-supplied capabilities that extend the built-in derivation rules. */
   extraCapabilities?: DurableFinalRequirementExtras;
 };
 
 /** Stable intent record for a durable outbound message send. */
 export type DurableMessageSendIntent<TPayload = unknown> = {
+  /** Queue-stable id for this logical outbound send. */
   id: string;
+  /** Channel id that owns the outbound send. */
   channel: string;
+  /** Provider-native destination target. */
   to: string;
+  /** Optional account scope used by multi-account channels. */
   accountId?: string;
+  /** Durable policy selected after disabled sends have been filtered out. */
   durability: Exclude<MessageDurabilityPolicy, "disabled">;
+  /** Last rendered payload batch, retained for retry/reconciliation. */
   renderedBatch?: RenderedMessageBatch<TPayload>;
 };

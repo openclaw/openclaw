@@ -7,6 +7,7 @@ import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
 export class MediaReferenceError extends Error {
+  /** Stable machine-readable reason for media reference rejection. */
   code: MediaReferenceErrorCode;
 
   constructor(code: MediaReferenceErrorCode, message: string, options?: ErrorOptions) {
@@ -17,17 +18,24 @@ export class MediaReferenceError extends Error {
 }
 
 type InboundMediaReference = {
+  /** First-level inbound media id inside the media store. */
   id: string;
+  /** Source after MEDIA tag normalization, kept for diagnostics and rewrites. */
   normalizedSource: string;
+  /** Resolved local media-store path safe for direct file readers. */
   physicalPath: string;
+  /** Whether the reference came from a canonical URI or an already-local path. */
   sourceType: "uri" | "path";
 };
 
 type InboundMediaUri = {
+  /** First-level inbound media id decoded from media://inbound/<id>. */
   id: string;
+  /** Canonical source string after MEDIA tag normalization. */
   normalizedSource: string;
 };
 
+/** Normalizes legacy `MEDIA:` prefixes while preserving canonical media-store URIs. */
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
   if (/^media:\/\//i.test(trimmed)) {
@@ -37,7 +45,9 @@ export function normalizeMediaReferenceSource(source: string): string {
 }
 
 type MediaReferenceSourceInfo = {
+  /** True when the source begins with a URI-like scheme token. */
   hasScheme: boolean;
+  /** True when the scheme cannot be consumed by media loading policy. */
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;
   isFileUrl: boolean;
@@ -46,6 +56,7 @@ type MediaReferenceSourceInfo = {
   looksLikeWindowsDrivePath: boolean;
 };
 
+/** Classifies a media reference source before local-path or remote fetch handling. */
 export function classifyMediaReferenceSource(
   source: string,
   options?: { allowDataUrl?: boolean },
@@ -164,6 +175,7 @@ async function resolveInboundMediaUri(
   };
 }
 
+/** Rewrites inbound media URIs into sandbox-relative paths used for staged agent inputs. */
 export function resolveMediaReferenceSandboxPath(
   source: string,
   inboundDir = "media/inbound",
@@ -207,6 +219,8 @@ export async function resolveInboundMediaReference(
           await resolvePathForContainment(rawInboundDir),
           await resolvePathForContainment(localPath),
         );
+  // Local path references are accepted only for first-level inbound media files. Nested paths,
+  // escapes, and symlink targets outside the inbound store must stay invisible to media readers.
   if (!rel || relativePathEscapesBase(rel) || rel.includes(path.sep)) {
     return null;
   }
@@ -219,6 +233,7 @@ export async function resolveInboundMediaReference(
   };
 }
 
+/** Resolves canonical inbound media references to local files and leaves other sources untouched. */
 export async function resolveMediaReferenceLocalPath(source: string): Promise<string> {
   const normalizedSource = normalizeMediaReferenceSource(source);
   return (await resolveInboundMediaReference(normalizedSource))?.physicalPath ?? normalizedSource;

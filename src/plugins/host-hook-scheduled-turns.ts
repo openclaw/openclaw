@@ -36,6 +36,9 @@ type ResolvedSessionTurnSchedule =
       at: string;
     };
 
+// Host hooks accept cron, delay, or absolute-time inputs, but the cron service
+// stores only cron expressions and ISO timestamps. Normalize at this boundary so
+// plugin callers cannot smuggle invalid dates into persisted scheduler state.
 function resolveSchedule(
   params: PluginSessionTurnScheduleParams,
 ): ResolvedSessionTurnSchedule | undefined {
@@ -138,6 +141,12 @@ function resolvePluginSessionTurnTag(value: unknown): {
   return { tag, invalid: false };
 }
 
+/**
+ * Builds the cron job name used for plugin-owned session turn schedules.
+ *
+ * Tagged names keep the tag directly after the plugin id so tag cleanup can use
+ * a bounded prefix query instead of scanning every scheduler job.
+ */
 export function buildPluginSchedulerCronName(params: {
   pluginId: string;
   sessionKey: string;
@@ -190,6 +199,8 @@ async function listAllCronJobsForPluginTagCleanup(
     if (!listResult.hasMore) {
       return jobs;
     }
+    // Cron pagination must make forward progress. If a backend returns a stale
+    // or missing cursor, stop with the jobs already listed rather than looping.
     if (listResult.nextOffset === null || listResult.nextOffset <= offset) {
       return jobs;
     }
@@ -197,6 +208,13 @@ async function listAllCronJobsForPluginTagCleanup(
   }
 }
 
+/**
+ * Schedules a bundled plugin request to deliver a future turn into a session.
+ *
+ * The returned handle is registered with host-hook cleanup so plugin unloads can
+ * remove pending jobs from cron. Non-bundled plugins intentionally get no access
+ * to this host-owned scheduler path.
+ */
 export async function schedulePluginSessionTurn(params: {
   pluginId: string;
   pluginName?: string;
@@ -307,6 +325,9 @@ export async function schedulePluginSessionTurn(params: {
   if (!jobId) {
     return undefined;
   }
+  // The scheduler write happens before the host hook registration. Re-check the
+  // caller's commit guard and rollback the cron job if the surrounding plugin
+  // transaction was abandoned after the cron service accepted the job.
   if (params.shouldCommit && !params.shouldCommit()) {
     const removed = await removeScheduledSessionTurn({
       cron,
@@ -352,6 +373,12 @@ export async function schedulePluginSessionTurn(params: {
   return handle;
 }
 
+/**
+ * Removes all pending bundled-plugin session turns matching a session/tag pair.
+ *
+ * Cleanup confirms both the encoded name prefix and session target before
+ * deleting so a tag collision cannot remove another session's scheduler job.
+ */
 export async function unschedulePluginSessionTurnsByTag(params: {
   pluginId: string;
   origin?: PluginOrigin;

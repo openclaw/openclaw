@@ -4,7 +4,9 @@ import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 export type PreparedRunExecPolicy = {
+  /** Security policy captured when the prepared run was created. */
   security: ExecSecurity;
+  /** Ask policy captured when the prepared run was created. */
   ask: ExecAsk;
 };
 
@@ -70,6 +72,7 @@ function normalizePreparedRunExecPolicy(value: unknown): PreparedRunExecPolicy |
   return undefined;
 }
 
+/** Parses current and legacy prepared-run payloads into a normalized approval plan. */
 export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayload | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
@@ -110,6 +113,7 @@ export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayl
   };
 }
 
+/** Resolves approval UI context from request payload fields and optional node plans. */
 export function resolveSystemRunApprovalRequestContext(params: {
   host?: unknown;
   command?: unknown;
@@ -142,6 +146,7 @@ export function resolveSystemRunApprovalRequestContext(params: {
   };
 }
 
+/** Resolves runtime argv/context from an approval plan or raw system-run command input. */
 export function resolveSystemRunApprovalRuntimeContext(params: {
   plan?: unknown;
   command?: unknown;

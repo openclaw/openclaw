@@ -46,12 +46,19 @@ export {
 } from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =
+  /** Gemini thinking payload normalization. */
   | "google-thinking"
+  /** Kilocode thinking wrapper with proxy-model exclusions. */
   | "kilocode-thinking"
+  /** Moonshot thinking type/keep handling. */
   | "moonshot-thinking"
+  /** MiniMax high-speed model rewrite when fast mode is enabled. */
   | "minimax-fast-mode"
+  /** OpenAI Responses defaults: attribution, fast mode, service tier, verbosity, web search, and reasoning. */
   | "openai-responses-defaults"
+  /** OpenRouter thinking wrapper with proxy-model exclusions. */
   | "openrouter-thinking"
+  /** Provider tool streaming with tool_stream defaulting on. */
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
@@ -96,6 +103,8 @@ export function buildProviderStreamFamilyHooks(
     case "openai-responses-defaults":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          // Order matters: request metadata/defaults are patched before content
+          // normalization and context-management compatibility wrappers.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
           if (resolveOpenAIFastMode(ctx.extraParams)) {
@@ -162,8 +171,6 @@ export const OPENROUTER_THINKING_STREAM_HOOKS =
 /** @deprecated Provider-owned stream hook shortcut; use local provider hooks instead. */
 export const TOOL_STREAM_DEFAULT_ON_HOOKS =
   buildProviderStreamFamilyHooks("tool-stream-default-on");
-
-// Public stream-wrapper helpers for provider plugins.
 
 export {
   createAnthropicToolPayloadCompatibilityWrapper,

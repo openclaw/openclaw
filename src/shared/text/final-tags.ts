@@ -1,7 +1,11 @@
 export type FinalTagMatch = {
+  /** Start offset of the matched tag in the source text. */
   index: number;
+  /** Exact tag text that should be removed or inspected. */
   text: string;
+  /** True for closing tags such as `</final>`. */
   isClose: boolean;
+  /** True for self-closing opening tags such as `<final />`. */
   isSelfClosing: boolean;
 };
 
@@ -53,6 +57,7 @@ function parseAttributeList(text: string): boolean {
     const quote = text[index];
     if (quote === '"' || quote === "'") {
       index += 1;
+      // Quoted values may contain spaces or `>`, so scan to the matching quote first.
       const end = text.indexOf(quote, index);
       if (end === -1) {
         return false;

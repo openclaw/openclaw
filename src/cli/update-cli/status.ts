@@ -32,6 +32,7 @@ function formatGitStatusLine(params: {
   return parts.join(" · ");
 }
 
+/** Print install/update channel status without mutating checkout, config, or registry state. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {

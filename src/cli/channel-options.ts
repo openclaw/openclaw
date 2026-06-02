@@ -26,16 +26,19 @@ function loadPrecomputedChannelOptions(): string[] | null {
   return null;
 }
 
+/** Resolve precomputed channel ids for CLI help text without loading channel plugins. */
 export function resolveCliChannelOptions(): string[] {
   const precomputed = loadPrecomputedChannelOptions();
   return precomputed ?? [];
 }
 
+/** Format a channel option placeholder such as `all|discord|telegram` for Commander help. */
 export function formatCliChannelOptions(extra: string[] = []): string {
   const options = [...extra, ...resolveCliChannelOptions()];
   return options.length > 0 ? options.join("|") : "channel";
 }
 
+/** Test hooks for clearing module-level startup metadata cache. */
 export const testing = {
   resetPrecomputedChannelOptionsForTests(): void {
     precomputedChannelOptions = undefined;

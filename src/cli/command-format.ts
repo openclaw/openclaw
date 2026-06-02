@@ -9,6 +9,7 @@ const UPDATE_COMMAND_RE =
   /^(?:pnpm|npm|bunx|npx)\s+openclaw\b.*(?:^|\s)update(?:\s|$)|^openclaw\b.*(?:^|\s)update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
+/** Format user-facing OpenClaw commands with active CLI name, profile, and container hints. */
 export function formatCliCommand(
   command: string,
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,

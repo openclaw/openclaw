@@ -30,6 +30,7 @@ function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): st
   }
 }
 
+/** Explains the platform-specific supervised service that blocks foreground gateway startup. */
 export async function maybeExplainGatewayServiceStop() {
   const service = resolveGatewayService();
   let loaded: boolean | null;

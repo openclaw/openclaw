@@ -1,5 +1,7 @@
 function parseStrictPositiveInteger(value: string): number | undefined {
   const trimmed = value.trim();
+  // Env overrides accept only decimal integers so units/decimals do not
+  // silently truncate into a shorter timeout.
   if (!/^\+?\d+$/u.test(trimmed)) {
     return undefined;
   }
@@ -19,6 +21,8 @@ export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOU
 /** Clamps arbitrary timer delays to Node's safe range and an optional floor. */
 export function resolveSafeTimeoutDelayMs(delayMs: number, opts?: { minMs?: number }): number {
   const rawMinMs = opts?.minMs ?? 1;
+  // Clamp the floor first; callers can opt into immediate timers with minMs=0,
+  // but invalid floors still fall back to the nonzero default timeout guard.
   const minMs = Math.min(
     MAX_SAFE_TIMEOUT_DELAY_MS,
     Math.max(0, Number.isFinite(rawMinMs) ? Math.floor(rawMinMs) : 1),
@@ -59,6 +63,8 @@ export function clampConnectChallengeTimeoutMs(
   timeoutMs: number,
   maxTimeoutMs = MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
 ): number {
+  // Keep the upper bound at least as large as the watchdog floor so callers
+  // cannot invert the clamp range with an undersized configured server timeout.
   return Math.max(
     MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
     Math.min(Math.max(MIN_CONNECT_CHALLENGE_TIMEOUT_MS, maxTimeoutMs), timeoutMs),
@@ -105,6 +111,8 @@ export function resolveConnectChallengeTimeoutMs(
   }
   const envOverride = getConnectChallengeTimeoutMsFromEnv(params?.env);
   if (envOverride !== undefined) {
+    // Explicit client overrides are allowed to exceed the server-derived cap
+    // for tests and slow environments; still apply the lower watchdog floor.
     return clampConnectChallengeTimeoutMs(envOverride, Math.max(maxTimeoutMs, envOverride));
   }
   return clampConnectChallengeTimeoutMs(configuredPreauthTimeoutMs, maxTimeoutMs);

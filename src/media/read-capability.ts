@@ -15,7 +15,9 @@ import {
 } from "./local-roots.js";
 
 type OutboundHostMediaPolicyContext = {
+  /** Session key used to derive group/channel policy when messageProvider is absent. */
   sessionKey?: string;
+  /** Channel/provider id for group policy lookup. */
   messageProvider?: string;
   groupId?: string | null;
   groupChannel?: string | null;
@@ -33,6 +35,8 @@ function isAgentScopedHostMediaReadAllowed(
     agentId?: string;
   } & OutboundHostMediaPolicyContext,
 ): boolean {
+  // Host media reads expand model-visible file access, so they require the same fs-root expansion
+  // and sender/group read policy used by normal tool-mediated file reads.
   if (
     !resolveEffectiveToolFsRootExpansionAllowed({
       cfg: params.cfg,
@@ -75,6 +79,8 @@ export function createAgentScopedHostMediaReadFile(
     params.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const workspaceRoot = resolveWorkspaceRoot(inferredWorkspaceDir);
+  // Read through the normal safe file reader after resolving relative inputs against the
+  // effective workspace root, matching tool-read path policy instead of raw fs access.
   return async (filePath: string) => {
     const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
     return (await readLocalFileSafely({ filePath: resolvedPath })).buffer;
@@ -92,12 +98,15 @@ function appendWorkspaceDirToLocalRoots(
   if (!roots?.length) {
     return [resolvedWorkspaceDir];
   }
+  // Local roots are compared after path resolution so caller/root duplicates do not broaden the
+  // access list or create confusing repeated roots in outbound media diagnostics.
   if (roots.some((root) => path.resolve(root) === resolvedWorkspaceDir)) {
     return roots;
   }
   return [...roots, resolvedWorkspaceDir];
 }
 
+/** Resolves outbound media access scoped to the current agent, workspace, and sender policy. */
 export function resolveAgentScopedOutboundMediaAccess(
   params: {
     cfg: OpenClawConfig;

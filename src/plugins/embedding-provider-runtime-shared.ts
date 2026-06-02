@@ -30,6 +30,10 @@ function resolveConfiguredProviderConfig(
   );
 }
 
+/**
+ * Resolves a configured model-provider id to the provider API family that owns
+ * embedding behavior, leaving direct provider ids untouched.
+ */
 export function readConfiguredProviderApiId(params: {
   providerId: string;
   cfg?: OpenClawConfig;
@@ -45,9 +49,17 @@ export function readConfiguredProviderApiId(params: {
   const resolvedProviderId = api
     ? (params.resolveApiProviderId?.(normalizeProviderId(api)) ?? normalizeProviderId(api))
     : params.resolveMissingApiProviderId?.(providerConfig);
+  // Only return aliases. Returning the normalized input id would make callers
+  // search the same provider twice and would hide real fallback misses.
   return resolvedProviderId && resolvedProviderId !== normalized ? resolvedProviderId : undefined;
 }
 
+/**
+ * Builds the ordered lookup keys for a runtime embedding provider request.
+ *
+ * The configured alias is secondary so explicit registered provider ids keep
+ * winning over model-provider API indirection.
+ */
 export function resolveRuntimeEmbeddingProviderLookupIds(params: {
   id: string;
   cfg?: OpenClawConfig;
@@ -64,6 +76,10 @@ export function resolveRuntimeEmbeddingProviderLookupIds(params: {
   return ids;
 }
 
+/**
+ * Lists embedding adapters from the in-process registry plus plugin capability
+ * declarations, preserving registered adapters when both sources share an id.
+ */
 export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: string }>(params: {
   key: EmbeddingProviderCapabilityKey;
   cfg?: OpenClawConfig;
@@ -82,6 +98,13 @@ export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: stri
   return [...merged.values()];
 }
 
+/**
+ * Resolves one embedding adapter by ordered lookup id.
+ *
+ * Registered adapters are tried before plugin capability fallbacks so hot-path
+ * callers keep using already-loaded runtime objects instead of rediscovering
+ * equivalent plugin metadata.
+ */
 export function getRuntimeEmbeddingProviderAdapter<TAdapter extends { id: string }>(params: {
   key: EmbeddingProviderCapabilityKey;
   cfg?: OpenClawConfig;

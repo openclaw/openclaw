@@ -64,14 +64,17 @@ const SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS = [
 const commonSingleAccountPromotionKeys = new Set<string>(COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS);
 const setupSingleAccountPromotionKeys = new Set<string>(SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS);
 
+/** Returns whether a root config key is safe for generic single-account migration. */
 export function isCommonSingleAccountPromotionKey(key: string): boolean {
   return commonSingleAccountPromotionKeys.has(key);
 }
 
+/** Returns whether setup-owned account patching should treat a key as account-scoped. */
 export function isSetupSingleAccountPromotionKey(key: string): boolean {
   return setupSingleAccountPromotionKeys.has(key);
 }
 
+/** Collects defined root config entries that may need promotion into an account section. */
 export function collectSingleAccountPromotionEntries(channel: Record<string, unknown>): {
   entries: string[];
   hasNamedAccounts: boolean;
@@ -80,6 +83,7 @@ export function collectSingleAccountPromotionEntries(channel: Record<string, unk
     Boolean,
   );
   const entries = Object.entries(channel)
+    // Undefined root values should not create account fields during migration.
     .filter(
       ([key, value]) =>
         key !== "accounts" && key !== "defaultAccount" && key !== "enabled" && value !== undefined,

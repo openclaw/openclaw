@@ -230,6 +230,7 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
+/** Classify one config path for UI/schema metadata without building a full plan. */
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
   if (isPluginInstallTimestampPath(path)) {
     return { kind: "none" };
@@ -257,6 +258,7 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   return isPlainObject(installs) ? installs : {};
 }
 
+/** List legacy plugin install timestamp fields that should not trigger reloads. */
 export function listPluginInstallTimestampMetadataPaths(
   prevConfig: unknown,
   nextConfig: unknown,
@@ -282,6 +284,7 @@ export function listPluginInstallTimestampMetadataPaths(
   return paths;
 }
 
+/** List legacy plugin install records whose identity changed, not just timestamps. */
 export function listPluginInstallWholeRecordPaths(
   prevConfig: unknown,
   nextConfig: unknown,
@@ -302,6 +305,12 @@ export function listPluginInstallWholeRecordPaths(
   return paths;
 }
 
+/**
+ * Translate changed config paths into the minimal Gateway reload action set.
+ *
+ * Restart rules win over hot/no-op rules, while hot rules accumulate targeted
+ * subsystem restarts so config writes can avoid a full Gateway restart.
+ */
 export function buildGatewayReloadPlan(
   changedPaths: string[],
   options: GatewayReloadPlanOptions = {},

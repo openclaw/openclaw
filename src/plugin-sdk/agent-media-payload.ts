@@ -1,11 +1,18 @@
 export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 
+/** Legacy agent media fields consumed by channel/plugin bridges. */
 export type AgentMediaPayload = {
+  /** First local path, mirrored for older single-media callers. */
   MediaPath?: string;
+  /** First media content type when the source provided one. */
   MediaType?: string;
+  /** First media URL/path, retained for agents that only read URL-style fields. */
   MediaUrl?: string;
+  /** All local media paths in outbound order. */
   MediaPaths?: string[];
+  /** All media URL/path values in outbound order. */
   MediaUrls?: string[];
+  /** Content types for entries that provided one; indexes may not match MediaPaths. */
   MediaTypes?: string[];
 };
 

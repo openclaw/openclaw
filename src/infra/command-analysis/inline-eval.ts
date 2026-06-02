@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 
+/** Interpreter invocation that can execute inline code or a positional program string. */
 export type InterpreterInlineEvalHit = {
   executable: string;
   normalizedExecutable: string;
@@ -185,6 +186,7 @@ function createInlineEvalHit(
   };
 }
 
+/** Detect command argv forms such as `python -c`, `node --eval`, `find -exec`, or awk/sed programs. */
 export function detectInterpreterInlineEvalArgv(
   argv: string[] | undefined | null,
 ): InterpreterInlineEvalHit | null {
@@ -236,7 +238,7 @@ export function detectInterpreterInlineEvalArgv(
     return null;
   }
 
-  // These tools can execute user-provided programs once the first non-option token is reached.
+  // Positional tools can execute user programs once the first non-option token is reached.
   for (let idx = 1; idx < argv.length; idx += 1) {
     const token = argv[idx]?.trim();
     if (!token) {
@@ -281,6 +283,7 @@ export function detectInterpreterInlineEvalArgv(
   return null;
 }
 
+/** Format a detected inline-eval hit for approval/safety diagnostics. */
 export function describeInterpreterInlineEval(hit: InterpreterInlineEvalHit): string {
   if (hit.flag === "<command>") {
     return `${hit.normalizedExecutable} inline command`;
@@ -291,6 +294,7 @@ export function describeInterpreterInlineEval(hit: InterpreterInlineEvalHit): st
   return `${hit.normalizedExecutable} ${hit.flag}`;
 }
 
+/** Detect allowlist patterns that name interpreters with inline-eval behavior. */
 export function isInterpreterLikeAllowlistPattern(pattern: string | undefined | null): boolean {
   const trimmed = normalizeLowercaseStringOrEmpty(pattern);
   if (!trimmed) {

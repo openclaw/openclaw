@@ -313,6 +313,8 @@ export function withOAuthLoginAbort<T>(
       },
       (error: unknown) => {
         cleanup();
+        // OAuth providers may bridge browser/runtime promises that reject with plain values;
+        // normalize them here so public SDK callers consistently receive Error objects.
         reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );

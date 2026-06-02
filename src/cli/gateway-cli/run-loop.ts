@@ -44,6 +44,7 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRun
 
 const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
+/** Runs the restart hook only after the first successful loop iteration. */
 function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
   let isFirstIteration = true;
   return async () => {
@@ -56,6 +57,7 @@ function createRestartIterationHook(onRestart: () => Promise<void> | void): () =
   };
 }
 
+/** Polls the child listener after respawn; readiness is TCP-level because HTTP may be mid-boot. */
 async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = net.createConnection({ host, port });
@@ -96,6 +98,7 @@ async function waitForHealthyGatewayChild(
   return false;
 }
 
+/** Owns the foreground Gateway lifecycle: lock, signals, graceful drain, and restart handoff. */
 export async function runGatewayLoop(params: {
   start: (params?: {
     startupStartedAt?: number;

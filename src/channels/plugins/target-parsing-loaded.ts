@@ -20,6 +20,10 @@ export type ParsedChannelExplicitTarget = {
   chatType?: "direct" | "group" | "channel";
 };
 
+/**
+ * Adapts legacy `parseExplicitTarget` output into the canonical route target
+ * shape while preserving the raw destination for comparison/debugging.
+ */
 export function resolveCompatParsedRouteTarget(params: {
   channel: string;
   rawTarget?: string | null;
@@ -56,6 +60,8 @@ export function parseExplicitTargetForLoadedChannel(
   }
   const normalizedChannel = normalizeChannelId(resolvedChannel) ?? resolvedChannel;
   return (
+    // Prefer already-loaded registry entries so hot delivery paths avoid
+    // bootstrapping bundled plugins solely to parse a legacy target string.
     getLoadedChannelPluginForRead(normalizedChannel)?.messaging?.parseExplicitTarget?.({
       raw: rawTarget,
     }) ??
@@ -78,6 +84,7 @@ export function resolveRouteTargetForLoadedChannel(params: {
   });
 }
 
+/** @deprecated Use `resolveRouteTargetForLoadedChannel`. */
 export function resolveExplicitDeliveryTargetCompat(params: {
   channel: string;
   rawTarget?: string | null;

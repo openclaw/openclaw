@@ -15,6 +15,7 @@ import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Returns the first HTTP header value after Node lowercases header names. */
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
   if (typeof raw === "string") {
@@ -26,6 +27,7 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
   return undefined;
 }
 
+/** Extracts a normalized bearer token from the Authorization header. */
 export function getBearerToken(req: IncomingMessage): string | undefined {
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
@@ -36,20 +38,27 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
 
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
+  /** Auth method accepted for the request, when the underlying auth check reports one. */
   authMethod?: GatewayAuthResult["method"];
+  /** Whether operator scopes declared by request headers may be trusted. */
   trustDeclaredOperatorScopes: boolean;
 };
 
 export type GatewayHttpRequestAuthCheckResult =
   | {
+      /** Request passed Gateway HTTP auth. */
       ok: true;
+      /** Auth method and operator-scope trust state for downstream authorization. */
       requestAuth: AuthorizedGatewayHttpRequest;
     }
   | {
+      /** Request failed Gateway HTTP auth. */
       ok: false;
+      /** Failure details used by callers that write the response themselves. */
       authResult: GatewayAuthResult;
     };
 
+/** Builds the browser-origin policy passed into shared Gateway HTTP auth checks. */
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
@@ -81,15 +90,24 @@ function shouldTrustDeclaredHttpOperatorScopes(
   if (authOrRequest && "trustDeclaredOperatorScopes" in authOrRequest) {
     return authOrRequest.trustDeclaredOperatorScopes;
   }
+  // Callers that pass only auth config get the conservative legacy check:
+  // bearer shared-secret requests cannot self-declare narrower operator scopes.
   return !isGatewayBearerHttpRequest(req, authOrRequest);
 }
 
+/** Authorizes an HTTP request or writes the Gateway auth failure response. */
 export async function authorizeGatewayHttpRequestOrReply(params: {
+  /** Incoming HTTP request to authenticate. */
   req: IncomingMessage;
+  /** Response used when auth fails. */
   res: ServerResponse;
+  /** Resolved Gateway auth policy. */
   auth: ResolvedGatewayAuth;
+  /** Trusted proxy CIDRs/hosts used for forwarded-origin checks. */
   trustedProxies?: string[];
+  /** Whether direct remote addresses may be used when proxy headers are absent. */
   allowRealIpFallback?: boolean;
+  /** Optional auth failure budget shared with the Gateway HTTP layer. */
   rateLimiter?: AuthRateLimiter;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
   const result = await checkGatewayHttpRequestAuth(params);
@@ -100,12 +118,19 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   return result.requestAuth;
 }
 
+/** Runs Gateway HTTP auth and returns structured auth/trust state without writing a response. */
 export async function checkGatewayHttpRequestAuth(params: {
+  /** Incoming HTTP request to authenticate. */
   req: IncomingMessage;
+  /** Resolved Gateway auth policy. */
   auth: ResolvedGatewayAuth;
+  /** Trusted proxy CIDRs/hosts used for forwarded-origin checks. */
   trustedProxies?: string[];
+  /** Whether direct remote addresses may be used when proxy headers are absent. */
   allowRealIpFallback?: boolean;
+  /** Optional auth failure budget shared with the Gateway HTTP layer. */
   rateLimiter?: AuthRateLimiter;
+  /** Config snapshot used for browser-origin policy resolution. */
   cfg?: OpenClawConfig;
 }): Promise<GatewayHttpRequestAuthCheckResult> {
   const token = getBearerToken(params.req);
@@ -138,14 +163,23 @@ export async function checkGatewayHttpRequestAuth(params: {
   };
 }
 
+/** Authorizes HTTP auth plus a required operator method scope, writing failures to the response. */
 export async function authorizeScopedGatewayHttpRequestOrReply(params: {
+  /** Incoming HTTP request to authenticate and authorize. */
   req: IncomingMessage;
+  /** Response used when auth or scope checks fail. */
   res: ServerResponse;
+  /** Resolved Gateway auth policy. */
   auth: ResolvedGatewayAuth;
+  /** Trusted proxy CIDRs/hosts used for forwarded-origin checks. */
   trustedProxies?: string[];
+  /** Whether direct remote addresses may be used when proxy headers are absent. */
   allowRealIpFallback?: boolean;
+  /** Optional auth failure budget shared with the Gateway HTTP layer. */
   rateLimiter?: AuthRateLimiter;
+  /** Gateway method whose operator scopes gate this endpoint. */
   operatorMethod: string;
+  /** Resolves the trusted operator scopes after request authentication. */
   resolveOperatorScopes: (
     req: IncomingMessage,
     requestAuth: AuthorizedGatewayHttpRequest,
@@ -168,6 +202,8 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
     return null;
   }
 
+  // Scope resolution happens after auth so resolvers can distinguish trusted
+  // proxy/local requests from shared-secret bearer requests.
   const operatorScopes = params.resolveOperatorScopes(params.req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, operatorScopes);
   if (!scopeAuth.allowed) {
@@ -178,6 +214,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   return { cfg, requestAuth, operatorScopes };
 }
 
+/** Returns true when the request uses shared-secret bearer auth for this Gateway auth config. */
 export function isGatewayBearerHttpRequest(
   req: IncomingMessage,
   auth?: SharedSecretGatewayAuth,
@@ -185,6 +222,7 @@ export function isGatewayBearerHttpRequest(
   return usesSharedSecretHttpAuth(auth) && Boolean(getBearerToken(req));
 }
 
+/** Resolves trusted operator scopes from headers, defaulting only on trusted request surfaces. */
 export function resolveTrustedHttpOperatorScopes(
   req: IncomingMessage,
   authOrRequest?:
@@ -213,6 +251,7 @@ export function resolveTrustedHttpOperatorScopes(
     .filter((scope) => scope.length > 0);
 }
 
+/** Scope resolver for OpenAI-compatible HTTP routes that opt into shared-secret trust. */
 export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
@@ -220,6 +259,7 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   return resolveSharedSecretHttpOperatorScopes(req, requestAuth);
 }
 
+/** Restores default operator scopes for shared-secret HTTP surfaces that explicitly trust them. */
 export function resolveSharedSecretHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
@@ -234,6 +274,7 @@ export function resolveSharedSecretHttpOperatorScopes(
   return resolveTrustedHttpOperatorScopes(req, requestAuth);
 }
 
+/** Returns whether the trusted HTTP scope set carries owner/admin semantics. */
 export function resolveHttpSenderIsOwner(
   req: IncomingMessage,
   authOrRequest?:
@@ -243,6 +284,7 @@ export function resolveHttpSenderIsOwner(
   return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
 }
 
+/** Owner resolver for OpenAI-compatible HTTP routes with shared-secret owner semantics. */
 export function resolveOpenAiCompatibleHttpSenderIsOwner(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,

@@ -58,6 +58,10 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
+/**
+ * Creates a local call record for provider webhooks that arrive before local state exists.
+ * This covers inbound PSTN calls and externally-created provider calls pointed at this webhook.
+ */
 function createWebhookCall(params: {
   ctx: EventContext;
   providerCallId: string;
@@ -107,6 +111,10 @@ function createWebhookCall(params: {
   return callRecord;
 }
 
+/**
+ * Persists a terminal snapshot for an inbound call rejected before it becomes active.
+ * The durable processed-event id keeps redelivery from repeatedly applying policy side effects.
+ */
 function persistRejectedInboundCall(params: {
   ctx: EventContext;
   event: NormalizedEvent;
@@ -115,6 +123,8 @@ function persistRejectedInboundCall(params: {
 }): void {
   const callId = params.event.callId || params.providerCallId;
   const now = Date.now();
+  // Rejections are persisted as terminal snapshots even though they never enter
+  // activeCalls, so replay recovery keeps the dedupe key and policy decision.
   const rejectedCall: CallRecord = {
     callId,
     providerCallId: params.providerCallId,
@@ -133,6 +143,13 @@ function persistRejectedInboundCall(params: {
   persistCallRecord(params.ctx.storePath, rejectedCall);
 }
 
+/**
+ * Applies one normalized provider event to active call state with replay dedupe.
+ *
+ * Unknown calls may be registered from webhook payloads, blocked inbound calls
+ * are persisted as terminal snapshots, and retryable errors deliberately keep
+ * their replay key uncommitted so a later delivery can still recover the call.
+ */
 export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   const dedupeKey = event.dedupeKey || event.id;
   if (ctx.processedEventIds.has(dedupeKey)) {
@@ -167,6 +184,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       if (ctx.rejectedProviderCallIds.has(pid)) {
         return;
       }
+      // Track rejected provider IDs separately from processed event IDs because
+      // carriers can emit multiple event ids for the same blocked call.
       ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
       persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
@@ -198,6 +217,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
 
   if (!call) {
+    // Do not burn the replay key. Some providers can deliver status callbacks
+    // before the create/answer event that registers the call.
     return;
   }
 
@@ -208,11 +229,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     if (previousProviderCallId) {
       const mapped = ctx.providerCallIdMap.get(previousProviderCallId);
       if (mapped === call.callId) {
+        // Providers can replace request ids with stable call ids; drop only our stale mapping.
         ctx.providerCallIdMap.delete(previousProviderCallId);
       }
     }
   }
 
+  // Retryable errors are observations, not terminal decisions; keep their
+  // replay keys reusable so a redelivery can still advance the call.
   const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
   if (shouldCommitReplayKey) {
     ctx.processedEventIds.add(dedupeKey);
@@ -289,6 +313,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           event.turnToken,
         );
         if (hadWaiter && !resolved) {
+          // Keep a mismatched turn-token transcript out of both waiters and durable history.
           console.warn(
             `[voice-call] Ignoring speech event with mismatched turn token for ${call.callId}`,
           );

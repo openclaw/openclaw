@@ -45,6 +45,7 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   return normalizeAgentId(raw);
 }
 
+/** Resolves OpenAI-compatible model ids like `openclaw/<agentId>` into Gateway agent ids. */
 export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
@@ -68,9 +69,13 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Validates the optional `x-openclaw-model` override against the agent's visible model catalog. */
 export async function resolveOpenAiCompatModelOverride(params: {
+  /** Incoming HTTP request carrying the optional x-openclaw-model header. */
   req: IncomingMessage;
+  /** Target agent whose default provider and visibility policy scope the override. */
   agentId: string;
+  /** OpenAI-compatible request model, used to reject malformed agent selectors early. */
   model: string | undefined;
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
   const requestModel = params.model?.trim();
@@ -85,6 +90,8 @@ export async function resolveOpenAiCompatModelOverride(params: {
     return {};
   }
 
+  // Header model overrides use the target agent's default provider as context,
+  // then pass through visibility policy so hidden/catalog-blocked models fail.
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
@@ -124,8 +131,11 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+/** Resolves the target agent from explicit headers, OpenAI-compatible model ids, then config. */
 export function resolveAgentIdForRequest(params: {
+  /** Incoming HTTP request carrying optional agent headers. */
   req: IncomingMessage;
+  /** OpenAI-compatible request model that may encode the target agent. */
   model: string | undefined;
 }): string {
   const cfg = getRuntimeConfig();
@@ -146,6 +156,8 @@ function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
+    // Explicit session keys are an interop escape hatch for HTTP clients that
+    // already manage Gateway sessions; generated keys stay agent-scoped below.
     return explicit;
   }
 
@@ -154,12 +166,19 @@ function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+/** Builds the agent/session/channel context shared by HTTP compatibility endpoints. */
 export function resolveGatewayRequestContext(params: {
+  /** Incoming HTTP request carrying optional session/channel headers. */
   req: IncomingMessage;
+  /** OpenAI-compatible request model that may encode the target agent. */
   model: string | undefined;
+  /** Optional OpenAI user id folded into generated session keys. */
   user?: string | undefined;
+  /** Prefix used when generating a new Gateway session key. */
   sessionPrefix: string;
+  /** Message channel used unless the endpoint opts into the channel header. */
   defaultMessageChannel: string;
+  /** Whether x-openclaw-message-channel may override the default channel. */
   useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });

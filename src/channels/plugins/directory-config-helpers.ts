@@ -15,6 +15,7 @@ function resolveDirectoryLimit(limit?: number | null): number | undefined {
   return typeof limit === "number" && limit > 0 ? limit : undefined;
 }
 
+/** Applies a case-insensitive substring query and positive limit to directory ids. */
 export function applyDirectoryQueryAndLimit(
   ids: string[],
   params: { query?: string | null; limit?: number | null },
@@ -34,6 +35,7 @@ export function applyDirectoryQueryAndLimit(
   return filtered;
 }
 
+/** Wraps normalized ids as directory entries of one peer kind. */
 export function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
   const entries: ChannelDirectoryEntry[] = [];
   for (const id of ids) {
@@ -64,6 +66,7 @@ function collectDirectoryIds(
   for (const value of values) {
     const entry = normalizeOptionalString(String(value)) ?? "";
     if (!entry || entry === "*") {
+      // Directory listings should not expose wildcard allowlist entries as concrete peers.
       continue;
     }
     const normalized = normalizeId ? normalizeId(entry) : entry;
@@ -79,6 +82,7 @@ function dedupeDirectoryIds(ids: string[]): string[] {
   return uniqueStrings(ids);
 }
 
+/** Collects normalized directory ids across sources while skipping blank and wildcard values. */
 export function collectNormalizedDirectoryIds(params: {
   sources: Iterable<unknown>[];
   normalizeId: (entry: string) => string | null | undefined;
@@ -100,6 +104,7 @@ export function collectNormalizedDirectoryIds(params: {
   return Array.from(ids);
 }
 
+/** Lists directory entries from raw source iterables with normalization, query, and limit. */
 export function listDirectoryEntriesFromSources(params: {
   kind: "user" | "group";
   sources: Iterable<unknown>[];
@@ -114,6 +119,7 @@ export function listDirectoryEntriesFromSources(params: {
   return toDirectoryEntries(params.kind, applyDirectoryQueryAndLimit(ids, params));
 }
 
+/** Lists entries from an optional inspected account, returning empty when absent. */
 export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
   params: DirectoryConfigParams & {
     kind: "user" | "group";
@@ -138,6 +144,7 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
   });
 }
 
+/** Creates an async lister around an optional inspected-account directory source. */
 export function createInspectedDirectoryEntriesLister<InspectedAccount>(params: {
   kind: "user" | "group";
   inspectAccount: (
@@ -154,6 +161,7 @@ export function createInspectedDirectoryEntriesLister<InspectedAccount>(params: 
     });
 }
 
+/** Lists entries from a required resolved account directory source. */
 export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
   params: DirectoryConfigParams & {
     kind: "user" | "group";
@@ -172,6 +180,7 @@ export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
   });
 }
 
+/** Creates an async lister around a required resolved-account directory source. */
 export function createResolvedDirectoryEntriesLister<ResolvedAccount>(params: {
   kind: "user" | "group";
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
@@ -185,6 +194,7 @@ export function createResolvedDirectoryEntriesLister<ResolvedAccount>(params: {
     });
 }
 
+/** Lists user directory entries from an allowFrom-style array. */
 export function listDirectoryUserEntriesFromAllowFrom(params: {
   allowFrom?: readonly unknown[];
   query?: string | null;
@@ -200,6 +210,7 @@ export function listDirectoryUserEntriesFromAllowFrom(params: {
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
+/** Lists user entries from allowFrom values plus ids stored as map keys. */
 export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
   allowFrom?: readonly unknown[];
   map?: Record<string, unknown>;
@@ -221,6 +232,7 @@ export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
+/** Lists group directory entries from object map keys. */
 export function listDirectoryGroupEntriesFromMapKeys(params: {
   groups?: Record<string, unknown>;
   query?: string | null;
@@ -236,6 +248,7 @@ export function listDirectoryGroupEntriesFromMapKeys(params: {
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
 
+/** Lists group entries from map keys plus allowFrom-style values. */
 export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
   groups?: Record<string, unknown>;
   allowFrom?: readonly unknown[];
@@ -257,6 +270,7 @@ export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(ids, params));
 }
 
+/** Lists user entries from allowFrom values on a required resolved account. */
 export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
   params: DirectoryConfigParams & {
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
@@ -273,6 +287,7 @@ export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
   });
 }
 
+/** Lists group entries from map keys on a required resolved account. */
 export function listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedAccount>(
   params: DirectoryConfigParams & {
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;

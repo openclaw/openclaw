@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Result shape for cache reads that must distinguish a miss from a cached undefined-like value. */
 export type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
+/** Small insertion-ordered LRU cache for plugin discovery, alias, manifest, and loader metadata. */
 export class PluginLruCache<T> {
   readonly #defaultMaxEntries: number;
   #maxEntries: number;
@@ -47,6 +49,7 @@ export class PluginLruCache<T> {
     return { hit: true, value: cached };
   }
 
+  /** Stores a value and promotes existing keys to most-recently-used position. */
   set(cacheKey: string, value: T): void {
     if (this.#entries.has(cacheKey)) {
       this.#entries.delete(cacheKey);
@@ -66,13 +69,16 @@ export class PluginLruCache<T> {
   }
 }
 
+/** Per-config runtime cache keyed by config object identity and a caller-defined subkey. */
 export type ConfigScopedRuntimeCache<T> = WeakMap<OpenClawConfig, Map<string, T>>;
 
+/** Promise loader that deduplicates in-flight/default work by config object identity. */
 export type ConfigScopedPromiseLoader<T> = {
   load(config?: OpenClawConfig): Promise<T>;
   clear(): void;
 };
 
+/** Resolves or computes a value from a config-scoped runtime cache. */
 export function resolveConfigScopedRuntimeCacheValue<T>(params: {
   cache: ConfigScopedRuntimeCache<T>;
   config?: OpenClawConfig;
@@ -95,10 +101,12 @@ export function resolveConfigScopedRuntimeCacheValue<T>(params: {
   return loaded;
 }
 
+/** Creates a stable JSON cache key from already-normalized cache key parts. */
 export function createPluginCacheKey(parts: readonly unknown[]): string {
   return JSON.stringify(parts);
 }
 
+/** Creates a config-scoped promise cache that retries failed loads on the next call. */
 export function createConfigScopedPromiseLoader<T>(
   load: (config?: OpenClawConfig) => T | Promise<T>,
 ): ConfigScopedPromiseLoader<T> {
@@ -108,6 +116,8 @@ export function createConfigScopedPromiseLoader<T>(
   const createPromise = (config?: OpenClawConfig): Promise<T> => {
     const promise = Promise.resolve().then(() => load(config));
     void promise.catch(() => {
+      // Failed loads should not poison later plugin discovery/runtime calls after config,
+      // filesystem, or optional dependency state changes.
       if (config) {
         promisesByConfig.delete(config);
       } else if (defaultPromise === promise) {

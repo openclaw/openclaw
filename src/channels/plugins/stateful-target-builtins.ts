@@ -10,10 +10,12 @@ function loadAcpStatefulTargetDriverModule(): Promise<AcpStatefulTargetDriverMod
   return acpDriverModulePromise;
 }
 
+/** Returns whether a stateful target driver id is provided by core built-ins. */
 export function isStatefulTargetBuiltinDriverId(id: string): boolean {
   return id.trim() === "acp";
 }
 
+/** Lazily registers built-in stateful target drivers exactly once. */
 export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
   if (builtinsRegisteredPromise) {
     await builtinsRegisteredPromise;
@@ -26,6 +28,7 @@ export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
   try {
     await builtinsRegisteredPromise;
   } catch (error) {
+    // A failed dynamic import must not permanently poison future registration attempts.
     builtinsRegisteredPromise = null;
     throw error;
   }

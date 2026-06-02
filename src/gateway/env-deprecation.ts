@@ -5,6 +5,12 @@ type LegacyEnvPrefix = (typeof LEGACY_ENV_PREFIXES)[number];
 
 let warned = false;
 
+/**
+ * Warn once when legacy Clawdbot/Moltbot env names are present.
+ *
+ * Gateway config no longer reads those names; this warning catches stale shell
+ * or launchd environments without printing the variable values.
+ */
 export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env): void {
   if (warned || isVitestRuntimeEnv(env)) {
     return;
@@ -37,6 +43,7 @@ export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env):
   warned = true;
 }
 
+/** Reset the process-local warning latch for focused tests. */
 export function resetLegacyOpenClawEnvWarningForTest(): void {
   warned = false;
 }

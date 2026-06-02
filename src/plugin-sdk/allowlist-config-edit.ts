@@ -6,15 +6,28 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 type AllowlistConfigPaths = {
+  /** Candidate locations read before edit, ordered from canonical to legacy fallbacks. */
   readPaths: string[][];
+  /** Canonical path that receives writes after normalization and dedupe. */
   writePath: string[];
+  /** Legacy paths removed after a successful canonical write. */
   cleanupPaths?: string[][];
 };
 
-export type AllowlistGroupOverride = { label: string; entries: string[] };
+/** Labeled allowlist entries shown as account/group-specific overrides. */
+export type AllowlistGroupOverride = {
+  /** Human-readable owner of this override, such as a room, guild, or route. */
+  label: string;
+  /** Configured allowlist entries for the labeled owner. */
+  entries: string[];
+};
+/** Best-effort display-name lookup result for configured allowlist entries. */
 export type AllowlistNameResolution = Array<{
+  /** Original allowlist entry requested by the UI. */
   input: string;
+  /** Whether the channel could resolve a display name for the entry. */
   resolved: boolean;
+  /** Resolved display name, when available. */
   name?: string | null;
 }>;
 type AllowlistNormalizer = (params: {
@@ -47,6 +60,7 @@ export function resolveDmGroupAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? DM_ALLOWLIST_CONFIG_PATHS : GROUP_ALLOWLIST_CONFIG_PATHS;
 }
 
+/** Resolve legacy DM paths only for channels that historically accepted dm.allowFrom. */
 export function resolveLegacyDmAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? LEGACY_DM_ALLOWLIST_CONFIG_PATHS : null;
 }
@@ -166,6 +180,7 @@ function resolveAccountScopedWriteTarget(
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
   if (isBlockedObjectKey(normalizedAccountId)) {
+    // Never materialize prototype-polluting account keys; fall back to the channel-level section.
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -175,6 +190,7 @@ function resolveAccountScopedWriteTarget(
   const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
   const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
   if (!useAccount) {
+    // Keep default-account channels compact until an accounts map already exists.
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -302,6 +318,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     for (const entry of existing) {
       const normalized = params.normalize([entry]);
       if (normalized.some((value) => shouldMatch(value))) {
+        // Remove by normalized value so display casing/format changes do not leave stale aliases.
         changed = true;
         continue;
       }
@@ -317,6 +334,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
       setNestedValue(resolvedTarget.target, params.paths.writePath, next);
     }
     for (const path of params.paths.cleanupPaths ?? []) {
+      // Successful canonical writes retire legacy mirrors to keep future reads single-sourced.
       deleteNestedValue(resolvedTarget.target, path);
     }
   }
@@ -331,8 +349,11 @@ function applyAccountScopedAllowlistConfigEdit(params: {
 
 /** Build the default account-scoped allowlist editor used by channel plugins with config-backed lists. */
 export function buildAccountScopedAllowlistConfigEditor(params: {
+  /** Channel id whose `channels.<id>` config section receives edits. */
   channelId: ChannelId;
+  /** Canonicalizes entries before add/remove comparison. */
   normalize: AllowlistNormalizer;
+  /** Maps DM/group scope to read/write/cleanup paths for this channel. */
   resolvePaths: (scope: "dm" | "group") => AllowlistConfigPaths | null;
 }): NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]> {
   return ({ cfg, parsedConfig, accountId, scope, action, entry }) => {
@@ -377,16 +398,24 @@ function buildAccountAllowlistAdapter<ResolvedAccount>(params: {
 
 /** Build the common DM/group allowlist adapter used by channels that store both lists in config. */
 export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
+  /** Channel id whose `channels.<id>` config section receives edits. */
   channelId: ChannelId;
+  /** Resolves the account whose allowlist state is being read or edited. */
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
+  /** Canonicalizes entries before add/remove comparison. */
   normalize: AllowlistNormalizer;
+  /** Reads DM allowlist entries from the resolved account. */
   resolveDmAllowFrom: (
     account: ResolvedAccount,
     context: { cfg: OpenClawConfig; accountId?: string | null },
   ) => Array<string | number> | null | undefined;
+  /** Reads group/channel allowlist entries from the resolved account. */
   resolveGroupAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  /** Optional DM policy label shown alongside allowlist state. */
   resolveDmPolicy?: (account: ResolvedAccount) => string | null | undefined;
+  /** Optional group policy label shown alongside allowlist state. */
   resolveGroupPolicy?: (account: ResolvedAccount) => string | null | undefined;
+  /** Optional route-specific overrides displayed below account-level group entries. */
   resolveGroupOverrides?: (account: ResolvedAccount) => AllowlistGroupOverride[] | undefined;
 }): Pick<ChannelAllowlistAdapter, "supportsScope" | "readConfig" | "applyConfigEdit"> {
   return buildAccountAllowlistAdapter({
@@ -407,14 +436,20 @@ export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
 
 /** Build the common DM-only allowlist adapter for channels with legacy dm.allowFrom fallback paths. */
 export function buildLegacyDmAccountAllowlistAdapter<ResolvedAccount>(params: {
+  /** Channel id whose `channels.<id>` config section receives edits. */
   channelId: ChannelId;
+  /** Resolves the account whose allowlist state is being read or edited. */
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
+  /** Canonicalizes entries before add/remove comparison. */
   normalize: AllowlistNormalizer;
+  /** Reads DM allowlist entries from the resolved account. */
   resolveDmAllowFrom: (
     account: ResolvedAccount,
     context: { cfg: OpenClawConfig; accountId?: string | null },
   ) => Array<string | number> | null | undefined;
+  /** Optional group policy label shown for channels that report group state but edit only DM. */
   resolveGroupPolicy?: (account: ResolvedAccount) => string | null | undefined;
+  /** Optional route-specific overrides displayed below legacy DM state. */
   resolveGroupOverrides?: (account: ResolvedAccount) => AllowlistGroupOverride[] | undefined;
 }): Pick<ChannelAllowlistAdapter, "supportsScope" | "readConfig" | "applyConfigEdit"> {
   return buildAccountAllowlistAdapter({

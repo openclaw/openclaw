@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register poll creation with repeated choice and channel-specific duration flags. */
 export function registerMessagePollCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(

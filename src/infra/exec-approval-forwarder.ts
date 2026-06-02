@@ -122,6 +122,7 @@ type ApprovalRouteRequestFields = {
   turnSourceThreadId?: string | number | null;
 };
 
+/** Runtime approval forwarder facade used by exec and plugin approval stores. */
 export type ExecApprovalForwarder = {
   handleRequested: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
@@ -174,6 +175,8 @@ function shouldForwardRoute(params: {
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  // Dedupe must use the same route identity as outbound delivery so session and explicit
+  // targets do not double-send to the same chat/thread.
   return channelRouteDedupeKey({
     channel,
     to: target.to,
@@ -226,12 +229,14 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   }
 
   let fence = "```";
+  // User commands can contain Markdown fences; grow ours until the payload is inert text.
   while (command.includes(fence)) {
     fence += "`";
   }
   return { inline: false, text: `${fence}\n${command}\n${fence}` };
 }
 
+/** Build the generic forwarded exec approval text when no channel-specific renderer exists. */
 export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
@@ -408,6 +413,8 @@ function buildApprovalRenderPayload<TParams>(params: {
         params.renderParams,
       )
     : null;
+  // Channel renderers can add native controls; keep the generic SDK payload as the durable
+  // fallback so every target still receives actionable text.
   return adapterPayload ?? params.buildFallback();
 }
 
@@ -595,6 +602,7 @@ function createApprovalHandlers<
     };
     pending.set(requestId, pendingEntry);
 
+    // A newer request with the same id wins; do not deliver stale buttons after replacement.
     if (pending.get(requestId) !== pendingEntry) {
       return false;
     }
@@ -647,6 +655,8 @@ function createApprovalHandlers<
 
     const cfg = params.getConfig();
     let targets = entry?.targets;
+    // Resolved events may arrive after restart or after pending state was evicted. Reconstruct
+    // route targets from the resolved payload when it still carries enough routing metadata.
     if (!targets) {
       const routeRequest = params.strategy.getRouteRequestFromResolved(resolved);
       if (routeRequest) {
@@ -773,6 +783,7 @@ const pluginApprovalStrategy = createApprovalStrategy<
     }),
 });
 
+/** Create a shared forwarder for exec and plugin approvals with injectable runtime deps. */
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {

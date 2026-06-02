@@ -1,4 +1,9 @@
-/** Splits text into bounded chunks using caller-owned soft-break selection. */
+/**
+ * Splits text into bounded chunks using caller-owned soft-break selection.
+ *
+ * The resolver only picks a preferred break within the current window; this helper owns trimming,
+ * separator consumption, and hard-limit fallback so channel-specific callers cannot stall the loop.
+ */
 export function chunkTextByBreakResolver(
   text: string,
   limit: number,

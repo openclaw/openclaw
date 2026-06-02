@@ -8,6 +8,7 @@ import type { OpenClawPluginToolContext } from "./types.js";
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 1;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
+/** Cached descriptor projection for a plugin tool plus plugin-only display metadata. */
 export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
@@ -18,12 +19,15 @@ const descriptorCache = new Map<string, CachedPluginToolDescriptor[]>();
 let descriptorCacheObjectIds = new WeakMap<object, number>();
 let nextDescriptorCacheObjectId = 1;
 
+/** Memo table for config cache-key normalization during one plugin tool enumeration pass. */
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
 
+/** Creates per-call memoization for expensive or identity-based config cache keys. */
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
   return new WeakMap();
 }
 
+/** Clears descriptor cache state and object-id fallbacks for tests. */
 export function resetPluginToolDescriptorCache(): void {
   descriptorCache.clear();
   descriptorCacheObjectIds = new WeakMap();
@@ -39,6 +43,7 @@ function sourceFingerprint(source: string): string {
   }
 }
 
+/** Assigns stable process-local ids for config objects that cannot produce a structural cache key. */
 function getDescriptorCacheObjectId(value: object | null | undefined): number | null {
   if (!value) {
     return null;
@@ -61,6 +66,8 @@ function stripDescriptorVolatileConfigFields(
   if (!("meta" in value) && !("wizard" in value)) {
     return value;
   }
+  // Metadata and wizard payloads can be large/transient but do not affect plugin tool descriptors.
+  // Removing them keeps descriptor cache keys stable across setup/status-only config churn.
   const { meta: _meta, wizard: _wizard, ...stableConfig } = value as Record<string, unknown>;
   return stableConfig as NonNullable<PluginLoadOptions["config"]>;
 }
@@ -113,6 +120,7 @@ function buildDescriptorContextCacheKey(params: {
   });
 }
 
+/** Builds the complete cache key for plugin tool descriptor enumeration. */
 export function buildPluginToolDescriptorCacheKey(params: {
   pluginId: string;
   source: string;
@@ -141,6 +149,7 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+/** Captures the gateway-facing descriptor shape for a plugin-provided tool. */
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
@@ -162,12 +171,14 @@ export function capturePluginToolDescriptor(params: {
   };
 }
 
+/** Reads cached plugin tool descriptors for an exact descriptor cache key. */
 export function readCachedPluginToolDescriptors(
   cacheKey: string,
 ): readonly CachedPluginToolDescriptor[] | undefined {
   return descriptorCache.get(cacheKey);
 }
 
+/** Writes cached plugin tool descriptors, evicting the oldest cache key when over limit. */
 export function writeCachedPluginToolDescriptors(params: {
   cacheKey: string;
   descriptors: readonly CachedPluginToolDescriptor[];

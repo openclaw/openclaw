@@ -25,9 +25,21 @@ import { loadSessionEntry } from "./session-utils.js";
 const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
 
 type SessionKeyPathResolution =
-  | { matched: false }
-  | { matched: true; sessionKey: string }
-  | { error: "invalid-session-key"; matched: true };
+  | {
+      /** Request path is not owned by the session kill endpoint. */
+      matched: false;
+    }
+  | {
+      /** Request path matched and yielded a decoded session key. */
+      matched: true;
+      /** Decoded target session key from `/sessions/{sessionKey}/kill`. */
+      sessionKey: string;
+    }
+  | {
+      /** Request path matched but the session key segment was missing or malformed. */
+      error: "invalid-session-key";
+      matched: true;
+    };
 
 function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
@@ -45,13 +57,18 @@ function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   }
 }
 
+/** Handles authenticated `/sessions/{sessionKey}/kill` HTTP requests. */
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: {
+    /** Gateway auth policy used before any session or run lookup occurs. */
     auth: ResolvedGatewayAuth;
+    /** Trusted proxy CIDRs for classifying local/direct admin requests. */
     trustedProxies?: string[];
+    /** Whether proxy headers may fall back to the socket remote address. */
     allowRealIpFallback?: boolean;
+    /** Optional auth limiter shared with the surrounding Gateway HTTP server. */
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
@@ -93,6 +110,8 @@ export async function handleSessionKillHttpRequest(
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
 
   if (!requesterSessionKey && !allowLocalAdminKill) {
+    // Remote kills need an owning requester session; without one they would be
+    // indistinguishable from arbitrary cross-session abort requests.
     sendJson(res, 403, {
       ok: false,
       error: {
@@ -127,6 +146,8 @@ export async function handleSessionKillHttpRequest(
   if (!allowLocalAdminKill && requesterSessionKey) {
     const runEntry = getLatestSubagentRunByChildSessionKey(canonicalKey);
     if (runEntry) {
+      // Requester-scoped kills go through subagent control so parent/child
+      // ownership is enforced before the run receives a stop signal.
       const result = await killControlledSubagentRun({
         cfg,
         controller: resolveSubagentController({ cfg, agentSessionKey: requesterSessionKey }),

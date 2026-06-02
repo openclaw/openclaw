@@ -19,6 +19,7 @@ import type {
   StatefulBindingTargetSessionResult,
 } from "./stateful-target-drivers.js";
 
+/** Converts ACP session metadata or configured binding specs into a stateful target descriptor. */
 function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -67,6 +68,7 @@ function toAcpStatefulBindingTargetDescriptor(params: {
   };
 }
 
+/** Ensures the ACP configured binding behind a stateful target is ready. */
 async function ensureAcpTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
@@ -89,6 +91,7 @@ async function ensureAcpTargetReady(params: {
   });
 }
 
+/** Ensures the ACP configured binding has a live target session. */
 async function ensureAcpTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
@@ -107,6 +110,7 @@ async function ensureAcpTargetSession(params: {
   });
 }
 
+/** Resets an ACP stateful target through the gateway session authority. */
 async function resetAcpTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -128,6 +132,7 @@ async function resetAcpTargetInPlace(params: {
   };
 }
 
+/** Stateful target driver for configured ACP bindings. */
 export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {
   id: "acp",
   ensureReady: ensureAcpTargetReady,

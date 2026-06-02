@@ -9,10 +9,13 @@ import {
 import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 type OptionalFlagParse = {
+  /** False when the flag syntax was present but missing a value. */
   ok: boolean;
+  /** Parsed flag value, or undefined when the flag was absent. */
   value?: string;
 };
 
+/** Parse a single optional flag and distinguish absent from malformed syntax. */
 function parseOptionalFlagValue(argv: string[], name: string): OptionalFlagParse {
   const value = getFlagValue(argv, name);
   if (value === null) {
@@ -21,6 +24,7 @@ function parseOptionalFlagValue(argv: string[], name: string): OptionalFlagParse
   return { ok: true, value };
 }
 
+/** Parse repeated `--flag value` / `--flag=value` forms until `--` terminates flags. */
 function parseRepeatedFlagValues(argv: string[], name: string): string[] | null {
   const values: string[] = [];
   const args = argv.slice(2);
@@ -49,6 +53,7 @@ function parseRepeatedFlagValues(argv: string[], name: string): string[] | null 
   return values;
 }
 
+/** Extract exactly one positional after root options and known boolean flags are skipped. */
 function parseSinglePositional(
   argv: string[],
   params: {
@@ -63,6 +68,7 @@ function parseSinglePositional(
   return positionals[0] ?? null;
 }
 
+/** Parse fast-route args for `openclaw health`. */
 export function parseHealthRouteArgs(argv: string[]) {
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
   if (timeoutMs === null) {
@@ -75,6 +81,7 @@ export function parseHealthRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse fast-route args for `openclaw status`. */
 export function parseStatusRouteArgs(argv: string[]) {
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
   if (timeoutMs === null) {
@@ -90,6 +97,7 @@ export function parseStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse gateway status args only when unsupported SSH options are absent. */
 export function parseGatewayStatusRouteArgs(argv: string[]) {
   const url = parseOptionalFlagValue(argv, "--url");
   if (!url.ok) {
@@ -132,6 +140,7 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse session listing args without invoking Commander. */
 export function parseSessionsRouteArgs(argv: string[]) {
   const agent = parseOptionalFlagValue(argv, "--agent");
   if (!agent.ok) {
@@ -159,6 +168,7 @@ export function parseSessionsRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse agent listing fast-route flags. */
 export function parseAgentsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
@@ -166,6 +176,7 @@ export function parseAgentsListRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `config get <path>` when exactly one path positional is present. */
 export function parseConfigGetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "get"],
@@ -180,6 +191,7 @@ export function parseConfigGetRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `config unset <path>` and preserve mutation-safety CLI options. */
 export function parseConfigUnsetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "unset"],
@@ -198,6 +210,7 @@ export function parseConfigUnsetRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse model listing filters for the routed command path. */
 export function parseModelsListRouteArgs(argv: string[]) {
   const provider = parseOptionalFlagValue(argv, "--provider");
   if (!provider.ok) {
@@ -212,6 +225,7 @@ export function parseModelsListRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse model status probe flags, including repeated probe profiles. */
 export function parseModelsStatusRouteArgs(argv: string[]) {
   const probeProvider = parseOptionalFlagValue(argv, "--probe-provider");
   if (!probeProvider.ok) {
@@ -257,6 +271,7 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse channel list flags for JSON-capable routed output. */
 export function parseChannelsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
@@ -264,6 +279,7 @@ export function parseChannelsListRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse channel status probe flags with optional scoped channel. */
 export function parseChannelsStatusRouteArgs(argv: string[]) {
   const timeout = parseOptionalFlagValue(argv, "--timeout");
   const channel = parseOptionalFlagValue(argv, "--channel");
@@ -281,6 +297,7 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `plugins list --json`; non-JSON output stays on the Commander path. */
 export function parsePluginsListRouteArgs(argv: string[]) {
   if (!hasFlag(argv, "--json")) {
     return null;
@@ -333,6 +350,7 @@ export function parseTasksListRouteArgs(argv: string[]) {
   );
 }
 
+/** Parse task audit JSON filters and validate positive limits. */
 export function parseTasksAuditRouteArgs(argv: string[]) {
   if (!hasFlag(argv, "--json")) {
     return null;

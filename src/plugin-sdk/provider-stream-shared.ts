@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
@@ -11,7 +12,6 @@ import type { StreamFn } from "../agents/runtime/index.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
 export type ProviderStreamWrapperFactory =
@@ -20,6 +20,7 @@ export type ProviderStreamWrapperFactory =
   | undefined
   | false;
 
+/** Compose optional provider stream wrappers around a base stream function in call order. */
 export function composeProviderStreamWrappers(
   baseStreamFn: StreamFn | undefined,
   ...wrappers: ProviderStreamWrapperFactory[]
@@ -58,6 +59,8 @@ function createPlainTextToolCallBlock(parsed: {
 }): Record<string, unknown> {
   return {
     type: "toolCall",
+    // Synthetic ids need the same provider-safe shape as native tool ids so
+    // downstream replay policy can pair promoted calls with tool results.
     id: createSyntheticToolCallId(),
     name: parsed.name,
     arguments: parsed.arguments,
@@ -182,6 +185,8 @@ function wrapPlainTextToolCallStream(
         stream.push(event);
       }
     } catch (error) {
+      // Keep stream consumers on the assistant event protocol even when repair
+      // fails; raw thrown errors can otherwise leave result() waiters hanging.
       stream.push({
         type: "error",
         reason: "error",
@@ -230,6 +235,7 @@ export function defaultToolStreamExtraParams(
   };
 }
 
+/** Patch provider request payloads immediately before the underlying stream consumes them. */
 export function createPayloadPatchStreamWrapper(
   baseStreamFn: StreamFn | undefined,
   patchPayload: (params: {
@@ -251,6 +257,8 @@ export function createPayloadPatchStreamWrapper(
     if (wrapperOptions?.shouldPatch && !wrapperOptions.shouldPatch({ model, context, options })) {
       return underlying(model, context, options);
     }
+    // Preserve the caller's stream function and install only an onPayload patch,
+    // so providers keep their native streaming/result behavior.
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
@@ -338,7 +346,9 @@ export type OpenAICompatibleThinkingLevel = ProviderWrapStreamFnContext["thinkin
 
 /** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
 export function isOpenAICompatibleThinkingEnabled(params: {
+  /** Session/request thinking level from provider wrapping context. */
   thinkingLevel: OpenAICompatibleThinkingLevel;
+  /** Per-request stream options; explicit reasoning settings override thinkingLevel. */
   options: Parameters<StreamFn>[2];
 }): boolean {
   const options = (params.options ?? {}) as { reasoningEffort?: unknown; reasoning?: unknown };
@@ -407,9 +417,13 @@ function ensureDeepSeekV4AssistantReasoningContent(
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
+  /** Session/request thinking level mapped to DeepSeek reasoning_effort. */
   thinkingLevel: DeepSeekV4ThinkingLevel;
+  /** Limits payload mutation to model ids owned by the caller. */
   shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+  /** Optional provider-specific thinking-level to reasoning-effort mapper. */
   resolveReasoningEffort?: (thinkingLevel: DeepSeekV4ThinkingLevel) => DeepSeekV4ReasoningEffort;
+  /** Restricts which replayed assistant messages get reasoning_content backfilled. */
   shouldBackfillAssistantReasoningContent?: (message: Record<string, unknown>) => boolean;
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {

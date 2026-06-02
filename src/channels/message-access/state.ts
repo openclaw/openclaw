@@ -317,11 +317,14 @@ async function resolveIngressAllowlist(params: {
 async function resolveRouteFacts(
   input: ChannelIngressStateInput,
 ): Promise<ResolvedRouteGateFacts[]> {
+  // Deterministic route order keeps the access graph stable across config object iteration.
   const routeFacts = [...(input.routeFacts ?? [])].toSorted(
     (left, right) => left.precedence - right.precedence || left.id.localeCompare(right.id),
   );
   const resolved: ResolvedRouteGateFacts[] = [];
   for (const route of routeFacts) {
+    // Route sender sources inherit the already-effective DM/group allowlists;
+    // explicit senderAllowFrom replaces that source before route normalization.
     const senderAllowFrom =
       route.senderAllowFrom ??
       (route.senderAllowFromSource === "effective-dm"
@@ -351,8 +354,11 @@ async function resolveRouteFacts(
 }
 
 export async function resolveChannelIngressState(
+  /** Raw channel ingress facts before allowlists, route gates, and origin subjects are normalized. */
   input: ChannelIngressStateInput,
 ): Promise<ChannelIngressState> {
+  // Resolve every gate surface in parallel so the final graph is a pure
+  // projection of the input, not the order in which async adapters completed.
   const [dm, pairingStore, group, commandOwner, commandGroup, routeFacts, eventOriginMatched] =
     await Promise.all([
       resolveIngressAllowlist({ input, rawEntries: input.allowlists.dm, context: "dm" }),

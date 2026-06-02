@@ -43,6 +43,7 @@ function withDiagnostics<T extends object>(params: {
     : params.result;
 }
 
+/** Resolves non-interactive probe credentials for local or remote Gateway surfaces. */
 export async function resolveGatewayProbeSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -141,6 +142,7 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   });
 }
 
+/** Resolves interactive client credentials with explicit/env/config precedence and failure reasons. */
 export async function resolveGatewayInteractiveSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

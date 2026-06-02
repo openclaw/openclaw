@@ -1,5 +1,6 @@
 import type { TaskTerminalOutcome } from "./task-registry.types.js";
 
+/** Terminal outcome override used when required child completion is not final. */
 export type RequiredCompletionTerminalResult = {
   terminalOutcome?: Extract<TaskTerminalOutcome, "blocked">;
   terminalSummary?: string;
@@ -30,6 +31,8 @@ function matchesProgressOnlyPrefix(value: string): boolean {
   if (PROGRESS_ONLY_PATTERN.test(value) || BARE_PROGRESS_ONLY_PATTERN.test(value)) {
     return true;
   }
+  // "Next, I'll verify..." is still progress-only; strip planning prefixes
+  // before matching so required completions cannot satisfy the contract with intent.
   const followup = value.replace(FOLLOW_UP_PLANNING_PREFIX_PATTERN, "").trim();
   return (
     followup !== value &&
@@ -45,9 +48,12 @@ function hasNonProgressFollowupSentence(value: string): boolean {
   const separatorEnd = boundary.index + boundary[0].length - 1;
   const firstSentence = value.slice(0, separatorEnd).trim();
   const rest = value.slice(separatorEnd).trim();
+  // A progress opener followed by a concrete final sentence should not be
+  // blocked; recurse on the remainder to reject chains of only-progress text.
   return matchesProgressOnlyPrefix(firstSentence) && !isProgressOnlyCompletionText(rest);
 }
 
+/** Detects completion text that promises work instead of delivering a result. */
 export function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
   const normalized = normalizeCompletionText(value);
   if (!normalized) {
@@ -59,6 +65,7 @@ export function isProgressOnlyCompletionText(value: string | null | undefined): 
   return matchesProgressOnlyPrefix(normalized);
 }
 
+/** Converts required completion text into a blocked terminal override when needed. */
 export function resolveRequiredCompletionTerminalResult(
   resultText: string | null | undefined,
 ): RequiredCompletionTerminalResult {
@@ -79,6 +86,7 @@ export function resolveRequiredCompletionTerminalResult(
   return {};
 }
 
+/** Converts failed delivery of a required completion into a blocked terminal override. */
 export function resolveRequiredCompletionDeliveryFailureTerminalResult(
   reason: string | null | undefined,
 ): RequiredCompletionTerminalResult {

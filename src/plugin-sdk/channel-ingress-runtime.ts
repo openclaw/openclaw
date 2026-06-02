@@ -1,11 +1,3 @@
-/**
- * High-level runtime resolver for inbound channel access decisions.
- *
- * Channel plugins should use this subpath for new receive paths. It accepts
- * platform facts, raw allowlists, route descriptors, command facts, and access
- * group config, then returns sender/route/command/activation projections plus
- * the ordered ingress graph.
- */
 export {
   channelIngressRoutes,
   createChannelIngressResolver,

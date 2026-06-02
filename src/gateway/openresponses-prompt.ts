@@ -4,6 +4,7 @@ import {
 } from "./agent-prompt.js";
 import type { ContentPart, ItemParam } from "./open-responses.schema.js";
 
+/** Extracts text-bearing content parts while ignoring media/file parts. */
 function extractTextContent(content: string | ContentPart[]): string {
   if (typeof content === "string") {
     return content;
@@ -22,10 +23,16 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
+/** Converts Responses `input` into the Gateway agent message plus extra system context. */
 export function buildAgentPrompt(input: string | ItemParam[]): {
+  /** User-facing transcript text passed to the agent runtime. */
   message: string;
+  /** System/developer content preserved outside the replayed conversation. */
   extraSystemPrompt?: string;
 } {
+  // Responses input preserves system/developer text separately so Gateway can
+  // pass it as ingress context while replaying user/assistant/tool turns in
+  // transcript order.
   if (typeof input === "string") {
     return { message: input };
   }
@@ -58,7 +65,6 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         entry: { sender: `Tool:${item.call_id}`, body: item.output },
       });
     }
-    // Skip reasoning and item_reference for prompt building (Phase 1)
   }
 
   const message = buildAgentMessageFromConversationEntries(conversationEntries);

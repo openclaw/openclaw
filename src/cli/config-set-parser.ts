@@ -10,6 +10,7 @@ type ConfigSetModeResolution =
       error: string;
     };
 
+/** Resolve the mutually exclusive config set mode implied by CLI flags. */
 export function resolveConfigSetMode(params: {
   hasBatchMode: boolean;
   hasRefBuilderOptions: boolean;

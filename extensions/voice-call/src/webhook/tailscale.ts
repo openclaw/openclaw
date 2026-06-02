@@ -14,6 +14,7 @@ type TailscaleCommandStdout = {
   text: string;
 };
 
+/** Appends command stdout while dropping retained text once the safety cap is exceeded. */
 export function appendTailscaleCommandStdout(
   current: TailscaleCommandStdout,
   data: Buffer | string,
@@ -25,6 +26,7 @@ export function appendTailscaleCommandStdout(
   const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
   const bytes = current.bytes + buffer.byteLength;
   if (bytes > maxBytes) {
+    // Avoid keeping oversized command output in memory or logs after the limit trips.
     return { bytes, exceeded: true, text: "" };
   }
   return { bytes, exceeded: false, text: `${current.text}${buffer.toString("utf8")}` };
@@ -53,6 +55,7 @@ function runTailscaleCommand(
     proc.stdout.on("data", (data) => {
       stdout = appendTailscaleCommandStdout(stdout, data);
       if (stdout.exceeded) {
+        // Treat runaway tailscale output like a failed command; callers only need availability.
         proc.kill("SIGKILL");
         finish({ code: -1, stdout: "" });
       }
@@ -73,6 +76,7 @@ function runTailscaleCommand(
   });
 }
 
+/** Reads local Tailscale identity, returning null when the CLI is absent or unusable. */
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
   const { code, stdout } = await runTailscaleCommand(["status", "--json", "--peers=false"]);
   if (code !== 0) {
@@ -82,6 +86,7 @@ export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> 
   try {
     const status = JSON.parse(stdout);
     return {
+      // tailscale status reports a trailing dot; route URLs need the host without it.
       dnsName: status.Self?.DNSName?.replace(/\.$/, "") || null,
       nodeId: status.Self?.ID || null,
     };
@@ -90,11 +95,13 @@ export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> 
   }
 }
 
+/** Returns the local node's MagicDNS name when Tailscale status is available. */
 export async function getTailscaleDnsName(): Promise<string | null> {
   const info = await getTailscaleSelfInfo();
   return info?.dnsName ?? null;
 }
 
+/** Activates one Tailscale serve/funnel path and returns its public URL on success. */
 export async function setupTailscaleExposureRoute(opts: {
   mode: "serve" | "funnel";
   path: string;
@@ -125,6 +132,7 @@ export async function setupTailscaleExposureRoute(opts: {
   return null;
 }
 
+/** Removes one Tailscale serve/funnel path through the same bounded CLI wrapper. */
 export async function cleanupTailscaleExposureRoute(opts: {
   mode: "serve" | "funnel";
   path: string;
@@ -132,6 +140,7 @@ export async function cleanupTailscaleExposureRoute(opts: {
   await runTailscaleCommand([opts.mode, "off", opts.path]);
 }
 
+/** Maps voice-call config onto a local webhook URL exposed through Tailscale. */
 export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<string | null> {
   if (config.tailscale.mode === "off") {
     return null;
@@ -146,6 +155,7 @@ export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<s
   });
 }
 
+/** Cleans up the configured Tailscale exposure path when Tailscale exposure was enabled. */
 export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise<void> {
   if (config.tailscale.mode === "off") {
     return;

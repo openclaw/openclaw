@@ -5,12 +5,14 @@ import {
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
+/** Lists bundled channels with declarative configured-state metadata. */
 export function listBundledChannelIdsWithConfiguredState(
   discovery?: PluginDiscoveryResult,
 ): string[] {
   return listBundledChannelIdsForPackageState("configuredState", discovery);
 }
 
+/** Checks whether a bundled channel appears configured without loading full plugin source. */
 export function hasBundledChannelConfiguredState(params: {
   channelId: string;
   cfg: OpenClawConfig;

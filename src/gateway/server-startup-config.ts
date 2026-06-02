@@ -95,16 +95,23 @@ function secretsPrepareTimelineAttributes(
 
 /** Config snapshot plus optional plugin metadata loaded before Gateway startup auth. */
 export type GatewayStartupConfigSnapshotLoadResult = {
+  /** Loaded config snapshot after runtime-only startup adjustments. */
   snapshot: ConfigFileSnapshot;
+  /** Whether loading wrote config back to disk. */
   wroteConfig: boolean;
+  /** Optional plugin metadata read with the config snapshot. */
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 /** Load and validate the config snapshot, applying runtime-only plugin auto-enable changes. */
 export async function loadGatewayStartupConfigSnapshot(params: {
+  /** Minimal test gateways skip plugin auto-enable and discovery-like startup side effects. */
   minimalTestGateway: boolean;
+  /** Startup logger used for runtime-only auto-enable reporting. */
   log: GatewayStartupLog;
+  /** Optional startup timeline measurement hook. */
   measure?: GatewayStartupConfigMeasure;
+  /** Optional caller-provided config read result to avoid rereading disk. */
   initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
@@ -168,15 +175,21 @@ function withRuntimeConfig(
 
 /** Create the serialized secrets activation function used by startup and reload paths. */
 export function createRuntimeSecretsActivator(params: {
+  /** Logger for secret preparation warnings and degraded/recovered state. */
   logSecrets: GatewayStartupLog;
+  /** State-event emitter for degraded/recovered secret runtime transitions. */
   emitStateEvent: (
     code: GatewaySecretsStateEventCode,
     message: string,
     cfg: OpenClawConfig,
   ) => void;
+  /** Optional injected prepare hook for tests or alternate runtimes. */
   prepareRuntimeSecretsSnapshot?: PrepareRuntimeSecretsSnapshot;
+  /** Optional injected activation hook for tests or alternate runtimes. */
   activateRuntimeSecretsSnapshot?: ActivateRuntimeSecretsSnapshot;
+  /** Optional manifest registry used for secret runtime plugin context. */
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  /** Optional plugin metadata snapshot used for secret runtime plugin context. */
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
@@ -430,11 +443,17 @@ export function assertValidGatewayStartupConfigSnapshot(
 
 /** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
 export async function prepareGatewayStartupConfig(params: {
+  /** Loaded and validated config snapshot from startup config loading. */
   configSnapshot: ConfigFileSnapshot;
+  /** Runtime auth override layered over config during startup only. */
   authOverride?: GatewayAuthConfig;
+  /** Runtime Tailscale override layered over config during startup only. */
   tailscaleOverride?: GatewayTailscaleConfig;
+  /** Secrets activator used for preflight and final runtime activation. */
   activateRuntimeSecrets: ActivateRuntimeSecrets;
+  /** Legacy startup option; generated auth remains runtime-only. */
   persistStartupAuth?: boolean;
+  /** Optional startup timeline measurement hook. */
   measure?: GatewayStartupConfigMeasure;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
   const measure = params.measure ?? (async (_name, run) => await run());

@@ -44,6 +44,7 @@ export type { ChannelPairingAdapter } from "./pairing.types.js";
 type ConfiguredBindingRule = AgentBinding;
 export type { ChannelApprovalKind } from "../../infra/approval-types.js";
 
+/** Availability state for a plugin action after config and platform support are checked. */
 export type ChannelActionAvailabilityState =
   | { kind: "enabled" }
   | { kind: "disabled" }
@@ -51,6 +52,7 @@ export type ChannelActionAvailabilityState =
 
 export type ChannelApprovalInitiatingSurfaceState = ChannelActionAvailabilityState;
 
+/** Destination chosen for forwarding an approval request into a channel. */
 export type ChannelApprovalForwardTarget = {
   channel: string;
   to: string;
@@ -59,13 +61,16 @@ export type ChannelApprovalForwardTarget = {
   source?: "session" | "target";
 };
 
+/** Tone token rendered by status/capability diagnostics. */
 export type ChannelCapabilitiesDisplayTone = "default" | "muted" | "success" | "warn" | "error";
 
+/** Single human-readable status line produced by channel diagnostics. */
 export type ChannelCapabilitiesDisplayLine = {
   text: string;
   tone?: ChannelCapabilitiesDisplayTone;
 };
 
+/** Structured diagnostics used by status output and troubleshooting views. */
 export type ChannelCapabilitiesDiagnostics = {
   lines?: ChannelCapabilitiesDisplayLine[];
   details?: Record<string, unknown>;
@@ -73,6 +78,7 @@ export type ChannelCapabilitiesDiagnostics = {
 
 type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
 
+/** Setup-time config mutation hooks shared by CLI, onboarding, and plugin setup wizards. */
 export type ChannelSetupAdapter = {
   resolveAccountId?: (params: {
     cfg: OpenClawConfig;
@@ -113,6 +119,7 @@ export type ChannelSetupAdapter = {
   }) => string | undefined;
 };
 
+/** Required account/config access contract for every channel plugin. */
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
@@ -154,6 +161,7 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   }) => string | undefined;
 };
 
+/** Secret-reference and runtime-secret integration points owned by a plugin. */
 export type ChannelSecretsAdapter = {
   secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
   unsupportedSecretRefSurfacePatterns?: readonly string[];
@@ -168,12 +176,14 @@ export type ChannelSecretsAdapter = {
   }) => void;
 };
 
+/** Group policy hooks used by inbound routing and command authorization. */
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
   resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };
 
+/** Status, probe, and diagnostics hooks for one configured account. */
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
   buildChannelSummary?: ChannelAdapterCallback<
@@ -236,6 +246,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
   collectStatusIssues?: (accounts: ChannelAccountSnapshot[]) => ChannelStatusIssue[];
 };
 
+/** Runtime context passed to a channel account when the gateway starts it. */
 export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -308,24 +319,28 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   channelRuntime?: ChannelRuntimeSurface;
 };
 
+/** Logout result returned by channel auth/runtime adapters. */
 export type ChannelLogoutResult = {
   cleared: boolean;
   loggedOut?: boolean;
   [key: string]: unknown;
 };
 
+/** First response for QR-style login flows, often before the account is connected. */
 export type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;
 };
 
+/** Poll/wait response for QR-style login flows after the user scans or times out. */
 export type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
   qrDataUrl?: string;
 };
 
+/** Context for account logout without a live gateway start context. */
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -334,6 +349,7 @@ export type ChannelLogoutContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
 };
 
+/** Gateway lifecycle and login adapter for channel account runtimes. */
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
@@ -353,6 +369,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
 };
 
+/** Interactive login hook for channels that authenticate outside gateway startup. */
 export type ChannelAuthAdapter = {
   login?: (params: {
     cfg: OpenClawConfig;
@@ -363,6 +380,7 @@ export type ChannelAuthAdapter = {
   }) => Promise<void>;
 };
 
+/** Lightweight readiness and typing hooks used by heartbeat/status replies. */
 export type ChannelHeartbeatAdapter = {
   checkReady?: (params: {
     cfg: OpenClawConfig;
@@ -407,6 +425,7 @@ type ChannelDirectoryListGroupMembersParams = {
   runtime: RuntimeEnv;
 };
 
+/** Directory lookup hooks for peers, groups, and group members. */
 export type ChannelDirectoryAdapter = {
   self?: (params: ChannelDirectorySelfParams) => Promise<ChannelDirectoryEntry | null>;
   listPeers?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
@@ -418,8 +437,10 @@ export type ChannelDirectoryAdapter = {
   ) => Promise<ChannelDirectoryEntry[]>;
 };
 
+/** Target resolver class used by CLI/setup account allowlist flows. */
 export type ChannelResolveKind = "user" | "group";
 
+/** Result row for resolving a user-entered target into a provider id. */
 export type ChannelResolveResult = {
   input: string;
   resolved: boolean;
@@ -428,6 +449,7 @@ export type ChannelResolveResult = {
   note?: string;
 };
 
+/** Bulk resolver used when setup/config commands normalize allowlist targets. */
 export type ChannelResolverAdapter = {
   resolveTargets: (params: {
     cfg: OpenClawConfig;
@@ -438,6 +460,7 @@ export type ChannelResolverAdapter = {
   }) => Promise<ChannelResolveResult[]>;
 };
 
+/** Elevated policy hooks for trusted channels or owner-only command contexts. */
 export type ChannelElevatedAdapter = {
   allowFromFallback?: (params: {
     cfg: OpenClawConfig;
@@ -445,6 +468,7 @@ export type ChannelElevatedAdapter = {
   }) => Array<string | number> | undefined;
 };
 
+/** Native command/menu rendering hooks for channel-specific control surfaces. */
 export type ChannelCommandAdapter = {
   enforceOwnerForCommands?: boolean;
   skipWhenConfigEmpty?: boolean;
@@ -481,6 +505,7 @@ export type ChannelCommandAdapter = {
   buildModelBrowseChannelData?: () => ReplyPayload["channelData"] | null;
 };
 
+/** Config mutation result from channel doctor or compatibility repair hooks. */
 export type ChannelDoctorConfigMutation = {
   config: OpenClawConfig;
   changes: string[];
@@ -489,11 +514,13 @@ export type ChannelDoctorConfigMutation = {
 
 export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;
 
+/** Result from an ordered doctor sequence that may include repair and warnings. */
 export type ChannelDoctorSequenceResult = {
   changeNotes: string[];
   warningNotes: string[];
 };
 
+/** Context for default empty-allowlist warning decisions. */
 export type ChannelDoctorEmptyAllowlistAccountContext = {
   account: Record<string, unknown>;
   channelName: string;
@@ -503,6 +530,7 @@ export type ChannelDoctorEmptyAllowlistAccountContext = {
   prefix: string;
 };
 
+/** Doctor hooks for channel-owned config repair, warnings, and state migrations. */
 export type ChannelDoctorAdapter = {
   dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
   groupModel?: "sender" | "route" | "hybrid";
@@ -538,6 +566,7 @@ export type ChannelDoctorAdapter = {
   ) => boolean;
 };
 
+/** Lifecycle hooks called after config writes, account removal, or gateway startup. */
 export type ChannelLifecycleAdapter = {
   onAccountConfigChanged?: (params: {
     prevCfg: OpenClawConfig;
@@ -568,6 +597,7 @@ export type ChannelLifecycleAdapter = {
   }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
+/** Channel-specific delivery controls for approval forwarding. */
 export type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
@@ -577,6 +607,8 @@ export type ChannelApprovalDeliveryAdapter = {
     request: ExecApprovalRequest | PluginApprovalRequest;
   }) => boolean;
 };
+
+/** Behavior for native `/approve` commands after channel authorization checks. */
 export type ChannelApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
@@ -591,6 +623,7 @@ export type {
   ChannelApprovalNativeTarget,
 } from "./approval-native.types.js";
 
+/** Channel renderer for pending/resolved approval messages. */
 export type ChannelApprovalRenderAdapter = {
   exec?: {
     buildPendingPayload?: (params: {
@@ -620,6 +653,7 @@ export type ChannelApprovalRenderAdapter = {
   };
 };
 
+/** Shared approval extension surface for exec and plugin approvals. */
 export type ChannelApprovalAdapter = {
   delivery?: ChannelApprovalDeliveryAdapter;
   nativeRuntime?: ChannelApprovalNativeRuntimeAdapter;
@@ -632,6 +666,7 @@ export type ChannelApprovalAdapter = {
   }) => string | null | undefined;
 };
 
+/** Approval capability plus same-chat actor authorization hooks. */
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   authorizeActorAction?: (params: {
     cfg: OpenClawConfig;
@@ -663,6 +698,7 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   }) => ChannelApproveCommandBehavior | undefined;
 };
 
+/** Config read/write hooks for channel allowlist commands. */
 export type ChannelAllowlistAdapter = {
   applyConfigEdit?: (params: {
     cfg: OpenClawConfig;
@@ -719,15 +755,18 @@ export type ChannelAllowlistAdapter = {
   supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
 };
 
+/** Canonical provider conversation id plus optional parent id. */
 export type ChannelConfiguredBindingConversationRef = {
   conversationId: string;
   parentConversationId?: string;
 };
 
+/** Binding match result; higher priority wins when multiple bindings match. */
 export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversationRef & {
   matchPriority?: number;
 };
 
+/** Command-origin details used to resolve the conversation an agent should bind to. */
 export type ChannelCommandConversationContext = {
   accountId: string;
   threadId?: string;
@@ -742,6 +781,7 @@ export type ChannelCommandConversationContext = {
   fallbackTo?: string;
 };
 
+/** Provider-specific matching for configured conversation bindings. */
 export type ChannelConfiguredBindingProvider = {
   selfParentConversationByDefault?: boolean;
   compileConfiguredBinding: (params: {
@@ -759,6 +799,7 @@ export type ChannelConfiguredBindingProvider = {
   ) => ChannelConfiguredBindingConversationRef | null;
 };
 
+/** Runtime support for creating and managing conversation-bound agents. */
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
   /**
@@ -835,6 +876,7 @@ export type ChannelConversationBindingSupport = {
       }>;
 };
 
+/** Security audit and DM policy hooks for a resolved account. */
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   applyConfigFixes?: (params: {
     cfg: OpenClawConfig;

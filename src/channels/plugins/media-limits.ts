@@ -3,6 +3,10 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 
 const MB = 1024 * 1024;
 
+/**
+ * Resolves the effective channel media byte limit from channel-specific account
+ * config first, then the global agent default.
+ */
 export function resolveChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   // Channel-specific config lives under different keys; keep this helper generic

@@ -1,6 +1,7 @@
 import { isValueToken } from "../infra/cli-root-options.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 
+/** Read a root option value from `--flag=value` or the following argv token. */
 export function takeCliRootOptionValue(
   raw: string,
   next: string | undefined,

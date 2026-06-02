@@ -4,9 +4,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespondFn } from "./types.js";
 
 export function resolveAgentIdOrRespondError(params: {
+  /** Caller-supplied id before method-specific normalization. */
   rawAgentId: unknown;
   respond: RespondFn;
   cfg: OpenClawConfig;
+  /** Normalizer chosen by the handler so aliases/empty strings stay method-owned. */
   normalize: (rawAgentId: unknown) => string | undefined;
 }) {
   const knownAgents = listAgentIds(params.cfg);

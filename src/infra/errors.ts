@@ -1,5 +1,6 @@
 import { redactSensitiveText } from "../logging/redact.js";
 
+/** Extracts a stable string error code from Node/provider-shaped errors. */
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -14,6 +15,7 @@ export function extractErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
+/** Reads an Error-like name without forcing non-object values through String(). */
 export function readErrorName(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
@@ -22,6 +24,7 @@ export function readErrorName(err: unknown): string {
   return typeof name === "string" ? name : "";
 }
 
+/** Walks an error graph breadth-first while protecting callers from cycles. */
 export function collectErrorGraphCandidates(
   err: unknown,
   resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
@@ -51,28 +54,25 @@ export function collectErrorGraphCandidates(
   return candidates;
 }
 
-/**
- * Type guard for NodeJS.ErrnoException (any error with a `code` property).
- */
+/** Type guard for NodeJS.ErrnoException-like errors with a code property. */
 export function isErrno(err: unknown): err is NodeJS.ErrnoException {
   return Boolean(err && typeof err === "object" && "code" in err);
 }
 
-/**
- * Check if an error has a specific errno code.
- */
+/** Checks whether an Error-like value has the exact errno code. */
 export function hasErrnoCode(err: unknown, code: string): boolean {
   return isErrno(err) && err.code === code;
 }
 
+/** Formats unknown thrown values into redacted text suitable for logs/UI. */
 export function formatErrorMessage(err: unknown): string {
   let formatted: string;
   if (err instanceof Error) {
     formatted = err.message || err.name || "Error";
-    // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
+    // Some provider/client errors wrap the actionable cause, so include the
+    // chain while stopping at cycles and duplicate wrapper messages.
     let cause: unknown = err.cause;
     const seen = new Set<unknown>([err]);
-    // Skip causes that repeat a message already emitted (e.g. coerceToFailoverError).
     const seenMessages = new Set<string>([formatted]);
     const appendCauseMessage = (message: string): void => {
       if (!message || seenMessages.has(message)) {
@@ -104,7 +104,6 @@ export function formatErrorMessage(err: unknown): string {
       formatted = Object.prototype.toString.call(err);
     }
   }
-  // Security: best-effort token redaction before returning/logging.
   return redactSensitiveText(formatted);
 }
 
@@ -129,6 +128,7 @@ export function stringifyNonErrorCause(value: unknown): string {
   }
 }
 
+/** Converts any thrown value to an Error while preserving object fields as metadata. */
 export function toErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -143,6 +143,7 @@ export function toErrorObject(value: unknown, fallbackMessage: string): Error {
   return error;
 }
 
+/** Formats top-level uncaught errors, preserving stacks except for config validation. */
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);
@@ -154,8 +155,10 @@ export function formatUncaughtError(err: unknown): string {
   return formatErrorMessage(err);
 }
 
+/** Coarse error families used by retry/reporting code without exposing provider-specific text. */
 export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
 
+/** Classifies broad provider/runtime error families from redacted message text and codes. */
 export function detectErrorKind(err: unknown): ErrorKind | undefined {
   if (err === undefined) {
     return undefined;

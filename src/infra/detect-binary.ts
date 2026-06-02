@@ -4,6 +4,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { isSafeExecutableValue } from "./exec-safety.js";
 
+/** Check whether a safe executable name or path is available without running it. */
 export async function detectBinary(name: string): Promise<boolean> {
   if (!name?.trim()) {
     return false;
@@ -18,6 +19,7 @@ export async function detectBinary(name: string): Promise<boolean> {
     resolved.includes("/") ||
     resolved.includes("\\")
   ) {
+    // Path-like inputs are presence probes only; never hand them to a shell lookup command.
     try {
       await fs.access(resolved);
       return true;

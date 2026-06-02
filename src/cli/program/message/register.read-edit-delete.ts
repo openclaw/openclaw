@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register read/edit/delete commands that share target and message-id semantics. */
 export function registerMessageReadEditDeleteCommands(
   message: Command,
   helpers: MessageCliHelpers,

@@ -12,14 +12,19 @@ import {
   type ConfigWriteTargetLike,
 } from "./config-write-policy-shared.js";
 import type { ChannelId } from "./types.core.js";
+
+/** Channel/account scope used by channel plugin config-write checks. */
 export type ConfigWriteScope = ConfigWriteScopeLike;
+/** Normalized config-write target used by channel plugin callers. */
 export type ConfigWriteTarget = ConfigWriteTargetLike;
+/** Authorization result for channel-initiated config writes. */
 export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 function isInternalConfigWriteMessageChannel(channel?: string | null): boolean {
   return normalizeLowercaseStringOrEmpty(channel) === "webchat";
 }
 
+/** Resolves whether config writes are enabled for a channel/account. */
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
   channelId?: ChannelId | null;
@@ -28,6 +33,7 @@ export function resolveChannelConfigWrites(params: {
   return resolveChannelConfigWritesShared(params);
 }
 
+/** Authorizes a config write against origin and resolved target scopes. */
 export function authorizeConfigWrite(params: {
   cfg: OpenClawConfig;
   origin?: ConfigWriteScope;
@@ -37,10 +43,12 @@ export function authorizeConfigWrite(params: {
   return authorizeConfigWriteShared(params);
 }
 
+/** Converts an explicit channel/account scope into a config-write target. */
 export function resolveExplicitConfigWriteTarget(scope: ConfigWriteScope): ConfigWriteTarget {
   return resolveExplicitConfigWriteTargetShared(scope);
 }
 
+/** Infers the config-write target touched by a config path. */
 export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTarget {
   return resolveConfigWriteTargetFromPathShared({
     path,
@@ -48,6 +56,7 @@ export function resolveConfigWriteTargetFromPath(path: string[]): ConfigWriteTar
   });
 }
 
+/** Allows internal webchat operator-admin messages to bypass channel config-write policy. */
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
@@ -58,6 +67,7 @@ export function canBypassConfigWritePolicy(params: {
   });
 }
 
+/** Formats a user-facing denial message for config-write policy failures. */
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
   fallbackChannelId?: ChannelId | null;

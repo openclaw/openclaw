@@ -9,6 +9,7 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
+/** Maps registry summary counters into the immutable public task summary DTO. */
 export function mapTaskRunAggregateSummary(summary: TaskRegistrySummary): TaskRunAggregateSummary {
   return {
     total: summary.total,
@@ -20,6 +21,7 @@ export function mapTaskRunAggregateSummary(summary: TaskRegistrySummary): TaskRu
   };
 }
 
+/** Maps an internal task registry record into the public runtime task-run view. */
 export function mapTaskRunView(task: TaskRecord): TaskRunView {
   return {
     id: task.taskId,
@@ -50,10 +52,12 @@ export function mapTaskRunView(task: TaskRecord): TaskRunView {
   };
 }
 
+/** Maps the full task-run detail; currently identical to the list view shape. */
 export function mapTaskRunDetail(task: TaskRecord): TaskRunDetail {
   return mapTaskRunView(task);
 }
 
+/** Maps an internal TaskFlow record into the public runtime TaskFlow view. */
 export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {
   return {
     id: flow.flowId,
@@ -70,6 +74,7 @@ export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {
   };
 }
 
+/** Maps a TaskFlow plus child tasks into the public runtime TaskFlow detail DTO. */
 export function mapTaskFlowDetail(params: {
   flow: TaskFlowRecord;
   tasks: TaskRecord[];
@@ -81,6 +86,8 @@ export function mapTaskFlowDetail(params: {
     ...base,
     ...(params.flow.stateJson !== undefined ? { state: params.flow.stateJson } : {}),
     ...(params.flow.waitJson !== undefined ? { wait: params.flow.waitJson } : {}),
+    // Omit the blocked object entirely unless there is useful child-task or
+    // summary context; callers treat missing as "not blocked".
     ...(params.flow.blockedTaskId || params.flow.blockedSummary
       ? {
           blocked: {

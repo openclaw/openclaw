@@ -16,10 +16,11 @@ function isHeadersLike(value: object): value is HeadersLike {
   );
 }
 
+/** Normalize plain header records before passing them to runtime fetch implementations. */
 export function normalizeHeadersInitForFetch(
   headers: HeadersInit | undefined,
 ): HeadersInit | undefined {
-  // To do: delete once supported Node runtimes accept symbol-keyed header records.
+  // Some runtimes reject symbol-keyed header records, so preserve strings and drop symbols.
   if (!headers || typeof headers !== "object" || Array.isArray(headers) || isHeadersLike(headers)) {
     return headers;
   }
@@ -35,6 +36,7 @@ export function normalizeHeadersInitForFetch(
   return normalized;
 }
 
+/** Clone RequestInit only when its headers need fetch-runtime normalization. */
 export function normalizeRequestInitHeadersForFetch<T extends { headers?: HeadersInit }>(
   init: T | undefined,
 ): T | undefined {

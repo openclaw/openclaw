@@ -25,13 +25,21 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type GatewayClient = {
+  /** Handshake metadata that identifies the client role, channel, and auth mode. */
   connect: ConnectParams;
+  /** Stable connection id used for targeted broadcasts and approval routing. */
   connId?: string;
+  /** Normalized remote address captured at handshake time for audit/rate-limit decisions. */
   clientIp?: string;
+  /** Plugin HTTP surfaces advertised by this client, keyed by surface name. */
   pluginSurfaceUrls?: Record<string, string>;
+  /** Node capability surfaces the client can service directly. */
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
+  /** Active capability leases; expiresAtMs prevents stale nodes from receiving work. */
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
+  /** True when the connection authenticated through device-token pairing. */
   isDeviceTokenAuth?: boolean;
+  /** Privileged runtime flags set only by trusted internal clients. */
   internal?: {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
@@ -41,9 +49,13 @@ export type GatewayClient = {
 };
 
 export type RespondFn = (
+  /** Protocol success bit; false responses should include an ErrorShape. */
   ok: boolean,
+  /** JSON-serializable result payload for successful responses. */
   payload?: unknown,
+  /** Gateway protocol error shape for failed responses. */
   error?: ErrorShape,
+  /** Optional transport metadata kept outside the application payload. */
   meta?: Record<string, unknown>,
 ) => void;
 
@@ -57,7 +69,9 @@ export type GatewayRequestContext = {
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
+    /** Force live probes instead of returning only cached health state. */
     probe?: boolean;
+    /** Include local-only sensitive fields; never use for public health broadcasts. */
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
@@ -144,7 +158,9 @@ export type GatewayRequestContext = {
 };
 
 export type GatewayRequestOptions = {
+  /** Raw protocol request frame before method-specific param normalization. */
   req: RequestFrame;
+  /** Authenticated client metadata, or null for server-originated/internal calls. */
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
@@ -154,6 +170,7 @@ export type GatewayRequestOptions = {
 
 export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
+  /** Method params normalized to an object before invoking a handler. */
   params: Record<string, unknown>;
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;

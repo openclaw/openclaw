@@ -117,6 +117,7 @@ function isCurrentSourceConversation(
   );
 }
 
+/** Mirrors a delivered current-source message action back into the active transcript. */
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {

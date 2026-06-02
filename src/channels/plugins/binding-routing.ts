@@ -15,6 +15,7 @@ import type { ConfiguredBindingResolution } from "./binding-types.js";
 
 const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
 
+/** Result of resolving a configured binding before a route is finalized. */
 export type ConfiguredBindingRouteResult = {
   bindingResolution: ConfiguredBindingResolution | null;
   route: ResolvedAgentRoute;
@@ -22,6 +23,7 @@ export type ConfiguredBindingRouteResult = {
   boundAgentId?: string;
 };
 
+/** Result of resolving an existing runtime conversation binding. */
 export type RuntimeConversationBindingRouteResult = {
   bindingRecord: SessionBindingRecord | null;
   route: ResolvedAgentRoute;
@@ -66,6 +68,7 @@ function isPluginOwnedRuntimeBindingRecord(record: SessionBindingRecord | null):
   );
 }
 
+/** Rewrites a route to a configured stateful binding target when one matches. */
 export function resolveConfiguredBindingRoute(
   params: {
     cfg: OpenClawConfig;
@@ -86,6 +89,7 @@ export function resolveConfiguredBindingRoute(
 
   const boundSessionKey = bindingResolution.statefulTarget.sessionKey.trim();
   if (!boundSessionKey) {
+    // Empty target session keys keep the matched binding for diagnostics but cannot route traffic.
     return {
       bindingResolution,
       route: params.route,
@@ -110,6 +114,7 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
+/** Rewrites a route to an existing runtime binding when the binding is core-owned. */
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
@@ -138,6 +143,7 @@ export function resolveRuntimeConversationBindingRoute(
 
   getSessionBindingService().touch(bindingRecord.bindingId);
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    // Plugin-owned bindings are bookkeeping records; the plugin already owns final delivery.
     return {
       bindingRecord,
       route: params.route,
@@ -162,6 +168,7 @@ export function resolveRuntimeConversationBindingRoute(
   };
 }
 
+/** Bounds configured binding readiness checks so channel routing cannot hang indefinitely. */
 export async function ensureConfiguredBindingRouteReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;

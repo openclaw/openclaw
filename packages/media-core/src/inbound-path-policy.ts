@@ -9,6 +9,8 @@ function normalizePosixAbsolutePath(value: string): string | undefined {
   if (!trimmed || trimmed.includes("\0")) {
     return undefined;
   }
+  // Normalize to POSIX separators so policy matching is deterministic across
+  // callers that hand us macOS/Linux paths or Windows drive-style paths.
   const normalized = path.posix.normalize(trimmed.replaceAll("\\", "/"));
   const isAbsolute = normalized.startsWith("/") || WINDOWS_DRIVE_ABS_RE.test(normalized);
   if (!isAbsolute || normalized === "/") {
@@ -44,6 +46,7 @@ function matchesRootPattern(params: { candidatePath: string; rootPattern: string
   return true;
 }
 
+/** Validates one absolute inbound-media root pattern with single-segment wildcards only. */
 export function isValidInboundPathRootPattern(value: string): boolean {
   const normalized = normalizePosixAbsolutePath(value);
   if (!normalized) {
@@ -56,6 +59,7 @@ export function isValidInboundPathRootPattern(value: string): boolean {
   return segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"));
 }
 
+/** Normalizes, filters, and de-duplicates configured inbound-media root patterns. */
 export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
   const normalized: string[] = [];
   const seen = new Set<string>();
@@ -94,6 +98,7 @@ export function mergeInboundPathRoots(
   return merged;
 }
 
+/** Checks a local media path against configured roots, using fallback roots only when none are valid. */
 export function isInboundPathAllowed(params: {
   filePath: string;
   roots: readonly string[];

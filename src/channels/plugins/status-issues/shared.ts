@@ -3,10 +3,12 @@ import { isRecord } from "../../../utils.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
 export { isRecord };
 
+/** Normalizes unknown metadata into a non-empty string for status messages. */
 export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
+/** Formats optional match key/source metadata for diagnostic status output. */
 export function formatMatchMetadata(params: {
   matchKey?: unknown;
   matchSource?: unknown;
@@ -25,6 +27,7 @@ export function formatMatchMetadata(params: {
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
+/** Appends formatted match metadata only when the provider supplied usable values. */
 export function appendMatchMetadata(
   message: string,
   params: { matchKey?: unknown; matchSource?: unknown },
@@ -33,6 +36,7 @@ export function appendMatchMetadata(
   return meta ? `${message} (${meta})` : message;
 }
 
+/** Returns the effective account id only for accounts that are enabled and configured. */
 export function resolveEnabledConfiguredAccountId(account: {
   accountId?: unknown;
   enabled?: unknown;
@@ -44,6 +48,7 @@ export function resolveEnabledConfiguredAccountId(account: {
   return enabled && configured ? accountId : null;
 }
 
+/** Runs a channel-specific issue collector over enabled account snapshots. */
 export function collectIssuesForEnabledAccounts<
   T extends { accountId?: unknown; enabled?: unknown },
 >(params: {

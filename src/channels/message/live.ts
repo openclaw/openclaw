@@ -3,10 +3,15 @@ export type { LiveMessagePhase, LiveMessageState } from "./types.js";
 
 /** Mutable draft preview handle used before a live message is finalized or discarded. */
 export type LivePreviewFinalizerDraft<TId> = {
+  /** Flush pending preview updates before reading or editing the draft id. */
   flush: () => Promise<void>;
+  /** Return the provider id for the current draft preview, if one exists. */
   id: () => TId | undefined;
+  /** Prevent later preview edits before finalizing in place. */
   seal?: () => Promise<void>;
+  /** Drop queued preview work while keeping the visible draft available for fallback cleanup. */
   discardPending?: () => Promise<void>;
+  /** Remove all local/provider draft preview state after final delivery. */
   clear: () => Promise<void>;
 };
 
@@ -26,17 +31,23 @@ export type LivePreviewFinalizerResult<TPayload> = {
 /** Adapter contract for channels that can edit a draft preview into the final message. */
 export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
   draft?: LivePreviewFinalizerDraft<TId>;
+  /** Convert the final payload into a provider-native edit, or return undefined to fall back. */
   buildFinalEdit: (payload: TPayload) => TEdit | undefined;
+  /** Apply the final edit to the draft preview id. */
   editFinal: (id: TId, edit: TEdit) => Promise<void>;
+  /** Map draft ids to the final platform id when the provider changes ids after edit. */
   resolveFinalizedId?: (id: TId, edit: TEdit) => TId | undefined;
+  /** Build the receipt used after finalizing a preview in place. */
   createPreviewReceipt?: (id: TId, edit: TEdit) => MessageReceipt;
   onPreviewFinalized?: (
     id: TId,
     receipt: MessageReceipt,
     liveState: LiveMessageState<TPayload>,
   ) => Promise<void> | void;
+  /** Extract media or other payload pieces that still need normal delivery after final edit. */
   buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
   deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
+  /** Decide whether an ambiguous preview edit error should fall back or retain the preview. */
   handlePreviewEditError?: (params: {
     error: unknown;
     id: TId;
@@ -202,6 +213,7 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
   }
 
   if (params.draft.discardPending) {
+    // Final edit was impossible; discard pending preview work before sending a normal final reply.
     await params.draft.discardPending();
   } else {
     await params.draft.clear();

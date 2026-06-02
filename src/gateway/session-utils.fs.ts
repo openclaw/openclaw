@@ -135,6 +135,8 @@ export function attachOpenClawTranscriptMeta(
     !Array.isArray(record["__openclaw"])
       ? (record["__openclaw"] as Record<string, unknown>)
       : {};
+  // Transcript readers attach ids, sequence numbers, and parse hints without
+  // overwriting provider-visible message fields.
   return {
     ...record,
     __openclaw: {
@@ -160,17 +162,23 @@ export function readSessionMessages(
 }
 
 export type ReadRecentSessionMessagesOptions = {
+  /** Maximum visible messages returned after transcript projection. */
   maxMessages: number;
+  /** Maximum bytes read from the transcript tail before parsing. */
   maxBytes?: number;
+  /** Maximum raw JSONL lines parsed from the bounded tail window. */
   maxLines?: number;
 };
 
 export type ReadSessionMessagesAsyncOptions =
   | {
+      /** Full mode uses the transcript index and can return the whole active branch. */
       mode: "full";
+      /** Caller-facing reason for choosing an unbounded read path. */
       reason: string;
     }
   | ({
+      /** Recent mode reads only a bounded transcript tail for hot history paths. */
       mode: "recent";
     } & ReadRecentSessionMessagesOptions);
 
@@ -413,6 +421,8 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
   const firstActiveRecord = activeBranch[0];
   const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
   if (firstActiveIndex > 0) {
+    // Keep the nearest compaction marker before the active branch so bounded
+    // history still explains why earlier messages are absent.
     for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
       const entry = entries[index];
       if (entry?.record.type === "compaction") {
@@ -608,6 +618,8 @@ export async function readSessionMessageByIdAsync(
   if (!entry) {
     return { oversized: false, found: false };
   }
+  // Oversized rows are indexed by id/seq but intentionally not reparsed here;
+  // callers can offer a targeted "too large" response without loading the line.
   if (entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
     return { oversized: true, found: true, seq: entry.seq };
   }

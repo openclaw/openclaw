@@ -6,6 +6,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
+/** Reads a TaskFlow only when the caller owns the flow's owner key. */
 export function getTaskFlowByIdForOwner(params: {
   flowId: string;
   callerOwnerKey: string;
@@ -17,11 +18,13 @@ export function getTaskFlowByIdForOwner(params: {
     : undefined;
 }
 
+/** Lists TaskFlows visible to one normalized owner key. */
 export function listTaskFlowsForOwner(params: { callerOwnerKey: string }): TaskFlowRecord[] {
   const ownerKey = normalizeOptionalString(params.callerOwnerKey);
   return ownerKey ? listTaskFlowsForOwnerKey(ownerKey) : [];
 }
 
+/** Returns the newest TaskFlow for one owner key, or undefined for blank owners. */
 export function findLatestTaskFlowForOwner(params: {
   callerOwnerKey: string;
 }): TaskFlowRecord | undefined {
@@ -29,6 +32,7 @@ export function findLatestTaskFlowForOwner(params: {
   return ownerKey ? findLatestTaskFlowForOwnerKey(ownerKey) : undefined;
 }
 
+/** Resolves a direct flow id or owner-key token without crossing owner boundaries. */
 export function resolveTaskFlowForLookupTokenForOwner(params: {
   token: string;
   callerOwnerKey: string;
@@ -45,5 +49,7 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   if (!normalizedToken || normalizedToken !== normalizedCallerOwnerKey) {
     return undefined;
   }
+  // The owner key doubles as a stable "latest flow for this session" lookup
+  // token, but only after direct id lookup and owner equality both pass.
   return findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
 }

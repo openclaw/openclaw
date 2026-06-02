@@ -46,6 +46,7 @@ type HookSessionPolicyResolved = {
 
 type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
 
+/** Resolve enabled hook ingress config into the normalized policy used per request. */
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
@@ -88,6 +89,8 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
     );
   }
+  // Templated session keys can splice attacker-controlled request fields into
+  // routing state, so require an explicit prefix fence before the route loads.
   if (hasEffectiveTemplatedHookSessionKeyMapping(mappings) && !allowedSessionKeyPrefixes) {
     throw new Error(
       "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
@@ -149,6 +152,7 @@ export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string
   return prefixes.some((prefix) => normalized.startsWith(prefix));
 }
 
+/** Extract the hook bearer token from supported auth headers without accepting query tokens. */
 export function extractHookToken(req: IncomingMessage): string | undefined {
   const auth = normalizeOptionalString(req.headers.authorization) ?? "";
   if (normalizeLowercaseStringOrEmpty(auth).startsWith("bearer ")) {
@@ -184,6 +188,7 @@ export async function readJsonBody(
   return { ok: false, error: result.error };
 }
 
+/** Flatten Node's incoming header shape into the lowercase map consumed by hook mappings. */
 export function normalizeHookHeaders(req: IncomingMessage) {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
@@ -197,6 +202,7 @@ export function normalizeHookHeaders(req: IncomingMessage) {
   return headers;
 }
 
+/** Validate the built-in /hooks/wake payload before it is handed to channel wake logic. */
 export function normalizeWakePayload(
   payload: Record<string, unknown>,
 ):
@@ -239,6 +245,7 @@ export type { HookMessageChannel } from "./hooks.types.js";
 const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
+/** Resolve external hook channel input, defaulting omitted channels to the last active channel. */
 export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
   if (raw === undefined) {
     return "last";
@@ -279,6 +286,7 @@ export function resolveHookIdempotencyKey(params: {
   );
 }
 
+/** Resolve an explicit agent id to a known configured agent, falling back unknown ids to default. */
 export function resolveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
@@ -320,6 +328,7 @@ const getHookSessionKeyRequestPolicyError = () =>
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
   `sessionKey must start with one of: ${prefixes.join(", ")}`;
 
+/** Apply hook session-key policy before dispatching externally supplied routing state. */
 export function resolveHookSessionKey(params: {
   hooksConfig: HooksConfigResolved;
   source: HookSessionKeySource;
@@ -361,6 +370,8 @@ function hasTemplatedHookSessionKey(sessionKey: string | undefined): boolean {
 function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolved[]): boolean {
   const effectiveMappings: HookMappingResolved[] = [];
   for (const mapping of mappings) {
+    // Only reachable mappings matter for startup validation; an earlier catch-all
+    // mapping makes later templated keys inert for that source/path pair.
     if (isHookMappingShadowed(mapping, effectiveMappings)) {
       continue;
     }
@@ -396,10 +407,13 @@ export function normalizeHookDispatchSessionKey(params: {
   if (!parsed) {
     return trimmed;
   }
+  // Agent-prefixed sessions bind history to an agent id. Rebind mapped hooks to
+  // the resolved target so a caller cannot smuggle history into another agent.
   const targetAgentId = normalizeAgentId(params.targetAgentId);
   return `agent:${targetAgentId}:${parsed.rest}`;
 }
 
+/** Normalize /hooks/agent payload fields into the dispatch shape used by the Gateway. */
 export function normalizeAgentPayload(payload: Record<string, unknown>):
   | {
       ok: true;

@@ -53,6 +53,7 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   }
 }
 
+/** Builds origin-aware rate-limit/origin-check context for browser-initiated handshakes. */
 export function resolveHandshakeBrowserSecurityContext(params: {
   requestOrigin?: string;
   clientIp: string | undefined;
@@ -76,6 +77,7 @@ export function resolveHandshakeBrowserSecurityContext(params: {
   };
 }
 
+/** Allows first-party local clients to repair pairing without a manual approval round trip. */
 export function shouldAllowSilentLocalPairing(params: {
   locality: PairingLocalityKind;
   hasBrowserOriginHeader: boolean;
@@ -197,6 +199,7 @@ function isControlUiBrowserContainerLocalEquivalent(params: {
   );
 }
 
+/** Classifies whether a handshake is local enough to qualify for silent pairing policy. */
 export function resolvePairingLocality(params: {
   connectParams: ConnectParams;
   isLocalClient: boolean;
@@ -253,6 +256,7 @@ export function resolvePairingLocality(params: {
   return "remote";
 }
 
+/** Allows same-host backend clients to operate without pairing when local auth already proves trust. */
 export function shouldSkipLocalBackendSelfPairing(params: {
   connectParams: ConnectParams;
   locality: PairingLocalityKind;
@@ -307,6 +311,7 @@ function buildUnauthorizedHandshakeContext(params: {
   };
 }
 
+/** Verifies device signatures against the current payload shape, then legacy v2 fallback. */
 export function resolveDeviceSignaturePayloadVersion(params: {
   device: {
     id: string;
@@ -360,6 +365,7 @@ function resolveAuthProvidedKind(
           : "none";
 }
 
+/** Maps failed auth state to structured retry guidance returned with unauthorized handshakes. */
 export function resolveUnauthorizedHandshakeContext(params: {
   connectAuth: HandshakeConnectAuth | null | undefined;
   failedAuth: GatewayAuthResult;

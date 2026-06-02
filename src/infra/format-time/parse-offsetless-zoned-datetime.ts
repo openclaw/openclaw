@@ -12,10 +12,12 @@ type OffsetlessIsoDateTimeParts = {
   millisecond: number;
 };
 
+/** True only for ISO local datetimes without a UTC offset or timezone suffix. */
 export function isOffsetlessIsoDateTime(raw: string): boolean {
   return OFFSETLESS_ISO_DATETIME_RE.test(raw);
 }
 
+/** Interpret an offset-less ISO datetime as wall-clock time in an IANA timezone. */
 export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: string): string | null {
   const expectedParts = parseOffsetlessIsoDateTimeParts(raw);
   if (!expectedParts) {

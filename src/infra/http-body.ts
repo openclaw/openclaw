@@ -7,6 +7,7 @@ import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
+/** Stable machine-readable reasons for request body guard failures. */
 export type RequestBodyLimitErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "REQUEST_BODY_TIMEOUT"
@@ -35,6 +36,7 @@ const DEFAULT_RESPONSE_MESSAGE: Record<RequestBodyLimitErrorCode, string> = {
   CONNECTION_CLOSED: "Connection closed",
 };
 
+/** Typed error used when a request body is rejected before application parsing. */
 export class RequestBodyLimitError extends Error {
   readonly code: RequestBodyLimitErrorCode;
   readonly statusCode: number;
@@ -47,6 +49,7 @@ export class RequestBodyLimitError extends Error {
   }
 }
 
+/** Narrow unknown failures to request body limit errors, optionally by reason. */
 export function isRequestBodyLimitError(
   error: unknown,
   code?: RequestBodyLimitErrorCode,
@@ -60,6 +63,7 @@ export function isRequestBodyLimitError(
   return error.code === code;
 }
 
+/** Convert a limit reason into the default client-facing response text. */
 export function requestBodyErrorToText(code: RequestBodyLimitErrorCode): string {
   return DEFAULT_RESPONSE_MESSAGE[code];
 }
@@ -94,6 +98,7 @@ type RequestBodyChunkProgress = {
   exceeded: boolean;
 };
 
+/** Clamp untrusted byte and timer limits before wiring request listeners. */
 function resolveRequestBodyLimitValues(options: {
   maxBytes: number;
   timeoutMs?: number;
@@ -125,6 +130,7 @@ function advanceRequestBodyChunk(
   };
 }
 
+/** Read a complete request body while enforcing declared and streamed byte limits. */
 export async function readRequestBodyWithLimit(
   req: IncomingMessage,
   options: ReadRequestBodyOptions,
@@ -173,6 +179,7 @@ export async function readRequestBodyWithLimit(
     const timer = setNodeTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
       if (!req.destroyed) {
+        // Timeout owns teardown after listener registration; fail() removes listeners.
         req.destroy();
       }
       fail(error);
@@ -225,10 +232,12 @@ export type ReadJsonBodyResult =
   | { ok: true; value: unknown }
   | { ok: false; error: string; code: RequestBodyLimitErrorCode | "INVALID_JSON" };
 
+/** Options for JSON request parsing with the same byte and timeout guards. */
 export type ReadJsonBodyOptions = ReadRequestBodyOptions & {
   emptyObjectOnEmpty?: boolean;
 };
 
+/** Parse a limited request body as JSON without throwing validation errors to callers. */
 export async function readJsonBodyWithLimit(
   req: IncomingMessage,
   options: ReadJsonBodyOptions,
@@ -263,12 +272,14 @@ export async function readJsonBodyWithLimit(
   }
 }
 
+/** Disposable streaming guard for routes that parse the body with another framework. */
 export type RequestBodyLimitGuard = {
   dispose: () => void;
   isTripped: () => boolean;
   code: () => RequestBodyLimitErrorCode | null;
 };
 
+/** Guard options for early response formatting and custom limit messages. */
 export type RequestBodyLimitGuardOptions = {
   maxBytes: number;
   timeoutMs?: number;
@@ -276,6 +287,7 @@ export type RequestBodyLimitGuardOptions = {
   responseText?: Partial<Record<RequestBodyLimitErrorCode, string>>;
 };
 
+/** Attach a body-size/timeout guard that can reject before downstream parsing runs. */
 export function installRequestBodyLimitGuard(
   req: IncomingMessage,
   res: ServerResponse,
@@ -310,6 +322,7 @@ export function installRequestBodyLimitGuard(
   const respond = (error: RequestBodyLimitError) => {
     const text = customText[error.code] ?? requestBodyErrorToText(error.code);
     if (!res.headersSent) {
+      // The guard writes the response only if no downstream handler won the race.
       res.statusCode = error.statusCode;
       if (responseFormat === "text") {
         res.setHeader("Content-Type", "text/plain; charset=utf-8");

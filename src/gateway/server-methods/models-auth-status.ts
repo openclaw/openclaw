@@ -60,18 +60,28 @@ export type ModelAuthExpiry = {
 };
 
 export type ModelAuthStatusProfile = {
+  /** Stable auth-profile id from the provider's auth-profile store. */
   profileId: string;
+  /** Credential class backing this status row. */
   type: "oauth" | "token" | "api_key";
+  /** Health of this individual profile before provider-level OAuth rollup. */
   status: AuthProfileHealthStatus;
+  /** Present only for credentials with a validated expiry timestamp. */
   expiry?: ModelAuthExpiry;
 };
 
 export type ModelAuthStatusProvider = {
+  /** Canonical provider id used by Gateway model/auth routes. */
   provider: string;
+  /** User-facing provider label, with usage-provider aliases resolved. */
   displayName: string;
+  /** Provider-level health after OAuth-specific rollup rules are applied. */
   status: AuthProviderHealthStatus;
+  /** Earliest effective OAuth expiry when the provider has expiring profiles. */
   expiry?: ModelAuthExpiry;
+  /** Raw profile rows retained so UI can show credential-level detail. */
   profiles: ModelAuthStatusProfile[];
+  /** Optional quota/plan summary loaded only for providers with usage data. */
   usage?: {
     windows: UsageWindow[];
     summary?: string;
@@ -86,8 +96,11 @@ export type ModelAuthStatusResult = {
 };
 
 export type ModelAuthLogoutResult = {
+  /** Provider id requested for logout. */
   provider: string;
+  /** Auth-profile ids removed from every owning auth-profile store. */
   removedProfiles: string[];
+  /** Active chat run ids aborted because they were using the logged-out provider. */
   abortedRunIds: string[];
 };
 

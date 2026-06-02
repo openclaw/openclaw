@@ -4,6 +4,7 @@ import type { NodeRegistry, NodeSession } from "./node-registry.js";
 const TALK_CAPABILITY = "talk";
 const TALK_COMMAND_PREFIX = "talk.";
 
+/** Return whether any connected node advertises Talk capability or talk.* commands. */
 export function hasConnectedTalkNode(registry: NodeRegistry): boolean {
   return registry.listConnected().some(isTalkCapableNode);
 }

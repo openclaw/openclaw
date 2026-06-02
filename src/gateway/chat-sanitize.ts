@@ -64,6 +64,12 @@ function stripEnvelopeFromContentWithRole(
   return { content: next, changed };
 }
 
+/**
+ * Remove internal routing envelopes from one chat message while preserving shape.
+ *
+ * User messages keep a sender label when the envelope carried one, while
+ * assistant/tool messages only lose internal metadata that should not render.
+ */
 export function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
@@ -75,6 +81,8 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   let changed = false;
   const next: Record<string, unknown> = { ...entry };
   const senderLabel = stripUserEnvelope ? extractMessageSenderLabel(entry) : null;
+  // User envelopes may be the only place a channel sender name exists; preserve
+  // that label separately before removing the transport metadata from display.
   if (senderLabel && entry.senderLabel !== senderLabel) {
     next.senderLabel = senderLabel;
     changed = true;
@@ -107,6 +115,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+/** Strip display-only envelopes from a message array without cloning on no-op. */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -119,5 +128,7 @@ export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
     }
     return stripped;
   });
+  // Callers use reference equality to skip downstream projection work when
+  // transcript rows were already display-safe.
   return changed ? next : messages;
 }

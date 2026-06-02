@@ -8,6 +8,7 @@ import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
+/** Native command defaults that can be resolved without plugin activation. */
 export type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
@@ -15,10 +16,12 @@ export type ChannelCommandDefaults = Pick<
 
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
 
+/** Accepts manifest channel ids that are safe to use as own-property keys. */
 export function isSafeManifestChannelId(channelId: string): boolean {
   return SAFE_MANIFEST_CHANNEL_ID_PATTERN.test(channelId) && !isBlockedObjectKey(channelId);
 }
 
+/** Reads a manifest/config record key without traversing prototype pollution keys. */
 export function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
   if (isBlockedObjectKey(key) || !Object.hasOwn(record, key)) {
     return undefined;
@@ -26,6 +29,7 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
   return record[key];
 }
 
+/** Normalizes optional command defaults from manifest metadata. */
 export function normalizeChannelCommandDefaults(
   value: ChannelCommandDefaults | undefined,
 ): ChannelCommandDefaults | undefined {
@@ -51,12 +55,20 @@ export function normalizeChannelCommandDefaults(
   return defaults;
 }
 
+/**
+ * Resolves read-only native command defaults from plugin metadata snapshots
+ * without loading the channel plugin implementation.
+ */
 export function resolveReadOnlyChannelCommandDefaults(
   channelId: string,
   options: {
+    /** Environment used for workspace/current-plugin snapshot resolution in CLI fast paths. */
     env?: NodeJS.ProcessEnv;
+    /** State root for installed-plugin index lookup without activating plugins. */
     stateDir?: string;
+    /** Workspace root allowed to contribute the current plugin snapshot. */
     workspaceDir?: string;
+    /** Runtime config that decides plugin enablement and scoped discovery. */
     config: OpenClawConfig;
   },
 ): ChannelCommandDefaults | undefined {
@@ -76,6 +88,8 @@ export function resolveReadOnlyChannelCommandDefaults(
     if (!record.channels.includes(normalizedChannelId)) {
       continue;
     }
+    // Disabled plugins must not leak command auto-enable defaults through the
+    // read-only path; the activated path applies the same installed-index gate.
     if (!isInstalledPluginEnabled(resolvedSnapshot.index, record.id, options.config)) {
       continue;
     }
@@ -92,6 +106,8 @@ export function resolveReadOnlyChannelCommandDefaults(
       record.channelCatalogMeta?.id === normalizedChannelId
         ? record.channelCatalogMeta.commands
         : undefined;
+    // Per-channel manifest config is more specific than catalog metadata, so it
+    // wins when both surfaces declare command defaults for the same channel id.
     const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
     if (commands) {
       return commands;

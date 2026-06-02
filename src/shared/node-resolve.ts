@@ -2,7 +2,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { type NodeMatchCandidate, resolveNodeIdFromCandidates } from "./node-match.js";
 
 type ResolveNodeFromListOptions<TNode extends NodeMatchCandidate> = {
+  /** Allows blank queries to resolve through `pickDefaultNode`. */
   allowDefault?: boolean;
+  /** Caller-owned default picker used when blank queries are accepted. */
   pickDefaultNode?: (nodes: TNode[]) => TNode | null;
 };
 

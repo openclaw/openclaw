@@ -6,10 +6,6 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
-// Read-only status commands project a safe subset of account fields into snapshots
-// so renderers can preserve "configured but unavailable" state without touching
-// strict runtime-only credential helpers.
-
 const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
   "botTokenStatus",
@@ -33,6 +29,8 @@ function readNullableNumber(
   record: Record<string, unknown>,
   key: string,
 ): number | null | undefined {
+  // Preserve explicit null timestamps; status callers use null to distinguish
+  // "known empty" from an omitted/unsupported field.
   if (record[key] === null) {
     return null;
   }
@@ -44,6 +42,8 @@ function readStringArray(record: Record<string, unknown>, key: string): string[]
   if (!Array.isArray(value)) {
     return undefined;
   }
+  // Snapshot arrays are display data. Coerce only string/number entries and drop empties so
+  // arbitrary config objects cannot leak through status output as JSON-ish strings.
   const normalized = normalizeStringEntries(
     value.map((entry) => (typeof entry === "string" || typeof entry === "number" ? entry : "")),
   );
@@ -57,6 +57,7 @@ function readCredentialStatus(record: Record<string, unknown>, key: CredentialSt
     : undefined;
 }
 
+/** Infers configured state from any credential status field on an account snapshot-like object. */
 export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -70,12 +71,15 @@ export function resolveConfiguredFromCredentialStatuses(account: unknown): boole
     }
     sawCredentialStatus = true;
     if (status !== "missing") {
+      // Any configured credential is enough for coarse account presence; callers
+      // that require every credential use resolveConfiguredFromRequiredCredentialStatuses.
       return true;
     }
   }
   return sawCredentialStatus ? false : undefined;
 }
 
+/** Infers configured state only when every named required credential is non-missing. */
 export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
@@ -92,12 +96,15 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
     }
     sawCredentialStatus = true;
     if (status === "missing") {
+      // Required-credential checks are all-or-nothing so multi-token accounts
+      // do not appear configured when one mandatory credential is absent.
       return false;
     }
   }
   return sawCredentialStatus ? true : undefined;
 }
 
+/** Returns true when a credential exists but is unavailable to the current process. */
 export function hasConfiguredUnavailableCredentialStatus(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -108,6 +115,7 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
   );
 }
 
+/** Returns true when an account snapshot exposes an actual credential or available status. */
 export function hasResolvedCredentialValue(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -120,6 +128,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
   );
 }
 
+/** Projects non-secret credential source/status fields into a channel account snapshot. */
 export function projectCredentialSnapshotFields(
   account: unknown,
 ): Pick<
@@ -143,6 +152,8 @@ export function projectCredentialSnapshotFields(
   const appTokenSource = normalizeOptionalString(record.appTokenSource);
   const signingSecretSource = normalizeOptionalString(record.signingSecretSource);
 
+  // Only expose source/status metadata. Raw credential fields are intentionally
+  // omitted here because channel snapshots are safe to display in status output.
   return {
     ...(tokenSource ? { tokenSource } : {}),
     ...(botTokenSource ? { botTokenSource } : {}),
@@ -166,6 +177,7 @@ export function projectCredentialSnapshotFields(
   };
 }
 
+/** Projects a safe read-only account snapshot, redacting URL credentials and raw secrets. */
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
 ): Partial<ChannelAccountSnapshot> {
@@ -232,6 +244,7 @@ export function projectSafeChannelAccountSnapshotFields(
       ? { allowFrom: readStringArray(record, "allowFrom") }
       : {}),
     ...projectCredentialSnapshotFields(account),
+    // Status output may display base URLs, but embedded credentials must never leak.
     ...(baseUrl ? { baseUrl: stripUrlUserInfo(baseUrl) } : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
       ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }

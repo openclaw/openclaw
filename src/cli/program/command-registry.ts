@@ -19,6 +19,7 @@ export {
 };
 export type { CommandRegistration };
 
+/** Register all eager core commands plus lazy sub-CLI placeholders for the current argv. */
 export function registerProgramCommands(
   program: Command,
   ctx: ProgramContext,

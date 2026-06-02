@@ -37,6 +37,7 @@ function normalizeSystemRunApprovalFileOperand(
   };
 }
 
+/** Normalizes unknown approval-plan input into the canonical system-run plan shape. */
 export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprovalPlan | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -92,6 +93,7 @@ function hashSystemRunEnvEntries(entries: NormalizedSystemRunEnvEntry[]): string
   return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
+/** Builds the deterministic env binding hash and key preview for approval ids. */
 export function buildSystemRunApprovalEnvBinding(env: unknown): {
   envHash: string | null;
   envKeys: string[];
@@ -103,6 +105,7 @@ export function buildSystemRunApprovalEnvBinding(env: unknown): {
   };
 }
 
+/** Builds the argv/cwd/session/env binding that ties approval ids to one run request. */
 export function buildSystemRunApprovalBinding(params: {
   argv: unknown;
   cwd?: unknown;
@@ -135,6 +138,7 @@ function argvMatches(expectedArgv: string[], actualArgv: string[]): boolean {
   return true;
 }
 
+/** Result of matching a stored approval binding against the actual system-run request. */
 export type SystemRunApprovalMatchResult =
   | { ok: true }
   | {
@@ -157,6 +161,7 @@ function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMa
   };
 }
 
+/** Compares approval env hashes, failing closed when env keys exist without a hash. */
 export function matchSystemRunApprovalEnvHash(params: {
   expectedEnvHash: string | null;
   actualEnvHash: string | null;
@@ -198,6 +203,7 @@ export function matchSystemRunApprovalEnvHash(params: {
   return { ok: true };
 }
 
+/** Matches an approval binding against the actual system-run binding. */
 export function matchSystemRunApprovalBinding(params: {
   expected: SystemRunApprovalBinding;
   actual: SystemRunApprovalBinding;
@@ -222,6 +228,7 @@ export function matchSystemRunApprovalBinding(params: {
   });
 }
 
+/** Builds a mismatch result for approvals that lack a stored system-run binding. */
 export function missingSystemRunApprovalBinding(params: {
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
@@ -230,6 +237,7 @@ export function missingSystemRunApprovalBinding(params: {
   });
 }
 
+/** Converts a binding mismatch into the public system-run error payload shape. */
 export function toSystemRunApprovalMismatchError(params: {
   runId: string;
   match: SystemRunApprovalMismatch;

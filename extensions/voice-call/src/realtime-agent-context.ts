@@ -20,9 +20,13 @@ function limitText(text: string, maxChars: number): string {
   return `${text.slice(0, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
 }
 
+/** Reads configured workspace context files into bounded prompt sections for realtime voice turns. */
 async function readWorkspaceVoiceContextFiles(params: {
+  /** Agent workspace root; all configured files are resolved inside this directory. */
   workspaceDir: string;
+  /** Relative file names from voice-call realtime agent context config. */
   files: readonly string[];
+  /** Shared character budget across headings and file contents. */
   maxChars: number;
 }): Promise<string[]> {
   const sections: string[] = [];
@@ -35,11 +39,15 @@ async function readWorkspaceVoiceContextFiles(params: {
     if (remaining <= 0) {
       continue;
     }
+    // The security runtime keeps reads rooted in the agent workspace, so config
+    // file names can be user-controlled without allowing path escape.
     const content = await workspaceRoot.readText(file).catch(() => undefined);
     const trimmed = content?.trim();
     if (!trimmed) {
       continue;
     }
+    // Charge headings against the same budget as content so a long file list
+    // cannot crowd out the final prompt with metadata alone.
     const body = limitText(trimmed, Math.max(0, remaining - file.length - 16));
     const section = `### ${file}\n${body}`;
     sections.push(section);
@@ -48,10 +56,20 @@ async function readWorkspaceVoiceContextFiles(params: {
   return sections;
 }
 
+/**
+ * Builds realtime voice system instructions with bounded agent identity/context capsules.
+ *
+ * The returned prompt keeps immediate phone-turn context small and leaves deeper
+ * workspace, memory, and tool work behind the realtime consult tool.
+ */
 export async function buildRealtimeVoiceInstructions(params: {
+  /** Provider/system baseline instructions before plugin-specific policy and context. */
   baseInstructions: string;
+  /** Voice-call plugin config controlling consult policy and context inclusion. */
   config: VoiceCallConfig;
+  /** Core OpenClaw config used to resolve the selected agent identity/workspace. */
   coreConfig: CoreConfig;
+  /** Injected agent helpers from the plugin runtime boundary. */
   agentRuntime: CoreAgentDeps;
 }): Promise<string> {
   const { config } = params;
@@ -66,6 +84,8 @@ export async function buildRealtimeVoiceInstructions(params: {
     return sections.filter(Boolean).join("\n\n");
   }
 
+  // Realtime calls need a small always-available context capsule; larger memory,
+  // tools, and workspace state stay behind openclaw_agent_consult.
   const agentId = config.agentId ?? "main";
   const capsule: string[] = [
     "OpenClaw agent voice context:",
@@ -108,6 +128,8 @@ export async function buildRealtimeVoiceInstructions(params: {
     }
   }
 
+  // Keep the voice capsule after policy guidance: it is persona/context, not a
+  // stronger instruction layer than realtime consult and transfer rules.
   sections.push(limitText(capsule.join("\n\n"), contextConfig.maxChars));
   return sections.filter(Boolean).join("\n\n");
 }

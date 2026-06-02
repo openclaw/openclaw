@@ -10,9 +10,9 @@ import type {
   ProviderToolSchemaDiagnostic,
 } from "./plugin-entry.js";
 
-// Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
 export { cleanSchemaForGemini, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS, stripUnsupportedSchemaKeywords };
 
+/** Find unsupported schema keyword paths while preserving property names in diagnostic paths. */
 export function findUnsupportedSchemaKeywords(
   schema: unknown,
   path: string,
@@ -33,6 +33,8 @@ export function findUnsupportedSchemaKeywords(
       ? (record.properties as Record<string, unknown>)
       : undefined;
   if (properties) {
+    // Preserve property names in diagnostic paths; treating `properties` like
+    // a normal schema object would report the container instead of the field.
     for (const [key, value] of Object.entries(properties)) {
       violations.push(
         ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
@@ -55,6 +57,7 @@ export function findUnsupportedSchemaKeywords(
   return violations;
 }
 
+/** Rewrite Gemini tool parameters by removing schema keywords rejected by Gemini transports. */
 export function normalizeGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
@@ -69,6 +72,7 @@ export function normalizeGeminiToolSchemas(
   });
 }
 
+/** Report Gemini-incompatible schema keyword paths without mutating the incoming tools. */
 export function inspectGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
@@ -85,6 +89,12 @@ export function inspectGeminiToolSchemas(
   });
 }
 
+/**
+ * Normalize native OpenAI Responses tool schemas to the stricter object shape expected by strict mode.
+ *
+ * Non-native OpenAI-compatible routes are left untouched because many proxy providers accept wider
+ * JSON Schema shapes and should not inherit OpenAI-specific constraints.
+ */
 export function normalizeOpenAIToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
@@ -119,6 +129,9 @@ function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): 
   const api = (ctx.model?.api ?? ctx.modelApi ?? "").trim().toLowerCase();
   const baseUrl = (ctx.model?.baseUrl ?? "").trim().toLowerCase();
 
+  // Only native OpenAI/ChatGPT endpoints get strict schema normalization. Other
+  // OpenAI-compatible providers often accept wider JSON Schema and may reject
+  // OpenAI-specific object-shape rewrites.
   if (provider === "openai") {
     if (api === "openai-responses") {
       return !baseUrl || isOpenAIResponsesBaseUrl(baseUrl);
@@ -146,9 +159,11 @@ function isOpenAICodexBaseUrl(baseUrl: string): boolean {
 }
 
 type NormalizeOpenAIStrictCompatOptions = {
+  /** Top-level empty parameter schemas become explicit empty objects for strict mode. */
   promoteEmptyObject: boolean;
 };
 
+/** Object-valued schema maps whose values are independent child schemas. */
 const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
   "$defs",
   "definitions",
@@ -157,6 +172,7 @@ const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
   "properties",
 ]);
 
+/** Schema-valued fields that should recurse without promoting `{}` to object roots. */
 const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
   "additionalProperties",
   "allOf",
@@ -214,6 +230,9 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
+    // Map containers such as `properties` hold named schemas; union/nested
+    // containers hold schema nodes directly. Keeping those modes separate
+    // avoids accidentally rewriting property names as schema keywords.
     const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
@@ -244,6 +263,8 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
       !Array.isArray(normalized.properties)) ||
       Array.isArray(normalized.required));
   if (hasObjectShapeHints) {
+    // Typebox and plugin-authored schemas often imply object-ness with
+    // `properties`/`required`; native OpenAI strict mode requires it explicitly.
     normalized.type = "object";
     changed = true;
   }
@@ -259,6 +280,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
     Object.keys(normalized.properties as Record<string, unknown>).length === 0;
 
   if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
+    // Empty object parameters still need an explicit required list in strict mode.
     normalized.required = [];
     changed = true;
   }
@@ -275,6 +297,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   return changed ? normalized : schema;
 }
 
+/** Return paths that would force native OpenAI tool handling out of strict-schema mode. */
 export function findOpenAIStrictSchemaViolations(
   schema: unknown,
   path: string,
@@ -348,6 +371,7 @@ export function findOpenAIStrictSchemaViolations(
   return violations;
 }
 
+/** Inspect OpenAI tools after route gating; native transports downgrade strict mode elsewhere. */
 export function inspectOpenAIToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
@@ -361,6 +385,7 @@ export function inspectOpenAIToolSchemas(
 
 export const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["anyOf", "oneOf"]);
 
+/** Detects nullable union arms that can become DeepSeek's `nullable: true` flag. */
 function isNullSchemaVariant(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return false;
@@ -441,9 +466,14 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
 
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
+    // If no object variant exists, stripping the union keyword is the least
+    // surprising DeepSeek-compatible shape we can preserve.
     return normalized;
   }
 
+  // DeepSeek rejects JSON Schema unions. Prefer the first non-null object arm
+  // and overlay sibling keywords so descriptions/defaults beside anyOf/oneOf
+  // are preserved on the supported single-schema shape.
   const merged = {
     ...(selected as Record<string, unknown>),
     ...normalized,
@@ -462,6 +492,7 @@ function isStringConstVariant(entry: unknown): entry is { const: string } {
   return typeof record.const === "string";
 }
 
+/** Collapse DeepSeek-rejected union keywords into the closest supported single-schema shape. */
 export function normalizeDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
@@ -479,6 +510,7 @@ export function normalizeDeepSeekToolSchemas(
   });
 }
 
+/** Report DeepSeek-incompatible union keyword paths before normalization. */
 export function inspectDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
@@ -497,6 +529,7 @@ export function inspectDeepSeekToolSchemas(
 
 export type ProviderToolCompatFamily = "deepseek" | "gemini" | "openai";
 
+/** Build provider-entry hooks for one known tool-schema compatibility family. */
 export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
   inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];

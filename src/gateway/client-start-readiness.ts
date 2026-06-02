@@ -10,6 +10,7 @@ export type {
   GatewayClientStartReadinessOptions,
 } from "../../packages/gateway-client/src/readiness.js";
 
+/** Starts a Gateway client after the event loop proves timers and microtasks can run. */
 export function startGatewayClientWhenEventLoopReady(
   client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},

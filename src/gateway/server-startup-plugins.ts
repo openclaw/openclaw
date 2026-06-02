@@ -24,7 +24,9 @@ type GatewayStartupTrace = {
 
 /** Returns the config snapshot used by channel/plugin startup maintenance. */
 export function resolveGatewayStartupMaintenanceConfig(params: {
+  /** Config snapshot captured at Gateway start. */
   cfgAtStart: OpenClawConfig;
+  /** Runtime config after recovery/default hydration. */
   startupRuntimeConfig: OpenClawConfig;
 }): OpenClawConfig {
   // Early config recovery may supply channel blocks after the start snapshot; startup
@@ -40,13 +42,21 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
 
 /** Builds plugin startup state and gateway method lists before the server binds. */
 export async function prepareGatewayPluginBootstrap(params: {
+  /** Config snapshot captured at Gateway start. */
   cfgAtStart: OpenClawConfig;
+  /** Source config used for plugin activation policy before runtime defaults. */
   activationSourceConfig?: OpenClawConfig;
+  /** Runtime config after recovery/default hydration. */
   startupRuntimeConfig: OpenClawConfig;
+  /** Optional plugin metadata snapshot from config loading. */
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  /** Minimal test gateways skip most plugin runtime loading. */
   minimalTestGateway: boolean;
+  /** Bootstrap logger used by plugin/channel startup maintenance. */
   log: GatewayPluginBootstrapLog;
+  /** Whether to load full runtime plugins during pre-bind bootstrap. */
   loadRuntimePlugins?: boolean;
+  /** Whether to load setup-runtime hooks for deferred channel plugins only. */
   loadSetupRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
@@ -183,17 +193,29 @@ export async function prepareGatewayPluginBootstrap(params: {
 
 /** Loads startup plugin runtimes through the deferred bootstrap boundary. */
 export async function loadGatewayStartupPluginRuntime(params: {
+  /** Runtime plugin config to pass into plugin loading. */
   cfg: OpenClawConfig;
+  /** Source config used for activation policy, when different from runtime config. */
   activationSourceConfig?: OpenClawConfig;
+  /** Default workspace directory for plugin host services. */
   workspaceDir: string;
+  /** Plugin bootstrap logger. */
   log: GatewayPluginBootstrapLog;
+  /** Gateway methods available before plugin methods are added. */
   baseMethods: string[];
+  /** Core Gateway method names used to protect core descriptors. */
   coreGatewayMethodNames?: readonly string[];
+  /** Optional host services injected into plugin loading. */
   hostServices?: PluginRegistryParams["hostServices"];
+  /** Plugin ids selected for startup loading. */
   startupPluginIds: string[];
+  /** Optional lookup table prepared before runtime loading. */
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
+  /** Prefer setup-runtime entrypoints for channel plugins during setup bootstrap. */
   preferSetupRuntimeForChannelPlugins?: boolean;
+  /** Suppress plugin info logs during setup-runtime-only bootstrap. */
   suppressPluginInfoLogs?: boolean;
+  /** Optional startup trace collector. */
   startupTrace?: GatewayStartupTrace;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise

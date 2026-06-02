@@ -74,6 +74,7 @@ function isSessionFileEntry(value: unknown): value is FileEntry {
   return isRecord(message) && typeof message.role === "string";
 }
 
+/** Parses session JSONL while preserving row numbers for later bundle warnings. */
 function parseSessionEntries(content: string): {
   entries: FileEntry[];
   warnings: JsonlParseWarning[];
@@ -113,6 +114,7 @@ function parseSessionEntries(content: string): {
   return { entries, warnings, rowByEntry };
 }
 
+/** Upgrades old transcript rows in memory so trajectory exports use current branch links. */
 function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
@@ -156,6 +158,7 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   }
 }
 
+/** Reads only the active session branch, stopping on missing parents or cycles. */
 async function readSessionBranch(filePath: string): Promise<{
   header: SessionHeader | null;
   leafId: string | null;
@@ -220,6 +223,7 @@ async function readSessionBranch(filePath: string): Promise<{
   return { header, leafId, branchEntries, warnings };
 }
 
+/** Parses bounded JSONL sources and reports bad rows instead of failing the whole export. */
 async function parseJsonlFile<T>(
   filePath: string,
   params: {
@@ -286,6 +290,7 @@ async function parseJsonlFile<T>(
   return { events: parsed, warnings };
 }
 
+/** Validates runtime trajectory rows before mixing them with transcript-derived events. */
 function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
   if (!isRecord(value)) {
     return false;
@@ -303,6 +308,7 @@ function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
   );
 }
 
+/** Groups repeated parse warnings while keeping a capped sample of offending rows. */
 function summarizeJsonlWarnings(warnings: JsonlParseWarning[]): TrajectoryBundleWarning[] {
   const byKey = new Map<string, TrajectoryBundleWarning>();
   for (const warning of warnings) {
@@ -342,6 +348,7 @@ function normalizeTimestamp(value: unknown): string {
   return new Date(0).toISOString();
 }
 
+/** Maps stored agent message roles to the stable trajectory event taxonomy. */
 function resolveMessageEventType(message: AgentMessage): string {
   if (message.role === "user") {
     return "user.message";
@@ -355,6 +362,7 @@ function resolveMessageEventType(message: AgentMessage): string {
   return `message.${message.role}`;
 }
 
+/** Extracts assistant tool-call blocks from historical block shape variants. */
 function extractAssistantToolCalls(
   message: AgentMessage,
 ): Array<{ id?: string; name?: string; arguments?: unknown; index: number }> {
@@ -389,6 +397,7 @@ function extractAssistantToolCalls(
   });
 }
 
+/** Converts transcript branch entries into redacted trajectory events. */
 function buildTranscriptEvents(params: {
   entries: SessionEntry[];
   sessionId: string;
@@ -492,6 +501,7 @@ function buildTranscriptEvents(params: {
   return events;
 }
 
+/** Produces globally ordered events and rewrites sequence numbers after the merge. */
 function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
   const sourceOrder: Record<TrajectoryEvent["source"], number> = {
     runtime: 0,
@@ -525,6 +535,7 @@ function trajectoryJsonlFile(
   return jsonlSupportBundleFile(pathName, lines);
 }
 
+/** Builds the redaction scope used for local trajectory export paths. */
 function buildTrajectoryExportRedaction(params: {
   workspaceDir: string;
 }): TrajectoryExportRedaction {
@@ -536,6 +547,7 @@ function buildTrajectoryExportRedaction(params: {
   };
 }
 
+/** Replaces the exact workspace prefix before broader support redaction runs. */
 function redactWorkspacePathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceDir = redaction.workspaceDir;
   if (!workspaceDir) {
@@ -553,6 +565,7 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
   return next;
 }
 
+/** Redacts strings that are or contain local paths without touching ordinary text. */
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceRedacted = redactWorkspacePathString(value, redaction);
   if (
@@ -567,6 +580,7 @@ function maybeRedactPathString(value: string, redaction: TrajectoryExportRedacti
   return workspaceRedacted;
 }
 
+/** Recursively redacts local path strings while preserving JSON object shape. */
 function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedaction): unknown {
   if (typeof value === "string") {
     return maybeRedactPathString(value, redaction);
@@ -585,6 +599,7 @@ function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedact
   return next;
 }
 
+/** Applies export-time path redaction to an event already sanitized for payload secrets. */
 function redactEventForExport(
   event: TrajectoryEvent,
   redaction: TrajectoryExportRedaction,
@@ -600,6 +615,7 @@ function redactEventForExport(
   };
 }
 
+/** Recovers the latest compiled prompt/tool context from runtime events. */
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
   const latestContext = runtimeEvents
     .slice()
@@ -627,10 +643,12 @@ function resolveLatestRuntimeEventData(
   return event?.data;
 }
 
+/** Normalizes paths for fuzzy matching between redacted skills and tool-call arguments. */
 function normalizePathForMatch(value: string): string {
   return value.replaceAll("\\", "/").trim().toLowerCase();
 }
 
+/** Finds path-like strings in tool-call arguments without assuming a specific schema. */
 function collectPotentialPathStrings(value: unknown): string[] {
   const found = new Set<string>();
   const visit = (input: unknown) => {
@@ -660,6 +678,7 @@ function collectPotentialPathStrings(value: unknown): string[] {
   return [...found];
 }
 
+/** Annotates captured skills with invocation hints derived from tool-call file paths. */
 function markInvokedSkills(params: { skills: unknown; events: TrajectoryEvent[] }): unknown {
   if (!params.skills || typeof params.skills !== "object") {
     return params.skills;
@@ -711,6 +730,7 @@ function markInvokedSkills(params: { skills: unknown; events: TrajectoryEvent[] 
   };
 }
 
+/** Builds metadata.json from the newest runtime metadata event plus safe fallbacks. */
 function buildMetadataCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
@@ -755,6 +775,7 @@ function buildMetadataCapture(params: {
   };
 }
 
+/** Builds artifacts.json from the richest terminal runtime event available. */
 function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
@@ -804,6 +825,7 @@ function buildArtifactsCapture(params: {
   };
 }
 
+/** Builds prompts.json from compiled context, submitted prompts, and prompt reports. */
 function buildPromptsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
@@ -855,6 +877,7 @@ function buildPromptsCapture(params: {
   };
 }
 
+/** Resolves the default on-disk bundle directory for a session export. */
 export function resolveDefaultTrajectoryExportDir(params: {
   workspaceDir: string;
   sessionId: string;
@@ -870,6 +893,7 @@ export function resolveDefaultTrajectoryExportDir(params: {
   );
 }
 
+/** Exports a sanitized trajectory support bundle for one session branch. */
 export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
   manifest: TrajectoryBundleManifest;
   outputDir: string;

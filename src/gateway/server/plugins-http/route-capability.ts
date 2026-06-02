@@ -61,6 +61,8 @@ export function listPluginNodeCapabilities(
     if (surface) {
       const next = resolvePluginNodeCapabilityRouteSurface(route as PluginNodeCapabilityRoute);
       const existing = surfaces.get(surface);
+      // Keep the shortest TTL advertised for a surface so pollers refresh at
+      // the strictest route cadence when multiple plugins expose the same key.
       if (!existing || resolveTtlMs(next) < resolveTtlMs(existing)) {
         surfaces.set(surface, next);
       }

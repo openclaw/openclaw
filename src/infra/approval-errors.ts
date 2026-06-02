@@ -15,6 +15,12 @@ function readApprovalNotFoundDetailsReason(value: unknown): string | null {
   return typeof reason === "string" ? (normalizeOptionalString(reason) ?? null) : null;
 }
 
+/**
+ * Detects approval-not-found errors across current gateway codes and legacy message text.
+ *
+ * Callers use this to decide whether to try fallback approval flows; non-Error values and unrelated
+ * gateway failures stay false so retry/fallback logic does not hide real transport failures.
+ */
 export function isApprovalNotFoundError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
@@ -27,5 +33,6 @@ export function isApprovalNotFoundError(err: unknown): boolean {
   if (gatewayCode === INVALID_REQUEST && detailsReason === APPROVAL_NOT_FOUND) {
     return true;
   }
+  // Older gateways only surfaced this as text; keep the fallback narrow and case-insensitive.
   return /unknown or expired approval id/i.test(err.message);
 }

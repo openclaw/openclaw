@@ -13,11 +13,13 @@ type TrajectoryPointerOpenFlagConstants = Pick<
 > &
   Partial<Pick<typeof fs.constants, "O_NOFOLLOW">>;
 
+/** Converts a session id into a bounded filename segment for trajectory sidecars. */
 export function safeTrajectorySessionFileName(sessionId: string): string {
   const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
   return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
 }
 
+/** Builds secure pointer open flags, using O_NOFOLLOW on platforms that expose it. */
 export function resolveTrajectoryPointerOpenFlags(
   constants: TrajectoryPointerOpenFlagConstants = fs.constants,
 ): number {
@@ -30,6 +32,7 @@ export function resolveTrajectoryPointerOpenFlags(
   );
 }
 
+/** Resolves a generated filename under a configured directory and rejects escapes. */
 function resolveContainedPath(baseDir: string, fileName: string): string {
   const resolvedBase = path.resolve(baseDir);
   const resolvedFile = path.resolve(resolvedBase, fileName);
@@ -39,6 +42,7 @@ function resolveContainedPath(baseDir: string, fileName: string): string {
   return resolvedFile;
 }
 
+/** Resolves the runtime JSONL sidecar path for one session. */
 export function resolveTrajectoryFilePath(params: {
   env?: NodeJS.ProcessEnv;
   sessionFile?: string;
@@ -63,6 +67,7 @@ export function resolveTrajectoryFilePath(params: {
     : `${params.sessionFile}.trajectory.jsonl`;
 }
 
+/** Resolves the session-adjacent pointer that records override-directory runtime paths. */
 export function resolveTrajectoryPointerFilePath(sessionFile: string): string {
   return sessionFile.endsWith(".jsonl")
     ? `${sessionFile.slice(0, -".jsonl".length)}.trajectory-path.json`

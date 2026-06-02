@@ -1,5 +1,3 @@
-// Public contract-safe web-search registration helpers for provider plugins.
-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   WebSearchCredentialResolutionSource,
@@ -38,9 +36,11 @@ export type {
 } from "./provider-web-search-contract-fields.js";
 
 type CreateWebSearchProviderSelectionOptions = CreateWebSearchProviderContractFieldsOptions & {
+  /** Plugin id enabled when a user selects this provider from setup/tool flows. */
   selectionPluginId?: string;
 };
 
+/** Build web-search provider fields, optionally including provider-selection config enablement. */
 export function createWebSearchProviderContractFields(
   options: CreateWebSearchProviderSelectionOptions,
 ): Pick<
@@ -59,6 +59,8 @@ export function createWebSearchProviderContractFields(
     ...createBaseWebSearchProviderContractFields(options),
     ...(selectionPluginId
       ? {
+          // Selection enables the provider plugin entry, but does not apply
+          // channel-style normalization or other plugin install side effects.
           applySelectionConfig: (config: OpenClawConfig) =>
             enablePluginInConfig(config, selectionPluginId).config,
         }

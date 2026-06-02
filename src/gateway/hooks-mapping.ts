@@ -112,6 +112,7 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
+/** Resolve configured and preset hook mappings into route-ready mapping records. */
 export function resolveHookMappings(
   hooks?: HooksConfig,
   opts?: { configDir?: string },
@@ -144,6 +145,8 @@ export function resolveHookMappings(
 
   const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
+  // Transform modules are executable local code; keep custom roots under the
+  // managed hooks transform directory before any request can import them.
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,
     hooks?.transformsDir,
@@ -153,6 +156,7 @@ export function resolveHookMappings(
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
 }
 
+/** Apply the first matching hook mapping and optional transform to one webhook request. */
 export async function applyHookMappings(
   mappings: HookMappingResolved[],
   ctx: HookMappingContext,
@@ -290,6 +294,8 @@ function mergeAction(
   if (!override) {
     return validateAction(base);
   }
+  // Transforms may switch action kind, but validation still requires the final
+  // action to carry the payload field consumed by the selected dispatcher.
   const kind = override.kind ?? base.kind ?? defaultAction;
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
@@ -357,11 +363,14 @@ function resolveMergedSessionKeySource(
       // through to the default/generated key path later in hook dispatch.
       return undefined;
     }
+    // Transform-produced session keys are treated as templated unless the module
+    // explicitly marks them static, because they can derive from request data.
     return override.sessionKeySource === "static" ? "static" : "templated";
   }
   return baseAgent?.sessionKeySource;
 }
 
+/** Detect whether a hook template can read request context through {{...}} expressions. */
 export function hasHookTemplateExpressions(template: string): boolean {
   return /\{\{\s*[^}]+\s*\}\}/.test(template);
 }
@@ -524,7 +533,7 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
 }
 
 // Block traversal into prototype-chain properties on attacker-controlled
-// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
+// webhook payloads. Mirrors the same blocklist used by config-paths.ts
 // for config path traversal.
 const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 

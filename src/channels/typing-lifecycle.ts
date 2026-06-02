@@ -7,6 +7,7 @@ type TypingKeepaliveLoop = {
   isRunning: () => boolean;
 };
 
+/** Creates a non-overlapping keepalive loop for platform typing refresh calls. */
 export function createTypingKeepaliveLoop(params: {
   intervalMs: number;
   onTick: AsyncTick;
@@ -18,6 +19,8 @@ export function createTypingKeepaliveLoop(params: {
     if (tickInFlight) {
       return;
     }
+    // Typing adapters can be slow or rate-limited; skip overlapping ticks
+    // instead of building an unbounded queue of refresh calls.
     tickInFlight = true;
     try {
       await params.onTick();
@@ -30,6 +33,8 @@ export function createTypingKeepaliveLoop(params: {
     if (params.intervalMs <= 0 || timer) {
       return;
     }
+    // intervalMs <= 0 intentionally disables keepalive while still allowing
+    // the initial typing start call from the owning callback.
     timer = setInterval(() => {
       void tick();
     }, params.intervalMs);

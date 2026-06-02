@@ -9,6 +9,10 @@ import {
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
 
+/**
+ * Resolve the effective Gateway bearer token using the same precedence as
+ * CLI, doctor, and install flows: explicit input, config/SecretRef, then env.
+ */
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -35,6 +39,9 @@ export async function resolveGatewayAuthToken(params: {
     value: tokenInput,
     defaults: params.cfg.secrets?.defaults,
   }).ref;
+  // SecretRefs deliberately gate env fallback because callers use this helper
+  // both for service auth and drift warnings; unresolved refs must stay visible
+  // unless the caller opted into legacy always-fallback behavior.
   const envFallback = params.envFallback ?? "always";
   const envToken = trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN);
 

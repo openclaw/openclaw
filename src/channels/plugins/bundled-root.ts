@@ -14,8 +14,11 @@ const OPENCLAW_PACKAGE_ROOT =
     : process.cwd());
 
 export type BundledChannelRootScope = {
+  /** Package root used to resolve generated bundled metadata and runtime files. */
   packageRoot: string;
+  /** Stable partition key for bundled module and metadata caches. */
   cacheKey: string;
+  /** Optional override tree that replaces the package's bundled extensions dir. */
   pluginsDir?: string;
 };
 
@@ -28,6 +31,10 @@ function derivePackageRootFromExtensionsDir(extensionsDir: string): string {
   return parentDir;
 }
 
+/**
+ * Resolves the active bundled channel root. Packaged builds use the OpenClaw
+ * package root; tests and override flows can point at a replacement plugin tree.
+ */
 export function resolveBundledChannelRootScope(
   env: NodeJS.ProcessEnv = process.env,
 ): BundledChannelRootScope {
@@ -40,6 +47,9 @@ export function resolveBundledChannelRootScope(
   }
   const resolvedPluginsDir = path.resolve(bundledPluginsDir);
   return {
+    // Overrides can point either at an `extensions/` tree or directly at a
+    // generated plugin root; keep the package root aligned with that shape so
+    // generated metadata and runtime imports share one boundary.
     packageRoot:
       path.basename(resolvedPluginsDir) === "extensions"
         ? derivePackageRootFromExtensionsDir(resolvedPluginsDir)

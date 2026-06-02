@@ -90,6 +90,9 @@ export function withActivatedPluginIds(params: {
     if (!normalized) {
       continue;
     }
+    // A restrictive allowlist is an operator boundary. Activation helpers may
+    // mark already-allowed plugins enabled, but must not widen discovery by
+    // injecting new ids into an existing allowlist.
     if (originalAllowSet && !originalAllowSet.has(normalized)) {
       continue;
     }
@@ -113,6 +116,13 @@ export function withActivatedPluginIds(params: {
   };
 }
 
+/**
+ * Applies bundled-plugin compatibility shims to a plugin config snapshot.
+ *
+ * Enablement compat revives bundled plugins that older config shapes imply;
+ * Vitest compat is scoped separately so tests can keep legacy fixtures active
+ * without changing production enablement semantics.
+ */
 export function applyPluginCompatibilityOverrides(params: {
   config?: OpenClawConfig;
   compat?: PluginActivationCompatConfig;
@@ -182,6 +192,13 @@ function applyPluginAutoEnableForActivation(params: {
   });
 }
 
+/**
+ * Resolves the canonical activation snapshot before compatibility overrides.
+ *
+ * `activationSourceConfig` intentionally points at the raw config so downstream
+ * status/diagnostics can distinguish explicit user configuration from
+ * auto-enabled or compat-enabled plugin activation.
+ */
 export function resolvePluginActivationSnapshot(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
@@ -219,6 +236,12 @@ export function resolvePluginActivationSnapshot(params: {
   };
 }
 
+/**
+ * Resolves plugin activation inputs for registry loading.
+ *
+ * This layers compatibility overrides on top of the canonical snapshot while
+ * preserving the raw activation source and auto-enable reasons for diagnostics.
+ */
 export function resolvePluginActivationInputs(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
@@ -255,6 +278,12 @@ export function resolvePluginActivationInputs(params: {
   };
 }
 
+/**
+ * Resolves activation inputs plus bundled compat plugin ids.
+ *
+ * Callers supply the compat id resolver so each surface can discover only the
+ * bundled plugins relevant to that runtime path before compat overrides run.
+ */
 export function resolveBundledPluginCompatibleActivationInputs(
   params: BundledPluginCompatibleActivationParams,
 ): BundledPluginCompatibleActivationInputs {
@@ -297,6 +326,12 @@ export function resolveBundledPluginCompatibleActivationInputs(
   };
 }
 
+/**
+ * Resolves the smaller load-value shape used by lazy provider/runtime helpers.
+ *
+ * This avoids creating a full normalized activation source when callers only
+ * need config, compat ids, and auto-enable reasons for a subsequent load.
+ */
 export function resolveBundledPluginCompatibleLoadValues(
   params: BundledPluginCompatibleActivationParams,
 ): BundledPluginCompatibleLoadValues {

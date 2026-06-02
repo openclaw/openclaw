@@ -19,9 +19,13 @@ import { createDefaultDeps } from "../../deps.js";
 import { ensurePluginRegistryLoaded, type PluginRegistryScope } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {
+  /** Add channel/account/json/dry-run/verbose flags shared by message subcommands. */
   withMessageBase: (command: Command) => Command;
+  /** Add an optional outbound target flag. */
   withMessageTarget: (command: Command) => Command;
+  /** Add a required outbound target flag. */
   withRequiredMessageTarget: (command: Command) => Command;
+  /** Validate options, preload needed plugins, run the message action, and exit. */
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
 
@@ -43,6 +47,7 @@ type MessagePluginPreloadPlan =
   | { preload: true; loadOptions: MessagePluginLoadOptions }
   | { preload: false };
 
+/** Normalize Commander aliases into the message command's canonical option names. */
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
   return {
@@ -51,6 +56,7 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
   };
 }
 
+/** Validate numeric message flags before plugin code receives raw Commander values. */
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
     if (opts[key] === undefined) {
@@ -70,6 +76,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   }
 }
 
+/** Run gateway_stop hooks after mutating message actions without hanging the CLI. */
 async function runPluginStopHooks(): Promise<void> {
   let timeout: NodeJS.Timeout | null = null;
   const hookRun = runGlobalGatewayStopSafely({
@@ -92,6 +99,7 @@ async function runPluginStopHooks(): Promise<void> {
   }
 }
 
+/** Resolve the single channel implied by explicit channel or target flags. */
 function resolveScopedMessageChannel(opts: Record<string, unknown>): string | undefined {
   return resolveMessageSecretScope({
     channel: opts.channel,
@@ -100,12 +108,14 @@ function resolveScopedMessageChannel(opts: Record<string, unknown>): string | un
   }).channel;
 }
 
+/** Narrow arbitrary action strings to the public channel message action set. */
 function asChannelMessageActionName(action: string): ChannelMessageActionName | undefined {
   return CHANNEL_MESSAGE_ACTION_NAME_SET.has(action)
     ? (action as ChannelMessageActionName)
     : undefined;
 }
 
+/** Detect channel actions that are executed by the gateway instead of local plugins. */
 function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
   const messageAction = asChannelMessageActionName(action);
   if (!messageAction || !scopedChannel) {
@@ -118,6 +128,7 @@ function isGatewayOwnedMessageAction(action: string, scopedChannel: string | und
   return executionMode === "gateway";
 }
 
+/** Decide whether plugin registry preload is needed before running a message action. */
 function resolveMessagePluginPreloadPlan(
   action: string,
   opts: Record<string, unknown>,
@@ -136,6 +147,7 @@ function resolveMessagePluginPreloadPlan(
   return { preload: false };
 }
 
+/** Build shared option decorators and action runner used by all message subcommands. */
 export function createMessageCliHelpers(
   message: Command,
   messageChannelOptions: string,

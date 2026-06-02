@@ -3,6 +3,7 @@ import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import type { PendingRequest } from "./types.js";
 
+/** Render pending pairing requests with sanitized cells for terminal-safe output. */
 export function renderPendingPairingRequestsTable(params: {
   pending: PendingRequest[];
   now: number;

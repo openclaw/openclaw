@@ -26,13 +26,13 @@ import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
 export interface PlivoProviderOptions {
-  /** Override public URL origin for signature verification */
+  /** Canonical external origin used when Plivo signs or re-fetches callback URLs. */
   publicUrl?: string;
-  /** Skip webhook signature verification (development only) */
+  /** Development-only escape hatch; production should verify every Plivo callback. */
   skipVerification?: boolean;
-  /** Outbound ring timeout in seconds */
+  /** Outbound ring timeout passed to Plivo's `hangup_on_ring` field. */
   ringTimeoutSec?: number;
-  /** Webhook security options (forwarded headers/allowlist) */
+  /** Forwarded-header trust and host allowlist controls for callback URL reconstruction. */
   webhookSecurity?: WebhookSecurityConfig;
 }
 
@@ -48,9 +48,11 @@ function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
   if (nonceV2) {
     return `plivo:v2:${nonceV2}`;
   }
+  // Unsigned/dev callbacks still need stable replay keys, so fall back to the raw body hash.
   return `plivo:fallback:${crypto.createHash("sha256").update(ctx.rawBody).digest("hex")}`;
 }
 
+/** Plivo Call API provider that drives speak/listen by transferring the A-leg to XML callbacks. */
 export class PlivoProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
 
@@ -60,7 +62,7 @@ export class PlivoProvider implements VoiceCallProvider {
   private readonly options: PlivoProviderOptions;
   private readonly apiHost: string;
 
-  // Best-effort mapping between create-call request UUID and call UUID.
+  // Plivo create-call returns a request UUID first; later callbacks reveal the call UUID.
   private requestUuidToCallUuid = new Map<string, string>();
 
   // Used for transfer URLs and GetInput action URLs.
@@ -85,6 +87,7 @@ export class PlivoProvider implements VoiceCallProvider {
     this.options = options;
   }
 
+  /** Sends an authenticated Plivo API request through the SSRF guard. */
   private async apiRequest<T = unknown>(params: {
     method: "GET" | "POST" | "DELETE";
     endpoint: string;
@@ -107,6 +110,7 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  /** Verifies Plivo signatures and returns replay keys for manager-level webhook dedupe. */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
     const result = verifyPlivoWebhook(ctx, this.authToken, {
       publicUrl: this.options.publicUrl,
@@ -129,6 +133,7 @@ export class PlivoProvider implements VoiceCallProvider {
     };
   }
 
+  /** Parses Plivo form callbacks into normalized events or one-shot XML responses. */
   parseWebhookEvent(
     ctx: WebhookContext,
     options?: WebhookParseOptions,
@@ -154,6 +159,7 @@ export class PlivoProvider implements VoiceCallProvider {
       const callId = this.getCallIdFromQuery(ctx);
       const pending = callId ? this.pendingSpeakByCallId.get(callId) : undefined;
       if (callId) {
+        // Pending XML payloads are single-use because Plivo fetches them via transfer callback.
         this.pendingSpeakByCallId.delete(callId);
       }
 
@@ -172,6 +178,7 @@ export class PlivoProvider implements VoiceCallProvider {
       const callId = this.getCallIdFromQuery(ctx);
       const pending = callId ? this.pendingListenByCallId.get(callId) : undefined;
       if (callId) {
+        // Pending listen options are single-use for the transfer callback that asks for XML.
         this.pendingListenByCallId.delete(callId);
       }
 
@@ -221,6 +228,7 @@ export class PlivoProvider implements VoiceCallProvider {
     const requestUuid = params.get("RequestUUID") || "";
 
     if (requestUuid && callUuid) {
+      // Connect outbound initiation IDs to call-control IDs once Plivo exposes both.
       this.requestUuidToCallUuid.set(requestUuid, callUuid);
     }
 
@@ -298,6 +306,7 @@ export class PlivoProvider implements VoiceCallProvider {
     return null;
   }
 
+  /** Starts an outbound Plivo call and stores the webhook base needed by later transfer flows. */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const webhookUrl = new URL(input.webhookUrl);
     webhookUrl.searchParams.set("provider", "plivo");
@@ -362,6 +371,7 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  /** Resolves Plivo's create-time request UUID to the callback-time CallUUID when available. */
   private resolveCallContext(params: {
     providerCallId: string;
     callId: string;
@@ -370,6 +380,8 @@ export class PlivoProvider implements VoiceCallProvider {
     callUuid: string;
     webhookBase: string;
   } {
+    // Plivo returns request_uuid at create time and CallUUID later on callbacks;
+    // prefer the adopted CallUUID once the answer/hangup webhook links them.
     const callUuid = this.requestUuidToCallUuid.get(params.providerCallId) ?? params.providerCallId;
     const webhookBase =
       this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(params.callId);
@@ -382,6 +394,7 @@ export class PlivoProvider implements VoiceCallProvider {
     return { callUuid, webhookBase };
   }
 
+  /** Transfers the live call leg to a short-lived XML flow for pending speak/listen payloads. */
   private async transferCallLeg(params: {
     callUuid: string;
     webhookBase: string;
@@ -393,6 +406,8 @@ export class PlivoProvider implements VoiceCallProvider {
     transferUrl.searchParams.set("flow", params.flow);
     transferUrl.searchParams.set("callId", params.callId);
 
+    // Transfer the A-leg to a short-lived XML endpoint so Plivo fetches the
+    // current speak/listen payload without storing text in provider URLs.
     await this.apiRequest({
       method: "POST",
       endpoint: `/Call/${params.callUuid}/`,
@@ -404,6 +419,7 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  /** Queues one speak payload and transfers the call leg so Plivo fetches XML once. */
   async playTts(input: PlayTtsInput): Promise<void> {
     const { callUuid, webhookBase } = this.resolveCallContext({
       providerCallId: input.providerCallId,
@@ -416,6 +432,7 @@ export class PlivoProvider implements VoiceCallProvider {
       locale: input.locale,
     });
 
+    // The xml-speak webhook consumes this pending payload exactly once.
     await this.transferCallLeg({
       callUuid,
       webhookBase,
@@ -424,6 +441,7 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  /** Queues one listen payload and transfers the call leg to a GetInput XML callback. */
   async startListening(input: StartListeningInput): Promise<void> {
     const { callUuid, webhookBase } = this.resolveCallContext({
       providerCallId: input.providerCallId,
@@ -435,6 +453,7 @@ export class PlivoProvider implements VoiceCallProvider {
       language: input.language,
     });
 
+    // The xml-listen webhook consumes this pending payload exactly once.
     await this.transferCallLeg({
       callUuid,
       webhookBase,
@@ -443,10 +462,12 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  /** No-op because Plivo GetInput ends itself after speech or timeout. */
   async stopListening(_input: StopListeningInput): Promise<void> {
     // GetInput ends automatically when speech ends.
   }
 
+  /** Reads Plivo call status during restore; API errors stay unknown so timers can decide later. */
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     const terminalStatuses = new Set([
       "completed",
@@ -546,6 +567,7 @@ export class PlivoProvider implements VoiceCallProvider {
   private baseWebhookUrlFromCtx(ctx: WebhookContext): string | null {
     try {
       if (this.options.publicUrl) {
+        // Pin callbacks to configured public origin while preserving this webhook path.
         const base = new URL(this.options.publicUrl);
         const requestUrl = new URL(ctx.url);
         base.pathname = requestUrl.pathname;

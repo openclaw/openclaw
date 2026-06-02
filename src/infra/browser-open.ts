@@ -40,6 +40,7 @@ function normalizeBrowserOpenUrl(raw: string): string | null {
   }
 }
 
+/** Resolves the platform browser opener without launching it. */
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
   const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -48,6 +49,8 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     Boolean(process.env.SSH_TTY) ||
     Boolean(process.env.SSH_CONNECTION);
 
+  // Linux remote shells without a GUI cannot hand off browser opens; macOS and
+  // Windows can still delegate to their native launcher from SSH sessions.
   if (isSsh && !hasDisplay && platform !== "win32" && platform !== "darwin") {
     return { argv: null, reason: "ssh-no-display" };
   }
@@ -88,6 +91,7 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   return { argv: null, reason: "unsupported-platform" };
 }
 
+/** Reports whether a browser opener is available and why it is unavailable. */
 export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
@@ -96,6 +100,7 @@ export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
   return { ok: true, command: resolved.command };
 }
 
+/** Opens an HTTP(S) URL in the system browser when the local environment supports it. */
 export async function openUrl(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;

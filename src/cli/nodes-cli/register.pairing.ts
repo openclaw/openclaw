@@ -23,6 +23,7 @@ const NODE_PAIR_APPROVE_SCOPE_SET = new Set<OperatorScope>([
   "operator.admin",
 ]);
 
+/** Normalize requested approval scopes and keep the minimum pairing scope present. */
 function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
   const normalized = new Set<OperatorScope>(DEFAULT_NODE_PAIR_APPROVE_SCOPES);
   if (!Array.isArray(scopes)) {
@@ -40,6 +41,7 @@ function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
   return [...normalized];
 }
 
+/** Resolve the strongest scopes needed by a pending request before approval. */
 async function resolveApproveScopesForRequest(
   opts: NodesRpcOpts,
   requestId: string,
@@ -63,6 +65,7 @@ async function resolveApproveScopesForRequest(
   }
 }
 
+/** Register pending/approve/reject/remove/rename commands for node pairing records. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
     nodes

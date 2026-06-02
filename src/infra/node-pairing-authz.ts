@@ -1,13 +1,21 @@
 import { NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
 
-/** Operator scopes required to approve a pending node pairing surface. */
+/**
+ * Operator scopes required to approve a pending node pairing surface. Pairing
+ * permission is always required; command declarations can require write or admin
+ * authority depending on the risk of the declared command set.
+ */
 export type NodeApprovalScope = "operator.pairing" | "operator.write" | "operator.admin";
 
 const OPERATOR_PAIRING_SCOPE: NodeApprovalScope = "operator.pairing";
 const OPERATOR_WRITE_SCOPE: NodeApprovalScope = "operator.write";
 const OPERATOR_ADMIN_SCOPE: NodeApprovalScope = "operator.admin";
 
-/** Map declared node commands to the least operator scopes needed for approval. */
+/**
+ * Map declared node commands to the least operator scopes needed for approval.
+ * `system.run`-class commands require admin approval, other command surfaces
+ * require write approval, and commandless nodes require pairing-only approval.
+ */
 export function resolveNodePairApprovalScopes(commands: unknown): NodeApprovalScope[] {
   const normalized = Array.isArray(commands)
     ? commands.filter((command): command is string => typeof command === "string")

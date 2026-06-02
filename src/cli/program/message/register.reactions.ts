@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register reaction mutate/list commands with channel-specific identity flags. */
 export function registerMessageReactionsCommands(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(

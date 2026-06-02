@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
+/** Classify a listener from process metadata for port-conflict diagnostics. */
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
   const raw = normalizeLowercaseStringOrEmpty(
     `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
@@ -11,6 +12,7 @@ export function classifyPortListener(listener: PortListener, port: number): Port
   }
   if (raw.includes("ssh")) {
     const portToken = String(port);
+    // Match common SSH tunnel forms: `-L 18789:...`, `-L18789:...`, or host:port.
     const tunnelPattern = new RegExp(
       `-(l|r)\\s*${portToken}\\b|-(l|r)${portToken}\\b|:${portToken}\\b`,
     );
@@ -27,6 +29,8 @@ function parseListenerAddress(address: string): { host: string; port: number } |
   if (!trimmed) {
     return null;
   }
+  // lsof/netstat output differs by platform; normalize only wrapper text and
+  // preserve the host token so IPv6 brackets and wildcard binds stay distinct.
   const normalized = trimmed.replace(/^tcp6?\s+/i, "").replace(/\s*\(listen\)\s*$/i, "");
   const bracketMatch = normalized.match(/^\[([^\]]+)\]:(\d+)$/);
   if (bracketMatch) {
@@ -57,6 +61,8 @@ function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
   }
   if (host.startsWith("::ffff:")) {
     const mapped = host.slice("::ffff:".length);
+    // IPv4-mapped loopback is reported on IPv6 sockets by some OS tools; keep
+    // it in the IPv6 bucket so dual-stack detection still sees both binds.
     return mapped === "127.0.0.1" ? "ipv6" : null;
   }
   return null;
@@ -70,6 +76,10 @@ function isExpectedGatewayBindAddress(host: string): boolean {
   return classifyLoopbackAddressFamily(host) !== null || isWildcardAddress(host);
 }
 
+/**
+ * True for one Gateway process bound to a single expected loopback or wildcard
+ * address. This suppresses conflict hints for the normal managed Gateway bind.
+ */
 export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
@@ -93,6 +103,10 @@ export function isSingleExpectedGatewayListener(listeners: PortListener[], port:
   );
 }
 
+/**
+ * True for one Gateway process reported as separate IPv4 and IPv6 loopback
+ * listeners. OS tools often show dual-stack binds as two rows for one pid.
+ */
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -127,6 +141,7 @@ export function isDualStackLoopbackGatewayListeners(
   return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
 }
 
+/** Identify benign Gateway listener sets that should not produce conflict hints. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
   return (
     isSingleExpectedGatewayListener(listeners, port) ||
@@ -134,6 +149,7 @@ export function isExpectedGatewayListeners(listeners: PortListener[], port: numb
   );
 }
 
+/** Build ordered human-facing remediation hints for processes using a port. */
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
@@ -162,6 +178,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
+/** Format one listener for CLI diagnostics without assuming all fields are present. */
 export function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
@@ -170,6 +187,7 @@ export function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
+/** Format complete free/busy port diagnostics for CLI/status output. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status !== "busy") {
     return [`Port ${diagnostics.port} is free.`];

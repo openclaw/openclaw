@@ -15,7 +15,9 @@ type ValidatorFn = ((value: unknown) => boolean) & {
 
 export function respondInvalidParams(params: {
   respond: RespondFn;
+  /** Gateway method name used to make validation failures actionable. */
   method: string;
+  /** Compiled validator whose errors are formatted into the protocol error. */
   validator: ValidatorFn;
 }) {
   params.respond(
@@ -32,10 +34,13 @@ export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Pr
   try {
     await fn();
   } catch (err) {
+    // Node/device operations fail as transient Gateway unavailability, not
+    // invalid requests, because callers can often retry after reconnect.
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
   }
 }
 
+/** Converts node invoke result envelopes into Gateway UNAVAILABLE responses. */
 export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
   respond: RespondFn,
   res: T,

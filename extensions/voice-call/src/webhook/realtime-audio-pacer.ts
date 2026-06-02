@@ -8,6 +8,8 @@ const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const PCM16_MAX_AMPLITUDE = 32768;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
 
+// Decode table is process-stable and hot-path reused by the speech detector;
+// build it once instead of recomputing mu-law expansion per audio sample.
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
 }
@@ -23,14 +25,20 @@ type RealtimeAudioQueueItem =
       type: "mark";
     };
 
+/** Sends one serialized provider media/control frame; false means the socket can no longer accept output. */
 export type RealtimeAudioSend = (message: string) => boolean;
 
+/** Serializes provider-specific realtime media control envelopes. */
 export interface RealtimeAudioSerializer {
+  /** Wraps one base64 PCMU frame in the provider's outbound media envelope. */
   media(payloadBase64: string): string;
+  /** Builds the provider command that drops queued carrier-side audio. */
   clear(): string;
+  /** Builds a provider mark/control frame emitted after preceding paced audio. */
   mark(name: string): string;
 }
 
+/** Paces mu-law telephony output so realtime providers receive one 20ms frame at a time. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -39,21 +47,28 @@ export class RealtimeAudioPacer {
 
   constructor(
     private readonly params: {
+      /** Maximum queued PCMU bytes before playback is abandoned and backpressure fires. */
       maxQueuedAudioBytes?: number;
+      /** Called once the pacer closes because outbound audio outran the provider socket. */
       onBackpressure?: () => void;
+      /** Sends serialized frames to the provider socket; returning false drops remaining playback. */
       send: RealtimeAudioSend;
+      /** Provider-specific media/clear/mark serializer, usually bound to the stream id. */
       serializer: RealtimeAudioSerializer;
     },
   ) {}
 
+  /** Queues provider-ready mu-law bytes and starts the pacing pump if needed. */
   sendAudio(muLaw: Buffer): void {
     if (this.closed || muLaw.length === 0) {
       return;
     }
     const maxQueuedAudioBytes = this.params.maxQueuedAudioBytes ?? DEFAULT_MAX_QUEUED_AUDIO_BYTES;
     for (let offset = 0; offset < muLaw.length; offset += TELEPHONY_CHUNK_BYTES) {
+      // Queue an owned copy so callers can safely reuse or mutate their source buffer.
       const chunk = Buffer.from(muLaw.subarray(offset, offset + TELEPHONY_CHUNK_BYTES));
       if (this.queuedAudioBytes + chunk.length > maxQueuedAudioBytes) {
+        // Once provider output falls too far behind, close instead of sending a partial response.
         this.failBackpressure();
         return;
       }
@@ -67,6 +82,7 @@ export class RealtimeAudioPacer {
     this.ensurePump();
   }
 
+  /** Queues a provider mark after any earlier audio frames. */
   sendMark(name: string): void {
     if (this.closed || !name) {
       return;
@@ -75,6 +91,7 @@ export class RealtimeAudioPacer {
     this.ensurePump();
   }
 
+  /** Drops unsent audio/marks and emits the provider clear command. */
   clearAudio(): number {
     if (this.closed) {
       return 0;
@@ -87,6 +104,7 @@ export class RealtimeAudioPacer {
     return clearedAudioBytes;
   }
 
+  /** Stops future sends and releases queued audio. */
   close(): void {
     this.closed = true;
     this.clearTimer();
@@ -134,6 +152,8 @@ export class RealtimeAudioPacer {
     }
 
     if (!sent) {
+      // Treat a failed send as terminal for queued playback. Keeping stale audio
+      // queued after provider backpressure would play the wrong turn later.
       this.queue = [];
       this.queuedAudioBytes = 0;
       return;
@@ -144,6 +164,7 @@ export class RealtimeAudioPacer {
   }
 }
 
+/** Calculates normalized RMS for 8kHz mu-law frames using the same lookup table as the pacer. */
 export function calculateMulawRms(muLaw: Buffer): number {
   if (muLaw.length === 0) {
     return 0;
@@ -156,6 +177,7 @@ export function calculateMulawRms(muLaw: Buffer): number {
   return Math.sqrt(sum / muLaw.length);
 }
 
+/** Edge detector for caller speech starts, debounced across loud and quiet telephony chunks. */
 export class RealtimeMulawSpeechStartDetector {
   private loudChunks = 0;
   private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
@@ -163,12 +185,16 @@ export class RealtimeMulawSpeechStartDetector {
 
   constructor(
     private readonly params: {
+      /** Consecutive loud chunks required before reporting the speech-start edge. */
       requiredLoudChunks?: number;
+      /** Consecutive quiet chunks required before arming the next speech-start edge. */
       requiredQuietChunks?: number;
+      /** Normalized mu-law RMS threshold that separates silence/noise from speech. */
       rmsThreshold?: number;
     } = {},
   ) {}
 
+  /** Returns true only on the transition from quiet/not-speaking to sustained speech. */
   accept(muLaw: Buffer): boolean {
     const rms = calculateMulawRms(muLaw);
     const threshold = this.params.rmsThreshold ?? DEFAULT_SPEECH_RMS_THRESHOLD;
@@ -187,6 +213,8 @@ export class RealtimeMulawSpeechStartDetector {
     this.quietChunks += 1;
     const requiredQuietChunks = this.params.requiredQuietChunks ?? DEFAULT_REQUIRED_QUIET_CHUNKS;
     if (this.quietChunks >= requiredQuietChunks) {
+      // Require sustained quiet before arming the next speech-start edge, so
+      // brief pauses inside one utterance do not trigger repeated barge-ins.
       this.speaking = false;
     }
     return false;

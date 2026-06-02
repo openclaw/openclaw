@@ -25,29 +25,34 @@ export function setDefaultSecurityHeaders(
   }
 }
 
+/** Send a JSON response with the Gateway-wide content type. */
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
 
+/** Send a plain-text response with the Gateway-wide content type. */
 export function sendText(res: ServerResponse, status: number, body: string) {
   res.statusCode = status;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end(body);
 }
 
+/** Send a 405 response and advertise the allowed method set. */
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
   sendText(res, 405, "Method Not Allowed");
 }
 
+/** Send the standard structured 401 response used by Gateway HTTP surfaces. */
 export function sendUnauthorized(res: ServerResponse) {
   sendJson(res, 401, {
     error: { message: "Unauthorized", type: "unauthorized" },
   });
 }
 
+/** Send the standard structured 429 response, with Retry-After when available. */
 export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
   if (retryAfterMs && retryAfterMs > 0) {
     res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
@@ -60,6 +65,7 @@ export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
   });
 }
 
+/** Map a Gateway auth failure to either 401 or rate-limited 429. */
 export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayAuthResult) {
   if (authResult.rateLimited) {
     sendRateLimited(res, authResult.retryAfterMs);
@@ -68,12 +74,14 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
   sendUnauthorized(res);
 }
 
+/** Send the standard structured 400 response for invalid request input. */
 export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },
   });
 }
 
+/** Build the standard 403 body for operator-scope failures without writing the response. */
 export function buildMissingScopeForbiddenBody(missingScope: string | undefined) {
   return {
     ok: false,
@@ -84,10 +92,12 @@ export function buildMissingScopeForbiddenBody(missingScope: string | undefined)
   };
 }
 
+/** Send the standard 403 response for operator-scope failures. */
 export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
   sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
 }
 
+/** Read a JSON request body and translate parser failures into Gateway HTTP errors. */
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
@@ -120,10 +130,12 @@ export async function readJsonBodyOrError(
   return body.value;
 }
 
+/** Write the OpenAI-compatible SSE completion sentinel. */
 export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+/** Prepare an HTTP response for server-sent event streaming. */
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -132,6 +144,7 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
+/** Abort the supplied operation when either request or response socket closes. */
 export function watchClientDisconnect(
   req: IncomingMessage,
   res: ServerResponse,

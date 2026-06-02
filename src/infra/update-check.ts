@@ -9,6 +9,7 @@ import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
+/** Git checkout freshness and dirtiness facts used by update/status surfaces. */
 export type GitUpdateStatus = {
   root: string;
   sha: string | null;
@@ -22,6 +23,7 @@ export type GitUpdateStatus = {
   error?: string;
 };
 
+/** Dependency install marker state for the package manager detected at root. */
 export type DepsStatus = {
   manager: PackageManager;
   status: "ok" | "missing" | "stale" | "unknown";
@@ -30,18 +32,21 @@ export type DepsStatus = {
   reason?: string;
 };
 
+/** Registry version lookup result for the release channel currently being checked. */
 export type RegistryStatus = {
   latestVersion: string | null;
   tag?: string;
   error?: string;
 };
 
+/** Raw npm dist-tag lookup result for the `openclaw` package. */
 export type NpmTagStatus = {
   tag: string;
   version: string | null;
   error?: string;
 };
 
+/** Raw npm package target lookup, including the published Node engine contract. */
 export type NpmPackageTargetStatus = {
   target: string;
   version: string | null;
@@ -49,6 +54,7 @@ export type NpmPackageTargetStatus = {
   error?: string;
 };
 
+/** Combined local install and optional registry status used by update commands. */
 export type UpdateCheckResult = {
   root: string | null;
   installKind: "git" | "package" | "unknown";
@@ -58,6 +64,7 @@ export type UpdateCheckResult = {
   registry?: RegistryStatus;
 };
 
+/** Format a stable human label for git installs without exposing full SHAs. */
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
   if (update.installKind !== "git") {
     return null;
@@ -97,6 +104,7 @@ async function detectGitRoot(root: string): Promise<string | null> {
   return top ? path.resolve(top) : null;
 }
 
+/** Collect git branch/tag/dirty/ahead/behind facts without throwing on partial failure. */
 export async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
@@ -226,6 +234,7 @@ function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
   return { lockfilePath: null, markerPath: null };
 }
 
+/** Check whether installed dependencies are missing or older than the lockfile. */
 export async function checkDepsStatus(params: {
   root: string;
   manager: PackageManager;
@@ -294,6 +303,7 @@ export async function checkDepsStatus(params: {
   };
 }
 
+/** Fetch the npm `latest` version for the OpenClaw package. */
 export async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
 }): Promise<RegistryStatus> {
@@ -304,6 +314,7 @@ export async function fetchNpmLatestVersion(params?: {
   };
 }
 
+/** Fetch the registry version for an OpenClaw update channel. */
 export async function fetchNpmRegistryVersionForChannel(params: {
   channel: UpdateChannel;
   timeoutMs?: number;
@@ -318,6 +329,7 @@ export async function fetchNpmRegistryVersionForChannel(params: {
   };
 }
 
+/** Fetch one npm target document, where target may be a dist-tag or exact version. */
 export async function fetchNpmPackageTargetStatus(params: {
   target: string;
   timeoutMs?: number;
@@ -345,6 +357,7 @@ export async function fetchNpmPackageTargetStatus(params: {
   }
 }
 
+/** Fetch the version behind one npm dist-tag. */
 export async function fetchNpmTagVersion(params: {
   tag: string;
   timeoutMs?: number;
@@ -360,6 +373,7 @@ export async function fetchNpmTagVersion(params: {
   };
 }
 
+/** Resolve the effective npm dist-tag/version for stable, beta, and nightly channels. */
 export async function resolveNpmChannelTag(params: {
   channel: UpdateChannel;
   timeoutMs?: number;
@@ -379,11 +393,13 @@ export async function resolveNpmChannelTag(params: {
   }
   const cmp = compareSemverStrings(channelStatus.version, latestStatus.version);
   if (cmp != null && cmp < 0) {
+    // Beta must not offer an older beta when latest has already advanced past it.
     return { tag: "latest", version: latestStatus.version };
   }
   return { tag: channelTag, version: channelStatus.version };
 }
 
+/** Compare OpenClaw date releases first, then fallback to comparable semver. */
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
   if (a && b) {
     const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
@@ -397,6 +413,7 @@ export function compareSemverStrings(a: string | null, b: string | null): number
   );
 }
 
+/** Build the local/registry update status snapshot for CLI and status surfaces. */
 export async function checkUpdateStatus(params: {
   root: string | null;
   timeoutMs?: number;

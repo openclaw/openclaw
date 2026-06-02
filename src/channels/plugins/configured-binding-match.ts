@@ -14,6 +14,7 @@ import type {
   ChannelConfiguredBindingMatch,
 } from "./types.adapters.js";
 
+/** Returns account match strength: 0 no match, 1 wildcard, 2 exact/default. */
 export function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
@@ -38,11 +39,13 @@ function matchCompiledBindingConversation(params: {
   });
 }
 
+/** Normalizes a configured binding channel id into the compiled-binding channel type. */
 export function resolveCompiledBindingChannel(raw: string): ConfiguredBindingChannel | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized ? (normalized as ConfiguredBindingChannel) : null;
 }
 
+/** Converts a runtime conversation ref into normalized channel/account/conversation fields. */
 export function toConfiguredBindingConversationRef(conversation: ConversationRef): {
   channel: ConfiguredBindingChannel;
   accountId: string;
@@ -62,6 +65,7 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
   };
 }
 
+/** Materializes a matched compiled binding into its persisted binding record and target. */
 export function materializeConfiguredBindingRecord(params: {
   rule: CompiledConfiguredBinding;
   accountId: string;
@@ -73,6 +77,7 @@ export function materializeConfiguredBindingRecord(params: {
   });
 }
 
+/** Selects the highest-priority compiled binding for a canonical conversation ref. */
 export function resolveMatchingConfiguredBinding(params: {
   rules: CompiledConfiguredBinding[];
   conversation: ReturnType<typeof toConfiguredBindingConversationRef>;
@@ -106,6 +111,7 @@ export function resolveMatchingConfiguredBinding(params: {
     }
     const matchPriority = match.matchPriority ?? 0;
     if (accountMatchPriority === 2) {
+      // Exact/default account matches outrank wildcard account rules even at equal match priority.
       if (!exactMatch || matchPriority > (exactMatch.match.matchPriority ?? 0)) {
         exactMatch = { rule, match };
       }

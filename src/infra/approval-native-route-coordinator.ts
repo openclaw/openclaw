@@ -144,6 +144,8 @@ function didReportDeliverToOrigin(report: ApprovalRouteReport, originAccountId?:
     reportAccountId !== undefined &&
     reportAccountId !== originAccountId
   ) {
+    // Matching the same chat id from a different configured account is not enough to suppress
+    // the origin notice; approval controls may be scoped to account credentials.
     return false;
   }
   const originKey = buildChannelApprovalNativeTargetKey(originTarget);
@@ -266,6 +268,12 @@ function resolveApprovalRouteNotice(params: {
   };
 }
 
+/**
+ * Check whether a native route runtime is available for a kind/channel/account tuple.
+ *
+ * Missing account ids match any registered account so channel-wide callers can detect native
+ * approval support without knowing the concrete credential binding.
+ */
 export function hasActiveApprovalNativeRouteRuntime(params: {
   approvalKind: ChannelApprovalKind;
   channel?: string | null;
@@ -294,6 +302,8 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
   for (const runtimeId of entry.expectedRuntimeIds) {
     if (!entry.reports.has(runtimeId)) {
+      // Wait for the startup-time runtime quorum so parallel native clients produce one notice
+      // based on the full delivery picture, not the first reporter to finish.
       return;
     }
   }
@@ -324,6 +334,12 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 }
 
+/**
+ * Register one native approval runtime as a participant in origin-route notice aggregation.
+ *
+ * Callers must `start` before observing requests or reporting delivery, and `stop` when the native
+ * runtime shuts down so pending notice quorums do not wait on an inactive client.
+ */
 export function createApprovalNativeRouteReporter(params: {
   handledKinds: ReadonlySet<ChannelApprovalKind>;
   channel?: string;
@@ -366,6 +382,7 @@ export function createApprovalNativeRouteReporter(params: {
   };
 
   return {
+    /** Snapshot active sibling runtimes when this approval request is first seen. */
     observeRequest(payload: { approvalKind: ChannelApprovalKind; request: ApprovalRequest }): void {
       if (!registered || !params.handledKinds.has(payload.approvalKind)) {
         return;
@@ -382,6 +399,7 @@ export function createApprovalNativeRouteReporter(params: {
       entry.expectedRuntimeIds.add(runtimeId);
       pendingApprovalRouteNotices.set(payload.request.id, entry);
     },
+    /** Add this runtime to the active quorum used by later approval requests. */
     start(): void {
       if (registered) {
         return;
@@ -396,6 +414,7 @@ export function createApprovalNativeRouteReporter(params: {
       });
       registered = true;
     },
+    /** Report that this runtime intentionally skipped native delivery for the request. */
     async reportSkipped(paramsValue: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
@@ -411,6 +430,7 @@ export function createApprovalNativeRouteReporter(params: {
         deliveredTargets: [],
       });
     },
+    /** Report the delivery plan and successfully delivered native approval targets. */
     async reportDelivery(paramsLocal: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
@@ -419,6 +439,7 @@ export function createApprovalNativeRouteReporter(params: {
     }): Promise<void> {
       await report(paramsLocal);
     },
+    /** Remove this runtime from active and pending notice quorums. */
     async stop(): Promise<void> {
       if (!registered) {
         return;
@@ -431,12 +452,15 @@ export function createApprovalNativeRouteReporter(params: {
           clearPendingApprovalRouteNotice(entry.request.id);
           continue;
         }
+        // Stopping a runtime removes it from the quorum; remaining reports may now be enough to
+        // decide whether the origin chat needs a notice.
         await maybeFinalizeApprovalRouteNotice(entry.request.id);
       }
     },
   };
 }
 
+/** Reset module-scoped native route state between tests. */
 export function clearApprovalNativeRouteStateForTest(): void {
   for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
     clearPendingApprovalRouteNotice(approvalId);

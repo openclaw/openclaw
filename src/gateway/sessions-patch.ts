@@ -78,6 +78,9 @@ function shouldPreserveSessionAuthProfileOverride(params: {
   currentProvider: string;
   provider: string;
 }): boolean {
+  // Auth profiles are provider-owned. Bare profile names stay only when the
+  // current provider resolves to the target provider; qualified names carry
+  // their own provider owner and survive only same-auth-provider switches.
   const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
   if (!profileOverride) {
     return false;
@@ -96,6 +99,8 @@ function shouldPreserveSessionAuthProfileOverride(params: {
       resolveProviderIdForAuth(provider, { config: params.cfg })
     );
   };
+  // Bare profile names belong to the current provider; provider-qualified names
+  // carry their own owner and only survive switches within the same auth provider.
   const delimiterIndex = profileOverride.indexOf(":");
   if (delimiterIndex < 0) {
     return resolvesToTargetProvider(params.currentProvider);
@@ -129,12 +134,19 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
+/** Apply a Gateway sessions.patch payload to an in-memory session store entry. */
 export async function applySessionsPatchToStore(params: {
+  /** Active config used for defaults, provider aliases, and agent model policy. */
   cfg: OpenClawConfig;
+  /** Mutable session store object owned by the caller's store transaction. */
   store: Record<string, SessionEntry>;
+  /** Canonical store key being patched. */
   storeKey: string;
+  /** Agent scope for default model resolution when the key is not agent-prefixed. */
   agentId?: string;
+  /** Wire-protocol patch payload after the Gateway method has resolved the target key. */
   patch: SessionsPatchParams;
+  /** Lazy model catalog loader used only when model or thinking validation needs it. */
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
@@ -173,11 +185,16 @@ export async function applySessionsPatchToStore(params: {
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
   if (existing && !existing.sessionId) {
+    // Entries without a sessionId are placeholder rows; labels and display names
+    // belong to durable sessions and must not be inherited when a real session starts.
     delete next.label;
     delete next.displayName;
   }
 
   if ("spawnedBy" in patch) {
+    // Spawn lineage is append-only session identity. Allow the first write on
+    // subagent/ACP sessions, but reject later clears or changes so parent links
+    // remain stable for session trees.
     const raw = patch.spawnedBy;
     if (raw === null) {
       if (existing?.spawnedBy) {
@@ -604,6 +621,9 @@ export async function applySessionsPatchToStore(params: {
           `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
         );
       }
+      // Existing overrides can become unsupported after a model switch; downgrade
+      // them to the nearest supported level unless the caller explicitly asked
+      // for the now-invalid value in this same patch.
       next.thinkingLevel = resolveSupportedThinkingLevel({
         provider: effectiveProvider,
         model: effectiveModel,

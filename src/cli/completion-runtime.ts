@@ -8,8 +8,11 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { pathExists } from "../utils.js";
 
+/** Shells supported by completion generation and profile installation. */
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
+/** Supported shell label accepted by completion install/write commands. */
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
+/** Env flag used to suppress plugin command loading while generating completion scripts. */
 export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
 
 /** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
@@ -211,10 +214,7 @@ export async function isCompletionInstalled(
   );
 }
 
-/**
- * Check if the profile uses the slow dynamic completion pattern.
- * Returns true if profile has `source <(openclaw completion ...)` instead of cached file.
- */
+/** Detect old dynamic completion profile lines that source `openclaw completion` directly. */
 export async function usesSlowDynamicCompletion(
   shell: CompletionShell,
   binName = "openclaw",
@@ -237,6 +237,7 @@ export async function usesSlowDynamicCompletion(
   return false;
 }
 
+/** Install a cached completion source block into the target shell profile. */
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
   const isShellSupported = isCompletionShell(shell);
   if (!isShellSupported) {

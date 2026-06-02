@@ -134,6 +134,13 @@ function compareHistoryMessages(
   return a.order - b.order;
 }
 
+/**
+ * Merge external CLI transcript messages into local chat history.
+ *
+ * Deduping prefers durable external ids, then falls back to role/text matching
+ * within a small timestamp window so re-imports do not duplicate user-visible
+ * turns while preserving chronological order for newly discovered entries.
+ */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];

@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
+/** Body-read budget profile for unauthenticated versus already-authenticated webhook phases. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 
 export {
@@ -21,26 +22,36 @@ export {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 
+/** Default request body caps shared by webhook plugin handlers. */
 export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
+  /** Strict limit for unauthenticated requests before signature/auth checks complete. */
   preAuth: {
     maxBytes: 64 * 1024,
     timeoutMs: 5_000,
   },
+  /** Larger limit for handlers that already authenticated the webhook source. */
   postAuth: {
     maxBytes: 1024 * 1024,
     timeoutMs: 30_000,
   },
 });
 
+/** Default per-key concurrency caps for webhook request pipelines. */
 export const WEBHOOK_IN_FLIGHT_DEFAULTS = Object.freeze({
+  /** Maximum concurrent handlers for one resolved account, peer, route, or IP key. */
   maxInFlightPerKey: 8,
+  /** Upper bound on distinct active keys retained by the in-memory limiter. */
   maxTrackedKeys: 4_096,
 });
 
 export type WebhookInFlightLimiter = {
+  /** Attempts to reserve one active request slot for the key. */
   tryAcquire: (key: string) => boolean;
+  /** Releases a previously acquired request slot for the key. */
   release: (key: string) => void;
+  /** Number of keys currently tracked for active request counts. */
   size: () => number;
+  /** Drops all active counters; intended for tests and lifecycle teardown. */
   clear: () => void;
 };
 
@@ -49,6 +60,8 @@ function resolveWebhookBodyReadLimits(params: {
   timeoutMs?: number;
   profile?: WebhookBodyReadProfile;
 }): { maxBytes: number; timeoutMs: number } {
+  // Pre-auth readers stay intentionally small and fast; post-auth handlers can
+  // opt into provider payload sizes after the source has been verified.
   const defaults =
     params.profile === "pre-auth"
       ? WEBHOOK_BODY_READ_DEFAULTS.preAuth
@@ -72,6 +85,8 @@ function respondWebhookBodyReadError(params: {
   invalidMessage?: string;
 }): { ok: false } {
   const { res, code, invalidMessage } = params;
+  // Keep low-level body-reader error codes mapped to stable webhook HTTP
+  // responses so every plugin rejects malformed traffic consistently.
   if (code === "PAYLOAD_TOO_LARGE") {
     res.statusCode = 413;
     res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
@@ -94,7 +109,9 @@ function respondWebhookBodyReadError(params: {
 
 /** Create an in-memory limiter that caps concurrent webhook handlers per key. */
 export function createWebhookInFlightLimiter(options?: {
+  /** Per-key concurrency cap; invalid values fall back to `WEBHOOK_IN_FLIGHT_DEFAULTS`. */
   maxInFlightPerKey?: number;
+  /** Maximum tracked key cardinality before old counters are pruned. */
   maxTrackedKeys?: number;
 }): WebhookInFlightLimiter {
   const maxInFlightPerKey = resolveWebhookIntegerOption(
@@ -111,6 +128,8 @@ export function createWebhookInFlightLimiter(options?: {
 
   return {
     tryAcquire: (key: string) => {
+      // Empty keys mean the caller could not derive a stable account/peer/IP
+      // identity; skip accounting instead of collapsing all traffic together.
       if (!key) {
         return true;
       }
@@ -119,6 +138,8 @@ export function createWebhookInFlightLimiter(options?: {
         return false;
       }
       active.set(key, current + 1);
+      // The guard is per-process and best-effort; cap cardinality so hostile keys cannot
+      // grow memory without bound.
       pruneMapToMaxSize(active, maxTrackedKeys);
       return true;
     },
@@ -155,10 +176,15 @@ export function isJsonContentType(value: string | string[] | undefined): boolean
 export function applyBasicWebhookRequestGuards(params: {
   req: IncomingMessage;
   res: ServerResponse;
+  /** Allowed methods. Empty or omitted means method checks are skipped. */
   allowMethods?: readonly string[];
+  /** Optional fixed-window limiter for coarse pre-body request throttling. */
   rateLimiter?: FixedWindowRateLimiter;
+  /** Stable limiter key, usually account, route, peer, or IP based. */
   rateLimitKey?: string;
+  /** Test hook for deterministic rate-limit windows. */
   nowMs?: number;
+  /** Require JSON media types for POST requests before reading the body. */
   requireJsonContentType?: boolean;
 }): boolean {
   const allowMethods = params.allowMethods?.length ? params.allowMethods : null;
@@ -202,8 +228,11 @@ export function beginWebhookRequestPipelineOrReject(params: {
   nowMs?: number;
   requireJsonContentType?: boolean;
   inFlightLimiter?: WebhookInFlightLimiter;
+  /** Key for concurrent handler accounting; omitted/empty keys intentionally skip this guard. */
   inFlightKey?: string;
+  /** Override status when the per-key in-flight guard rejects a request. */
   inFlightLimitStatusCode?: number;
+  /** Override response body when the per-key in-flight guard rejects a request. */
   inFlightLimitMessage?: string;
 }): { ok: true; release: () => void } | { ok: false } {
   if (
@@ -232,6 +261,8 @@ export function beginWebhookRequestPipelineOrReject(params: {
   return {
     ok: true,
     release: () => {
+      // Release hooks can be called from multiple finally/error paths; only the first one
+      // should decrement the active request count.
       if (released) {
         return;
       }
@@ -247,9 +278,13 @@ export function beginWebhookRequestPipelineOrReject(params: {
 export async function readWebhookBodyOrReject(params: {
   req: IncomingMessage;
   res: ServerResponse;
+  /** Explicit byte limit; positive finite values override the selected profile default. */
   maxBytes?: number;
+  /** Explicit read timeout; positive finite values override the selected profile default. */
   timeoutMs?: number;
+  /** Select strict pre-auth or larger post-auth default limits when no override is supplied. */
   profile?: WebhookBodyReadProfile;
+  /** Response body used for non-standard invalid-body failures. */
   invalidBodyMessage?: string;
 }): Promise<{ ok: true; value: string } | { ok: false }> {
   const limits = resolveWebhookBodyReadLimits({
@@ -281,10 +316,15 @@ export async function readWebhookBodyOrReject(params: {
 export async function readJsonWebhookBodyOrReject(params: {
   req: IncomingMessage;
   res: ServerResponse;
+  /** Explicit byte limit; positive finite values override the selected profile default. */
   maxBytes?: number;
+  /** Explicit read timeout; positive finite values override the selected profile default. */
   timeoutMs?: number;
+  /** Select strict pre-auth or larger post-auth default limits when no override is supplied. */
   profile?: WebhookBodyReadProfile;
+  /** Treat an empty request body as `{}` for webhook providers that omit JSON payloads. */
   emptyObjectOnEmpty?: boolean;
+  /** Response body used for malformed JSON or body-read failures. */
   invalidJsonMessage?: string;
 }): Promise<{ ok: true; value: unknown } | { ok: false }> {
   const limits = resolveWebhookBodyReadLimits({

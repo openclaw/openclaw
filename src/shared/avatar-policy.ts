@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 
+/** Maximum local avatar size accepted by agent identity and Control UI uploads. */
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
 const LOCAL_AVATAR_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
@@ -18,10 +19,15 @@ const AVATAR_MIME_BY_EXT: Record<string, string> = {
   ".tiff": "image/tiff",
 };
 
+/** Matches any data URL before MIME-type-specific avatar checks. */
 export const AVATAR_DATA_RE = /^data:/i;
+/** Matches inline image data URLs accepted by avatar inputs. */
 export const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
+/** Matches remote avatar URLs that the UI can render without local file resolution. */
 export const AVATAR_HTTP_RE = /^https?:\/\//i;
+/** Matches URI-like schemes; Windows drive letters are handled separately. */
 export const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+/** Matches Windows absolute paths so `C:\...` is not treated as a URI scheme. */
 export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
@@ -65,6 +71,8 @@ export function isWorkspaceRelativeAvatarPath(value: string): boolean {
   if (value.startsWith("~")) {
     return false;
   }
+  // `C:\avatar.png` matches the generic URI scheme regex; keep it eligible as a local
+  // path while still rejecting non-file schemes such as `javascript:`.
   if (hasAvatarUriScheme(value) && !isWindowsAbsolutePath(value)) {
     return false;
   }

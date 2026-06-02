@@ -170,6 +170,9 @@ function buildAgentCommandInput(params: {
 }
 
 function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition[] {
+  // Convert OpenAI Chat Completions function tools into the internal client-tool
+  // shape before tool_choice narrowing; unsupported tool types fail at the HTTP
+  // boundary instead of reaching the agent runtime.
   if (tools == null) {
     return [];
   }
@@ -327,6 +330,8 @@ function writeAssistantToolCallsIncrementalChunks(
   },
 ) {
   for (const [index, call] of params.toolCalls.entries()) {
+    // OpenAI streams a tool call header first, then argument deltas keyed by the
+    // same index. Keep indexes stable so clients can assemble multi-tool turns.
     writeSse(res, {
       id: params.runId,
       object: "chat.completion.chunk",
@@ -556,6 +561,9 @@ function parseImageUrlToSource(url: string): InputImageSource {
 
 function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
   const messages = asMessages(messagesUnknown);
+  // Only the latest active user/tool turn can receive fresh image bytes. Older
+  // multimodal turns remain text transcript context so replay cannot refetch or
+  // re-decode historical media on every request.
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") {
@@ -592,6 +600,8 @@ async function resolveImagesForRequest(
   for (const url of urls) {
     const source = parseImageUrlToSource(url);
     if (source.type === "base64") {
+      // Check declared data-URI bytes before decoding, then verify extracted
+      // bytes after normalization so mixed URL/base64 batches share one cap.
       const sourceBytes = estimateBase64DecodedBytes(source.data);
       if (totalBytes + sourceBytes > limits.maxTotalImageBytes) {
         throw new Error(

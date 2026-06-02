@@ -103,12 +103,16 @@ const DEFAULT_REDACT_PREFILTER_RE =
   /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CARD|CVC|CVV|PAYMENT|PRIVATE KEY|[?&]pass=|security[-_]?code|securityCode|\bBearer\s+|sk-|ghp_|github_pat_|xox[baprs]-|xapp-|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|npm_|AKID|LTAI|hf_|r8_|\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,})/i;
 
 export type RedactOptions = {
+  /** off disables redaction; tools applies configured/default tool-safe masking. */
   mode?: RedactSensitiveMode;
+  /** Custom patterns replace defaults except on tool-payload helpers that merge both. */
   patterns?: RedactPattern[];
 };
 
 export type ResolvedRedactOptions = {
+  /** Effective mode after config/default normalization. */
   mode: RedactSensitiveMode;
+  /** Parsed global regexes ready for repeated redaction calls. */
   patterns: RegExp[];
 };
 
@@ -262,6 +266,7 @@ export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOpt
   };
 }
 
+/** Redacts free-form diagnostic text using explicit options or logging config defaults. */
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
   if (!text) {
     return text;
@@ -270,6 +275,8 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (normalizeMode(resolvedOptions.mode) === "off") {
     return text;
   }
+  // Avoid compiling/running the full default pattern set on ordinary log lines
+  // that cannot contain known credential markers.
   if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(text)) {
     return text;
   }
@@ -280,6 +287,7 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   return redactText(text, resolved.patterns);
 }
 
+/** Redacts tool detail text only when logging redaction is in tools mode. */
 export function redactToolDetail(detail: string): string {
   const resolved = resolveConfigRedaction();
   if (normalizeMode(resolved.mode) !== "tools") {
@@ -302,10 +310,12 @@ function resolveToolPayloadRedaction(
 // Forces tools-mode regardless of `logging.redactSensitive` (which governs log
 // output, not UI surfaces), and merges user `logging.redactPatterns` with the
 // built-in defaults so both apply.
+/** Redacts tool payload text even when normal logging redaction is disabled. */
 export function redactToolPayloadText(text: string): string {
   return redactToolPayloadTextWithConfig(text, readLoggingConfig());
 }
 
+/** Config-injected variant of redactToolPayloadText for tests and alternate config sources. */
 export function redactToolPayloadTextWithConfig(
   text: string,
   loggingConfig?: LoggingConfig,
@@ -316,6 +326,7 @@ export function redactToolPayloadTextWithConfig(
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
 }
 
+/** True when a structured object key should force masking even without token-like value text. */
 export function isSensitiveFieldKey(key: string): boolean {
   return STRUCTURED_SECRET_FIELD_RE.test(key) || STRUCTURED_SECRET_ENV_FIELD_RE.test(key);
 }
@@ -357,6 +368,7 @@ export function redactSensitiveFieldValue(
   return redactSensitiveFieldValueWithOptions(key, value, options ?? resolveToolPayloadRedaction());
 }
 
+/** Config-injected variant of redactSensitiveFieldValue for support/export pipelines. */
 export function redactSensitiveFieldValueWithConfig(
   key: string,
   value: string,
@@ -416,6 +428,7 @@ function redactStructuredSecretValue(
   return value;
 }
 
+/** Recursively redacts strings and sensitive structured fields while preserving value shape. */
 export function redactSecrets<T>(value: T): T {
   const options = resolveToolPayloadRedaction();
   if (typeof value === "string") {
@@ -430,14 +443,17 @@ export function redactSecrets<T>(value: T): T {
   return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
 }
 
+/** Returns a copy of the built-in redaction pattern sources for tests/custom resolvers. */
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
 }
 
-// Applies already-resolved redaction to a batch of lines without re-resolving options.
-// Lines are joined before redacting so multiline patterns (e.g. PEM blocks) can match across
-// line boundaries, then split back. Use this instead of mapping redactSensitiveText when
-// options are resolved once per request.
+/**
+ * Applies already-resolved redaction to a batch of lines without re-resolving options.
+ *
+ * Lines are joined before redacting so multiline patterns, such as PEM blocks,
+ * can match across line boundaries, then split back into the original shape.
+ */
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
   if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
     return lines;

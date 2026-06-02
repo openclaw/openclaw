@@ -3,6 +3,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { unauthorizedHintForMessage } from "./rpc.js";
 
+/** Build the node command theme once so rich/no-color output stays consistent. */
 export function getNodesTheme() {
   const rich = isRich();
   const color = (fn: (value: string) => string) => (value: string) => (rich ? fn(value) : value);
@@ -16,6 +17,7 @@ export function getNodesTheme() {
   };
 }
 
+/** Run a nodes subcommand with shared failure formatting and bridge auth hints. */
 export function runNodesCommand(label: string, action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     const message = String(err);

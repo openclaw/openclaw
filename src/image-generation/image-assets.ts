@@ -31,6 +31,7 @@ function throwMalformedImageResponse(message: string | undefined): never | undef
   return undefined;
 }
 
+/** Resolve a stable extension from provider MIME metadata, preserving caller fallback for blanks. */
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
   fallback = "png",
@@ -49,6 +50,7 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
+/** Detect common generated-image byte signatures before trusting provider-supplied defaults. */
 export function sniffImageMimeType(
   buffer: Buffer,
   fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
@@ -90,6 +92,7 @@ export function toImageDataUrl(params: {
   return `data:${mimeType};base64,${params.buffer.toString("base64")}`;
 }
 
+/** Parse image data URLs and canonicalize base64 so malformed provider/caller input is rejected. */
 export function parseImageDataUrl(
   dataUrl: string,
 ): { mimeType: string; base64: string } | undefined {
@@ -109,6 +112,10 @@ export function parseImageDataUrl(
   return { mimeType, base64: canonicalBase64 };
 }
 
+/**
+ * Build a generated asset from provider base64 while keeping MIME, filename, and
+ * prompt metadata aligned.
+ */
 export function generatedImageAssetFromBase64(params: {
   base64: string | undefined;
   index: number;
@@ -182,6 +189,7 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
   });
 }
 
+/** Parse OpenAI-compatible image responses, optionally failing fast when malformed rows appear. */
 export function parseOpenAiCompatibleImageResponse(
   payload: unknown,
   options: {
@@ -220,6 +228,7 @@ export function parseOpenAiCompatibleImageResponse(
   return images;
 }
 
+/** Preserve explicit upload filenames, otherwise synthesize deterministic names from MIME metadata. */
 export function imageSourceUploadFileName(params: {
   image: ImageGenerationSourceImage;
   index: number;

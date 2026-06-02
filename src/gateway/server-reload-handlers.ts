@@ -185,6 +185,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
   clients: Iterable<SharedGatewayAuthClient>;
 };
 
+/** Build hot-reload and restart handlers around the mutable Gateway runtime state. */
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const getActiveCounts = () => {
     const queueSize = getTotalQueueSize();
@@ -265,6 +266,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (initial.totalActive <= 0) {
       return;
     }
+    // Channel reload can interrupt delivery/session work; drain the same
+    // queues that restart deferral watches before stopping channel transports.
     const channelNames = [...channels].join(", ");
     const initialDetails = formatActiveDetails(initial);
     params.logReload.warn(
@@ -318,6 +321,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
       } catch (err) {
+        // Keep serving the last valid hook config if a hot edit is invalid;
+        // the rest of the reload plan may still be safe to apply.
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
       }
     }
@@ -344,6 +349,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           return;
         }
         await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        // Plugin replacement can swap channel implementations; stop affected
+        // channels before registry replacement so old handlers do not keep running.
         const stoppedChannels: ChannelKind[] = [];
         const stopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
@@ -602,6 +609,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   return { applyHotReload, requestGatewayRestart };
 }
 
+/** Start the file-backed config reloader and bridge accepted plans into live Gateway state. */
 export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigReloaderParams) {
   if (params.minimalTestGateway) {
     return { stop: async () => {} };
@@ -679,6 +687,8 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       try {
         await applyHotReload(plan, prepared.config);
       } catch (err) {
+        // Hot reload already activated secret material; restore both secrets
+        // and shared-auth generation before reporting the rejected edit.
         if (previousSnapshot) {
           await activateSecretsRuntimeSnapshot(previousSnapshot);
         } else {

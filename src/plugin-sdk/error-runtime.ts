@@ -1,9 +1,10 @@
-// Shared error graph/format helpers without the full infra-runtime surface.
-
+/** Stable machine-readable code for subagent runtime calls made outside request scope. */
 export const SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE = "OPENCLAW_SUBAGENT_RUNTIME_REQUEST_SCOPE";
+/** Default message shown when a plugin asks for request-scoped subagent APIs too early. */
 export const SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_MESSAGE =
   "Plugin runtime subagent methods are only available during a gateway request.";
 
+/** Error type used by SDK runtime guards when a request-owned helper is unavailable. */
 export class RequestScopedSubagentRuntimeError extends Error {
   code = SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE;
 

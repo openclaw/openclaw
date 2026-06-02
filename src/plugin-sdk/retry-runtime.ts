@@ -1,5 +1,3 @@
-// Public retry helpers for plugins that need retry config or policy runners.
-
 export {
   resolveRetryConfig,
   retryAsync,

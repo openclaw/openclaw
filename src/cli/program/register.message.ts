@@ -21,6 +21,7 @@ import { registerMessageReadEditDeleteCommands } from "./message/register.read-e
 import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
 
+/** Register the message command tree and shared helper context for subcommands. */
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
     .command("message")

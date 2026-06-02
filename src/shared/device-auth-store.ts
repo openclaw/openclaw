@@ -9,7 +9,9 @@ export type { DeviceAuthEntry, DeviceAuthStore } from "./device-auth.js";
 
 /** Storage seam used by shared device-auth helpers and filesystem-backed infra wrappers. */
 export type DeviceAuthStoreAdapter = {
+  /** Reads the current canonical store snapshot, or null when no usable store exists. */
   readStore: () => DeviceAuthStore | null;
+  /** Persists a full canonical store snapshot atomically at the adapter boundary. */
   writeStore: (store: DeviceAuthStore) => void;
 };
 

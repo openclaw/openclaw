@@ -1,17 +1,24 @@
 const TERMINAL_FAILURE_STATES = new Set(["failed", "expired", "cancelled", "canceled"]);
 
 type BatchStatusLike = {
+  /** Provider batch id, when included in the status payload. */
   id?: string;
+  /** Provider batch state such as completed, failed, expired, or cancelled. */
   status?: string;
+  /** Provider file id containing successful output rows. */
   output_file_id?: string | null;
+  /** Provider file id containing row-level errors. */
   error_file_id?: string | null;
 };
 
 export type BatchCompletionResult = {
+  /** Provider file id containing successful output rows. */
   outputFileId: string;
+  /** Optional provider file id containing row-level errors. */
   errorFileId?: string;
 };
 
+/** Extracts output/error file ids from a completed provider batch status. */
 export function resolveBatchCompletionFromStatus(params: {
   provider: string;
   batchId: string;
@@ -26,6 +33,7 @@ export function resolveBatchCompletionFromStatus(params: {
   };
 }
 
+/** Throws with provider error-file detail when the batch reached a terminal failure state. */
 export async function throwIfBatchTerminalFailure(params: {
   provider: string;
   status: BatchStatusLike;
@@ -42,6 +50,7 @@ export async function throwIfBatchTerminalFailure(params: {
   throw new Error(`${params.provider} batch ${params.status.id ?? "<unknown>"} ${state}${suffix}`);
 }
 
+/** Returns completed batch files now, or waits when remote.batch.wait is enabled. */
 export async function resolveCompletedBatchResult(params: {
   provider: string;
   status: BatchStatusLike;

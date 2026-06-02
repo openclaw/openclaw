@@ -1,6 +1,7 @@
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 
+/** Provider operation phase used to choose safe transient retry defaults. */
 export type ProviderOperationRetryStage = "read" | "poll" | "download" | "create";
 
 export type TransientProviderRetryParams = {
@@ -27,6 +28,7 @@ export type TransientProviderRetryOptions = {
 
 export type TransientProviderRetryConfig = boolean | TransientProviderRetryOptions;
 
+/** Default one-retry policy for idempotent provider reads, polls, and downloads. */
 export const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
   attempts: 2,
   baseDelayMs: 250,
@@ -48,6 +50,8 @@ export function resolveTransientProviderRetryOptions(
 export function defaultTransientProviderRetryForStage(
   stage: ProviderOperationRetryStage,
 ): TransientProviderRetryConfig | undefined {
+  // Creation calls can allocate remote jobs/assets; callers must opt in so retries do not
+  // accidentally duplicate provider-side work after an ambiguous failure.
   return stage === "create" ? undefined : true;
 }
 
@@ -213,6 +217,8 @@ export function shouldRetrySameKeyProviderOperation(params: {
   if (params.options.signal?.aborted) {
     return false;
   }
+  // This helper only retries the same provider credential. API-key rotation is handled by the
+  // higher-level model auth runner, so auth/permission/model errors stay terminal here.
   const retryParams: TransientProviderRetryParams = {
     error: params.error,
     message: params.message,

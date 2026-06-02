@@ -47,6 +47,12 @@ function resolveClaudeProjectsDir(homeDir?: string): string {
   return path.join(resolveHistoryHomeDir(homeDir), CLAUDE_PROJECTS_RELATIVE_DIR);
 }
 
+/**
+ * Resolve the Claude CLI session id from current and legacy session metadata.
+ *
+ * Imports must honor older persisted fields so chat history stays connected
+ * across config/schema migrations without duplicating the external transcript.
+ */
 export function resolveClaudeCliBindingSessionId(
   entry: SessionEntry | undefined,
 ): string | undefined {

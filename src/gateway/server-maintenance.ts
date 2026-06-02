@@ -16,6 +16,7 @@ import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 
+/** Start the Gateway's periodic broadcast, health, dedupe, chat, and media cleanup timers. */
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
     event: string,
@@ -91,7 +92,8 @@ export function startGatewayMaintenanceTimers(params: {
     .refreshGatewayHealthSnapshot({ probe: false })
     .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
-  // dedupe cache cleanup
+  // Dedupe cleanup preserves keys for active or still-accepted runs; dropping
+  // them early would allow retries to spawn duplicate agent/chat work.
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
@@ -148,6 +150,8 @@ export function startGatewayMaintenanceTimers(params: {
     }
     if (params.dedupe.size > DEDUPE_MAX) {
       const excess = params.dedupe.size - DEDUPE_MAX;
+      // Map insertion order changes on reinsertion, so trim by stored timestamp
+      // instead of relying on iteration order for overflow eviction.
       const oldestKeys = [...params.dedupe.entries()]
         .filter(
           ([key, entry]) =>
@@ -260,6 +264,8 @@ export function startGatewayMaintenanceTimers(params: {
     if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
+    // Media cleanup may outlive its hourly tick on slow disks; serialize runs so
+    // recursive pruning cannot race itself through the same directory tree.
     mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
       recursive: true,
       pruneEmptyDirs: true,

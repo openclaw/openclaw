@@ -110,6 +110,7 @@ async function runGatewayCommand(
   try {
     await action();
   } catch (err) {
+    // JSON mode must preserve machine-readable Gateway transport errors for scripts.
     if (opts?.json) {
       const { formatGatewayTransportErrorJson } = await import("../../gateway/call.js");
       const payload = formatGatewayTransportErrorJson(err);
@@ -138,6 +139,7 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   return fallback;
 }
 
+/** Re-applies parent gateway auth flags after Commander resolves child command options. */
 function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
   opts: T,
   command?: Command,
@@ -222,6 +224,7 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
   return parts.join(" ");
 }
 
+/** Renders the ring-buffer stability snapshot in deterministic order for CLI diffs/support logs. */
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
   const lines = [
     colorize(rich, theme.heading, "Gateway Stability"),
@@ -275,6 +278,7 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
+/** Normalizes `--bundle` forms so bare flags consistently mean "latest" bundle. */
 function normalizeStabilityBundleTarget(raw: unknown): string | null {
   if (raw === undefined || raw === false) {
     return null;
@@ -395,6 +399,7 @@ function renderSupportExportResult(
 function resolveSupportExportRpcOptions(
   rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">,
 ): GatewayRpcOpts {
+  // Support export snapshots should be quick and non-interactive even when the gateway is wedged.
   return {
     url: rpc?.url,
     token: rpc?.token,

@@ -1,8 +1,11 @@
 import type { VoiceCallConfig } from "./config.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
+/** Build a complete valid voice-call config baseline for focused tests. */
 export function createVoiceCallBaseConfig(params?: {
+  /** Provider id to set on the config; defaults to mock. */
   provider?: "telnyx" | "twilio" | "plivo" | "mock";
+  /** Tunnel provider to set on the config; defaults to none. */
   tunnelProvider?: "none" | "ngrok";
 }): VoiceCallConfig {
   return {

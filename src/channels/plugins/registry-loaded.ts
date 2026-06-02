@@ -6,11 +6,13 @@ import type {
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
 
+/** Loaded channel plugin runtime shape with normalized id and metadata. */
 export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
   meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
 
+/** Registry entry paired with a loaded channel plugin runtime shape. */
 export type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: LoadedChannelPlugin;
 };
@@ -64,6 +66,7 @@ function resolveChannelPlugins(): ChannelPluginView {
   }
 
   const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
+    // Stable registry order keeps built-in channel defaults ahead of un-ordered external plugins.
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -91,10 +94,12 @@ function resolveChannelPlugins(): ChannelPluginView {
   };
 }
 
+/** Lists loaded channel plugins in display/selection order. */
 export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
   return resolveChannelPlugins().sorted.slice();
 }
 
+/** Looks up a loaded channel plugin by normalized id. */
 export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
@@ -103,6 +108,7 @@ export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | un
   return resolveChannelPlugins().byId.get(resolvedId);
 }
 
+/** Looks up the registry entry for a loaded channel plugin by normalized id. */
 export function getLoadedChannelPluginEntryById(id: string): LoadedChannelPluginEntry | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

@@ -269,23 +269,33 @@ export type PreflightFacts = {
 
 /** Delivery metadata for one reply payload dispatch. */
 export type ChannelDeliveryInfo = {
+  /** Reply dispatcher bucket that produced this payload. */
   kind: ReplyDispatchKind;
 };
 
 /** Durable delivery queue intent recorded when a reply is deferred. */
 export type ChannelDeliveryIntent = {
+  /** Durable outbound queue id for the logical reply send. */
   id: string;
+  /** Discriminator for delivery intents created by the outbound queue. */
   kind: "outbound_queue";
+  /** Queue durability policy selected for this delivery. */
   queuePolicy: OutboundDeliveryQueuePolicy;
 };
 
 /** Result returned after delivering one channel reply payload. */
 export type ChannelDeliveryResult = {
+  /** Platform message ids returned by legacy delivery adapters. */
   messageIds?: string[];
+  /** Normalized message receipt returned by message-lifecycle delivery. */
   receipt?: MessageReceipt;
+  /** Thread/topic id where the visible reply landed. */
   threadId?: string;
+  /** Platform message id that the reply targeted. */
   replyToId?: string;
+  /** Whether the delivery produced a visible platform reply. */
   visibleReplySent?: boolean;
+  /** Durable outbound intent when delivery was queued or tracked asynchronously. */
   deliveryIntent?: ChannelDeliveryIntent;
 };
 
@@ -294,21 +304,27 @@ export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
   "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
 > & {
+  /** Explicit destination override; null prevents context fallback. */
   to?: string | null;
+  /** Explicit reply target override; null prevents source-message fallback. */
   replyToId?: string | null;
+  /** Capability requirements callers already derived for this payload. */
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
 /** Delivery adapter used by channel turns to send reply payloads. */
 export type ChannelEventDeliveryAdapter = {
+  /** Normalizes or enriches reply payloads before durable/legacy delivery selection. */
   preparePayload?: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
   ) => Promise<ReplyPayload> | ReplyPayload;
+  /** Legacy delivery path used when durable delivery is disabled or unsupported. */
   deliver: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  /** Durable delivery options, or a per-payload resolver that can opt out with false. */
   durable?:
     | false
     | ChannelTurnDurableDeliveryOptions
@@ -319,38 +335,55 @@ export type ChannelEventDeliveryAdapter = {
         | false
         | ChannelTurnDurableDeliveryOptions
         | Promise<false | ChannelTurnDurableDeliveryOptions>);
+  /** Observer called after either durable or legacy delivery returns. */
   onDelivered?: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
     result: ChannelDeliveryResult | void,
   ) => Promise<void> | void;
+  /** Error sink wired into the buffered reply dispatcher. */
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 
 /** Options for recording inbound session route state around a turn. */
 export type ChannelTurnRecordOptions = {
+  /** Group-route resolution facts retained with the inbound session record. */
   groupResolution?: GroupKeyResolution | null;
+  /** Whether the session recorder may create a missing session. */
   createIfMissing?: boolean;
+  /** Last-route update to persist after this inbound turn. */
   updateLastRoute?: InboundLastRouteUpdate;
+  /** Non-fatal record error sink used by compatibility dispatchers. */
   onRecordError?: (err: unknown) => void;
+  /** Hook for async metadata work that should outlive the immediate record call. */
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 };
 
 /** Options for finalizing visible conversation history after dispatch. */
 export type ChannelTurnHistoryFinalizeOptions = {
+  /** Only group histories are cleared through this finalizer. */
   isGroup?: boolean;
+  /** Caller-owned history map key for the conversation. */
   historyKey?: string;
+  /** Caller-owned pending history storage. */
   historyMap?: Map<string, HistoryEntry[]>;
+  /** Retention limit; undefined disables cleanup. */
   limit?: number;
 };
 
 /** Options for recording history when an inbound event is dropped before dispatch. */
 export type ChannelTurnDroppedHistoryOptions = {
+  /** Caller-owned history map key for the dropped conversation. */
   key: string;
+  /** Retention limit for recorded dropped-message context. */
   limit: number;
+  /** Caller-owned pending history storage. */
   historyMap: Map<string, HistoryEntry[]>;
+  /** Record drops even when the admission did not explicitly request history. */
   recordOnDrop?: boolean;
+  /** Retention limit for media attached to the dropped event. */
   mediaLimit?: number;
+  /** Dynamic guard for channels that only record history under current config state. */
   shouldRecord?: () => boolean;
 };
 
@@ -368,44 +401,79 @@ export type ChannelTurnReplyPipelineOptions = Omit<
 
 /** Fully assembled channel turn ready to build the dispatch runner. */
 export type AssembledChannelTurn = {
+  /** Config used for reply generation and outbound delivery. */
   cfg: OpenClawConfig;
+  /** Channel id that owns the inbound turn. */
   channel: string;
+  /** Optional account scope for multi-account channel adapters. */
   accountId?: string;
+  /** Agent selected by routing before dispatch. */
   agentId: string;
+  /** Stable route session key used when the context payload lacks a session key. */
   routeSessionKey: string;
+  /** Session store path used by the recorder and reply dispatcher. */
   storePath: string;
+  /** Finalized message context passed into templating and dispatch. */
   ctxPayload: FinalizedMsgContext;
+  /** Session recorder that runs before reply dispatch. */
   recordInboundSession: RecordInboundSession;
+  /** Buffered dispatcher that resolves tool/block/final reply payloads. */
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
+  /** Delivery adapter for final outbound reply payloads. */
   delivery: ChannelEventDeliveryAdapter;
+  /** Optional reply pipeline knobs resolved just before dispatch. */
   replyPipeline?: ChannelTurnReplyPipelineOptions;
+  /** Dispatcher options layered over reply pipeline callbacks. */
   dispatcherOptions?: ChannelTurnDispatcherOptions;
+  /** Reply generation options forwarded without block-reply ownership. */
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
+  /** Optional reply resolver override for tests or specialized adapters. */
   replyResolver?: GetReplyFromConfig;
+  /** Session recording options. */
   record?: ChannelTurnRecordOptions;
+  /** History cleanup options after dispatch. */
   history?: ChannelTurnHistoryFinalizeOptions;
+  /** Admission result when the adapter already decided dispatch vs observe-only. */
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  /** Bot-loop suppression facts evaluated before record/dispatch. */
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Structured lifecycle logger for turn execution. */
   log?: (event: ChannelTurnLogEvent) => void;
+  /** Platform message id used in lifecycle logs. */
   messageId?: string;
 };
 
 /** Channel turn with dispatch runner already prepared. */
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
+  /** Channel id that owns the inbound turn. */
   channel: string;
+  /** Optional account scope for multi-account channel adapters. */
   accountId?: string;
+  /** Stable route session key used when the context payload lacks a session key. */
   routeSessionKey: string;
+  /** Session store path used by the recorder. */
   storePath: string;
+  /** Finalized message context recorded before dispatch. */
   ctxPayload: FinalizedMsgContext;
+  /** Session recorder that runs before the prepared dispatch callback. */
   recordInboundSession: RecordInboundSession;
+  /** Session recording options. */
   record?: ChannelTurnRecordOptions;
+  /** History cleanup options after dispatch. */
   history?: ChannelTurnHistoryFinalizeOptions;
+  /** Callback invoked if session recording fails before dispatch starts. */
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
+  /** Prepared dispatch callback that emits the channel-specific reply result. */
   runDispatch: () => Promise<TDispatchResult>;
+  /** Synthetic result returned when observe-only dispatch is suppressed. */
   observeOnlyDispatchResult?: TDispatchResult;
+  /** Admission result when the adapter already decided dispatch vs observe-only. */
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  /** Bot-loop suppression facts evaluated before record/dispatch. */
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Structured lifecycle logger for turn execution. */
   log?: (event: ChannelTurnLogEvent) => void;
+  /** Platform message id used in lifecycle logs. */
   messageId?: string;
 };
 
@@ -432,14 +500,23 @@ export type ChannelTurnStage =
 
 /** Structured channel turn log event. */
 export type ChannelTurnLogEvent = {
+  /** Turn lifecycle stage that emitted this event. */
   stage: ChannelTurnStage;
+  /** Event kind within the lifecycle stage. */
   event: "start" | "done" | "drop" | "handled" | "error";
+  /** Channel id that owns the event. */
   channel: string;
+  /** Optional account scope for multi-account channel adapters. */
   accountId?: string;
+  /** Platform message id associated with this turn. */
   messageId?: string;
+  /** Session key associated with the current stage. */
   sessionKey?: string;
+  /** Admission state active when the event was emitted. */
   admission?: ChannelTurnAdmission["kind"];
+  /** Drop/handled reason when applicable. */
   reason?: string;
+  /** Error captured for lifecycle error events. */
   error?: unknown;
 };
 
@@ -464,8 +541,11 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
 
 /** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */
 export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
+  /** Converts raw channel input into normalized turn input, or null to drop before logging. */
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
+  /** Classifies whether the normalized event can start an agent turn. */
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
+  /** Performs access/mention/history/media preflight before route resolution. */
   preflight?: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
@@ -475,19 +555,26 @@ export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult>
     | ChannelTurnAdmission
     | null
     | undefined;
+  /** Resolves the normalized event into either an assembled or prepared turn. */
   resolveTurn: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
   ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
+  /** Final callback after dispatch or after a dispatch failure result has been assembled. */
   onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 
 /** Parameters for running one raw channel event through the turn kernel. */
 export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
+  /** Channel id that owns the raw event. */
   channel: string;
+  /** Optional account scope for multi-account channel adapters. */
   accountId?: string;
+  /** Raw provider/channel event payload. */
   raw: TRaw;
+  /** Adapter implementation for this raw event type. */
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
+  /** Structured lifecycle logger for diagnostics and tests. */
   log?: (event: ChannelTurnLogEvent) => void;
 };

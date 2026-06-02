@@ -13,17 +13,27 @@ import type { WebSearchProviderPlugin } from "../plugins/types.js";
 export type WebSearchProviderContractCredential =
   | { type: "none" }
   | { type: "top-level" }
-  | { type: "scoped"; scopeId: string };
+  | {
+      type: "scoped";
+      /** Nested provider scope inside the search config object. */
+      scopeId: string;
+    };
 
 export type WebSearchProviderConfiguredCredential = {
+  /** Plugin id whose config stores the credential value. */
   pluginId: string;
+  /** Config field to read/write; defaults to apiKey. */
   field?: string;
 };
 
 export type CreateWebSearchProviderContractFieldsOptions = {
+  /** Secret/config path advertised as inactive when the provider owns credential lookup. */
   credentialPath: string;
+  /** Optional explicit inactive paths when the default credentialPath list is insufficient. */
   inactiveSecretPaths?: string[];
+  /** Search-config credential layout used by runtime tool execution. */
   searchCredential: WebSearchProviderContractCredential;
+  /** Root OpenClaw config credential layout used by setup/auth flows. */
   configuredCredential?: WebSearchProviderConfiguredCredential;
 };
 
@@ -92,6 +102,8 @@ export function createBaseWebSearchProviderContractFields(
   const configuredCredentialFields = createConfiguredCredentialFields(options.configuredCredential);
 
   return {
+    // Empty credential paths represent keyless providers; do not advertise an
+    // inactive secret that setup/doctor flows could prompt users to fill.
     inactiveSecretPaths:
       options.inactiveSecretPaths ?? (options.credentialPath ? [options.credentialPath] : []),
     ...createSearchCredentialFields(options.searchCredential),

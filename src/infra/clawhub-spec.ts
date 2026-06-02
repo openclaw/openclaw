@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Parses explicit `clawhub:name[@version]` install specs without treating bare packages as ClawHub. */
 export function parseClawHubPluginSpec(raw: string): {
   name: string;
   version?: string;

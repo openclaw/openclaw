@@ -58,6 +58,8 @@ export function replaceGatewayModelPricingCache(
   nextPricing: Map<string, CachedModelPricing>,
   nextCachedAt = Date.now(),
 ): void {
+  // Swap the whole map atomically so readers never observe a partially merged
+  // pricing refresh.
   cachedPricing = nextPricing;
   cachedAt = nextCachedAt;
 }
@@ -106,6 +108,8 @@ export function getGatewayModelPricingHealth(params?: {
       detail: failure.detail,
     }))
     .toSorted((left, right) => left.source.localeCompare(right.source));
+  // Surface the newest failure as the summary while keeping per-source rows
+  // deterministic for health snapshots and tests.
   const latest = sources.reduce<(typeof sources)[number] | undefined>((current, source) => {
     if (!current || (source.lastFailureAt ?? 0) > (current.lastFailureAt ?? 0)) {
       return source;
@@ -134,6 +138,8 @@ export function getCachedGatewayModelPricing(params: {
   if (direct) {
     return direct;
   }
+  // Some callers pass provider-specific aliases while refresh stores normalized
+  // refs; retry through model selection normalization before declaring a miss.
   const normalized = normalizeModelRef(provider, model);
   const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
   if (normalizedKey === key) {
@@ -174,6 +180,8 @@ function stablePricingValue(value: unknown): string {
 
 export function getGatewayModelPricingCacheFingerprint(): string {
   const entries = Array.from(cachedPricing.entries()).toSorted(([a], [b]) => a.localeCompare(b));
+  // Fingerprints feed config/runtime freshness checks; stable object key order
+  // keeps equivalent pricing maps byte-identical across refreshes.
   return stablePricingValue(entries);
 }
 

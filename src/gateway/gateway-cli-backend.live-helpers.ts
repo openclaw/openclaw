@@ -76,6 +76,7 @@ function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undef
   return binding ? `${binding.provider}/${parsed.model}` : raw;
 }
 
+/** Maps a live-test model ref to both CLI-runtime and canonical config provider keys. */
 export function resolveCliBackendLiveModelSelection(params: {
   rawModel: string;
   defaultProvider: string;
@@ -116,6 +117,7 @@ export function resolveCliBackendLiveModelSelection(params: {
   };
 }
 
+/** Parses env-supplied argv overrides while rejecting non-string JSON entries. */
 export function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -128,6 +130,7 @@ export function parseJsonStringArray(name: string, raw?: string): string[] | und
   return parsed;
 }
 
+/** Normalizes the optional live image probe mode toggle used by provider matrix lanes. */
 export function parseImageMode(raw?: string): "list" | "repeat" | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -139,6 +142,7 @@ export function parseImageMode(raw?: string): "list" | "repeat" | undefined {
   throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
 }
 
+/** Resolves whether this provider should exercise image attachment handling in live lanes. */
 export function shouldRunCliImageProbe(providerId: string): boolean {
   const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE?.trim();
   if (raw) {
@@ -147,6 +151,7 @@ export function shouldRunCliImageProbe(providerId: string): boolean {
   return resolveCliBackendLiveTest(providerId)?.defaultImageProbe === true;
 }
 
+/** Resolves whether this provider should exercise MCP tool routing in live lanes. */
 export function shouldRunCliMcpProbe(providerId: string): boolean {
   const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE?.trim();
   if (raw) {
@@ -155,6 +160,7 @@ export function shouldRunCliMcpProbe(providerId: string): boolean {
   return resolveCliBackendLiveTest(providerId)?.defaultMcpProbe === true;
 }
 
+/** Returns the fresh/resume CLI argv used by live backend tests after env overrides. */
 export function resolveCliBackendLiveArgs(params: {
   providerId: string;
   defaultArgs?: string[];
@@ -178,6 +184,7 @@ export function resolveCliBackendLiveArgs(params: {
   return { args, resumeArgs };
 }
 
+/** Picks the default live model-switch target for providers with a known safe alternate model. */
 export function resolveCliModelSwitchProbeTarget(
   providerId: string,
   modelRef: string,
@@ -193,6 +200,7 @@ export function resolveCliModelSwitchProbeTarget(
   return "claude-cli/claude-opus-4-6";
 }
 
+/** Resolves whether the live lane should ask the CLI backend to switch models mid-session. */
 export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: string): boolean {
   const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE?.trim();
   if (raw) {
@@ -201,6 +209,7 @@ export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: strin
   return typeof resolveCliModelSwitchProbeTarget(providerId, modelRef) === "string";
 }
 
+/** Accepts exact replies plus common final-period drift from CLI backends. */
 export function matchesCliBackendReply(text: string, expected: string): boolean {
   const normalized = text.trim();
   const target = expected.trim();
@@ -213,6 +222,7 @@ export function matchesCliBackendReply(text: string, expected: string): boolean 
   );
 }
 
+/** Adds Claude CLI MCP config flags without duplicating caller-provided strict/config options. */
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
   const next = [...args];
   if (!next.includes("--strict-mcp-config")) {
@@ -224,6 +234,7 @@ export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: stri
   return next;
 }
 
+/** Allocates the Gateway plus adjacent live-test ports from one collision-resistant block. */
 export async function getFreeGatewayPort(): Promise<number> {
   return await getFreePortBlockWithPermissionFallback({
     offsets: [0, 1, 2, 4],
@@ -231,6 +242,7 @@ export async function getFreeGatewayPort(): Promise<number> {
   });
 }
 
+/** Creates a workspace fixture whose injected instruction files can be verified by the agent. */
 export async function createBootstrapWorkspace(
   tempDir: string,
 ): Promise<BootstrapWorkspaceContext> {
@@ -308,6 +320,7 @@ export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
   );
 }
 
+/** Connects a test Gateway client with bounded retries for slow Docker/live startup windows. */
 export async function connectTestGatewayClient(params: {
   url: string;
   token: string;
@@ -467,6 +480,7 @@ export function snapshotCliBackendLiveEnv(): CliBackendLiveEnvSnapshot {
   };
 }
 
+/** Applies the minimal live-test Gateway environment while preserving selected real credentials. */
 export function applyCliBackendLiveEnv(preservedEnv: ReadonlySet<string>): void {
   process.env.OPENCLAW_SKIP_CHANNELS = "1";
   process.env.OPENCLAW_SKIP_PROVIDERS = "1";
@@ -483,6 +497,7 @@ export function applyCliBackendLiveEnv(preservedEnv: ReadonlySet<string>): void 
   }
 }
 
+/** Restores every env var captured by snapshotCliBackendLiveEnv after a live helper lane. */
 export function restoreCliBackendLiveEnv(snapshot: CliBackendLiveEnvSnapshot): void {
   restoreEnvVar("OPENCLAW_CONFIG_PATH", snapshot.configPath);
   restoreEnvVar("OPENCLAW_STATE_DIR", snapshot.stateDir);
@@ -507,6 +522,7 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   process.env[name] = value;
 }
 
+/** Ensures live tests have a paired operator-scoped device identity before connecting. */
 export async function ensurePairedTestGatewayClientIdentity(params?: {
   displayName?: string;
 }): Promise<DeviceIdentity> {

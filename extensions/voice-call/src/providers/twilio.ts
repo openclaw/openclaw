@@ -48,6 +48,9 @@ function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: 
     return verifiedRequestKey;
   }
 
+  // Before signature verification succeeds, derive idempotency from the actual
+  // request facts we route on; Twilio's raw idempotency header is not enough
+  // because query tokens select the OpenClaw call/turn.
   const signature = getHeader(ctx.headers, "x-twilio-signature") ?? "";
   const params = new URLSearchParams(ctx.rawBody);
   const callSid = params.get("CallSid") ?? "";
@@ -73,6 +76,7 @@ type TwilioProviderConfig = {
   authToken?: string;
 };
 
+/** Twilio Voice provider for REST call control, TwiML callback routing, and media streams. */
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
 
@@ -82,23 +86,23 @@ export class TwilioProvider implements VoiceCallProvider {
   private readonly callWebhookUrls = new Map<string, string>();
   private readonly options: TwilioProviderOptions;
 
-  /** Current public webhook URL (set when tunnel starts or from config) */
+  /** Provider-visible webhook origin used for signature verification and generated stream URLs. */
   private currentPublicUrl: string | null = null;
 
-  /** Optional telephony TTS provider for streaming TTS */
+  /** Optional streaming TTS adapter used before falling back to TwiML redirects. */
   private ttsProvider: TelephonyTtsProvider | null = null;
 
-  /** Optional media stream handler for sending audio */
+  /** Optional media bridge used to enqueue outbound audio to live Twilio streams. */
   private mediaStreamHandler: MediaStreamHandler | null = null;
 
-  /** Map of call SID to stream SID for media streams */
+  /** Current Twilio streamSid per callSid; outbound media/clear/mark frames require it. */
   private callStreamMap = new Map<string, string>();
-  /** Per-call tokens for media stream authentication */
+  /** Per-call stream tokens validated before accepting Twilio media websocket starts. */
   private streamAuthTokens = new Map<string, string>();
 
-  /** Storage for TwiML content (for notify mode with URL-based TwiML) */
+  /** One-shot TwiML payloads consumed by initial notify-mode callbacks. */
   private readonly twimlStorage = new Map<string, string>();
-  /** Track notify-mode calls to avoid streaming on follow-up callbacks */
+  /** Notify-mode call ids that should not be upgraded into streaming conversations. */
   private readonly notifyCalls = new Set<string>();
   private readonly activeStreamCalls = new Set<string>();
 
@@ -151,30 +155,37 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
+  /** Updates the externally reachable webhook origin after tunnel/exposure setup. */
   setPublicUrl(url: string): void {
     this.currentPublicUrl = url;
   }
 
+  /** Returns the public origin currently used for generated callbacks and stream URLs. */
   getPublicUrl(): string | null {
     return this.currentPublicUrl;
   }
 
+  /** Injects the telephony TTS adapter used for live media-stream playback. */
   setTTSProvider(provider: TelephonyTtsProvider): void {
     this.ttsProvider = provider;
   }
 
+  /** Injects the media stream bridge that owns outbound audio queueing and barge-in clears. */
   setMediaStreamHandler(handler: MediaStreamHandler): void {
     this.mediaStreamHandler = handler;
   }
 
+  /** Associates a Twilio stream SID with a call SID so later playback can target the socket. */
   registerCallStream(callSid: string, streamSid: string): void {
     this.callStreamMap.set(callSid, streamSid);
   }
 
+  /** Returns whether a live stream is registered for the Twilio call SID. */
   hasRegisteredStream(callSid: string): boolean {
     return this.callStreamMap.has(callSid);
   }
 
+  /** Removes a stream mapping, preserving newer reconnect streams when an old stop arrives late. */
   unregisterCallStream(callSid: string, streamSid?: string): void {
     const currentStreamSid = this.callStreamMap.get(callSid);
     if (!currentStreamSid) {
@@ -184,16 +195,20 @@ export class TwilioProvider implements VoiceCallProvider {
       return;
     }
     if (streamSid && currentStreamSid !== streamSid) {
+      // Twilio can deliver a stop for an older stream after reconnecting the
+      // same call; keep the newer stream registered so playback is not severed.
       return;
     }
     this.callStreamMap.delete(callSid);
     this.activeStreamCalls.delete(callSid);
   }
 
+  /** True when TwiML should connect new calls to the media stream bridge instead of static TwiML. */
   isConversationStreamConnectEnabled(): boolean {
     return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }
 
+  /** Validates a one-time media-stream token before accepting Twilio's websocket start frame. */
   isValidStreamToken(callSid: string, token?: string): boolean {
     const expected = this.streamAuthTokens.get(callSid);
     if (!expected || !token) {
@@ -245,6 +260,9 @@ export class TwilioProvider implements VoiceCallProvider {
         if (!isTwilioCallNotInProgressError(err)) {
           throw err;
         }
+        // Twilio can acknowledge answer/status webhooks before the Calls API
+        // accepts live TwiML updates for that SID. Short retries bridge that
+        // provider race without hiding real API failures.
         console.warn(
           `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${retryDelayMs}ms`,
         );
@@ -383,6 +401,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
     const endReason = mapProviderStatusToEndReason(callStatus);
     if (endReason) {
+      // Terminal status callbacks are the last provider-owned cleanup point for
+      // stream credentials when local hangup did not initiate the call ending.
       this.streamAuthTokens.delete(callSid);
       this.activeStreamCalls.delete(callSid);
       if (callIdOverride) {
@@ -430,9 +450,13 @@ export class TwilioProvider implements VoiceCallProvider {
     });
 
     if (decision.consumeStoredTwimlCallId) {
+      // Stored notify/pre-connect TwiML is single-use; replaying it on later
+      // callbacks would restart setup digits instead of entering conversation.
       this.deleteStoredTwiml(decision.consumeStoredTwimlCallId);
     }
     if (decision.activateStreamCallSid) {
+      // activeStreamCalls is the admission lock for inbound calls before the
+      // WebSocket start event has registered a stream SID.
       this.activeStreamCalls.add(decision.activateStreamCallSid);
     }
 
@@ -498,6 +522,8 @@ export class TwilioProvider implements VoiceCallProvider {
     if (existing) {
       return existing;
     }
+    // Keep the token stable for the call: Twilio may fetch TwiML more than once
+    // before the WebSocket "start" frame carries customParameters.token.
     const token = crypto.randomBytes(16).toString("base64url");
     this.streamAuthTokens.set(callSid, token);
     return token;
@@ -510,6 +536,8 @@ export class TwilioProvider implements VoiceCallProvider {
     }
     const token = this.getStreamAuthToken(callSid);
     const url = new URL(baseUrl);
+    // Keep the token in URL state until getStreamConnectXml moves it into a
+    // Twilio <Parameter>; Twilio drops WebSocket query strings on connect.
     url.searchParams.set("token", token);
     return url.toString();
   }
@@ -668,6 +696,8 @@ export class TwilioProvider implements VoiceCallProvider {
   <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
 </Response>`;
 
+    // Redirect back to the stored webhook URL so the call returns to normal
+    // dynamic TwiML after Twilio finishes playing the DTMF sequence.
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "sendDtmf");
   }
 
@@ -697,6 +727,8 @@ export class TwilioProvider implements VoiceCallProvider {
         sent?: unknown;
       };
       return {
+        // Older handlers returned void; treat that as success while allowing
+        // newer handlers to report dropped frames or marks explicitly.
         sent: typed.sent === undefined ? true : Boolean(typed.sent),
       };
     };
@@ -853,10 +885,6 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 }
-
-// -----------------------------------------------------------------------------
-// Twilio-specific types
-// -----------------------------------------------------------------------------
 
 interface TwilioCallResponse {
   sid: string;

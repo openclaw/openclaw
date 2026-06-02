@@ -22,8 +22,12 @@ function resolveTranscriptPathForComparison(value: string | undefined): string |
   }
   const resolved = path.resolve(trimmed);
   try {
+    // Existing files compare by realpath so symlinked session dirs still route
+    // transcript events to the same canonical session owner.
     return fs.realpathSync(resolved);
   } catch {
+    // Missing files can still appear in archive/delete events; use the absolute
+    // path so the caller can resolve ownership from the store snapshot.
     return resolved;
   }
 }
@@ -34,6 +38,8 @@ function sessionKeyMatchesTranscriptPath(params: {
   key: string;
   targetPath: string;
 }): boolean {
+  // Compare against every transcript candidate for the store target because a
+  // session can move between legacy, per-agent, and explicit sessionFile paths.
   const entry = params.store[params.key];
   if (!entry?.sessionId) {
     return false;
@@ -53,10 +59,17 @@ function sessionKeyMatchesTranscriptPath(params: {
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }
 
+/** Clear transcript-path lookup memoization between tests. */
 export function clearSessionTranscriptKeyCacheForTests(): void {
   TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
+/**
+ * Resolve a transcript file path back to the canonical Gateway session key that owns it.
+ *
+ * The current combined store is authoritative; cached answers are reused only
+ * when the same store snapshot still maps the path to that key.
+ */
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
   const targetPath = resolveTranscriptPathForComparison(sessionFile);
   if (!targetPath) {
@@ -75,6 +88,8 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
       targetPath,
     })
   ) {
+    // Cached keys are accepted only while the current store still proves the
+    // transcript path, so stale cache entries cannot survive session rotation.
     return cachedKey;
   }
 
@@ -96,6 +111,8 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
   }
 
   if (matchingEntries.length > 0) {
+    // The same transcript can be reachable through legacy and canonical keys.
+    // Collapse each sessionId first, then choose the freshest distinct session.
     const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
     for (const entry of matchingEntries) {
       const sessionId = entry[1].sessionId;
@@ -130,6 +147,8 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
       (a, b) => b.updatedAt - a.updatedAt,
     );
     const [freshestMatch, secondFreshestMatch] = sortedResolvedMatches;
+    // If two distinct sessions are equally fresh for the same path, leave it
+    // unresolved instead of guessing which canonical key should own the file.
     const resolvedKey =
       resolvedMatches.length === 1
         ? freshestMatch?.key

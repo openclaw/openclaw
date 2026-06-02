@@ -1,16 +1,23 @@
+/** Host-side file reader injected only when local media roots explicitly allow reads. */
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 
 export type OutboundMediaAccess = {
+  /** Allowed local roots for resolving outbound media paths; absent means no local root access. */
   localRoots?: readonly string[];
+  /** Optional host reader; callers must also provide localRoots before it can be used. */
   readFile?: OutboundMediaReadFile;
   /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 
 export type OutboundMediaLoadParams = {
+  /** Maximum bytes accepted while loading or fetching one media source. */
   maxBytes?: number;
+  /** Structured media access object preferred over legacy root/read fields. */
   mediaAccess?: OutboundMediaAccess;
+  /** Legacy local root list or explicit "any" opt-in for host reads. */
   mediaLocalRoots?: readonly string[] | "any";
+  /** Legacy host reader, used only when mediaAccess.readFile is absent. */
   mediaReadFile?: OutboundMediaReadFile;
   proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -29,6 +36,7 @@ export type OutboundMediaLoadOptions = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
+  /** True when a host readFile was accepted with matching local root policy. */
   hostReadCapability?: boolean;
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative media paths. */
@@ -44,6 +52,7 @@ export function resolveOutboundMediaLocalRoots(
   return mediaLocalRoots && mediaLocalRoots.length > 0 ? mediaLocalRoots : undefined;
 }
 
+/** Normalizes structured and legacy media access fields into one access object. */
 export function resolveOutboundMediaAccess(
   params: {
     mediaAccess?: OutboundMediaAccess;
@@ -80,6 +89,8 @@ export function buildOutboundMediaLoadOptions(
   const readFile = mediaAccess?.readFile ?? params.mediaReadFile;
   const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
   if (readFile) {
+    // Host readers are only safe when paired with explicit roots, or the caller deliberately
+    // passes localRoots: "any"; otherwise a reader would silently bypass path policy.
     if (!localRoots) {
       throw new Error(
         'Host media read requires explicit localRoots. Pass mediaAccess.localRoots or opt in with localRoots: "any".',

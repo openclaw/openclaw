@@ -1,3 +1,4 @@
+/** Recursively removes provider-unsupported JSON Schema keywords while preserving schema shape. */
 export function stripUnsupportedSchemaKeywords(
   schema: unknown,
   unsupportedKeywords: ReadonlySet<string>,
@@ -14,6 +15,7 @@ export function stripUnsupportedSchemaKeywords(
     if (unsupportedKeywords.has(key)) {
       continue;
     }
+    // Object properties are a map of child schemas, not a schema object itself.
     if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
       cleaned[key] = Object.fromEntries(
         Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [

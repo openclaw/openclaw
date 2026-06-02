@@ -64,6 +64,11 @@ function resolveManagedServiceHandoffRestartDelayMs(
   );
 }
 
+/**
+ * Gateway update RPC handlers. `update.run` records a restart sentinel before
+ * scheduling process restart so clients can recover update status after the
+ * gateway exits or hands off to a managed-service helper.
+ */
 export const updateHandlers: GatewayRequestHandlers = {
   "update.status": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {

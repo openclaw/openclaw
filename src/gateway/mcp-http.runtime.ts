@@ -12,10 +12,15 @@ const TOOL_CACHE_TTL_MS = 30_000;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
 type CachedScopedTools = {
+  /** Agent resolved for the scoped loopback request, if any. */
   agentId: string | undefined;
+  /** Executable tools after loopback scoping and native-tool exclusion. */
   tools: McpLoopbackTool[];
+  /** MCP schema derived from the same tools so list/call stay in sync. */
   toolSchema: McpToolSchemaEntry[];
+  /** Config object identity used to invalidate cache entries after reloads. */
   configRef: OpenClawConfig;
+  /** Cache write timestamp used for short TTL pruning. */
   time: number;
 };
 
@@ -66,6 +71,8 @@ export class McpLoopbackToolCache {
     sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
     senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
+    // The scoped tool set depends on conversation and sender context; keep the
+    // key explicit so loopback calls cannot reuse tools across route/account boundaries.
     const cacheKey = [
       params.sessionKey,
       params.messageProvider ?? "",
@@ -79,6 +86,8 @@ export class McpLoopbackToolCache {
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
+    // Config snapshots are process-stable between reloads; reference equality
+    // avoids hashing the full config on the MCP hot path.
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
       return cached;
     }

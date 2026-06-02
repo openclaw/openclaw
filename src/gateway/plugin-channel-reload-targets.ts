@@ -2,8 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ChannelId } from "../channels/plugins/index.js";
 
 export type ChannelPluginReloadTarget = {
+  /** Channel id whose runtime should restart when its plugin config changes. */
   channelId: ChannelId;
+  /** Owning plugin id, when it differs from the channel id. */
   pluginId?: string | null;
+  /** Historical or manifest aliases that can still appear in config paths. */
   aliases?: readonly string[] | null;
 };
 
@@ -26,6 +29,7 @@ export function listChannelPluginConfigTargetIds(
   return targets;
 }
 
+/** Checks config change paths against plugin entry/install prefixes for target ids. */
 export function pluginConfigTargetsChanged(
   targetIds: Iterable<string>,
   changedPaths: readonly string[],

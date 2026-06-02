@@ -1,8 +1,3 @@
-/**
- * Voice call response generator - uses the embedded OpenClaw agent for tool support.
- * Routes voice responses through the same agent infrastructure as messaging.
- */
-
 import crypto from "node:crypto";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import {
@@ -15,26 +10,28 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
 export type VoiceResponseParams = {
-  /** Voice call config */
+  /** Voice-call route config that selects agent, model, timeout, and session scope. */
   voiceConfig: VoiceCallConfig;
-  /** Core OpenClaw config */
+  /** Core OpenClaw config used by the embedded agent runtime and session store. */
   coreConfig: CoreConfig;
-  /** Injected host agent runtime */
+  /** Injected host agent runtime used to create/reuse the voice response session. */
   agentRuntime: CoreAgentDeps;
-  /** Call ID for session tracking */
+  /** Internal call id used for per-call session keys and run ids. */
   callId: string;
-  /** Persisted call session key */
+  /** Persisted call session key from the call record, when already resolved. */
   sessionKey?: string;
-  /** Caller's phone number */
+  /** Caller's phone number, used for phone-scoped fallback session keys and prompts. */
   from: string;
-  /** Conversation transcript */
+  /** Durable conversation transcript included in the system prompt as call history. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  /** Latest user message */
+  /** Latest caller utterance sent as the embedded-agent prompt. */
   userMessage: string;
 };
 
 export type VoiceResponseResult = {
+  /** Spoken text extracted from the agent payloads, or null for silence/failure. */
   text: string | null;
+  /** User-safe failure summary when the embedded response could not be produced. */
   error?: string;
 };
 
@@ -81,6 +78,7 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+/** Recovers the required spoken JSON object even when the model wraps it in fences or prose. */
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -97,6 +95,8 @@ function tryParseSpokenJson(text: string): string | null {
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
+    // Models sometimes wrap the required JSON in prose; recover the outer object
+    // before falling back to plain-text sanitization.
     candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
   }
 
@@ -153,6 +153,7 @@ function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
   return false;
 }
 
+/** Drops obvious planning text while preserving conversational fallback output for the caller. */
 function sanitizePlainSpokenText(text: string): string | null {
   const withoutCodeFences = text.replace(/```[\s\S]*?```/g, " ").trim();
   if (!withoutCodeFences) {
@@ -161,6 +162,8 @@ function sanitizePlainSpokenText(text: string): string | null {
 
   const paragraphs = normalizeStringEntries(withoutCodeFences.split(/\n\s*\n+/));
 
+  // Keep conversational plain text usable, but drop obvious planning paragraphs
+  // that should never be spoken to the caller.
   while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
     paragraphs.shift();
   }
@@ -168,10 +171,13 @@ function sanitizePlainSpokenText(text: string): string | null {
   return normalizeSpokenText(paragraphs.join(" "));
 }
 
+/** Extracts only caller-safe speech segments from mixed agent text, reasoning, and error payloads. */
 function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string | null {
   const spokenSegments: string[] = [];
 
   for (const payload of payloads) {
+    // Voice payloads can interleave hidden reasoning/tool errors with user-facing
+    // text; only speak explicit non-error output.
     if (payload.isError || payload.isReasoning) {
       continue;
     }
@@ -198,17 +204,21 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
+/** Scopes voice sessions into agent sandboxes so phone/call keys cannot collide across agents. */
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
   const trimmed = sessionKey.trim();
   if (trimmed.toLowerCase().startsWith("agent:")) {
     return trimmed;
   }
+  // Embedded agents expect an agent-scoped sandbox key even when the persisted
+  // voice session key is phone- or call-scoped.
   return `agent:${agentId}:${trimmed}`;
 }
 
 /**
- * Generate a voice response using the embedded OpenClaw agent with full tool support.
- * Uses the same agent infrastructure as messaging for consistent behavior.
+ * Generates a spoken voice response through the embedded OpenClaw agent runtime.
+ * The agent is forced through a JSON spoken-output contract, but this helper
+ * also sanitizes common plain-text fallback output before returning speech.
  */
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
@@ -238,26 +248,24 @@ export async function generateVoiceResponse(
   const agentId = voiceConfig.agentId ?? "main";
   const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
 
-  // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
   const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
-  // Ensure workspace exists
   await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
-  // Load or create session entry
   const now = Date.now();
   const existingSessionEntry = agentRuntime.session.getSessionEntry({
     storePath,
     sessionKey: resolvedSessionKey,
   });
 
-  // Resolve model from config
   const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
   let sessionEntry = existingSessionEntry;
   if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
+    // Response-model overrides are pinned on the session before the embedded
+    // agent starts so inherited model/auth metadata cannot leak from old calls.
     sessionEntry =
       (await agentRuntime.session.patchSessionEntry({
         storePath,
@@ -295,14 +303,11 @@ export async function generateVoiceResponse(
     agentId,
   });
 
-  // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
-  // Resolve agent identity for personalized prompt
   const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
   const agentName = identity?.name?.trim() || "assistant";
 
-  // Build system prompt with conversation history
   const basePrompt =
     voiceConfig.responseSystemPrompt ??
     `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
@@ -314,9 +319,10 @@ export async function generateVoiceResponse(
       .join("\n");
     extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
   }
+  // The embedded agent may stream through the normal text channel, so the system
+  // prompt carries a strict JSON spoken-output contract before payload parsing.
   extraSystemPrompt = `${extraSystemPrompt}\n\n${VOICE_SPOKEN_OUTPUT_CONTRACT}`;
 
-  // Resolve timeout
   const timeoutMs = voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
   const runId = `voice:${callId}:${Date.now()}`;
 

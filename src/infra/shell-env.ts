@@ -224,6 +224,7 @@ function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
   return Object.hasOwn(env, key);
 }
 
+/** Imports only missing expected keys from a sanitized login-shell environment. */
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
 
@@ -235,6 +236,8 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   const missingExpectedKeys = opts.expectedKeys.filter(
     (key) => !hasExplicitEnvBinding(opts.env, key),
   );
+  // Existing keys, including intentionally empty strings, remain authoritative
+  // so shell startup files cannot override explicit process configuration.
   if (missingExpectedKeys.length === 0) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
@@ -266,14 +269,17 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   return { ok: true, applied };
 }
 
+/** Reads the opt-in flag for loading missing env vars from the login shell. */
 export function shouldEnableShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
   return isTruthyEnvValue(env.OPENCLAW_LOAD_SHELL_ENV);
 }
 
+/** Reads the flag that defers shell-env fallback until a later startup stage. */
 export function shouldDeferShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
   return isTruthyEnvValue(env.OPENCLAW_DEFER_SHELL_ENV_FALLBACK);
 }
 
+/** Resolves the login-shell probe timeout from env with a bounded default. */
 export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_SHELL_ENV_TIMEOUT_MS?.trim();
   if (!raw) {
@@ -286,6 +292,7 @@ export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number
   return resolveTimeoutMs(parsed);
 }
 
+/** Probes and caches PATH from a trusted login shell for process PATH repair. */
 export function getShellPathFromLoginShell(opts: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -317,6 +324,7 @@ export function getShellPathFromLoginShell(opts: {
   return cachedShellPath;
 }
 
+/** Clears shell-env probe caches between tests. */
 export function resetShellPathCacheForTests(): void {
   cachedShellPath = undefined;
   cachedEtcShells = undefined;
@@ -324,6 +332,7 @@ export function resetShellPathCacheForTests(): void {
   nextExecCacheId = 1;
 }
 
+/** Returns the env keys applied by the most recent shell fallback run. */
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
 }

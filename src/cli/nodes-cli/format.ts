@@ -2,6 +2,7 @@ import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core
 
 export { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 
+/** Format a node permission map into stable CLI text, ignoring malformed keys. */
 export function formatPermissions(raw: unknown) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;

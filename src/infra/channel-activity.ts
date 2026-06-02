@@ -1,6 +1,9 @@
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+
+/** Direction of channel traffic recorded for activity freshness checks. */
 export type ChannelDirection = "inbound" | "outbound";
 
+/** Last observed activity timestamps for one channel/account route. */
 type ActivityEntry = {
   inboundAt: number | null;
   outboundAt: number | null;
@@ -9,6 +12,7 @@ type ActivityEntry = {
 const activity = new Map<string, ActivityEntry>();
 
 function keyFor(channel: ChannelId, accountId: string) {
+  // Keep the key human-readable for tests/debugging; account ids are normalized before this point.
   return `${channel}:${accountId || "default"}`;
 }
 
@@ -23,6 +27,7 @@ function ensureEntry(channel: ChannelId, accountId: string): ActivityEntry {
   return created;
 }
 
+/** Records the latest inbound or outbound activity timestamp for a channel account. */
 export function recordChannelActivity(params: {
   channel: ChannelId;
   accountId?: string | null;
@@ -40,6 +45,7 @@ export function recordChannelActivity(params: {
   }
 }
 
+/** Read the last inbound/outbound activity for a channel account without creating an entry. */
 export function getChannelActivity(params: {
   channel: ChannelId;
   accountId?: string | null;
@@ -53,6 +59,7 @@ export function getChannelActivity(params: {
   );
 }
 
+/** Clears all recorded channel activity for tests. */
 export function resetChannelActivityForTest() {
   activity.clear();
 }

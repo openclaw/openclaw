@@ -10,21 +10,35 @@ import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
+/** Chat delivery target resolved from an approval request's persisted session state. */
 export type ExecApprovalSessionTarget = {
+  /** Channel that owns the target, normalized from turn-source or stored session metadata. */
   channel?: string;
+  /** Concrete chat/user/thread destination used by channel delivery code. */
   to: string;
+  /** Optional channel account binding; missing means the route is channel-wide. */
   accountId?: string;
+  /** Optional reply/thread target, preserving numeric thread ids for legacy channel stores. */
   threadId?: string | number;
 };
 
+/** Parsed conversation identity from a request session key, including thread parent candidates. */
 export type ApprovalRequestSessionConversation = {
+  /** Channel encoded in the session key, such as `slack` or `matrix`. */
   channel: string;
+  /** Conversation namespace encoded by channel session-key helpers. */
   kind: "group" | "channel";
+  /** Normalized conversation id used by current channel routing. */
   id: string;
+  /** Raw conversation id suffix before thread splitting or parent normalization. */
   rawId: string;
+  /** Optional thread id encoded in the session key. */
   threadId?: string;
+  /** Session key without the thread suffix, used to address the parent conversation. */
   baseSessionKey: string;
+  /** Parent conversation id after removing any thread suffix. */
   baseConversationId: string;
+  /** Candidate parent ids used by channel-specific fallback lookup. */
   parentConversationCandidates: string[];
 };
 
@@ -59,6 +73,8 @@ function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRe
   if (isExecApprovalRequest(request)) {
     return request;
   }
+  // Plugin approvals share the same routing fields as exec approvals, but use title as the
+  // synthetic command so session-store helpers can stay approval-kind agnostic.
   return {
     id: request.id,
     request: {
@@ -78,6 +94,12 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
   return normalizeMessageChannel(value);
 }
 
+/**
+ * Resolve the conversation encoded directly in an approval request session key.
+ *
+ * The optional channel guard prevents callers from reusing a parsed conversation across
+ * unrelated channel handlers.
+ */
 export function resolveApprovalRequestSessionConversation(params: {
   request: ApprovalRequestLike;
   channel?: string | null;
@@ -109,6 +131,12 @@ export function resolveApprovalRequestSessionConversation(params: {
   };
 }
 
+/**
+ * Resolve the best chat target for an exec approval from turn-source and session state.
+ *
+ * Turn-source fields override stale stored delivery metadata when present, while the persisted
+ * session entry still proves that the approval belongs to a known session.
+ */
 export function resolveExecApprovalSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
@@ -149,6 +177,7 @@ export function resolveExecApprovalSessionTarget(params: {
   };
 }
 
+/** Resolve the approval route target for exec or plugin approvals using the shared session store. */
 export function resolveApprovalRequestSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -175,6 +204,12 @@ function resolveApprovalRequestStoredSessionTarget(params: {
   });
 }
 
+/**
+ * Resolve the origin target only when persisted session and turn-source bindings agree.
+ *
+ * Callers provide channel-specific target parsing and comparison so this helper can reject
+ * ambiguous mixed-source approvals without depending on channel-specific target shapes.
+ */
 export function resolveApprovalRequestOriginTarget<TTarget>(
   params: ApprovalRequestOriginTargetResolver<TTarget>,
 ): TTarget | null {
@@ -201,6 +236,8 @@ export function resolveApprovalRequestOriginTarget<TTarget>(
       ? params.resolveSessionTarget(sessionTargetBinding)
       : null;
 
+  // Mixed turn-source/session targets can route approval replies to the wrong chat; reject
+  // ambiguous requests instead of choosing one side.
   if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
     return null;
   }

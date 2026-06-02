@@ -19,6 +19,7 @@ import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
 
+/** Normalize legacy version strings so table output has one stable `v` prefix policy. */
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -30,6 +31,7 @@ function formatVersionLabel(raw: string) {
   return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
 }
 
+/** Split legacy node `version` into core/UI columns based on platform ownership. */
 function resolveNodeVersions(node: {
   platform?: string;
   version?: string;
@@ -51,6 +53,7 @@ function resolveNodeVersions(node: {
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
 }
 
+/** Collapse core/UI version facts into a compact terminal table cell. */
 function formatNodeVersions(node: {
   platform?: string;
   version?: string;
@@ -68,6 +71,7 @@ function formatNodeVersions(node: {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/** Shorten long PATH-style env values while preserving the start and final entry. */
 function formatPathEnv(raw?: string): string | null {
   if (typeof raw !== "string") {
     return null;
@@ -82,6 +86,7 @@ function formatPathEnv(raw?: string): string | null {
   return shortenHomeInString(display);
 }
 
+/** Render gateway client identity as a compact `id/mode` diagnostic label. */
 function formatClientLabel(node: { clientId?: string; clientMode?: string }): string | null {
   const clientId = node.clientId?.trim();
   const clientMode = node.clientMode?.trim();
@@ -91,11 +96,13 @@ function formatClientLabel(node: { clientId?: string; clientMode?: string }): st
   return clientId || clientMode || null;
 }
 
+/** Pick the safest visible node label and sanitize it before table rendering. */
 function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string }): string {
   const label = node.displayName?.trim() ? node.displayName.trim() : node.nodeId;
   return sanitizeTerminalText(label);
 }
 
+/** Parse relative duration filters and terminate with CLI-shaped errors on invalid input. */
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -119,6 +126,7 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   }
 }
 
+/** Merge effective runtime node state over persisted pairing metadata without exposing tokens. */
 function mergePairedNodeWithEffectiveNode(
   paired: PairedNode | undefined,
   effective: NodeListNode,
@@ -140,6 +148,7 @@ function mergePairedNodeWithEffectiveNode(
   };
 }
 
+/** Preserve disconnected paired nodes while preferring live `node.list` data when available. */
 function mergePairedNodesWithEffectiveNodes(
   paired: PairedNode[],
   effectiveNodes: NodeListNode[] | null,
@@ -166,6 +175,7 @@ function mergePairedNodesWithEffectiveNodes(
   return rows;
 }
 
+/** Best-effort live node list read; pairing commands continue when node runtime is unavailable. */
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
     return parseNodeList(await callGatewayCli("node.list", opts, {}));
@@ -174,12 +184,14 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
   }
 }
 
+/** Remove pairing token material from JSON list output. */
 function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
   const copy: Record<string, unknown> = { ...node };
   delete copy.token;
   return copy as Omit<PairedNodeListRow, "token">;
 }
 
+/** Register status/list/detail commands for paired and currently connected nodes. */
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes

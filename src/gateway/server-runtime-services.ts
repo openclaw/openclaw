@@ -68,6 +68,8 @@ export async function runGatewayPostReadyMaintenance(params: {
   try {
     const maintenance = await params.startMaintenance();
     if (maintenance) {
+      // Ownership transfers only after a complete handle set is returned; the
+      // shutdown path can then clear every timer through one state object.
       params.applyMaintenance(maintenance);
     }
   } catch (err) {
@@ -249,6 +251,8 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
+  // Tests skip pricing refresh to avoid lazy import timers; production keeps a
+  // stoppable handle even when pricing is disabled.
   const stopModelPricingRefresh = !isVitestRuntimeEnv()
     ? startGatewayModelPricingRefreshOnDemand({
         config: params.cfgAtStart,

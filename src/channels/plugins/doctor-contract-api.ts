@@ -36,6 +36,7 @@ function loadBundledChannelPublicArtifact(
   return undefined;
 }
 
+/** Loads the bundled channel doctor contract artifact used before full plugin startup. */
 export function loadBundledChannelDoctorContractApi(
   channelId: string,
 ): BundledChannelDoctorContractApi | undefined {

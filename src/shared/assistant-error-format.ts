@@ -19,6 +19,7 @@ const SUPPORT_REQUEST_ID_RE = /(?:request[\s_-]*id)\s*[:#]?\s*([a-z0-9][a-z0-9_-
 const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "The AI service returned an internal error. Please try again in a moment.";
 
+/** Stable transport sentinel used before converting malformed stream fragments to UI copy. */
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
 const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
@@ -26,6 +27,7 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
+/** Normalized provider API error fields safe to show or route through UI formatters. */
 export type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
@@ -64,6 +66,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   return false;
 }
 
+/** Extracts a provider-shaped JSON error payload from raw text or prefixed API errors. */
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   if (!raw) {
     return null;
@@ -92,6 +95,7 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   return null;
 }
 
+/** Parses a leading HTTP status prefix and returns the remaining message body. */
 export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
   const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
   if (!match) {
@@ -104,6 +108,7 @@ export function extractLeadingHttpStatus(raw: string): { code: number; rest: str
   return { code, rest: (match[2] ?? "").trim() };
 }
 
+/** Detects provider/CDN HTML error pages so they do not leak raw markup into chats. */
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -132,6 +137,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   );
 }
 
+/** Detects generic provider internal-error prose that should become retryable UI copy. */
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -143,6 +149,7 @@ export function isGenericProviderInternalError(raw: string): boolean {
   );
 }
 
+/** Normalizes nested or flat provider error payloads into a compact API error summary. */
 export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   if (!raw) {
     return null;
@@ -202,6 +209,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   };
 }
 
+/** Converts raw assistant/provider failures into bounded user-facing error text. */
 export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {

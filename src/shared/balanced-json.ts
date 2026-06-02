@@ -1,5 +1,7 @@
+/** JSON opener characters supported by the balanced-fragment scanner. */
 export type JsonOpeningDelimiter = "{" | "[";
 
+/** Balanced JSON-looking substring plus inclusive source offsets. */
 export type BalancedJsonFragment = {
   json: string;
   startIndex: number;
@@ -18,6 +20,7 @@ function isJsonOpeningDelimiter(
   return char === "{" ? openers.includes("{") : char === "[" && openers.includes("[");
 }
 
+/** Finds the first balanced object/array fragment while respecting JSON strings and escapes. */
 export function extractBalancedJsonPrefix(
   raw: string,
   opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
@@ -68,6 +71,7 @@ export function extractBalancedJsonPrefix(
   return null;
 }
 
+/** Extracts balanced JSON-looking fragments from a string without parsing their contents. */
 export function extractBalancedJsonFragments(
   raw: string,
   opts: { openers?: readonly JsonOpeningDelimiter[] } = {},

@@ -16,6 +16,7 @@ type MaxDurationTimerContext = Pick<
 >;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
 
+/** Cancels and forgets the max-duration timer for one call. */
 export function clearMaxDurationTimer(
   ctx: Pick<MaxDurationTimerContext, "maxDurationTimers">,
   callId: CallId,
@@ -27,10 +28,15 @@ export function clearMaxDurationTimer(
   }
 }
 
+/** Starts the per-call hard timeout, replacing any previous timer for the same call. */
 export function startMaxDurationTimer(params: {
+  /** Manager maps/config used to find the live call and persist timeout metadata. */
   ctx: MaxDurationTimerContext;
+  /** Internal call id whose timer should be replaced and tracked. */
   callId: CallId;
+  /** Cleanup hook invoked after timeout metadata is persisted on the live call. */
   onTimeout: (callId: CallId) => Promise<void>;
+  /** Optional millisecond override used when restoring aged calls. */
   timeoutMs?: number;
 }): void {
   clearMaxDurationTimer(params.ctx, params.callId);
@@ -52,6 +58,7 @@ export function startMaxDurationTimer(params: {
           `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
         );
         call.endReason = "timeout";
+        // Persist the timeout reason before delegating to provider hangup/cleanup.
         persistCallRecord(params.ctx.storePath, call);
         await params.onTimeout(params.callId);
       }
@@ -61,6 +68,7 @@ export function startMaxDurationTimer(params: {
   params.ctx.maxDurationTimers.set(params.callId, timer);
 }
 
+/** Clears a pending final-transcript waiter without resolving or rejecting its promise. */
 export function clearTranscriptWaiter(ctx: TranscriptWaiterContext, callId: CallId): void {
   const waiter = ctx.transcriptWaiters.get(callId);
   if (!waiter) {
@@ -70,6 +78,7 @@ export function clearTranscriptWaiter(ctx: TranscriptWaiterContext, callId: Call
   ctx.transcriptWaiters.delete(callId);
 }
 
+/** Rejects and removes the pending final-transcript waiter for a call. */
 export function rejectTranscriptWaiter(
   ctx: TranscriptWaiterContext,
   callId: CallId,
@@ -83,6 +92,7 @@ export function rejectTranscriptWaiter(
   waiter.reject(new Error(reason));
 }
 
+/** Resolves a pending transcript waiter only when its optional turn token matches. */
 export function resolveTranscriptWaiter(
   ctx: TranscriptWaiterContext,
   callId: CallId,
@@ -94,6 +104,7 @@ export function resolveTranscriptWaiter(
     return false;
   }
   if (waiter.turnToken && waiter.turnToken !== turnToken) {
+    // Ignore stale transcript completions from an earlier turn on the same call.
     return false;
   }
   clearTranscriptWaiter(ctx, callId);
@@ -101,9 +112,12 @@ export function resolveTranscriptWaiter(
   return true;
 }
 
+/** Registers a single pending final-transcript wait for a call turn. */
 export function waitForFinalTranscript(
   ctx: TimerContext,
+  /** Internal call id; only one waiter may be active per call. */
   callId: CallId,
+  /** Optional provider turn token that filters stale final transcripts. */
   turnToken?: string,
 ): Promise<string> {
   if (ctx.transcriptWaiters.has(callId)) {

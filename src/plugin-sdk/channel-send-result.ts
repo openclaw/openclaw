@@ -14,6 +14,8 @@ export type ChannelSendRawResult = {
 
 /** Attaches the channel id to a single outbound send result. */
 export function attachChannelToResult<T extends object>(channel: string, result: T) {
+  // Spread result after channel so plugin-returned metadata can override only
+  // intentionally; normal adapters pass channel-less results here.
   return {
     channel,
     ...result,
@@ -22,6 +24,8 @@ export function attachChannelToResult<T extends object>(channel: string, result:
 
 /** Attaches the channel id to each outbound send result in order. */
 export function attachChannelToResults<T extends object>(channel: string, results: readonly T[]) {
+  // Preserve provider result order for multi-send adapters that map one logical
+  // outbound call to several platform messages.
   return results.map((result) => attachChannelToResult(channel, result));
 }
 
@@ -52,6 +56,8 @@ export function createAttachedChannelResultAdapter(params: {
   sendPoll?: (ctx: SendPollParams) => MaybePromise<Omit<ChannelPollResult, "channel">>;
 }): Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll"> {
   return {
+    // Leave absent methods undefined so capability detection still reflects the
+    // underlying channel adapter instead of advertising unsupported sends.
     sendText: params.sendText
       ? async (ctx) => attachChannelToResult(params.channel, await params.sendText!(ctx))
       : undefined,
@@ -82,6 +88,8 @@ export function createRawChannelSendResultAdapter(params: {
 
 /** Normalize raw channel send results into the shape shared outbound callers expect. */
 export function buildChannelSendResult(channel: string, result: ChannelSendRawResult) {
+  // Legacy adapters report errors as strings; outbound delivery callers expect
+  // Error objects and an empty string when no platform message id exists.
   return {
     channel,
     ok: result.ok,

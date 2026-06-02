@@ -62,6 +62,7 @@ type DiagnosticsTimelineOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+/** Active timeline span metadata propagated through AsyncLocalStorage. */
 export type ActiveDiagnosticsTimelineSpan = {
   name: string;
   phase?: string;
@@ -90,6 +91,7 @@ function resolveDiagnosticsTimelineOptions(
   };
 }
 
+/** Checks whether JSONL timeline diagnostics should write for the given config/env. */
 export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
   const { config, env } = resolveDiagnosticsTimelineOptions(options);
   return (
@@ -167,6 +169,7 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
   return `${JSON.stringify(normalized)}\n`;
 }
 
+/** Appends a normalized timeline event to the configured JSONL file when enabled. */
 export function emitDiagnosticsTimelineEvent(
   event: DiagnosticsTimelineEvent,
   options: DiagnosticsTimelineOptions = {},
@@ -195,6 +198,7 @@ export function emitDiagnosticsTimelineEvent(
   }
 }
 
+/** Returns the currently active timeline span for nested instrumentation. */
 export function getActiveDiagnosticsTimelineSpan(): ActiveDiagnosticsTimelineSpan | undefined {
   return activeDiagnosticsTimelineSpan.getStore();
 }
@@ -285,6 +289,7 @@ function emitFailedDiagnosticsTimelineSpan(
   );
 }
 
+/** Measures async work with span start/end/error events when the timeline is enabled. */
 export async function measureDiagnosticsTimelineSpan<T>(
   name: string,
   run: () => Promise<T> | T,
@@ -299,11 +304,14 @@ export async function measureDiagnosticsTimelineSpan<T>(
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
+    // Callers can opt out of error messages for spans that may include secret
+    // refs; still emit the error type and rethrow to preserve control flow.
     emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
 }
 
+/** Measures synchronous work with span start/end/error events when the timeline is enabled. */
 export function measureDiagnosticsTimelineSpanSync<T>(
   name: string,
   run: () => T,
