@@ -3355,6 +3355,37 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
+  it("routes generic-path control commands as text slash when native commands are off", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      commands: { text: false, native: false },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 1234, type: "private" },
+        from: { id: 42, first_name: "Ada" },
+        text: "/compact",
+        date: 1736380800,
+        message_id: 5,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.CommandSource).toBe("text");
+    expect(payload.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+    });
+  });
   it("resolves topic-scoped forum metadata", () => {
     const threadSpec = resolveTelegramThreadSpec({
       isGroup: true,

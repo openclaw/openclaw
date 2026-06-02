@@ -434,7 +434,11 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
-  const commandSource = options?.commandSource;
+  // Generic message ingress lacks bot.command metadata; classify authorized control
+  // commands as text-slash so core command handlers and commands.log see them.
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
   const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
     cfg,
     agentId: route.agentId,
