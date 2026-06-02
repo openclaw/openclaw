@@ -1537,7 +1537,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
             createStartupConversationSummaryListParams(currentAgentId),
           );
           const sessions = sessionsRes.sessions ?? [];
-          const summarySession = sessions.find((s) => s.key === currentSessionKey) ?? sessions[0];
+          const summarySession = sessions.find((s) => s.key === currentSessionKey);
           if (summarySession) {
             const summaryStr =
               summarySession.derivedTitle || summarySession.lastMessagePreview || "";
