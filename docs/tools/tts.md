@@ -710,8 +710,8 @@ Reply -> TTS enabled?
 
 ## Captioned final text (`captionedFinalText`)
 
-Channel plugins can opt in to **captioned final text** delivery by returning
-`{ captionedFinalText: true }` from `resolveChannelTtsVoiceDelivery`. When
+Channel plugins can opt in to **captioned final text** delivery by declaring
+`captionedFinalText: true` on their `capabilities.tts.voice` object. When
 enabled, core changes how text and audio are delivered during an auto-TTS reply:
 
 1. **Live text suppression.** Instead of streaming block text to the channel
@@ -738,14 +738,23 @@ voice-plus-caption delivery.
 
 ### How to opt in (channel plugin)
 
-Return `captionedFinalText: true` from your channel's
-`resolveChannelTtsVoiceDelivery` implementation:
+Declare `captionedFinalText: true` inside `capabilities.tts.voice` in your
+channel plugin's account capabilities:
 
 ```ts
-resolveChannelTtsVoiceDelivery() {
-  return { captionedFinalText: true };
+capabilities: {
+  tts: {
+    voice: {
+      synthesisTarget: "voice-note",
+      captionedFinalText: true,
+    },
+  },
+  // ...other capabilities
 }
 ```
+
+Core reads this via `resolveChannelTtsVoiceDelivery` at runtime — channel
+plugins should not override that resolver directly.
 
 ## Output formats by channel
 
