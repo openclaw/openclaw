@@ -53,6 +53,11 @@ const model = {
   maxTokens: 4096,
 } satisfies Model<"openai-completions">;
 
+const reasoningModel = {
+  ...model,
+  reasoning: true,
+} satisfies Model<"openai-completions">;
+
 const context = {
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
 } satisfies Context;
@@ -153,8 +158,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -171,8 +177,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -189,8 +196,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -207,8 +215,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -225,8 +234,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -264,8 +274,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
 
@@ -308,8 +319,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
     const visibleText = result.content
@@ -353,8 +365,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       makeFinishChunk("stop"),
     ];
 
-    const stream = streamOpenAICompletions(model, context, {
+    const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
+      reasoningEffort: "medium",
     });
     const result = await stream.result();
     const visibleText = result.content
@@ -368,6 +381,46 @@ describe("openai-completions stop-reason tool-call guard", () => {
       thinking: "private reasoning",
       thinkingSignature: "reasoning_content",
     });
+  });
+
+  it("drops mirrored reasoning output when reasoning is disabled but keeps strict text partitioning", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "<think>private reasoning",
+            },
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_content: "private reasoning",
+            },
+          },
+        ],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+    const visibleText = result.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("");
+    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
 
   it("promotes silent tool_calls with finish_reason stop to toolUse", async () => {

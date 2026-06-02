@@ -2588,6 +2588,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
+        const emitReasoning = shouldEmitOpenAICompletionsReasoning(
+          model as OpenAIModeModel,
+          options as OpenAICompletionsOptions | undefined,
+        );
         const responseStream = (await client.chat.completions.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
@@ -2595,6 +2599,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
+          emitReasoning,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -2616,10 +2621,11 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; emitReasoning?: boolean },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
+  const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
@@ -2734,7 +2740,7 @@ async function processOpenAICompletionsStream(
     for (const delta of bufferedDeltas) {
       if (delta.kind === "text") {
         appendTextDeltaInternal(delta.text);
-      } else {
+      } else if (emitReasoning) {
         appendThinkingDeltaInternal(delta);
       }
     }
@@ -2833,6 +2839,9 @@ async function processOpenAICompletionsStream(
       appendFilteredVisibleTextDelta(delta.text);
       return;
     }
+    if (!emitReasoning) {
+      return;
+    }
     if (currentBlock?.type === "toolCall") {
       queuePostToolCallDelta(delta);
     } else {
@@ -2914,13 +2923,16 @@ async function processOpenAICompletionsStream(
       }
     }
     for (const reasoningDelta of reasoningDeltas) {
+      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+        continue;
+      }
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
         continue;
       }
       if (reasoningDelta.kind === "text") {
         appendTextDelta(reasoningDelta.text);
-      } else {
+      } else if (emitReasoning) {
         appendThinkingDelta(reasoningDelta);
       }
     }
@@ -3418,6 +3430,27 @@ type OpenAIResponsesRequestParams = {
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+function shouldEmitOpenAICompletionsReasoning(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  if (!model.reasoning) {
+    return false;
+  }
+  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
+    return false;
+  }
+  return true;
+}
+
+function shouldEmitOpenAICompletionsReasoningForModel(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  return shouldEmitOpenAICompletionsReasoning(model, options);
 }
 
 function resolveOpenAICompletionsMaxTokens(
@@ -4213,6 +4246,7 @@ export const testing = {
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
   processResponsesStream,
+  shouldEmitOpenAICompletionsReasoningForModel,
   formatModelTransportDebugBaseUrl,
   buildResponsesFailedNoDetailsObservation,
   buildOpenAIResponsesReasoningReplayMetadata,
