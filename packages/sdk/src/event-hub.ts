@@ -14,6 +14,7 @@ export class EventHub<T> {
   private readonly replayLimit: number;
   private readonly replayEvents: T[] = [];
   private closed = false;
+  private closeError: unknown;
   private readonly listeners = new Set<Listener<T>>();
   private readonly waiters = new Set<() => void>();
 
@@ -37,8 +38,14 @@ export class EventHub<T> {
     }
   }
 
-  close(): void {
+  close(error?: unknown): void {
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
+    if (error !== undefined) {
+      this.closeError = error;
+    }
     this.replayEvents.length = 0;
     this.listeners.clear();
     for (const wake of this.waiters) {
@@ -93,6 +100,10 @@ export class EventHub<T> {
                 return { done: false, value: queue.shift() as T };
               }
               if (this.closed) {
+                if (this.closeError !== undefined) {
+                  cleanup();
+                  throw this.closeError;
+                }
                 break;
               }
               await new Promise<void>((resolve) => {

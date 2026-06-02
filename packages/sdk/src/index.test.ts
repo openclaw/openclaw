@@ -1264,4 +1264,77 @@ describe("OpenClaw SDK", () => {
     expect(timedOut.runId).toBe("run_1");
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
+
+  it("surfaces pump failures when the transport event iterator throws before yielding", async () => {
+    const failure = new Error("synthetic transport event failure");
+    const transport: OpenClawTransport = {
+      async request() {
+        return {} as never;
+      },
+      events(): AsyncIterable<GatewayEvent> {
+        return {
+          [Symbol.asyncIterator](): AsyncIterator<GatewayEvent> {
+            return {
+              next: () => Promise.reject(failure),
+            };
+          },
+        };
+      },
+    };
+    const oc = new OpenClaw({ transport });
+
+    const iterator = oc.events()[Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toBe(failure);
+
+    await oc.close();
+  });
+
+  it("surfaces pump failures after a successful event when the iterator later throws", async () => {
+    const failure = new Error("synthetic transport event failure after yield");
+    const transport: OpenClawTransport = {
+      async request() {
+        return {} as never;
+      },
+      events(): AsyncIterable<GatewayEvent> {
+        return {
+          [Symbol.asyncIterator](): AsyncIterator<GatewayEvent> {
+            let yielded = false;
+            return {
+              next: () => {
+                if (yielded) {
+                  return Promise.reject(failure);
+                }
+                yielded = true;
+                return Promise.resolve({
+                  done: false,
+                  value: {
+                    event: "agent",
+                    seq: 1,
+                    payload: {
+                      runId: "run_pump",
+                      stream: "lifecycle",
+                      ts: 1_777_000_000_000,
+                      data: { phase: "start" },
+                    },
+                  },
+                });
+              },
+            };
+          },
+        };
+      },
+    };
+    const oc = new OpenClaw({ transport });
+
+    // The background pump yields one event and then fails. However the
+    // consumer reaches the stream, iteration must terminate by rejecting with
+    // the pump failure instead of reporting a clean end-of-stream.
+    await expect(async () => {
+      for await (const _event of oc.events()) {
+        // drain whatever events were delivered before the failure
+      }
+    }).rejects.toBe(failure);
+
+    await oc.close();
+  });
 });
