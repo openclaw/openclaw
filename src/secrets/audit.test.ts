@@ -459,6 +459,83 @@ describe("secrets audit", () => {
     });
   });
 
+  it("scans backup files for plaintext apiKey values", async () => {
+    const backupPath = path.join(fixture.stateDir, "models.json.20260501.bak");
+    await writeJsonFile(backupPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-bak...text", // pragma: allowlist secret
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      report.findings.some(
+        (entry) =>
+          entry.code === "LEGACY_RESIDUE" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "providers.openai.apiKey" &&
+          entry.message.includes("Backup file contains plaintext"),
+      ),
+    ).toBe(true);
+  });
+
+  it("scans .bak files for plaintext apiKey values", async () => {
+    const backupPath = path.join(fixture.stateDir, "openclaw.json.old");
+    await writeJsonFile(backupPath, {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com/v1",
+          api: "anthropic-messages",
+          apiKey: "sk-ant...bak", // pragma: allowlist secret
+          models: [{ id: "claude-4", name: "claude-4" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      report.findings.some(
+        (entry) =>
+          entry.code === "LEGACY_RESIDUE" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "providers.anthropic.apiKey",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not flag non-secret markers in backup files", async () => {
+    const backupPath = path.join(fixture.stateDir, "openclaw.json.bak");
+    await writeJsonFile(backupPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "OPENAI_API_KEY",
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      report.findings.some(
+        (entry) =>
+          entry.code === "LEGACY_RESIDUE" && entry.file === backupPath,
+      ),
+    ).toBe(false);
+  });
+
   it("does not flag models.json marker values as plaintext", async () => {
     await writeModelsProvider();
 

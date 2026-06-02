@@ -74,6 +74,33 @@ export function listAgentModelsJsonPaths(
   return [...paths];
 }
 
+export function listKnownSecretFileBackups(stateDir: string): string[] {
+  const out: string[] = [];
+  const searchRoots = [
+    path.join(resolveUserPath(stateDir), "agents"),
+    resolveUserPath(stateDir),
+  ];
+  for (const root of searchRoots) {
+    if (!fs.existsSync(root)) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      const fullPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        continue;
+      }
+      // Match backup files: models.json.*, openclaw.json.*, *.bak, *.backup, *.old
+      if (
+        /^(models|openclaw)\.json\.\d/.test(entry.name) ||
+        /\.(bak|backup|old)$/.test(entry.name)
+      ) {
+        out.push(fullPath);
+      }
+    }
+  }
+  return out;
+}
+
 export type ReadJsonObjectOptions = {
   maxBytes?: number;
   requireRegularFile?: boolean;

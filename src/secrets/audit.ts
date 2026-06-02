@@ -32,6 +32,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
+  listKnownSecretFileBackups,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -298,6 +299,69 @@ function collectAuthStoreSecrets(params: {
         profileId: entry.profileId,
       });
       trackAuthProviderState(params.collector, entry.provider, "oauth");
+    }
+  }
+}
+
+function collectBackupResidue(params: { stateDir: string; collector: AuditCollector }): void {
+  for (const backupPath of listKnownSecretFileBackups(params.stateDir)) {
+    params.collector.filesScanned.add(backupPath);
+    const parsedResult = readJsonObjectIfExists(backupPath);
+    if (parsedResult.error) {
+      addFinding(params.collector, {
+        code: "LEGACY_RESIDUE",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: "<root>",
+        message: `Invalid JSON in backup file: ${parsedResult.error}`,
+      });
+      continue;
+    }
+    const parsed = parsedResult.value;
+    if (!parsed) {
+      continue;
+    }
+    // Check for plaintext apiKey in provider configs within backup files
+    const providers = isRecord(parsed) && isRecord(parsed.providers)
+      ? parsed.providers
+      : parsed;
+    if (!isRecord(providers)) {
+      continue;
+    }
+    for (const [providerId, value] of Object.entries(providers)) {
+      if (!isRecord(value)) {
+        continue;
+      }
+      const apiKey = (value as Record<string, unknown>).apiKey;
+      if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
+        addFinding(params.collector, {
+          code: "LEGACY_RESIDUE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: `providers.${providerId}.apiKey`,
+          message: "Backup file contains plaintext provider apiKey.",
+          provider: providerId,
+        });
+      }
+      // Also check sub-keys: some backup formats nest providers
+      if (isRecord(value.providers)) {
+        for (const [subId, subValue] of Object.entries(value.providers)) {
+          if (!isRecord(subValue)) {
+            continue;
+          }
+          const subApiKey = (subValue as Record<string, unknown>).apiKey;
+          if (isNonEmptyString(subApiKey) && !isNonSecretApiKeyMarker(subApiKey)) {
+            addFinding(params.collector, {
+              code: "LEGACY_RESIDUE",
+              severity: "warn",
+              file: backupPath,
+              jsonPath: `providers.${subId}.apiKey`,
+              message: "Backup file contains plaintext provider apiKey.",
+              provider: subId,
+            });
+          }
+        }
+      }
     }
   }
 }
@@ -682,6 +746,10 @@ export async function runSecretsAudit(
     collector,
   });
   collectAuthJsonResidue({
+    stateDir,
+    collector,
+  });
+  collectBackupResidue({
     stateDir,
     collector,
   });
