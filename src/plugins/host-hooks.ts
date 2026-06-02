@@ -1,5 +1,6 @@
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
+import type { MessagePresentation } from "../interactive/payload.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
@@ -237,8 +238,9 @@ export type PluginSessionAttachmentCaptionFormat = "plain" | "html" | "markdown"
 
 export type PluginSessionAttachmentParams = {
   sessionKey: string;
-  files: PluginSessionAttachmentFile[];
+  files?: PluginSessionAttachmentFile[];
   text?: string;
+  presentation?: MessagePresentation;
   threadId?: string | number;
   forceDocument?: boolean;
   maxBytes?: number;
