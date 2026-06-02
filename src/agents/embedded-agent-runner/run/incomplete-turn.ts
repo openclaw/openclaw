@@ -619,6 +619,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   });
 }
 
+/**
+ * Builds the retry instruction for reasoning-only turns that consumed provider
+ * output budget but produced no visible assistant text.
+ */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -657,6 +661,10 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/**
+ * Builds the retry instruction for empty assistant turns when the provider/model
+ * is eligible for non-visible turn recovery.
+ */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -793,6 +801,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+/** Builds the fast-path execution instruction for short approval prompts like "go ahead". */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -832,6 +841,7 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
+/** Extracts the visible plan text and normalized step list from a plan-only reply. */
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
