@@ -420,6 +420,45 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+function parseClaudeCliPartialAssistantDelta(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (!usesClaudeStreamJsonDialect(params)) {
+    return null;
+  }
+  if (params.parsed.type !== "assistant" || !isRecord(params.parsed.message)) {
+    return null;
+  }
+  // Claude CLI --include-partial-messages emits assistant records with
+  // stop_reason: null while streaming and a non-null stop_reason (e.g.
+  // "end_turn") for the final complete message.  Only relay true partials.
+  const message = params.parsed.message;
+  if (isRecord(message) && message.stop_reason != null) {
+    return null;
+  }
+  const partialText = collectCliText(params.parsed.message);
+  if (!partialText || partialText.length <= params.textSoFar.length) {
+    return null;
+  }
+  const delta = partialText.startsWith(params.textSoFar)
+    ? partialText.slice(params.textSoFar.length)
+    : partialText;
+  if (!delta) {
+    return null;
+  }
+  return {
+    text: partialText,
+    delta,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
 type PendingToolUse = {
   toolCallId: string;
   name: string;
@@ -744,15 +783,33 @@ export function createCliJsonlStreamingParser(params: {
       sessionId,
       usage,
     });
-    if (!delta) {
+    if (delta) {
+      if (classifyClaudeCommentary) {
+        pendingClaudeText = `${pendingClaudeText}${delta.delta}`;
+      } else {
+        assistantText = delta.text;
+        params.onAssistantDelta(delta);
+      }
       return;
     }
-    if (classifyClaudeCommentary) {
-      pendingClaudeText = `${pendingClaudeText}${delta.delta}`;
-      return;
+
+    // Claude CLI with --include-partial-messages emits {"type":"assistant",
+    // "message":{...}} events that carry the accumulated text so far. When
+    // the CLI does not also emit raw stream_event/content_block_delta lines
+    // (or when they are suppressed), these partial messages are the only
+    // source of streaming text. Compute the delta against assistantText.
+    const partialDelta = parseClaudeCliPartialAssistantDelta({
+      backend: params.backend,
+      providerId: params.providerId,
+      parsed,
+      textSoFar: assistantText,
+      sessionId,
+      usage,
+    });
+    if (partialDelta) {
+      assistantText = partialDelta.text;
+      params.onAssistantDelta(partialDelta);
     }
-    assistantText = delta.text;
-    params.onAssistantDelta(delta);
   };
 
   const flushLines = (flushPartial: boolean) => {
