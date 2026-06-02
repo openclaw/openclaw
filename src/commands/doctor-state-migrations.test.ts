@@ -15,6 +15,7 @@ import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
+import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -297,6 +298,44 @@ function writeLegacyPluginStateSidecar(root: string): string {
     db.close();
   }
   return sourcePath;
+}
+
+async function writeExistingPluginInstallIndex(
+  root: string,
+  installRecords: Record<string, InstalledPluginInstallRecordInfo>,
+): Promise<void> {
+  await writePersistedInstalledPluginIndex(
+    {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 1,
+      installRecords,
+      plugins: [],
+      diagnostics: [],
+    },
+    { stateDir: root },
+  );
+}
+
+function writeLegacyPluginInstallIndex(
+  root: string,
+  records: Record<string, InstalledPluginInstallRecordInfo>,
+): string {
+  const sourcePath = path.join(root, "plugins", "installs.json");
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  fs.writeFileSync(sourcePath, JSON.stringify({ records }), "utf8");
+  return sourcePath;
+}
+
+async function runLegacyStateMigrationsForRoot(root: string) {
+  const detected = await detectLegacyStateMigrations({
+    cfg: {},
+    env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+  });
+  return await runLegacyStateMigrations({ detected });
 }
 
 function writeLegacyTaskStateSidecars(root: string): {
@@ -1302,45 +1341,20 @@ describe("doctor legacy state migrations", () => {
 
   it("merges missing legacy plugin install records into an existing SQLite index", async () => {
     const root = await makeTempRoot();
-    await writePersistedInstalledPluginIndex(
-      {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash: "test",
-        generatedAtMs: 1,
-        installRecords: {
-          existing: {
-            source: "npm",
-            spec: "existing@1.0.0",
-          },
-        },
-        plugins: [],
-        diagnostics: [],
+    await writeExistingPluginInstallIndex(root, {
+      existing: {
+        source: "npm",
+        spec: "existing@1.0.0",
       },
-      { stateDir: root },
-    );
-    const sourcePath = path.join(root, "plugins", "installs.json");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
-        records: {
-          legacy: {
-            source: "git",
-            spec: "git:file:///tmp/legacy",
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
-    const result = await runLegacyStateMigrations({ detected });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      legacy: {
+        source: "git",
+        spec: "git:file:///tmp/legacy",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Merged 1 legacy plugin install record → shared SQLite state");
@@ -1355,53 +1369,28 @@ describe("doctor legacy state migrations", () => {
 
   it("archives legacy plugin install index when SQLite already has richer matching records", async () => {
     const root = await makeTempRoot();
-    await writePersistedInstalledPluginIndex(
-      {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash: "test",
-        generatedAtMs: 1,
-        installRecords: {
-          demo: {
-            source: "npm",
-            spec: "demo@1.0.0",
-            version: "1.0.0",
-            resolvedName: "demo",
-            resolvedVersion: "1.0.0",
-            resolvedSpec: "demo@1.0.0",
-            integrity: "sha512-current",
-            shasum: "current",
-            installedAt: "2026-06-01T21:04:35.000Z",
-          },
-        },
-        plugins: [],
-        diagnostics: [],
+    await writeExistingPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+        integrity: "sha512-current",
+        shasum: "current",
+        installedAt: "2026-06-01T21:04:35.000Z",
       },
-      { stateDir: root },
-    );
-    const sourcePath = path.join(root, "plugins", "installs.json");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
-        records: {
-          demo: {
-            source: "npm",
-            spec: "demo@beta",
-            version: "1.0.0",
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
     });
-    const result = await runLegacyStateMigrations({ detected });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@beta",
+        version: "1.0.0",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
 
     expect(result.warnings).toStrictEqual([]);
     expect(fs.existsSync(sourcePath)).toBe(false);
@@ -1418,111 +1407,56 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("keeps legacy plugin install index when same-version npm records name different packages", async () => {
-    const root = await makeTempRoot();
-    await writePersistedInstalledPluginIndex(
-      {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash: "test",
-        generatedAtMs: 1,
-        installRecords: {
-          demo: {
-            source: "npm",
-            spec: "@openclaw/demo@1.0.0",
-            version: "1.0.0",
-            resolvedName: "@openclaw/demo",
-            resolvedVersion: "1.0.0",
-            resolvedSpec: "@openclaw/demo@1.0.0",
-          },
-        },
-        plugins: [],
-        diagnostics: [],
+  for (const fixture of [
+    {
+      label: "name different packages",
+      current: {
+        source: "npm",
+        spec: "@openclaw/demo@1.0.0",
+        version: "1.0.0",
+        resolvedName: "@openclaw/demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "@openclaw/demo@1.0.0",
       },
-      { stateDir: root },
-    );
-    const sourcePath = path.join(root, "plugins", "installs.json");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
-        records: {
-          demo: {
-            source: "npm",
-            spec: "@vendor/demo@1.0.0",
-            version: "1.0.0",
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([
-      "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-  });
-
-  it("keeps legacy plugin install index when same-version npm specs are unparseable", async () => {
-    const root = await makeTempRoot();
-    await writePersistedInstalledPluginIndex(
-      {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash: "test",
-        generatedAtMs: 1,
-        installRecords: {
-          demo: {
-            source: "npm",
-            spec: "file:../current-demo",
-            version: "1.0.0",
-            resolvedVersion: "1.0.0",
-          },
-        },
-        plugins: [],
-        diagnostics: [],
+      legacy: {
+        source: "npm",
+        spec: "@vendor/demo@1.0.0",
+        version: "1.0.0",
       },
-      { stateDir: root },
-    );
-    const sourcePath = path.join(root, "plugins", "installs.json");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
-        records: {
-          demo: {
-            source: "npm",
-            spec: "file:../legacy-demo",
-            version: "1.0.0",
-          },
-        },
-      }),
-      "utf8",
-    );
+    },
+    {
+      label: "specs are unparseable",
+      current: {
+        source: "npm",
+        spec: "file:../current-demo",
+        version: "1.0.0",
+        resolvedVersion: "1.0.0",
+      },
+      legacy: {
+        source: "npm",
+        spec: "file:../legacy-demo",
+        version: "1.0.0",
+      },
+    },
+  ] satisfies Array<{
+    label: string;
+    current: InstalledPluginInstallRecordInfo;
+    legacy: InstalledPluginInstallRecordInfo;
+  }>) {
+    it(`keeps legacy plugin install index when same-version npm records ${fixture.label}`, async () => {
+      const root = await makeTempRoot();
+      await writeExistingPluginInstallIndex(root, { demo: fixture.current });
+      const sourcePath = writeLegacyPluginInstallIndex(root, { demo: fixture.legacy });
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      const result = await runLegacyStateMigrationsForRoot(root);
+
+      expect(result.warnings).toStrictEqual([
+        "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+      ]);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     });
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([
-      "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-  });
+  }
 
   it("auto-migrates the shipped plugin-state SQLite sidecar by itself", async () => {
     const root = await makeTempRoot();

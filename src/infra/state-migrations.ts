@@ -374,12 +374,6 @@ function legacyInstalledPluginIndexMatches(
   );
 }
 
-function readInstallRecordIdentityVersion(
-  record: InstalledPluginIndex["installRecords"][string],
-): string | undefined {
-  return record.resolvedVersion ?? record.version;
-}
-
 function readInstallRecordNpmName(
   record: InstalledPluginIndex["installRecords"][string],
 ): string | undefined {
@@ -401,35 +395,24 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
 }): boolean {
-  const currentVersion = readInstallRecordIdentityVersion(params.currentRecord);
-  const legacyVersion = readInstallRecordIdentityVersion(params.legacyRecord);
-  const sameVersion = Boolean(currentVersion && legacyVersion && currentVersion === legacyVersion);
+  const { currentRecord, legacyRecord } = params;
+  if (legacyRecord.resolvedSpec && currentRecord.resolvedSpec === legacyRecord.resolvedSpec) {
+    return true;
+  }
+  if (legacyRecord.spec && currentRecord.resolvedSpec === legacyRecord.spec) {
+    return true;
+  }
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
   const currentNpmName = readInstallRecordNpmName(params.currentRecord);
   const legacyNpmName = readInstallRecordNpmName(params.legacyRecord);
-  const sameNpmPackage =
-    params.currentRecord.source === "npm" &&
-    params.legacyRecord.source === "npm" &&
-    Boolean(currentNpmName && legacyNpmName && currentNpmName === legacyNpmName);
-  return Boolean(
-    (sameVersion && sameNpmPackage) ||
-    (params.legacyRecord.resolvedSpec &&
-      params.currentRecord.resolvedSpec === params.legacyRecord.resolvedSpec) ||
-    (params.legacyRecord.spec && params.currentRecord.resolvedSpec === params.legacyRecord.spec),
-  );
-}
-
-function legacyInstallRecordFieldCoveredByCurrent(params: {
-  key: string;
-  currentRecord: InstalledPluginIndex["installRecords"][string];
-  legacyRecord: InstalledPluginIndex["installRecords"][string];
-}): boolean {
-  if (params.key === "spec") {
-    return legacyInstallRecordHasCurrentResolvedIdentity(params);
+  if (!currentNpmName || currentNpmName !== legacyNpmName) {
+    return false;
   }
-  if (params.key === "resolvedAt" || params.key === "installedAt") {
-    return typeof readInstallRecordField(params.currentRecord, params.key) === "string";
-  }
-  return false;
+  const currentVersion = currentRecord.resolvedVersion ?? currentRecord.version;
+  const legacyVersion = legacyRecord.resolvedVersion ?? legacyRecord.version;
+  return Boolean(currentVersion && legacyVersion && currentVersion === legacyVersion);
 }
 
 function legacyInstallRecordCoveredByCurrent(
@@ -440,10 +423,17 @@ function legacyInstallRecordCoveredByCurrent(
     return false;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
-    if (readInstallRecordField(currentRecord, key) === readInstallRecordField(legacyRecord, key)) {
+    const currentValue = readInstallRecordField(currentRecord, key);
+    if (currentValue === readInstallRecordField(legacyRecord, key)) {
       continue;
     }
-    if (legacyInstallRecordFieldCoveredByCurrent({ key, currentRecord, legacyRecord })) {
+    if (
+      key === "spec" &&
+      legacyInstallRecordHasCurrentResolvedIdentity({ currentRecord, legacyRecord })
+    ) {
+      continue;
+    }
+    if ((key === "resolvedAt" || key === "installedAt") && typeof currentValue === "string") {
       continue;
     }
     return false;
