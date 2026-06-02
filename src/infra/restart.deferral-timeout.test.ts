@@ -4,6 +4,7 @@ import {
   testing,
   consumeGatewaySigusr1RestartIntent,
   deferGatewayRestartUntilIdle,
+  scheduleGatewaySigusr1Restart,
   type RestartDeferralHooks,
 } from "./restart.js";
 
@@ -160,5 +161,48 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
 
     expect(hooks.onCheckError).toHaveBeenCalledOnce();
     expect(hooks.onReady).not.toHaveBeenCalled();
+  });
+});
+
+describe("scheduleGatewaySigusr1Restart skipDeferral intent", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    testing.resetSigusr1State();
+    process.on("SIGUSR1", () => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    testing.resetSigusr1State();
+    process.removeAllListeners("SIGUSR1");
+  });
+
+  it("carries skipDeferral in the restart intent when skipDeferral is true", () => {
+    scheduleGatewaySigusr1Restart({
+      delayMs: 0,
+      reason: "gateway.restart.safe",
+      skipDeferral: true,
+      skipCooldown: true,
+    });
+
+    vi.advanceTimersByTime(0);
+
+    const intent = consumeGatewaySigusr1RestartIntent();
+    expect(intent).toMatchObject({ skipDeferral: true });
+  });
+
+  it("does not carry skipDeferral when skipDeferral is false", () => {
+    scheduleGatewaySigusr1Restart({
+      delayMs: 0,
+      reason: "gateway.restart.safe",
+      skipDeferral: false,
+      skipCooldown: true,
+    });
+
+    vi.advanceTimersByTime(0);
+
+    const intent = consumeGatewaySigusr1RestartIntent();
+    expect(intent?.skipDeferral).toBeFalsy();
   });
 });
