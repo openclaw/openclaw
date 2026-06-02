@@ -136,7 +136,7 @@ reply channel and ignore pushed messages.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
 
-**Agent events** (`agent:turn:end`): `context.sessionKey`, `context.success`, `context.durationMs`, and `context.errorCode` when the turn failed. For ACP turns, this is scheduled after the runtime emits the terminal turn event and the manager has awaited event delivery callbacks. It marks the runtime turn lifecycle boundary and does not guarantee the completed turn has been written to durable session state. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. The event does not embed transcript text.
+**Agent events** (`agent:turn:end`): `context.sessionKey`, `context.success`, `context.durationMs`, and `context.errorCode` when the turn failed. For ACP turns, this is scheduled after the runtime emits the terminal turn event and the manager has awaited event delivery callbacks. Pre-runtime failures before a runtime turn starts, such as session initialization failure or capacity rejection, do not emit `agent:turn:end`. It marks the runtime turn lifecycle boundary and does not guarantee the completed turn has been written to durable session state. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. The event does not embed transcript text.
 
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 
