@@ -48,10 +48,12 @@ export function buildMediaLocalRoots(
   );
 }
 
+/** Returns the process default roots where local media reads may resolve generated/cache files. */
 export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
+/** Adds the active agent workspace to the default media roots without exposing all agent state. */
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -93,6 +95,7 @@ function resolveLocalMediaPath(source: string): string | undefined {
   return undefined;
 }
 
+/** Adds only concrete local source parent directories to an existing root allowlist. */
 export function appendLocalMediaParentRoots(
   roots: readonly string[],
   mediaSources?: readonly string[],
@@ -115,6 +118,7 @@ export function appendLocalMediaParentRoots(
   return appended;
 }
 
+/** Resolves outbound media roots, expanding for local sources only when filesystem policy allows it. */
 export function getAgentScopedMediaLocalRootsForSources(params: {
   cfg: OpenClawConfig;
   agentId?: string;
