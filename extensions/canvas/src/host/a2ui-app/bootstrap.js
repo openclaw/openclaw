@@ -104,6 +104,22 @@ const statusShadow = isAndroid
   : "0 10px 24px rgba(0, 0, 0, 0.25)";
 const statusBlur = isAndroid ? "10px" : "14px";
 
+const bytesToHex = (bytes) =>
+  Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+
+const createA2UIActionId = () => {
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) {
+    return crypto.randomUUID();
+  }
+  if (!crypto?.getRandomValues) {
+    throw new Error("A2UI action IDs require Web Crypto random values.");
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `a2ui_${Date.now()}_${bytesToHex(bytes)}`;
+};
+
 const postNativeMessage = (handler, payload) => {
   Reflect.apply(handler.postMessage, handler, [payload]);
 };
@@ -378,10 +394,7 @@ class OpenClawA2UIHost extends LitElement {
   }
 
   #makeActionId() {
-    return (
-      globalThis.crypto?.randomUUID?.() ??
-      `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`
-    );
+    return createA2UIActionId();
   }
 
   #setToast(text, kind = "ok", timeoutMs = 1400) {
