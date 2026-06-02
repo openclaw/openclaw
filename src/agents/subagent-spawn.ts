@@ -41,6 +41,7 @@ import {
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
 import {
+  modelKey,
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
@@ -343,7 +344,7 @@ function resolveContextModelRef(ctx: SpawnSubagentContext): string | undefined {
     return undefined;
   }
   const provider = normalizeOptionalString(ctx.modelProvider);
-  return provider ? `${provider}/${model}` : model;
+  return provider ? modelKey(provider, model) : model;
 }
 
 function resolvePersistedRequesterModelRef(params: {
@@ -373,7 +374,7 @@ function resolvePersistedRequesterModelRef(params: {
       overrideProvider: entry.providerOverride,
       overrideModel: entry.modelOverride,
     });
-    return ref ? `${ref.provider}/${ref.model}` : undefined;
+    return ref ? modelKey(ref.provider, ref.model) : undefined;
   } catch {
     return undefined;
   }

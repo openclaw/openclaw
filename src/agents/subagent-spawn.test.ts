@@ -765,7 +765,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams).not.toHaveProperty("workspaceDir");
   });
 
-  it("resolves model=inherit from the active requester model context", async () => {
+  it("resolves provider-qualified model=inherit from the active requester model context", async () => {
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
@@ -792,8 +792,8 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         agentSessionKey: "agent:main:main",
         agentChannel: "discord",
-        modelProvider: "openai",
-        modelId: "gpt-5.4",
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
       },
     );
 
@@ -801,12 +801,52 @@ describe("spawnSubagentDirect seam flow", () => {
       status: "accepted",
       runId: "run-inherit",
       modelApplied: true,
+      resolvedModel: "openrouter/auto",
+      resolvedProvider: "openrouter",
     });
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "openrouter",
+      model: "auto",
+    });
+  });
+
+  it("resolves provider-qualified model=inherit from persisted requester state", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        modelProvider: "openrouter",
+        model: "openrouter/auto",
+      },
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit persisted requester model",
+        model: "inherit",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+      resolvedModel: "openrouter/auto",
+      resolvedProvider: "openrouter",
+    });
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openrouter",
+      model: "auto",
     });
   });
 
