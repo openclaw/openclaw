@@ -401,6 +401,87 @@ describe("web inbound media saves with extension", () => {
     await listener.close();
   });
 
+  it("passes inbound WhatsApp lists into untrusted structured context", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "list1", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: {
+            listMessage: {
+              title: "Choose a delivery window",
+              description: "I found 2 available delivery windows.",
+              buttonText: "View windows",
+              sections: [
+                {
+                  title: "Available windows",
+                  rows: [
+                    {
+                      rowId: "delivery-morning",
+                      title: "Morning delivery",
+                      description: "9:00 AM to 12:00 PM",
+                    },
+                    {
+                      rowId: "delivery-evening",
+                      title: "Evening delivery",
+                      description: "6:00 PM to 8:00 PM",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          messageTimestamp: 1_700_000_006,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.body).toContain("rowId: delivery-morning");
+    expect(inbound.untrustedStructuredContext).toEqual([
+      {
+        label: "WhatsApp list",
+        source: "whatsapp",
+        type: "list",
+        payload: {
+          kind: "list",
+          title: "Choose a delivery window",
+          description: "I found 2 available delivery windows.",
+          buttonText: "View windows",
+          rows: [
+            {
+              sectionTitle: "Available windows",
+              rowId: "delivery-morning",
+              title: "Morning delivery",
+              description: "9:00 AM to 12:00 PM",
+            },
+            {
+              sectionTitle: "Available windows",
+              rowId: "delivery-evening",
+              title: "Evening delivery",
+              description: "6:00 PM to 8:00 PM",
+            },
+          ],
+        },
+      },
+    ]);
+
+    await listener.close();
+  });
+
   it("passes mediaMaxMb to saveMediaStream", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({

@@ -490,6 +490,93 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("sends WhatsApp list replies with selected row ids and quote context", async () => {
+    const res = await api.sendListReply(
+      "+1555",
+      {
+        title: "Morning slot",
+        selectedRowId: "slot-morning",
+        description: "10:30 AM with Dr. Lee",
+      },
+      {
+        accountId: "work",
+        quotedMessageKey: {
+          id: "list-msg",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: false,
+        },
+      },
+    );
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expect(requireSendContent()).toEqual({
+      listReply: {
+        title: "Morning slot",
+        description: "10:30 AM with Dr. Lee",
+        listType: 1,
+        singleSelectReply: {
+          selectedRowId: "slot-morning",
+        },
+      },
+    });
+    expect(requireSendOptions()).toMatchObject({
+      quoted: {
+        key: {
+          remoteJid: "1555@s.whatsapp.net",
+          id: "list-msg",
+          fromMe: false,
+        },
+      },
+    });
+    expectSendResultFields(res, {
+      kind: "text",
+      messageId: "msg-1",
+      providerAccepted: true,
+    });
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "work",
+      direction: "outbound",
+    });
+  });
+
+  it("sends WhatsApp button replies when the quoted list context came from buttons", async () => {
+    await api.sendListReply(
+      "+1555",
+      {
+        title: "Get recipe ideas",
+        selectedRowId: "reply-media-card-carousel",
+      },
+      {
+        accountId: "work",
+        quotedMessageKey: {
+          id: "buttons-msg",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: false,
+          interactiveListType: "buttons",
+        },
+      },
+    );
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expect(requireSendContent()).toEqual({
+      buttonReply: {
+        id: "reply-media-card-carousel",
+        displayText: "Get recipe ideas",
+      },
+      type: "plain",
+    });
+    expect(requireSendOptions()).toMatchObject({
+      quoted: {
+        key: {
+          remoteJid: "1555@s.whatsapp.net",
+          id: "buttons-msg",
+          fromMe: false,
+        },
+      },
+    });
+  });
+
   it("sends reactions with participant JID normalization", async () => {
     const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
     expectFirstSendJid("1555@s.whatsapp.net");

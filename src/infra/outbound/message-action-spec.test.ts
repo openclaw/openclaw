@@ -60,6 +60,18 @@ describe("actionHasTarget", () => {
     { action: "react", params: { chatIdentifier: "chat-id" }, expected: true },
     { action: "react", params: { chatId: 42 }, expected: true },
     {
+      action: "list-reply",
+      params: { chatJid: "15551234567@s.whatsapp.net" },
+      ctx: { channel: "whatsapp" },
+      expected: true,
+    },
+    {
+      action: "list-reply",
+      params: { chatId: "+15551234567" },
+      ctx: { channel: "whatsapp" },
+      expected: true,
+    },
+    {
       action: "upload-file",
       params: { chatIdentifier: "chat-id" },
       ctx: { channel: "imessage" },
@@ -82,6 +94,7 @@ describe("actionHasTarget", () => {
     { action: "react", params: { chatGuid: "" }, expected: false },
     { action: "react", params: { chatId: Number.NaN }, expected: false },
     { action: "react", params: { chatId: Number.POSITIVE_INFINITY }, expected: false },
+    { action: "list-reply", params: { chatJid: "15551234567@s.whatsapp.net" }, expected: false },
     {
       action: "send",
       params: { messageId: "msg_123", chatId: 42 },

@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+let sendListReplyWhatsApp: typeof import("./send.js").sendListReplyWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
@@ -83,11 +84,13 @@ vi.mock("./text-runtime.js", async () => {
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
+  const sendListReply = vi.fn(async () => acceptedSendResult("text", "list123"));
   const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
   const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ sendMessageWhatsApp, sendListReplyWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } =
+      await import("./send.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -122,6 +125,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.set("default", {
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });
@@ -190,11 +194,82 @@ describe("web outbound", () => {
     );
   });
 
+  it("sends list replies via the active listener", async () => {
+    const result = await sendListReplyWhatsApp(
+      "+1555",
+      {
+        title: "Morning slot",
+        selectedRowId: "slot-morning",
+        description: "10:30 AM with Dr. Lee",
+      },
+      {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        quotedMessageKey: {
+          id: "list-msg",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: false,
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      messageId: "list123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(sendListReply).toHaveBeenCalledWith(
+      "+1555",
+      {
+        title: "Morning slot",
+        selectedRowId: "slot-morning",
+        description: "10:30 AM with Dr. Lee",
+      },
+      {
+        accountId: "default",
+        quotedMessageKey: {
+          id: "list-msg",
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: false,
+        },
+      },
+    );
+  });
+
+  it("redacts list reply row details in outbound logs", async () => {
+    const logPath = path.join(os.tmpdir(), `openclaw-list-reply-${crypto.randomUUID()}.log`);
+    setLoggerOverride({ level: "trace", file: logPath });
+
+    await sendListReplyWhatsApp(
+      "+1555",
+      {
+        title: "Private billing appointment",
+        selectedRowId: "acct-123-slot-morning",
+        description: "10:30 AM with billing",
+      },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const content = fsSync.readFileSync(logPath, "utf-8");
+    expect(content).toContain(redactIdentifier("+1555"));
+    expect(content).toContain(redactIdentifier("1555@s.whatsapp.net"));
+    expect(content).not.toContain("Private billing appointment");
+    expect(content).not.toContain("acct-123-slot-morning");
+    expect(content).not.toContain("10:30 AM with billing");
+  });
+
   it("uses configured defaultAccount when outbound accountId is omitted", async () => {
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("work", {
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });
@@ -327,7 +402,7 @@ describe("web outbound", () => {
     expect(hoisted.runFfmpeg).toHaveBeenCalledTimes(1);
     const ffmpegArgs = hoisted.runFfmpeg.mock.calls.at(0)?.[0] as string[] | undefined;
     expect(ffmpegArgs?.slice(0, 5)).toEqual(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
-    expect(ffmpegArgs?.[5]).toContain(`/input.${media.name}`);
+    expect(ffmpegArgs?.[5]?.replaceAll("\\", "/")).toContain(`/input.${media.name}`);
     expect(ffmpegArgs?.slice(6, -1)).toEqual([
       "-vn",
       "-sn",
@@ -345,7 +420,7 @@ describe("web outbound", () => {
       "-f",
       "ogg",
     ]);
-    const outputPath = ffmpegArgs?.at(-1);
+    const outputPath = ffmpegArgs?.at(-1)?.replaceAll("\\", "/");
     expect(outputPath).toContain("/fs-safe-output-");
     expect(outputPath).toContain("-voice.ogg.part");
     expect(sendMessage).toHaveBeenNthCalledWith(
@@ -646,6 +721,7 @@ describe("web outbound", () => {
     hoisted.controllerListeners.set("work", {
       sendComposingTo,
       sendMessage,
+      sendListReply,
       sendPoll,
       sendReaction,
     });

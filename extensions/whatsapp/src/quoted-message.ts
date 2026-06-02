@@ -13,6 +13,7 @@ type QuotedMeta = {
   participantE164?: string;
   body?: string;
   fromMe?: boolean;
+  interactiveListType?: number | string;
 };
 type CacheEntry = QuotedMeta & { ts: number };
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
@@ -62,6 +63,7 @@ export function lookupInboundMessageMeta(
     participantE164: entry.participantE164,
     body: entry.body,
     fromMe: entry.fromMe,
+    interactiveListType: entry.interactiveListType,
   };
 }
 
@@ -126,6 +128,7 @@ export function lookupInboundMessageMetaForTarget(
       participantE164: exact.participantE164,
       body: exact.body,
       fromMe: exact.fromMe,
+      interactiveListType: exact.interactiveListType,
     };
   }
   const prefix = `${accountId}:`;
@@ -146,6 +149,7 @@ export function lookupInboundMessageMetaForTarget(
       participantE164: entry.participantE164,
       body: entry.body,
       fromMe: entry.fromMe,
+      interactiveListType: entry.interactiveListType,
     };
     if (!matchesQuotedConversationTarget(targetJid, candidate)) {
       continue;
@@ -165,6 +169,7 @@ export function buildQuotedMessageOptions(params: {
   participant?: string;
   /** Original message text — shown in the quote preview bubble. */
   messageText?: string;
+  interactiveListType?: number | string;
 }): MiscMessageGenerationOptions | undefined {
   const id = params.messageId?.trim();
   const remoteJid = params.remoteJid?.trim();

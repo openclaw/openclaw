@@ -250,6 +250,49 @@ export function createWebSendApi(params: {
         "sticker",
       );
     },
+    sendListReply: async (
+      to: string,
+      reply: {
+        title: string;
+        selectedRowId: string;
+        description?: string;
+      },
+      sendOptions?: ActiveWebSendOptions,
+    ): Promise<WhatsAppSendResult> => {
+      const jid = resolveOutboundJid(to);
+      const payload =
+        sendOptions?.quotedMessageKey?.interactiveListType === "buttons"
+          ? ({
+              buttonReply: {
+                id: reply.selectedRowId,
+                displayText: reply.title,
+              },
+              type: "plain",
+            } as AnyMessageContent)
+          : ({
+              listReply: {
+                title: reply.title,
+                description: reply.description,
+                // Baileys uses 1 for WhatsApp's single-select list replies.
+                listType: 1,
+                singleSelectReply: {
+                  selectedRowId: reply.selectedRowId,
+                },
+              },
+            } as AnyMessageContent);
+      const quotedOpts = buildQuotedMessageOptions({
+        messageId: sendOptions?.quotedMessageKey?.id,
+        remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
+        fromMe: sendOptions?.quotedMessageKey?.fromMe,
+        participant: sendOptions?.quotedMessageKey?.participant,
+        messageText: sendOptions?.quotedMessageKey?.messageText,
+      });
+      const result = quotedOpts
+        ? await params.sock.sendMessage(jid, payload, quotedOpts)
+        : await params.sock.sendMessage(jid, payload);
+      recordWhatsAppOutbound(sendOptions?.accountId ?? params.defaultAccountId);
+      return normalizeWhatsAppSendResult(result, "text");
+    },
     sendReaction: async (
       chatJid: string,
       messageId: string,

@@ -583,10 +583,11 @@ Behavior notes:
 
 ## Tools, actions, and config writes
 
-- Agent tool support includes WhatsApp reaction action (`react`).
+- Agent tool support includes WhatsApp reaction action (`react`) and native list selection replies (`list-reply`, using the captured `selectedRowId` and visible row `title`).
 - Action gates:
   - `channels.whatsapp.actions.reactions`
   - `channels.whatsapp.actions.polls`
+  - `channels.whatsapp.actions.sendMessage` (also gates `list-reply`)
 - Channel-initiated config writes are enabled by default (disable via `channels.whatsapp.configWrites=false`).
 
 ## Troubleshooting

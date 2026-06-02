@@ -44,6 +44,8 @@ export {
   type ActiveWebSendOptions,
   type WebInboundMessage,
   type WebListenerCloseReason,
+  type WhatsAppInteractiveListContext,
+  type WhatsAppInteractiveListRow,
   type WhatsAppStructuredContactContext,
 } from "./src/inbound/types.js";
 export {
@@ -61,6 +63,7 @@ export {
 } from "./src/normalize-target.js";
 export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
 export { testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";
+export { extractInteractiveListContext } from "./src/inbound/extract.js";
 export {
   startWhatsAppQaDriverSession,
   type WhatsAppQaDriverObservedMessage,

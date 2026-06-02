@@ -1,7 +1,12 @@
 // Whatsapp tests cover extract plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractMentionedJids, hasInboundUserContent } from "./extract.js";
+import {
+  extractInteractiveListContext,
+  extractMentionedJids,
+  extractText,
+  hasInboundUserContent,
+} from "./extract.js";
 
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
@@ -224,6 +229,29 @@ describe("hasInboundUserContent", () => {
     ).toBe(true);
   });
 
+  it("returns true for inbound list messages with selectable rows", () => {
+    expect(
+      hasInboundUserContent({
+        listMessage: {
+          title: "Choose an appointment",
+          buttonText: "View times",
+          sections: [
+            {
+              title: "Available times",
+              rows: [
+                {
+                  rowId: "slot-morning",
+                  title: "Morning slot",
+                  description: "10:30 AM with Dr. Lee",
+                },
+              ],
+            },
+          ],
+        },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
   it("returns true for buttons response wrapped in ephemeralMessage (regression for #73797 + greptile review)", () => {
     expect(
       hasInboundUserContent({
@@ -279,5 +307,328 @@ describe("hasInboundUserContent", () => {
     expect(hasInboundUserContent({ extendedTextMessage: { text: "  " } } as proto.IMessage)).toBe(
       false,
     );
+  });
+});
+
+describe("extractText", () => {
+  it("returns a synthetic button response when only the button id is present", () => {
+    expect(
+      extractText({
+        buttonsResponseMessage: {
+          selectedButtonId: "confirm",
+        },
+      } as proto.IMessage),
+    ).toBe('<whatsapp-button-response id="confirm">');
+  });
+
+  it("returns a synthetic template button response when only the selected id is present", () => {
+    expect(
+      extractText({
+        templateButtonReplyMessage: {
+          selectedId: "start-over",
+        } as unknown as proto.Message.ITemplateButtonReplyMessage,
+      } as proto.IMessage),
+    ).toBe('<whatsapp-template-button-response id="start-over">');
+  });
+
+  it("returns a synthetic interactive response when only the native flow name is present", () => {
+    expect(
+      extractText({
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: { name: "schedule_flow" },
+        } as unknown as proto.Message.IInteractiveResponseMessage,
+      } as proto.IMessage),
+    ).toBe('<whatsapp-interactive-response name="schedule_flow">');
+  });
+});
+
+describe("extractInteractiveListContext", () => {
+  it("extracts list rows and row ids from WhatsApp list messages", () => {
+    const message = {
+      listMessage: {
+        title: "Choose an appointment",
+        description: "I found 2 available appointment times.",
+        buttonText: "View times",
+        footerText: "Clinic",
+        listType: 1,
+        sections: [
+          {
+            title: "Available times",
+            rows: [
+              {
+                rowId: "slot-morning",
+                title: "Morning slot",
+                description: "10:30 AM with Dr. Lee",
+              },
+              {
+                rowId: "slot-afternoon",
+                title: "Afternoon slot",
+                description: "2:00 PM with Dr. Patel",
+              },
+            ],
+          },
+        ],
+      },
+    } as proto.IMessage;
+
+    expect(extractInteractiveListContext(message)).toEqual({
+      kind: "list",
+      title: "Choose an appointment",
+      description: "I found 2 available appointment times.",
+      buttonText: "View times",
+      footerText: "Clinic",
+      listType: 1,
+      rows: [
+        {
+          sectionTitle: "Available times",
+          rowId: "slot-morning",
+          title: "Morning slot",
+          description: "10:30 AM with Dr. Lee",
+        },
+        {
+          sectionTitle: "Available times",
+          rowId: "slot-afternoon",
+          title: "Afternoon slot",
+          description: "2:00 PM with Dr. Patel",
+        },
+      ],
+    });
+    expect(extractText(message)).toContain("Morning slot - 10:30 AM");
+    expect(extractText(message)).toContain("rowId: slot-afternoon");
+  });
+
+  it("extracts list rows from wrapped WhatsApp list messages", () => {
+    const message = {
+      ephemeralMessage: {
+        message: {
+          listMessage: {
+            title: "Choose a delivery window",
+            description: "I found 2 available delivery windows.",
+            buttonText: "View windows",
+            sections: [
+              {
+                title: "Available windows",
+                rows: [
+                  {
+                    rowId: "delivery-morning",
+                    title: "Morning delivery",
+                    description: "9:00 AM to 12:00 PM",
+                  },
+                  {
+                    rowId: "delivery-evening",
+                    title: "Evening delivery",
+                    description: "6:00 PM to 8:00 PM",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    } as proto.IMessage;
+
+    expect(hasInboundUserContent(message)).toBe(true);
+    expect(extractInteractiveListContext(message)).toEqual({
+      kind: "list",
+      title: "Choose a delivery window",
+      description: "I found 2 available delivery windows.",
+      buttonText: "View windows",
+      rows: [
+        {
+          sectionTitle: "Available windows",
+          rowId: "delivery-morning",
+          title: "Morning delivery",
+          description: "9:00 AM to 12:00 PM",
+        },
+        {
+          sectionTitle: "Available windows",
+          rowId: "delivery-evening",
+          title: "Evening delivery",
+          description: "6:00 PM to 8:00 PM",
+        },
+      ],
+    });
+    expect(extractText(message)).toContain("rowId: delivery-evening");
+  });
+
+  it("extracts rows from WhatsApp native flow single-select messages", () => {
+    const message = {
+      viewOnceMessage: {
+        message: {
+          interactiveMessage: {
+            header: { title: "Jasper's Market" },
+            body: { text: "Welcome to Jasper's Market! What can we help you with today?" },
+            footer: { text: "Fresh picks daily" },
+            nativeFlowMessage: {
+              buttons: [
+                {
+                  name: "single_select",
+                  buttonParamsJson: JSON.stringify({
+                    title: "Choose option",
+                    sections: [
+                      {
+                        title: "Menu",
+                        rows: [
+                          {
+                            id: "shop-online",
+                            title: "Shop online",
+                          },
+                          {
+                            id: "get-recipe-ideas",
+                            title: "Get Recipe Ideas",
+                            description: "Find dinner inspiration",
+                          },
+                          {
+                            id: "current-promo",
+                            title: "Current promo",
+                          },
+                        ],
+                      },
+                    ],
+                  }),
+                },
+              ],
+            },
+          },
+        },
+      },
+    } as proto.IMessage;
+
+    expect(hasInboundUserContent(message)).toBe(true);
+    expect(extractInteractiveListContext(message)).toEqual({
+      kind: "list",
+      title: "Jasper's Market",
+      description: "Welcome to Jasper's Market! What can we help you with today?",
+      buttonText: "Choose option",
+      footerText: "Fresh picks daily",
+      listType: "native_flow",
+      rows: [
+        {
+          sectionTitle: "Menu",
+          rowId: "shop-online",
+          title: "Shop online",
+        },
+        {
+          sectionTitle: "Menu",
+          rowId: "get-recipe-ideas",
+          title: "Get Recipe Ideas",
+          description: "Find dinner inspiration",
+        },
+        {
+          sectionTitle: "Menu",
+          rowId: "current-promo",
+          title: "Current promo",
+        },
+      ],
+    });
+    expect(extractText(message)).toContain("Get Recipe Ideas - Find dinner inspiration");
+    expect(extractText(message)).toContain("rowId: get-recipe-ideas");
+  });
+
+  it("extracts rows from WhatsApp buttons messages", () => {
+    const message = {
+      buttonsMessage: {
+        contentText: "Welcome to Jasper's Market! What can we help you with today?",
+        headerType: 1,
+        buttons: [
+          {
+            buttonId: "reply-interactive-with-media",
+            buttonText: { displayText: "Shop online" },
+            type: 1,
+          },
+          {
+            buttonId: "reply-media-card-carousel",
+            buttonText: { displayText: "Get recipe ideas" },
+            type: 1,
+          },
+          {
+            buttonId: "reply-offer",
+            buttonText: { displayText: "Current promo" },
+            type: 1,
+          },
+        ],
+      },
+    } as proto.IMessage;
+
+    expect(hasInboundUserContent(message)).toBe(true);
+    expect(extractInteractiveListContext(message)).toEqual({
+      kind: "list",
+      description: "Welcome to Jasper's Market! What can we help you with today?",
+      listType: "buttons",
+      rows: [
+        {
+          rowId: "reply-interactive-with-media",
+          title: "Shop online",
+        },
+        {
+          rowId: "reply-media-card-carousel",
+          title: "Get recipe ideas",
+        },
+        {
+          rowId: "reply-offer",
+          title: "Current promo",
+        },
+      ],
+    });
+    expect(extractText(message)).toContain("Get recipe ideas");
+    expect(extractText(message)).toContain("rowId: reply-media-card-carousel");
+  });
+
+  it("extracts rows from WhatsApp native flow reply button messages", () => {
+    const message = {
+      interactiveMessage: {
+        header: { title: "Jasper's Market" },
+        body: { text: "What can we help you with today?" },
+        nativeFlowMessage: {
+          buttons: [
+            {
+              name: "quick_reply",
+              buttonParamsJson: JSON.stringify({
+                id: "shop-online",
+                display_text: "Shop online",
+              }),
+            },
+            {
+              name: "quick_reply",
+              buttonParamsJson: JSON.stringify({
+                id: "get-recipe-ideas",
+                display_text: "Get recipe ideas",
+              }),
+            },
+          ],
+        },
+      },
+    } as proto.IMessage;
+
+    expect(hasInboundUserContent(message)).toBe(true);
+    expect(extractInteractiveListContext(message)).toEqual({
+      kind: "list",
+      title: "Jasper's Market",
+      description: "What can we help you with today?",
+      listType: "buttons",
+      rows: [
+        {
+          rowId: "shop-online",
+          title: "Shop online",
+        },
+        {
+          rowId: "get-recipe-ideas",
+          title: "Get recipe ideas",
+        },
+      ],
+    });
+    expect(extractText(message)).toContain("rowId: get-recipe-ideas");
+  });
+
+  it("returns selected row text for list response messages", () => {
+    expect(
+      extractText({
+        listResponseMessage: {
+          title: "Morning slot",
+          description: "10:30 AM with Dr. Lee",
+          singleSelectReply: { selectedRowId: "slot-morning" },
+        } as unknown as proto.Message.IListResponseMessage,
+      } as proto.IMessage),
+    ).toBe("Morning slot\n10:30 AM with Dr. Lee\nrowId: slot-morning");
   });
 });

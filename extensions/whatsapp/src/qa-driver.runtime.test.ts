@@ -37,6 +37,7 @@ vi.mock("./inbound/send-api.js", () => ({
     sendPoll: mocks.sendPoll,
     sendReaction: mocks.sendReaction,
     sendSticker: mocks.sendSticker,
+    sendListReply: vi.fn(),
   }),
 }));
 
