@@ -445,6 +445,11 @@ describe("update-cli", () => {
     vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<
       [string[], Record<string, unknown>]
     >;
+  const expectRunCommandOptions = (options: Parameters<typeof runCommandWithTimeout>[1]) => {
+    expect(typeof options).toBe("object");
+    expect(options).not.toBeNull();
+    return options as { cwd?: string; env?: NodeJS.ProcessEnv };
+  };
 
   const commandOk = (stdout = "") => ({
     stdout,
@@ -2102,7 +2107,9 @@ describe("update-cli", () => {
         return commandOk(`${npmRoot}\n`);
       }
       expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
-      expect(options.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
+      expect(expectRunCommandOptions(options).env?.NPM_CONFIG_REGISTRY).toBe(
+        "https://npm.internal.example/",
+      );
       return commandOk("https://npm.internal.example/\n");
     });
 
@@ -2155,7 +2162,7 @@ describe("update-cli", () => {
     });
     vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
       expect(argv).toEqual(["pnpm", "config", "get", "registry"]);
-      expect(options.cwd).toBe(pnpmGlobalProject);
+      expect(expectRunCommandOptions(options).cwd).toBe(pnpmGlobalProject);
       return {
         stdout: "https://pnpm.internal.example/\n",
         stderr: "",
@@ -2411,9 +2418,10 @@ describe("update-cli", () => {
         };
       }
       if (argv[0] === "pnpm" && argv[1] === "config" && argv[2] === "get") {
+        const commandOptions = expectRunCommandOptions(options);
         return {
           stdout:
-            options.cwd === pnpmGlobalProject
+            commandOptions.cwd === pnpmGlobalProject
               ? "https://registry.npmjs.org/\n"
               : "https://pnpm.internal.example/\n",
           stderr: "",
@@ -2472,7 +2480,7 @@ describe("update-cli", () => {
         return commandOk(`${npmRoot}\n`);
       }
       expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
-      expect(options.cwd).toBe(process.cwd());
+      expect(expectRunCommandOptions(options).cwd).toBe(process.cwd());
       return commandOk("https://npm.internal.example/\n");
     });
 
@@ -2515,7 +2523,7 @@ describe("update-cli", () => {
         argv[3] === "registry"
       ) {
         expect(argv).toEqual([owningNpm, "config", "get", "registry", "--global"]);
-        expect(options.cwd).toBe(process.cwd());
+        expect(expectRunCommandOptions(options).cwd).toBe(process.cwd());
         return commandOk("https://npm.internal.example/\n");
       }
       return commandOk();
@@ -2675,8 +2683,9 @@ describe("update-cli", () => {
         return commandOk(`${npmRoot}\n`);
       }
       expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
-      expect(options.env?.npm_config_registry).toBe("https://registry.npmjs.org/");
-      expect(options.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
+      const commandOptions = expectRunCommandOptions(options);
+      expect(commandOptions.env?.npm_config_registry).toBe("https://registry.npmjs.org/");
+      expect(commandOptions.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
       return commandOk("https://npm.internal.example/\n");
     });
 
@@ -2757,7 +2766,7 @@ describe("update-cli", () => {
     vi.mocked(defaultRuntime.writeJson).mockClear();
     vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
       expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
-      expect(options.env?.NPM_CONFIG_USERCONFIG).toBe(userConfig);
+      expect(expectRunCommandOptions(options).env?.NPM_CONFIG_USERCONFIG).toBe(userConfig);
       return {
         stdout: "https://registry.npmjs.org/\n",
         stderr: "",
@@ -3308,7 +3317,9 @@ describe("update-cli", () => {
         return commandOk(`${npmRoot}\n`);
       }
       expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
-      expect(options.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
+      expect(expectRunCommandOptions(options).env?.NPM_CONFIG_REGISTRY).toBe(
+        "https://npm.internal.example/",
+      );
       return commandOk("https://npm.internal.example/\n");
     });
 
