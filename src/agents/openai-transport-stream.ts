@@ -2657,6 +2657,11 @@ async function processOpenAICompletionsStream(
   let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
+  let chunkPushedEvent = false;
+  const pushStreamEvent = (event: unknown) => {
+    chunkPushedEvent = true;
+    stream.push(event);
+  };
   const finishCurrentBlock = () => {
     if (!currentBlock) {
       return;
@@ -2697,13 +2702,13 @@ async function processOpenAICompletionsStream(
       currentBlock = {
         type: "thinking",
         thinking: "",
-        thinkingSignature: reasoningDelta.signature,
+        ...(reasoningDelta.signature ? { thinkingSignature: reasoningDelta.signature } : {}),
       };
       output.content.push(currentBlock);
-      stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
     }
     currentBlock.thinking += reasoningDelta.text;
-    stream.push({
+    pushStreamEvent({
       type: "thinking_delta",
       contentIndex: blockIndex(),
       delta: reasoningDelta.text,
@@ -2715,10 +2720,10 @@ async function processOpenAICompletionsStream(
       finishCurrentBlock();
       currentBlock = { type: "text", text: "" };
       output.content.push(currentBlock);
-      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
     currentBlock.text += text;
-    stream.push({
+    pushStreamEvent({
       type: "text_delta",
       contentIndex: blockIndex(),
       delta: text,
@@ -2782,12 +2787,12 @@ async function processOpenAICompletionsStream(
     };
     currentBlock = block;
     output.content.push(block);
-    stream.push({
+    pushStreamEvent({
       type: "toolcall_start",
       contentIndex: output.content.indexOf(block),
       partial: output,
     });
-    stream.push({
+    pushStreamEvent({
       type: "toolcall_delta",
       contentIndex: output.content.indexOf(block),
       delta: toolCall.partialArgs,
@@ -2853,6 +2858,19 @@ async function processOpenAICompletionsStream(
       appendFilteredVisibleTextDelta(delta.text);
     }
   };
+  const emitReasoningUsageActivity = (hasReasoningUsageActivity: boolean) => {
+    if (!hasReasoningUsageActivity || chunkPushedEvent || !emitReasoning) {
+      return;
+    }
+    const latestBlock = output.content[output.content.length - 1];
+    if (currentBlock?.type === "text" || currentBlock?.type === "toolCall") {
+      return;
+    }
+    if (latestBlock?.type === "text" || latestBlock?.type === "toolCall") {
+      return;
+    }
+    appendThinkingDelta({ signature: "", text: "" });
+  };
   const flushReasoningTagTextPartitionerAtEnd = () => {
     for (const delta of reasoningTagTextPartitioner.flush()) {
       appendPartitionedVisibleDelta(delta);
@@ -2861,23 +2879,28 @@ async function processOpenAICompletionsStream(
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
     throwIfModelStreamAborted(options?.signal);
+    chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
       await cooperativeScheduler.afterEvent();
       continue;
     }
     const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
+    let hasReasoningUsageActivity = false;
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
+      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
       continue;
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
     if (!chunk.usage && choiceUsage) {
       output.usage = parseTransportChunkUsage(choiceUsage, model);
+      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapStopReason(choice.finish_reason);
@@ -2893,6 +2916,7 @@ async function processOpenAICompletionsStream(
       choice.delta ??
       (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
     if (!choiceDelta) {
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
       continue;
     }
@@ -2961,7 +2985,7 @@ async function processOpenAICompletionsStream(
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           output.content.push(block);
-          stream.push({
+          pushStreamEvent({
             type: "toolcall_start",
             contentIndex: output.content.indexOf(block),
             partial: output,
@@ -2991,7 +3015,7 @@ async function processOpenAICompletionsStream(
           toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
           block.partialArgs += toolCall.function.arguments;
           block.arguments = parseStreamingJson(block.partialArgs);
-          stream.push({
+          pushStreamEvent({
             type: "toolcall_delta",
             contentIndex: output.content.indexOf(block),
             delta: toolCall.function.arguments,
@@ -3001,6 +3025,7 @@ async function processOpenAICompletionsStream(
       }
     }
     flushPendingPostToolCallDeltas();
+    emitReasoningUsageActivity(hasReasoningUsageActivity);
     await cooperativeScheduler.afterEvent();
   }
   flushReasoningTagTextPartitionerAtEnd();
@@ -4205,6 +4230,15 @@ export function parseTransportChunkUsage(
   };
   calculateCost(model as never, usage as never);
   return usage;
+}
+
+function hasOpenAICompletionsReasoningUsageActivity(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+) {
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  return (
+    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
+  );
 }
 
 function mapStopReason(reason: string | null) {
