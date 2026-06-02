@@ -838,7 +838,7 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      appendJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      this.rewriteFile();
       this.flushed = true;
     } else {
       appendJsonlEntrySync(this.sessionFile, entry);
