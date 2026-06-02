@@ -453,6 +453,7 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
   return false;
 }
 
+/** Emits the silent-reply token for cron turns whose last successful tool result is silent. */
 export function resolveSilentToolResultReplyPayload(params: {
   isCronTrigger: boolean;
   payloadCount: number;
@@ -610,6 +611,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+/** Allows configured silent handling for replay-safe empty or reasoning-only assistant turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -792,6 +794,7 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
+/** Detects short multilingual approval prompts that should continue execution immediately. */
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
