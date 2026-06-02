@@ -119,6 +119,9 @@ function createTaskRunLifecycleRuntime(params: {
       notifyPolicy: input.notifyPolicy,
       deliveryStatus: input.deliveryStatus,
     });
+    if (!task) {
+      throw new Error("Task lifecycle persistence failed.");
+    }
     if (status === "running" && task.status !== "running") {
       return mapTaskRunDetail(
         markTaskRunningById({

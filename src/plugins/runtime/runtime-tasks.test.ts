@@ -4,6 +4,11 @@ import {
   getDetachedTaskLifecycleRuntime,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import type {
+  TaskDeliveryState,
+  TaskRecord,
+} from "../../tasks/task-registry.types.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
@@ -350,6 +355,40 @@ describe("runtime tasks", () => {
             task.runId === "code-session-idempotent",
         ),
     ).toHaveLength(1);
+  });
+
+  it("throws a controlled error when plugin lifecycle creation cannot persist", () => {
+    const upsertTaskWithDeliveryState = vi.fn(
+      (_params: { task: TaskRecord; deliveryState?: TaskDeliveryState }) => {
+        throw new Error("SQLITE_FULL: database or disk is full");
+      },
+    );
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          tasks: new Map(),
+          deliveryStates: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertTaskWithDeliveryState,
+      },
+    });
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    expect(() =>
+      taskRuns.lifecycle.create({
+        taskKind: "openclaw-code-agent.session",
+        runId: "create-persist-fail",
+        title: "Create while persistence fails",
+        status: "running",
+      }),
+    ).toThrow("Task lifecycle persistence failed.");
+
+    const attempted = upsertTaskWithDeliveryState.mock.calls[0]?.[0]?.task;
+    expect(attempted?.taskId).toEqual(expect.any(String));
+    expect(taskRuns.get(attempted?.taskId ?? "")).toBeUndefined();
   });
 
   it("scopes plugin lifecycle mutation by owner and taskKind", () => {
