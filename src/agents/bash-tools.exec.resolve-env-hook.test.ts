@@ -210,6 +210,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       ),
       runResolveExecEnv: vi.fn(async () => ({ PLUGIN_SAFE: "yes" })),
       runBeforeToolCall: vi.fn(async (event: { params: Record<string, unknown> }) => {
+        expect(Object.getOwnPropertySymbols(event.params)).toHaveLength(0);
         mocks.beforeToolCallParams.push({ ...event.params });
         return undefined;
       }),
@@ -258,6 +259,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       ),
       runResolveExecEnv: vi.fn(async () => ({ LAZY_PLUGIN_SAFE: "yes" })),
       runBeforeToolCall: vi.fn(async (event: { params: Record<string, unknown> }) => {
+        expect(Object.getOwnPropertySymbols(event.params)).toHaveLength(0);
         mocks.beforeToolCallParams.push({ ...event.params });
         return undefined;
       }),

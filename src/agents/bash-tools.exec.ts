@@ -99,14 +99,11 @@ type ExecToolArgs = Record<string, unknown> & {
   ask?: string;
   node?: string;
 };
-const RESOLVE_EXEC_ENV_PREPARED = Symbol("openclaw.resolveExecEnvPrepared");
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
 };
-type PreparedExecToolArgs = ExecToolArgs & {
-  [RESOLVE_EXEC_ENV_PREPARED]?: ResolvedExecEnvPreparedState;
-};
+const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
 
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "command",
@@ -142,18 +139,14 @@ function markResolveExecEnvPrepared<T extends ExecToolArgs>(
   params: T,
   state: ResolvedExecEnvPreparedState = {},
 ): T {
-  Object.defineProperty(params, RESOLVE_EXEC_ENV_PREPARED, {
-    value: state,
-    enumerable: false,
-    configurable: true,
-  });
+  resolvedExecEnvPreparedStates.set(params, state);
   return params;
 }
 
 function getResolvedExecEnvPreparedState(
   params: ExecToolArgs,
 ): ResolvedExecEnvPreparedState | undefined {
-  return (params as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED];
+  return resolvedExecEnvPreparedStates.get(params);
 }
 
 function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
