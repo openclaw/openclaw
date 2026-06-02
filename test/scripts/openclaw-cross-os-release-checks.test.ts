@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -7,10 +9,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer as createNetServer } from "node:net";
+import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, win32 } from "node:path";
+import { join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
@@ -28,6 +31,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
@@ -51,6 +55,7 @@ import {
   parseArgs,
   packageHasScript,
   readInstalledVersion,
+  readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
   resolveCrossOsAgentTurnOptional,
   runCommand,
@@ -81,10 +86,72 @@ import {
   writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(filePath)) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error(`timeout waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error(`process still alive: ${pid}`);
+}
+
+async function waitForExit(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<{ signal: NodeJS.Signals | null; status: number | null }> {
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(
+      () => rejectPromise(new Error("timeout waiting for child exit")),
+      timeoutMs,
+    );
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      resolvePromise({ signal, status });
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+  });
+}
+
 describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
     expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
     expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("bounds cross-OS fetched response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`);
+
+    const text = await readBoundedCrossOsResponseText(response, 128);
+
+    expect(text).toContain("[truncated]");
+    expect(text).not.toContain(tail);
+    expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
   });
 
   it("keeps gateway RPC status probes patient enough for live release startup", () => {
@@ -371,6 +438,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ]);
   });
 
+  it("keeps the Windows packaged-upgrade fallback install out of npm lifecycle scripts", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const fallbackInstallSource = source.slice(
+      source.indexOf('runTimedLanePhase(lane, "update-fallback-install"'),
+      source.indexOf('runTimedLanePhase(lane, "update-status"'),
+    );
+
+    expect(fallbackInstallSource).toContain("ignoreScripts: true");
+  });
+
   it("keeps packaged-upgrade release updates out of service restart flow", () => {
     const args = buildPackagedUpgradeUpdateArgs("http://127.0.0.1:49152/openclaw-current.tgz");
     expect(args.slice(0, 6)).toEqual([
@@ -514,7 +591,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       display_name: "macOS",
       lane: "fresh",
       os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-latest",
+      runner: "blacksmith-6vcpu-macos-15",
       suite: "packaged-fresh",
       suite_label: "packaged fresh",
     });
@@ -681,6 +758,42 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(readFileSync(logPath, "utf8")).toContain(`GET /${filePath.split(/[/\\]/u).at(-1)}`);
     } finally {
       await server?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("closes static release artifact sockets left by aborted clients", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-close-"));
+    const filePath = join(dir, "openclaw-2026.4.14.tgz");
+    const logPath = join(dir, "server.log");
+    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
+
+    try {
+      writeFileSync(filePath, Buffer.alloc(1024 * 1024, "x"));
+      server = await startStaticFileServer({ filePath, logPath });
+      const url = new URL(server.url);
+      const socket = createNetConnection(Number(url.port), url.hostname);
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      socket.write(`GET ${url.pathname} HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
+      await Promise.race([
+        server.close(),
+        delay(1_000).then(() => {
+          throw new Error("close timed out");
+        }),
+      ]);
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          socket.once("close", resolve);
+        }),
+        delay(1_000).then(() => {
+          throw new Error("socket close timed out");
+        }),
+      ]);
+    } finally {
+      await server?.close().catch(() => {});
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -866,6 +979,142 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       });
       expect(readFileSync(logPath, "utf8")).toContain("start command=");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds retained command output while preserving full command logs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-output-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        [
+          "-e",
+          [
+            "process.stdout.write('old-middle-recent');",
+            "process.stderr.write('err-old-err-recent');",
+          ].join(""),
+        ],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+          maxOutputBytes: 12,
+        },
+      );
+
+      expect(result.stdout).toBe("iddle-recent");
+      expect(result.stderr).toBe("d-err-recent");
+      const log = readFileSync(logPath, "utf8");
+      expect(log).toContain("old-middle-recent");
+      expect(log).toContain("err-old-err-recent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("kills timed-out command process groups", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-timeout-"));
+    const childPidPath = join(dir, "child.pid");
+    try {
+      const logPath = join(dir, "timeout.log");
+      const childScript = "setInterval(() => {}, 1000);";
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      const command = runCommand(process.execPath, ["-e", parentScript], {
+        cwd: dir,
+        env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+        logPath,
+        timeoutMs: 500,
+      });
+      await waitForFile(childPidPath, 2_000);
+      const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+
+      await expect(command).rejects.toThrow(/Command timed out:/u);
+      await waitForDead(childPid, 2_000);
+      expect(readFileSync(logPath, "utf8")).toContain("timeout command=");
+    } finally {
+      const childPid = existsSync(childPidPath)
+        ? Number.parseInt(readFileSync(childPidPath, "utf8"), 10)
+        : 0;
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards external termination to command process groups", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-signal-"));
+    const childPidPath = join(dir, "child.pid");
+    const scriptUrl = pathToFileURL(
+      resolvePath("scripts/openclaw-cross-os-release-checks.ts"),
+    ).href;
+    let childPid: number | undefined;
+    let runnerPid: number | undefined;
+
+    try {
+      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const runnerScript = [
+        `import { runCommand } from ${JSON.stringify(scriptUrl)};`,
+        `await runCommand(process.execPath, ['-e', ${JSON.stringify(parentScript)}], {`,
+        `  cwd: ${JSON.stringify(dir)},`,
+        `  env: process.env,`,
+        `  logPath: ${JSON.stringify(join(dir, "signal.log"))},`,
+        `  timeoutMs: 60000,`,
+        `});`,
+      ].join("\n");
+      const runner = spawn(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "-e", runnerScript],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "25",
+            OPENCLAW_TEST_CHILD_PID: childPidPath,
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
+      runnerPid = runner.pid;
+
+      await waitForFile(childPidPath, 2_000);
+      childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+      runner.kill("SIGTERM");
+      const result = await waitForExit(runner, 5_000);
+
+      expect(result).toEqual({ signal: null, status: 143 });
+      await waitForDead(childPid, 2_000);
+    } finally {
+      if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
+        process.kill(runnerPid, "SIGKILL");
+      }
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });

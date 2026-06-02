@@ -5,7 +5,7 @@ import {
   type AcpRuntime,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
-import { lazyStartRuntimeTurn } from "./src/runtime-turn.js";
+import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
 
@@ -37,8 +37,8 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     throw new Error("ACPX runtime service is not started");
   }
   state.startPromise ??= (async () => {
-    const { createAcpxRuntimeService } = await loadServiceModule();
-    const service = createAcpxRuntimeService(state.params);
+    const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
+    const service = createAcpxRuntimeServiceLocal(state.params);
     state.realService = service;
     await service.start(state.ctx as OpenClawPluginServiceContext);
     const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);
@@ -59,41 +59,7 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
 
 function createDeferredRuntime(state: DeferredServiceState): AcpRuntime {
   const resolveRuntime = () => startRealService(state);
-  return {
-    async ensureSession(input) {
-      return await (await resolveRuntime()).ensureSession(input);
-    },
-    startTurn(input) {
-      return lazyStartRuntimeTurn(resolveRuntime, input);
-    },
-    async *runTurn(input) {
-      yield* (await resolveRuntime()).runTurn(input);
-    },
-    async getCapabilities(input) {
-      return (await (await resolveRuntime()).getCapabilities?.(input)) ?? { controls: [] };
-    },
-    async getStatus(input) {
-      return (await (await resolveRuntime()).getStatus?.(input)) ?? {};
-    },
-    async setMode(input) {
-      await (await resolveRuntime()).setMode?.(input);
-    },
-    async setConfigOption(input) {
-      await (await resolveRuntime()).setConfigOption?.(input);
-    },
-    async doctor() {
-      return (await (await resolveRuntime()).doctor?.()) ?? { ok: true, message: "ok" };
-    },
-    async prepareFreshSession(input) {
-      await (await resolveRuntime()).prepareFreshSession?.(input);
-    },
-    async cancel(input) {
-      await (await resolveRuntime()).cancel(input);
-    },
-    async close(input) {
-      await (await resolveRuntime()).close(input);
-    },
-  };
+  return createLazyAcpRuntimeProxy(resolveRuntime);
 }
 
 export function createAcpxRuntimeService(

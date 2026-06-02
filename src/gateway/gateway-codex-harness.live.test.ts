@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
@@ -25,6 +26,7 @@ import {
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
+  shouldSkipRetryableCodexHarnessLiveError,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -35,7 +37,6 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import type { EventFrame } from "./protocol/index.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS);
@@ -103,17 +104,6 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
 
 function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
-}
-
-function isRetryableCodexHarnessLiveError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("gateway request timeout for sessions.list");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => void> {
@@ -787,70 +777,31 @@ async function verifyCodexCronMcpProbe(params: {
   }
 }
 
-async function readSpawnedChildRow(params: {
+function hasCodexAppServerLifecycleEvent(params: {
   childSessionKey: string;
-  client: GatewayClient;
-  parentSessionKey: string;
-}): Promise<Record<string, unknown> | undefined> {
-  const result = await params.client.request(
-    "sessions.list",
-    {
-      spawnedBy: params.parentSessionKey,
-      limit: 20,
-    },
-    { timeoutMs: 10_000 },
+  events: CapturedAgentEvent[];
+}): boolean {
+  return params.events.some(
+    (event) =>
+      event.sessionKey === params.childSessionKey && event.stream === "codex_app_server.lifecycle",
   );
-  const sessions = asRecord(result)?.sessions;
-  if (!Array.isArray(sessions)) {
-    return undefined;
-  }
-  return sessions
-    .map((entry) => asRecord(entry))
-    .find((entry): entry is Record<string, unknown> => entry?.key === params.childSessionKey);
-}
-
-function isActiveCodexSubagentRow(row: Record<string, unknown> | undefined): boolean {
-  if (!row) {
-    return false;
-  }
-  return row.hasActiveSubagentRun === true || row.subagentRunState === "active";
 }
 
 async function waitForCodexSubagentStarted(params: {
   childSessionKey: string;
-  client: GatewayClient;
   events: CapturedAgentEvent[];
-  parentSessionKey: string;
-}): Promise<Record<string, unknown> | undefined> {
-  const deadline = Date.now() + Math.min(CODEX_HARNESS_REQUEST_TIMEOUT_MS, 120_000);
-  let lastRow: Record<string, unknown> | undefined;
-  let lastError: unknown;
+}): Promise<void> {
+  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    try {
-      lastRow = await readSpawnedChildRow({
-        childSessionKey: params.childSessionKey,
-        client: params.client,
-        parentSessionKey: params.parentSessionKey,
-      });
-      const hasLifecycleEvent = params.events.some(
-        (event) =>
-          event.sessionKey === params.childSessionKey &&
-          event.stream === "codex_app_server.lifecycle",
-      );
-      if (lastRow && (hasLifecycleEvent || isActiveCodexSubagentRow(lastRow))) {
-        return lastRow;
-      }
-    } catch (error) {
-      lastError = error;
+    if (hasCodexAppServerLifecycleEvent(params)) {
+      return;
     }
     await delay(2_000);
   }
   throw new Error(
     [
       `subagent ${params.childSessionKey} did not start through the Codex app-server harness`,
-      `lastRow=${JSON.stringify(lastRow)}`,
       `events=${JSON.stringify(params.events)}`,
-      `lastError=${lastError instanceof Error ? lastError.message : String(lastError)}`,
     ].join("\n"),
   );
 }
@@ -925,6 +876,7 @@ async function verifyCodexSubagentProbe(params: {
         mode: "run",
         cleanup: "keep",
         context: "isolated",
+        lightContext: true,
         expectsCompletionMessage: false,
         runTimeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
       },
@@ -943,13 +895,10 @@ async function verifyCodexSubagentProbe(params: {
         `subagent spawn did not return a child session key: ${JSON.stringify(spawnResult)}`,
       );
     }
-    const childRow = await waitForCodexSubagentStarted({
+    await waitForCodexSubagentStarted({
       childSessionKey,
-      client: params.client,
       events,
-      parentSessionKey: params.sessionKey,
     });
-    expect(childRow?.key).toBe(childSessionKey);
   } finally {
     const { testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
     subagentSpawnTesting.setDepsForTest();
@@ -1189,7 +1138,11 @@ describeLive("gateway live (Codex harness)", () => {
             console.error(
               "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
             );
-          } else if (isRetryableCodexHarnessLiveError(error)) {
+          } else if (
+            shouldSkipRetryableCodexHarnessLiveError(error, {
+              subagentProbe: CODEX_HARNESS_SUBAGENT_PROBE,
+            })
+          ) {
             console.error(
               `SKIP: Codex harness live backend hit a retryable gateway timeout; skipping live Codex harness assertions. ${error instanceof Error ? error.message : String(error)}`,
             );

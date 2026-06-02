@@ -1,13 +1,19 @@
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
 import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
 import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
 
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
 async function requestTokenGrant(body: URLSearchParams): Promise<{
   access_token?: string;
   refresh_token?: string;
-  expires_in?: number;
+  expires_in?: unknown;
 }> {
   const response = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
@@ -27,15 +33,30 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   return (await response.json()) as {
     access_token?: string;
     refresh_token?: string;
-    expires_in?: number;
+    expires_in?: unknown;
   };
+}
+
+function resolveExpiredTokenTimestampMs(nowMs: number): number {
+  return asDateTimestampMs(nowMs - TOKEN_EXPIRY_BUFFER_MS) ?? nowMs;
+}
+
+function resolveTokenExpiresAt(value: unknown): number {
+  const nowMs = asDateTimestampMs(Date.now());
+  if (nowMs === undefined) {
+    return 0;
+  }
+  return (
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs, bufferMs: TOKEN_EXPIRY_BUFFER_MS }) ??
+    resolveExpiredTokenTimestampMs(nowMs)
+  );
 }
 
 async function buildGeminiCliCredentials(params: {
   tokenResponse: {
     access_token?: string;
     refresh_token?: string;
-    expires_in?: number;
+    expires_in?: unknown;
   };
   refreshTokenFallback?: string;
   existing?: Pick<GeminiCliOAuthCredentials, "email" | "projectId">;
@@ -63,11 +84,7 @@ async function buildGeminiCliCredentials(params: {
     // already-stored identity binding instead of failing token renewal.
   }
 
-  const expiresInMs =
-    typeof params.tokenResponse.expires_in === "number"
-      ? params.tokenResponse.expires_in * 1000
-      : 0;
-  const expiresAt = Date.now() + expiresInMs - 5 * 60 * 1000;
+  const expiresAt = resolveTokenExpiresAt(params.tokenResponse.expires_in);
 
   return {
     refresh: params.tokenResponse.refresh_token ?? params.refreshTokenFallback ?? "",

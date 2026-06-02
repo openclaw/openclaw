@@ -14,15 +14,16 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
+import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
-import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 export type RunCliAgentParams = {
@@ -54,6 +55,7 @@ export type RunCliAgentParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
@@ -61,6 +63,11 @@ export type RunCliAgentParams = {
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   authProfileId?: string;
+  onBeforeFreshCliSessionRetry?: (params: {
+    provider: string;
+    reason: FailoverReason;
+    sessionId: string;
+  }) => boolean | Promise<boolean>;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;
@@ -70,6 +77,9 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
   agentAccountId?: string;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
@@ -117,7 +127,8 @@ export type CliReusableSession = {
     | "system-prompt"
     | "cwd"
     | "mcp"
-    | "missing-transcript";
+    | "missing-transcript"
+    | "orphaned-tool-use";
 };
 
 export type PreparedCliRunContext = {

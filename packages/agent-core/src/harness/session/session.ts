@@ -1,6 +1,7 @@
-import type { ImageContent, TextContent } from "../../llm.js";
+import type { ImageContent, TextContent } from "../../../../llm-core/src/index.js";
 import type { AgentMessage } from "../../types.js";
 import {
+  asAgentMessage,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   createCustomMessage,
@@ -22,6 +23,7 @@ import type {
 } from "../types.js";
 import { SessionError } from "../types.js";
 
+/** Build model context from the active session branch and its latest state markers. */
 export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
   let thinkingLevel = "off";
   let model: { provider: string; modelId: string } | null = null;
@@ -45,30 +47,38 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       messages.push(entry.message);
     } else if (entry.type === "custom_message") {
       messages.push(
-        createCustomMessage(
-          entry.customType,
-          entry.content,
-          entry.display,
-          entry.details,
-          entry.timestamp,
+        asAgentMessage(
+          createCustomMessage(
+            entry.customType,
+            entry.content,
+            entry.display,
+            entry.details,
+            entry.timestamp,
+          ),
         ),
       );
     } else if (entry.type === "branch_summary" && entry.summary) {
-      messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
+      messages.push(
+        asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)),
+      );
     }
   };
 
   if (compaction) {
     messages.push(
-      createCompactionSummaryMessage(
-        compaction.summary,
-        compaction.tokensBefore,
-        compaction.timestamp,
+      asAgentMessage(
+        createCompactionSummaryMessage(
+          compaction.summary,
+          compaction.tokensBefore,
+          compaction.timestamp,
+        ),
       ),
     );
     const compactionIdx = pathEntries.findIndex(
       (e) => e.type === "compaction" && e.id === compaction.id,
     );
+    // Replay only the compacted entry's retained tail plus newer branch entries; older
+    // transcript content is represented by the synthetic compaction summary above.
     let foundFirstKept = false;
     for (let i = 0; i < compactionIdx; i++) {
       const entry = pathEntries[i];
@@ -91,6 +101,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   return { messages, thinkingLevel, model };
 }
 
+/** High-level session API backed by pluggable tree storage. */
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
   private storage: SessionStorage<TMetadata>;
 
@@ -192,6 +203,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     } satisfies CompactionEntry);
   }
 
+  /** Append a non-LLM transcript marker for harness-specific state. */
   async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
     return this.appendTypedEntry({
       type: "custom",
@@ -203,6 +215,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     } satisfies CustomEntry);
   }
 
+  /** Append harness-specific content that can also be replayed into model context. */
   async appendCustomMessageEntry(
     customType: string,
     content: string | (TextContent | ImageContent)[],
@@ -221,6 +234,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     } satisfies CustomMessageEntry);
   }
 
+  /** Record or clear the display label for an existing session entry. */
   async appendLabel(targetId: string, label: string | undefined): Promise<string> {
     if (!(await this.storage.getEntry(targetId))) {
       throw new SessionError("not_found", `Entry ${targetId} not found`);
@@ -245,6 +259,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
     } satisfies SessionInfoEntry);
   }
 
+  /** Move the visible branch leaf and optionally attach a summary of the abandoned branch. */
   async moveTo(
     entryId: string | null,
     summary?: { summary: string; details?: unknown; fromHook?: boolean },

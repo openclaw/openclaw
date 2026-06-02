@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -7,6 +15,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
 const fakeCrabboxBinDirs = new Map<string, string>();
+const GIT_COMMON_DIR_KEY = "rev-parse\u0000--git-common-dir";
+const GIT_CONFIG_SPARSE_KEY = "config\u0000--bool\u0000core.sparseCheckout";
+const GIT_SPARSE_LIST_KEY = "sparse-checkout\u0000list";
+const GIT_STATUS_PORCELAIN_KEY = "status\u0000--porcelain=v1";
+const GIT_MERGE_BASE_MAIN_HEAD_KEY = "merge-base\u0000origin/main\u0000HEAD";
+const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
+  [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
+  [GIT_SPARSE_LIST_KEY]: { status: 1 },
+};
 
 function makeFakeCrabbox(helpText: string): string {
   const cached = fakeCrabboxBinDirs.get(helpText);
@@ -29,7 +46,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     const script = [
       "#!/bin/sh",
       'if [ "$1" = "--version" ]; then',
-      '  printf "%s\\n" "crabbox 0.15.0"',
+      '  printf "%s\\n" "${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.22.1}"',
       "  exit 0",
       "fi",
       'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -109,7 +126,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "#!/usr/bin/env node",
     "const args = process.argv.slice(2);",
     'if (args[0] === "--version") {',
-    '  console.log("crabbox 0.15.0");',
+    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
     "  process.exit(0);",
     "}",
     'if (args[0] === "run" && args[1] === "--help") {',
@@ -126,6 +143,27 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
   );
   chmodSync(crabboxPath, 0o755);
   return crabboxPath;
+}
+
+function makeSlowVersionCrabbox(helpText: string): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-crabbox-"));
+  tempDirs.push(binDir);
+  const crabboxPath = path.join(binDir, "crabbox");
+
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 6_000); }',
+    `else if (args[0] === "run" && args[1] === "--help") { process.stdout.write(${JSON.stringify(helpText)}); }`,
+  ].join("\n");
+  writeFileSync(crabboxPath, `${script}\n`, "utf8");
+  writeFileSync(
+    `${crabboxPath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0crabbox" %*\r\n`,
+    "utf8",
+  );
+  chmodSync(crabboxPath, 0o755);
+  return binDir;
 }
 
 function shellSingleQuote(value: string): string {
@@ -152,6 +190,7 @@ function makeFakeGit(
       "  exit 0",
       "fi",
       'if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then',
+      '  rm -rf "$4"',
       "  exit 0",
       "fi",
       ...Object.entries(responses).flatMap(([key, response]) => {
@@ -179,7 +218,7 @@ function makeFakeGit(
     "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
-    "if (args[0] === 'worktree' && args[1] === 'remove') { process.exit(0); }",
+    "if (args[0] === 'worktree' && args[1] === 'remove') { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }",
     "const key = args.join('\\u0000');",
     "const response = responses.get(key);",
     "if (!response) { process.exit(1); }",
@@ -214,7 +253,8 @@ function runWrapper(
   } = {},
 ) {
   const binDir = makeFakeCrabbox(helpText);
-  const gitBinDir = options.gitResponses ? makeFakeGit(options.gitResponses) : "";
+  const gitResponses = { ...defaultGitResponses, ...options.gitResponses };
+  const gitBinDir = makeFakeGit(gitResponses);
   return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -224,6 +264,7 @@ function runWrapper(
       PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
         .filter(Boolean)
         .join(path.delimiter),
+      CRABBOX_PROVIDER: "",
       OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
       ...(options.configJson
         ? { OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify(options.configJson) }
@@ -231,10 +272,8 @@ function runWrapper(
       ...(options.configStatus
         ? { OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS: String(options.configStatus) }
         : {}),
-      ...(options.env ?? {}),
-      ...(options.gitResponses
-        ? { OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(options.gitResponses) }
-        : {}),
+      ...options.env,
+      OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(gitResponses),
     },
     timeout: 10_000,
   });
@@ -280,6 +319,10 @@ function expectGroupedShellCommand(remoteCommand: string, command: string): void
     expect(remoteCommand).toContain(`${command}\n}`);
   }
 }
+
+const remoteChangedGateEnvPrefix =
+  "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
+const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
 
 afterAll(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -327,6 +370,52 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toContain("local-container");
+  });
+
+  it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.21.9");
+  });
+
+  it("applies the Blacksmith version gate to provider aliases", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+  });
+
+  it("rejects prerelease Crabbox builds at the Blacksmith minimum boundary", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-rc.1" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.22.0-rc.1");
+  });
+
+  it("accepts post-release Crabbox describe builds at the Blacksmith minimum boundary", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-3-gabc1234" } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("blacksmith-testbox");
   });
 
   it("only forces the short local-container Docker work root on Linux", () => {
@@ -396,11 +485,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps explicit provider env overrides for Windows runs", () => {
-    const result = runWrapper(
-      azureProviderHelp,
-      ["run", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
-    );
+    const result = runWrapper(azureProviderHelp, ["run", "--target", "windows", "--", "echo ok"], {
+      env: { CRABBOX_PROVIDER: "aws" },
+    });
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toEqual([
@@ -413,10 +500,16 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=aws");
   });
 
-  it("keeps the configured provider for Windows runs when Azure is unavailable", () => {
+  it("keeps the AWS provider env for Windows runs when Azure is unavailable", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--target", "windows", "--", "echo ok"],
+      {
+        env: {
+          CRABBOX_PROVIDER: "aws",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
+        },
+      },
     );
 
     expect(result.status).toBe(0);
@@ -431,15 +524,16 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps existing Windows lease selections on the configured provider", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "run",
-      "--id",
-      "cbx_existing",
-      "--target",
-      "windows",
-      "--",
-      "echo ok",
-    ]);
+    const result = runWrapper(
+      azureProviderHelp,
+      ["run", "--id", "cbx_existing", "--target", "windows", "--", "echo ok"],
+      {
+        env: {
+          CRABBOX_PROVIDER: "aws",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
+        },
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toEqual([
@@ -603,6 +697,30 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
     expect(remoteCommand).toContain("shasum -a 256 -c -");
+    expect(remoteCommand).toContain(
+      'ready_marker="$node_dir/.openclaw-crabbox-node-ready"',
+    );
+    expect(remoteCommand).toContain(
+      'if [ -x "$node_dir/bin/node" ] && [ -f "$ready_marker" ]; then break; fi;',
+    );
+    expect(remoteCommand).toContain('touch "$ready_marker"');
+    expect(remoteCommand).toContain(
+      'install_lock="$tool_root/.node-${node_version}-${node_arch}.lock"',
+    );
+    expect(remoteCommand).toContain('lock_deadline=$((SECONDS + 300))');
+    expect(remoteCommand).toContain(
+      'printf "%s\\n" "$$" >"$install_lock/pid"',
+    );
+    expect(remoteCommand).toContain(
+      "timed out waiting for active macOS Node toolchain install lock: $install_lock pid=$lock_pid",
+    );
+    expect(remoteCommand).toContain(
+      "reclaiming stale macOS Node toolchain install lock: $install_lock",
+    );
+    expect(remoteCommand).toContain(
+      'rm -rf "$install_lock"',
+    );
+    expect(remoteCommand).toContain("release_install_lock");
     expect(remoteCommand).not.toContain("set -euo pipefail");
     expect(remoteCommand).toContain('return "$status"');
     expect(remoteCommand).toContain('if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;');
@@ -844,7 +962,10 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(remoteCommand).toContain("pnpm --version >&2");
-    expectGroupedShellCommand(remoteCommand, "node scripts/check-changed.mjs");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} node scripts/check-changed.mjs`,
+    );
   });
 
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
@@ -858,7 +979,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} pnpm check:changed`);
   });
 
   it("bootstraps raw AWS macOS shell scripts that set up before JavaScript commands", () => {
@@ -1060,7 +1181,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("bootstraps raw AWS macOS shell scripts with command-prefixed JavaScript commands", () => {
@@ -1381,7 +1502,10 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "pnpm check:changed || true");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `${remoteChangedGateExport} pnpm check:changed || true`,
+    );
   });
 
   it("does not bootstrap non-macOS AWS JavaScript commands", () => {
@@ -1404,6 +1528,58 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     ]);
   });
 
+  it("restores hydrated node_modules before AWS native Windows shell commands", () => {
+    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "normal",
+      "--id",
+      "cbx_test",
+      "--shell",
+      "--",
+      "corepack pnpm check:changed",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
+    expect(remoteCommand).toContain('mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"');
+    expect(remoteCommand).toContain("corepack pnpm check:changed");
+  });
+
+  it("restores hydrated node_modules before AWS native Windows direct commands", () => {
+    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "normal",
+      "--id",
+      "cbx_test",
+      "--",
+      "pnpm",
+      "--filter",
+      "@openclaw/discord",
+      "test",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain("pnpm --filter '@openclaw/discord' test");
+  });
+
   const itWithPosixLinkedWorktreeFixture = process.platform === "win32" ? it.skip : it;
 
   itWithPosixLinkedWorktreeFixture(
@@ -1416,7 +1592,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       mkdirSync(gitCommonDir, { recursive: true });
       writeFakeCrabbox(crabboxBinDir, "provider: aws\n");
       const gitResponses = {
-        ["rev-parse\u0000--git-common-dir"]: { stdout: `${gitCommonDir}\n` },
+        [GIT_COMMON_DIR_KEY]: { stdout: `${gitCommonDir}\n` },
       };
       const gitBinDir = makeFakeGit(gitResponses);
 
@@ -1487,9 +1663,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--", "echo ok"],
       {
         gitResponses: {
-          ["rev-parse\u0000--git-common-dir"]: { status: 1 },
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { status: 1 },
-          ["sparse-checkout\u0000list"]: { status: 1 },
+          [GIT_COMMON_DIR_KEY]: { status: 1 },
+          [GIT_CONFIG_SPARSE_KEY]: { status: 1 },
+          [GIT_SPARSE_LIST_KEY]: { status: 1 },
         },
       },
     );
@@ -1539,6 +1715,18 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected binary does not advertise provider bogus");
   });
 
+  it("times out hung sanity probes before rejecting the selected binary", () => {
+    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    const result = runWrapper(helpText, ["--version"], {
+      extraPathEntries: [makeSlowVersionCrabbox(helpText)],
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("version=unknown");
+    expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
+  });
+
   it("parses provider choices from the --provider flag help format", () => {
     const result = runWrapper(
       "Usage: crabbox run [options]\n  --provider hetzner|aws|local-container|blacksmith-testbox|cloudflare\n",
@@ -1567,8 +1755,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -1585,8 +1773,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -1618,8 +1806,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -1635,9 +1823,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1654,7 +1842,74 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("git add -A");
     expect(remoteCommand).toContain("git diff --cached --quiet");
     expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
-    expect(remoteCommand).toMatch(/&& corepack pnpm check:changed$/u);
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("bootstraps Git metadata for env-prefixed sparse changed gates", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "env",
+        "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+        "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+        "CI=1",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
   });
 
   it("preserves macOS JS bootstrapping for sparse changed gates on remote raw syncs", () => {
@@ -1663,9 +1918,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--target", "macos", "--", "pnpm", "check:changed"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1678,7 +1933,10 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
+    expectGroupedShellCommand(
+      remoteCommand,
+      `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} pnpm check:changed`,
+    );
   });
 
   it("preserves macOS JS and Git bootstraps for sparse shell changed gates with setup", () => {
@@ -1688,9 +1946,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1701,7 +1959,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves macOS JS and Git bootstraps for shell-wrapped sparse changed gates", () => {
@@ -1711,9 +1969,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1723,7 +1981,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for assignment-prefix command substitutions", () => {
@@ -1733,9 +1991,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1744,7 +2002,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for command-prefixed shell commands", () => {
@@ -1754,9 +2012,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1765,7 +2023,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for bash -lc shell commands", () => {
@@ -1776,9 +2034,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1790,7 +2048,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(
+      `&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; ${shellScript}`,
+    );
   });
 
   it("preserves sparse changed-gate Git bootstrap for shell option values before -c", () => {
@@ -1800,9 +2060,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1811,7 +2071,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for attached shell option values before -c", () => {
@@ -1821,9 +2081,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1832,7 +2092,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for grouped shell options before -c", () => {
@@ -1842,9 +2102,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1853,7 +2113,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for absolute time-prefixed shell commands", () => {
@@ -1863,9 +2123,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1874,7 +2134,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for timeout-wrapped shell commands", () => {
@@ -1885,9 +2145,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", shellScript],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1899,7 +2159,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toContain(`&& ${shellScript}`);
+    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped node commands", () => {
@@ -1921,9 +2181,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1934,7 +2194,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toMatch(
-      /&& timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
     );
   });
 
@@ -1944,9 +2204,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--", "timeout", "1200s", "bash", "-lc", "pnpm check:changed"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1956,7 +2216,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toMatch(/&& timeout 1200s bash -lc 'pnpm check:changed'$/u);
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s bash -lc 'pnpm check:changed'$/u,
+    );
   });
 
   it("does not treat quoted sparse shell text as a changed gate", () => {
@@ -1972,9 +2234,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -1998,9 +2260,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -2024,9 +2286,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -2084,9 +2346,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "aws", "--shell", "--", "env CI=1 pnpm check:changed"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -2098,7 +2360,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toMatch(/&& env CI=1 pnpm check:changed$/u);
+    expect(remoteCommand).toMatch(
+      /&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; env CI=1 pnpm check:changed$/u,
+    );
   });
 
   it("does not inject the POSIX changed-gate bootstrap for Windows targets", () => {
@@ -2117,9 +2381,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
-          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
         },
       },
     );
@@ -2146,8 +2410,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "local-container", "--", "echo ok"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -2157,14 +2421,39 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 
+  it("creates sparse-sync temporary full checkouts under the durable cache root", () => {
+    const syncRoot = path.join(repoRoot, ".crabbox-test-sync-root");
+    rmSync(syncRoot, { recursive: true, force: true });
+    try {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        {
+          env: { OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          },
+        },
+      );
+
+      const output = parseFakeCrabboxOutput(result);
+      expect(result.status).toBe(0);
+      expect(output.cwd).toContain(`${syncRoot}${path.sep}openclaw-crabbox-sync-`);
+      expect(readdirSync(syncRoot)).toEqual([]);
+    } finally {
+      rmSync(syncRoot, { recursive: true, force: true });
+    }
+  });
+
   it("uses a temporary full checkout when existing AWS leases sync clean sparse worktrees", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--id", "cbx_existing", "--", "echo ok"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -2180,8 +2469,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -2198,8 +2487,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: " M scripts/crabbox-wrapper.mjs\n" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: " M scripts/crabbox-wrapper.mjs\n" },
         },
       },
     );
@@ -2228,8 +2517,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -2263,8 +2552,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );
@@ -2291,8 +2580,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       ],
       {
         gitResponses: {
-          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
-          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
         },
       },
     );

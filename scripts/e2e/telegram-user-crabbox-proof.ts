@@ -5,11 +5,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 
 type CommandResult = {
   stderr: string;
   stdout: string;
+};
+
+type GatewaySpawnSpec = {
+  args: string[];
+  command: string;
+  options: SpawnOptionsWithoutStdio;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -134,12 +142,19 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
+export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
+export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
+export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
+export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
+export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
+export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
-const LOG_READY_TAIL_BYTES = readPositiveInt(
-  process.env.OPENCLAW_TELEGRAM_USER_PROOF_LOG_TAIL_BYTES,
-  256 * 1024,
-);
+export function readTelegramUserProofLogTailBytes(env: NodeJS.ProcessEnv = process.env): number {
+  return readPositiveIntEnv("OPENCLAW_TELEGRAM_USER_PROOF_LOG_TAIL_BYTES", 256 * 1024, env);
+}
+
+const LOG_READY_TAIL_BYTES = readTelegramUserProofLogTailBytes();
 const TELEGRAM_PROOF_WINDOW = {
   height: 1000,
   width: 650,
@@ -219,7 +234,8 @@ function parsePositiveInteger(value: string, label: string) {
   return parsed;
 }
 
-function parseArgs(argv: string[]): Options {
+function parseArgs(argvInput: string[]): Options {
+  let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
     "finish",
@@ -412,11 +428,6 @@ function readJsonFile(filePath: string): JsonObject {
   }
 }
 
-function readPositiveInt(raw: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 function requireString(source: JsonObject, key: string) {
   const value = source[key];
   if (typeof value === "number") {
@@ -478,42 +489,230 @@ function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: st
   };
 }
 
+export function createOpenClawGatewaySpawnSpec(params: {
+  env: NodeJS.ProcessEnv;
+  gatewayPort: number;
+  repoRoot: string;
+  comSpec?: string;
+  nodeExecPath?: string;
+  npmExecPath?: string;
+  platform?: NodeJS.Platform;
+}): GatewaySpawnSpec {
+  const spec = createPnpmRunnerSpawnSpec({
+    comSpec: params.comSpec,
+    cwd: params.repoRoot,
+    env: params.env,
+    nodeExecPath: params.nodeExecPath,
+    npmExecPath: params.npmExecPath,
+    platform: params.platform,
+    pnpmArgs: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+  });
+  return {
+    args: spec.args,
+    command: spec.command,
+    options: {
+      cwd: spec.options.cwd,
+      env: spec.options.env,
+      shell: spec.options.shell,
+      windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+    },
+  };
+}
+
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function runCommand(params: {
+type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
+
+function appendCommandText(current: string, chunk: Buffer): string {
+  return current + chunk.toString("utf8");
+}
+
+export function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
+  const next = appendCommandText(current, chunk);
+  return next.length > maxChars ? next.slice(-maxChars) : next;
+}
+
+export function appendCommandStdout(
+  current: string,
+  chunk: Buffer,
+  maxChars = COMMAND_STDOUT_MAX_CHARS,
+): AppendCommandStdoutResult {
+  const next = appendCommandText(current, chunk);
+  if (next.length > maxChars) {
+    return { ok: false, message: `command stdout exceeded ${maxChars} characters` };
+  }
+  return { ok: true, value: next };
+}
+
+export function appendCommandStderrTail(
+  current: string,
+  chunk: Buffer,
+  maxChars = COMMAND_STDERR_TAIL_CHARS,
+): string {
+  return appendCommandTextTail(current, chunk, maxChars);
+}
+
+function commandFailureOutput(stdout: string, stderr: string): string {
+  const stdoutTail =
+    stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
+      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${stdout.slice(
+          -COMMAND_FAILURE_STDOUT_TAIL_CHARS,
+        )}`
+      : stdout;
+  return `${stdoutTail}${stderr}`;
+}
+
+function timedOutError(message: string) {
+  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+const activeCommandChildren = new Set<ChildProcess>();
+let commandCleanupHandlersInstalled = false;
+
+function signalCommandTree(child: ChildProcess, signal: NodeJS.Signals) {
+  if (child.pid && process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
+}
+
+function signalActiveCommandChildren(signal: NodeJS.Signals) {
+  for (const child of activeCommandChildren) {
+    signalCommandTree(child, signal);
+  }
+}
+
+function installCommandCleanupHandlers() {
+  if (commandCleanupHandlersInstalled) {
+    return;
+  }
+  commandCleanupHandlersInstalled = true;
+  process.once("exit", () => {
+    signalActiveCommandChildren("SIGTERM");
+  });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      signalActiveCommandChildren(signal);
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
+export function runCommand(params: {
   args: string[];
   command: string;
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  outputFile?: string;
   stdio?: "inherit" | "pipe";
   stdin?: string;
+  timeoutKillGraceMs?: number;
+  timeoutMs?: number;
 }) {
   return new Promise<CommandResult>((resolve, reject) => {
+    if (params.outputFile) {
+      fs.writeFileSync(params.outputFile, "");
+    }
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
+      detached: process.platform !== "win32",
       env: params.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    activeCommandChildren.add(child);
+    installCommandCleanupHandlers();
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let stdoutLimitError: string | null = null;
+    let timeoutError: Error | null = null;
+    let killTimer: NodeJS.Timeout | undefined;
+    const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
+    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
+    const clearTimers = () => {
+      clearTimeout(timeout);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+    };
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      timeoutError = timedOutError(
+        `${params.command} ${params.args.join(" ")} timed out after ${timeoutMs}ms\n${commandFailureOutput(
+          stdout,
+          stderr,
+        )}`,
+      );
+      signalCommandTree(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        signalCommandTree(child, "SIGKILL");
+      }, timeoutKillGraceMs);
+      killTimer.unref?.();
+    }, timeoutMs);
+    timeout.unref?.();
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      stdout += text;
+      if (params.outputFile) {
+        fs.appendFileSync(params.outputFile, text);
+        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
+      } else if (params.stdio === "inherit") {
+        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
+      } else {
+        const appended = appendCommandStdout(stdout, chunk);
+        if (!appended.ok) {
+          stdoutLimitError = appended.message;
+          signalCommandTree(child, "SIGKILL");
+        } else {
+          stdout = appended.value;
+        }
+      }
       if (params.stdio === "inherit") {
         process.stdout.write(text);
       }
     });
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      stderr += text;
+      if (params.outputFile) {
+        fs.appendFileSync(params.outputFile, text);
+      }
+      stderr = appendCommandStderrTail(stderr, chunk);
       if (params.stdio === "inherit") {
         process.stderr.write(text);
       }
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeCommandChildren.delete(child);
+      clearTimers();
+      reject(error);
+    });
     child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      activeCommandChildren.delete(child);
+      if (timeoutError) {
+        signalCommandTree(child, "SIGKILL");
+        clearTimers();
+        reject(timeoutError);
+        return;
+      }
+      clearTimers();
+      if (stdoutLimitError) {
+        reject(new Error(`${params.command} ${params.args.join(" ")} failed: ${stdoutLimitError}`));
+        return;
+      }
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -521,7 +720,10 @@ function runCommand(params: {
       const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
       reject(
         new Error(
-          `${params.command} ${params.args.join(" ")} failed with ${detail}\n${stdout}${stderr}`,
+          `${params.command} ${params.args.join(" ")} failed with ${detail}\n${commandFailureOutput(
+            stdout,
+            stderr,
+          )}`,
         ),
       );
     });
@@ -618,9 +820,7 @@ function killPidTree(pid: number | undefined) {
   } catch {
     try {
       process.kill(pid, "SIGTERM");
-    } catch {
-      return;
-    }
+    } catch {}
   }
 }
 
@@ -630,17 +830,34 @@ function spawnDaemon(params: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   logPath: string;
+  shell?: boolean;
+  windowsVerbatimArguments?: boolean;
 }) {
   const log = fs.openSync(params.logPath, "a");
   const child = spawn(params.command, params.args, {
     cwd: params.cwd,
     detached: true,
     env: params.env,
+    shell: params.shell,
     stdio: ["ignore", log, log],
+    windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
   child.unref();
   fs.closeSync(log);
   return child.pid;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function waitForChildExit(child: ChildProcess) {
+  return new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
 }
 
 export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
@@ -656,7 +873,7 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
   const buffer = Buffer.alloc(bytesToRead);
   const fd = fs.openSync(logPath, "r");
-  let bytesRead = 0;
+  let bytesRead;
   try {
     bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
   } finally {
@@ -677,7 +894,9 @@ export async function waitForLog(
     if (pattern.test(text)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
@@ -805,52 +1024,122 @@ function writeSutConfig(params: {
   return { configPath, stateDir, tempRoot, workspace };
 }
 
-async function startLocalSut(params: {
-  gatewayPort: number;
-  groupId: string;
-  mockResponseText: string;
-  mockPort: number;
-  outputDir: string;
-  sutToken: string;
-  testerId: string;
-  repoRoot: string;
-}) {
-  const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
-  const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
-  const mock = spawnLogged("node", ["scripts/e2e/mock-openai-server.mjs"], {
-    cwd: params.repoRoot,
-    env: mockServerEnv({ ...params, requestLog }),
-  });
-  await waitForOutput(
-    mock.child,
-    /mock-openai listening/u,
-    () => mock.output,
-    "mock-openai",
-    10_000,
-  );
-  const gateway = spawnLogged(
-    "pnpm",
-    ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-    {
+type StartLocalSutDeps = {
+  createGatewaySpawnSpec?: typeof createOpenClawGatewaySpawnSpec;
+  drainUpdates?: typeof drainSutUpdates;
+  spawnLoggedCommand?: typeof spawnLogged;
+  waitForOutputReady?: typeof waitForOutput;
+  writeConfig?: typeof writeSutConfig;
+};
+
+export async function startLocalSut(
+  params: {
+    gatewayPort: number;
+    groupId: string;
+    mockResponseText: string;
+    mockPort: number;
+    outputDir: string;
+    sutToken: string;
+    testerId: string;
+    repoRoot: string;
+  },
+  deps: StartLocalSutDeps = {},
+) {
+  const drainUpdates = deps.drainUpdates ?? drainSutUpdates;
+  const writeConfig = deps.writeConfig ?? writeSutConfig;
+  const spawnLoggedCommand = deps.spawnLoggedCommand ?? spawnLogged;
+  const waitForOutputReady = deps.waitForOutputReady ?? waitForOutput;
+  const createGatewaySpawnSpec = deps.createGatewaySpawnSpec ?? createOpenClawGatewaySpawnSpec;
+  let gateway: ReturnType<typeof spawnLogged> | undefined;
+  let mock: ReturnType<typeof spawnLogged> | undefined;
+  try {
+    const drained = await drainUpdates(params.sutToken);
+    const config = writeConfig(params);
+    const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
+    mock = spawnLoggedCommand("node", ["scripts/e2e/mock-openai-server.mjs"], {
       cwd: params.repoRoot,
+      env: mockServerEnv({ ...params, requestLog }),
+    });
+    await waitForOutputReady(
+      mock.child,
+      /mock-openai listening/u,
+      () => mock.output,
+      "mock-openai",
+      10_000,
+    );
+    const gatewaySpec = createGatewaySpawnSpec({
       env: gatewayEnv({ ...config, sutToken: params.sutToken }),
-    },
-  );
-  await waitForOutput(gateway.child, /\[gateway\] ready/u, () => gateway.output, "gateway", 60_000);
-  return {
-    ...config,
-    drained,
-    gateway: gateway.child,
-    get gatewayLog() {
-      return gateway.output;
-    },
-    mock: mock.child,
-    get mockLog() {
-      return mock.output;
-    },
-    requestLog,
-  };
+      gatewayPort: params.gatewayPort,
+      repoRoot: params.repoRoot,
+    });
+    gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
+    await waitForOutputReady(
+      gateway.child,
+      /\[gateway\] ready/u,
+      () => gateway.output,
+      "gateway",
+      60_000,
+    );
+    return {
+      ...config,
+      drained,
+      gateway: gateway.child,
+      get gatewayLog() {
+        return gateway.output;
+      },
+      mock: mock.child,
+      get mockLog() {
+        return mock.output;
+      },
+      requestLog,
+    };
+  } catch (error) {
+    killTree(gateway?.child);
+    killTree(mock?.child);
+    throw error;
+  }
+}
+
+export async function recordProbeVideo(params: {
+  crabboxBin: string;
+  cwd: string;
+  durationSeconds: number;
+  leaseId: string;
+  outputPath: string;
+  provider: string;
+  runProbe: () => Promise<void>;
+  startDelayMs?: number;
+  target: string;
+}) {
+  let recording: ChildProcess | undefined;
+  try {
+    recording = spawn(
+      params.crabboxBin,
+      [
+        "artifacts",
+        "video",
+        "--provider",
+        params.provider,
+        "--target",
+        params.target,
+        "--id",
+        params.leaseId,
+        "--duration",
+        `${params.durationSeconds}s`,
+        "--output",
+        params.outputPath,
+      ],
+      { cwd: params.cwd, stdio: "inherit" },
+    );
+    await sleep(params.startDelayMs ?? 3_000);
+    await params.runProbe();
+    const recordCode = await waitForChildExit(recording);
+    if (recordCode !== 0) {
+      throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
+    }
+  } finally {
+    killTree(recording);
+  }
 }
 
 async function startLocalSutDaemon(params: {
@@ -883,12 +1172,20 @@ async function startLocalSutDaemon(params: {
     }
     await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
+    const gatewayEnvVars = gatewayEnv({ ...config, sutToken: params.sutToken });
+    const gatewaySpec = createOpenClawGatewaySpawnSpec({
+      env: gatewayEnvVars,
+      gatewayPort: params.gatewayPort,
+      repoRoot: params.repoRoot,
+    });
     gatewayPid = spawnDaemon({
-      command: "pnpm",
-      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-      cwd: params.repoRoot,
-      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      args: gatewaySpec.args,
+      command: gatewaySpec.command,
+      cwd: gatewaySpec.options.cwd ?? params.repoRoot,
+      env: gatewaySpec.options.env ?? gatewayEnvVars,
       logPath: gatewayLog,
+      shell: gatewaySpec.options.shell,
+      windowsVerbatimArguments: gatewaySpec.options.windowsVerbatimArguments,
     });
     if (!gatewayPid) {
       throw new Error("gateway did not start.");
@@ -1093,7 +1390,9 @@ async function runRemoteCommand(params: {
   args: string[];
   command: string;
   cwd: string;
+  outputFile?: string;
   stdio?: "inherit" | "pipe";
+  timeoutMs?: number;
 }) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 4; attempt += 1) {
@@ -1104,7 +1403,9 @@ async function runRemoteCommand(params: {
       if (attempt === 4 || !isTransientSshFailure(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 3000);
+      });
     }
   }
   throw lastError;
@@ -1130,13 +1431,20 @@ async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: stri
   });
 }
 
-async function sshRun(root: string, inspect: CrabboxInspect, remoteCommand: string) {
+async function sshRun(
+  root: string,
+  inspect: CrabboxInspect,
+  remoteCommand: string,
+  options: { outputFile?: string; timeoutMs?: number } = {},
+) {
   const ssh = sshArgs(inspect);
   return await runRemoteCommand({
     command: "ssh",
     args: [...ssh.base, ssh.target, remoteCommand],
     cwd: root,
+    outputFile: options.outputFile,
     stdio: "inherit",
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -1587,7 +1895,9 @@ async function writeRemoteSessionScripts(params: {
     selectChatScript,
     `${REMOTE_ROOT}/select-desktop-chat.sh`,
   );
-  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, {
+    timeoutMs: REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+  });
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
@@ -1810,12 +2120,11 @@ async function sendSessionProbe(root: string, opts: Options, outputDir: string) 
 async function runSessionCommand(root: string, opts: Options, outputDir: string) {
   const { session } = readSession(root, opts, outputDir);
   const command = opts.remoteCommand.map(shellQuote).join(" ");
-  const result = await sshRun(root, session.crabbox.inspect, command);
   const logPath = path.join(
     session.outputDir,
     `remote-command-${new Date().toISOString().replace(/[:.]/gu, "-")}.log`,
   );
-  fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
+  await sshRun(root, session.crabbox.inspect, command, { outputFile: logPath });
   return { command: opts.remoteCommand, log: path.relative(root, logPath), status: "pass" };
 }
 
@@ -1897,12 +2206,13 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
     throw new Error("view requires --message-id.");
   }
   const link = telegramPrivatePostLink(session.credential.groupId, messageId);
-  const result = await sshRun(root, session.crabbox.inspect, renderProofViewCommand(link));
   const logPath = path.join(
     session.outputDir,
     `proof-view-${new Date().toISOString().replace(/[:.]/gu, "-")}.log`,
   );
-  fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
+  await sshRun(root, session.crabbox.inspect, renderProofViewCommand(link), {
+    outputFile: logPath,
+  });
   return {
     crop: TELEGRAM_PROOF_CROP,
     geometry: TELEGRAM_PROOF_WINDOW,
@@ -2261,7 +2571,9 @@ async function main() {
     await scpToRemote(root, inspect, authorizeScript, `${REMOTE_ROOT}/authorize-desktop.sh`);
     await scpToRemote(root, inspect, selectChatScript, `${REMOTE_ROOT}/select-desktop-chat.sh`);
     await scpToRemote(root, inspect, probeScript, `${REMOTE_ROOT}/remote-probe.sh`);
-    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, {
+      timeoutMs: REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+    });
 
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
@@ -2285,30 +2597,18 @@ async function main() {
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
     const videoPath = path.join(outputDir, "telegram-user-crabbox-proof.mp4");
-    const recording = spawn(
-      opts.crabboxBin,
-      [
-        "artifacts",
-        "video",
-        "--provider",
-        opts.provider,
-        "--target",
-        opts.target,
-        "--id",
-        leaseId,
-        "--duration",
-        `${opts.recordSeconds}s`,
-        "--output",
-        videoPath,
-      ],
-      { cwd: root, stdio: "inherit" },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
-    const recordCode = await new Promise<number | null>((resolve) => recording.on("exit", resolve));
-    if (recordCode !== 0) {
-      throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
-    }
+    await recordProbeVideo({
+      crabboxBin: opts.crabboxBin,
+      cwd: root,
+      durationSeconds: opts.recordSeconds,
+      leaseId,
+      outputPath: videoPath,
+      provider: opts.provider,
+      runProbe: async () => {
+        await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
+      },
+      target: opts.target,
+    });
     const motionVideoPath = path.join(outputDir, "telegram-user-crabbox-proof-motion.mp4");
     const motionGifPath = path.join(outputDir, "telegram-user-crabbox-proof-motion.gif");
     summary.mediaPreview = await createMotionPreview({

@@ -8,6 +8,7 @@ import {
   formatContextLimitTruncationNotice,
   installContextEngineLoopHook,
   installToolResultContextGuard,
+  markTranscriptPromptText,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
 } from "./tool-result-context-guard.js";
 
@@ -408,10 +409,10 @@ describe("installToolResultContextGuard", () => {
 });
 
 type MockedEngine = ContextEngine & {
-  afterTurn: ReturnType<typeof vi.fn>;
-  assemble: ReturnType<typeof vi.fn>;
-  ingest: ReturnType<typeof vi.fn>;
-  ingestBatch?: ReturnType<typeof vi.fn>;
+  afterTurn: ReturnType<typeof vi.fn<NonNullable<ContextEngine["afterTurn"]>>>;
+  assemble: ReturnType<typeof vi.fn<ContextEngine["assemble"]>>;
+  ingest: ReturnType<typeof vi.fn<ContextEngine["ingest"]>>;
+  ingestBatch?: ReturnType<typeof vi.fn<NonNullable<ContextEngine["ingestBatch"]>>>;
 };
 
 function makeMockEngine(
@@ -428,13 +429,15 @@ function makeMockEngine(
     omitIngestBatch?: boolean;
   } = {},
 ): MockedEngine {
-  const defaultAfterTurn = vi.fn(async () => {});
-  const defaultAssemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-    messages: params.messages,
-    estimatedTokens: 0,
-  }));
-  const defaultIngest = vi.fn(async () => ({ ingested: true }));
-  const defaultIngestBatch = vi.fn(
+  const defaultAfterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+  const defaultAssemble = vi.fn<ContextEngine["assemble"]>(
+    async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }),
+  );
+  const defaultIngest = vi.fn<ContextEngine["ingest"]>(async () => ({ ingested: true }));
+  const defaultIngestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(
     async (params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0]) => ({
       ingestedCount: params.messages.length,
     }),
@@ -442,14 +445,18 @@ function makeMockEngine(
   const afterTurn = overrides.omitAfterTurn
     ? undefined
     : overrides.afterTurn
-      ? vi.fn(overrides.afterTurn)
+      ? vi.fn<NonNullable<ContextEngine["afterTurn"]>>(overrides.afterTurn)
       : defaultAfterTurn;
-  const assemble = overrides.assemble ? vi.fn(overrides.assemble) : defaultAssemble;
-  const ingest = overrides.ingest ? vi.fn(overrides.ingest) : defaultIngest;
+  const assemble = overrides.assemble
+    ? vi.fn<ContextEngine["assemble"]>(overrides.assemble)
+    : defaultAssemble;
+  const ingest = overrides.ingest
+    ? vi.fn<ContextEngine["ingest"]>(overrides.ingest)
+    : defaultIngest;
   const ingestBatch = overrides.omitIngestBatch
     ? undefined
     : overrides.ingestBatch
-      ? vi.fn(overrides.ingestBatch)
+      ? vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(overrides.ingestBatch)
       : defaultIngestBatch;
   const engine = {
     info: {
@@ -627,7 +634,7 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine();
     installHook(agent, engine, 1, () => ({
       provider: "anthropic",
-      modelId: modelId,
+      modelId,
       promptCache: {
         retention: "short",
         lastCacheTouchAt: 123,
@@ -667,6 +674,34 @@ describe("installContextEngineLoopHook", () => {
       messages,
       prePromptMessageCount: 1,
     });
+  });
+
+  it("projects marked model prompts for ingest without leaking the marker to assembly", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 0);
+
+    const modelPrompt = makeUser("model-only hook context\n\nvisible prompt");
+    markTranscriptPromptText(modelPrompt, "visible prompt");
+    const messages = [modelPrompt, makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, messages);
+
+    const afterTurnMessage = (recordMockArg(engine.afterTurn).messages as AgentMessage[])[0];
+    const assembleMessage = (recordMockArg(engine.assemble).messages as AgentMessage[])[0];
+    const transformedMessage = (transformed as AgentMessage[])[0];
+
+    expect(afterTurnMessage).toMatchObject({ role: "user", content: "visible prompt" });
+    expect(JSON.stringify(afterTurnMessage)).not.toContain("__openclawTranscriptPromptText");
+    expect(assembleMessage).toMatchObject({
+      role: "user",
+      content: "model-only hook context\n\nvisible prompt",
+    });
+    expect(JSON.stringify(assembleMessage)).not.toContain("__openclawTranscriptPromptText");
+    expect(transformedMessage).toMatchObject({
+      role: "user",
+      content: "model-only hook context\n\nvisible prompt",
+    });
+    expect(JSON.stringify(transformedMessage)).not.toContain("__openclawTranscriptPromptText");
   });
 
   it("calls afterTurn and assemble when new messages are appended after the first call", async () => {

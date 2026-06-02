@@ -8,6 +8,10 @@ import {
   resolveNodeFromNodeList,
   type NodeMatchCandidate,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -69,41 +73,6 @@ export type CanvasCliDependencies = {
 
 type CanvasNodeCandidate = NodeMatchCandidate;
 type CanvasSnapshotRequestFormat = "png" | "jpeg";
-
-function normalizeNumericString(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function parseStrictPositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^\+?\d+$/.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function parseStrictFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
   const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");
@@ -291,7 +260,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
   deps.nodesCallOpts(
     canvas
       .command("snapshot")
-      .description("Capture a canvas snapshot (prints MEDIA:<path>)")
+      .description("Capture a canvas snapshot (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--format <png|jpg|jpeg>", "Image format", "jpg")
       .option("--max-width <px>", "Max width in px (optional)")
@@ -318,7 +287,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
             deps.defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
             return;
           }
-          deps.defaultRuntime.log(`MEDIA:${deps.shortenHomePath(filePath)}`);
+          deps.defaultRuntime.log(deps.shortenHomePath(filePath));
         });
       }),
     { timeoutMs: 60_000 },

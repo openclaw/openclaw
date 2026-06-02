@@ -10,36 +10,32 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
-import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
-  buildContextEnginePromptCacheInfo,
-  buildAutoAddedToolSearchControlNamesForAllowlistCheck,
-  buildCallableToolNamesForEmptyAllowlistCheck,
-  buildToolSearchRunPlan,
-  buildAfterTurnRuntimeContext,
-  buildAfterTurnRuntimeContextFromUsage,
-  composeSystemPromptWithHookContext,
-  decodeHtmlEntitiesInObject,
-  isPrimaryBootstrapRun,
-  mergeOrphanedTrailingUserPrompt,
-  normalizeMessagesForLlmBoundary,
-  prependSystemPromptAddition,
-  remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
-  resolveUnknownToolGuardThreshold,
-  shouldRunLlmOutputHooksForAttempt,
-  resolveAttemptToolPolicyMessageProvider,
+} from "../stream-resolution.js";
+import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
+import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import {
+  buildAfterTurnRuntimeContext,
+  buildAfterTurnRuntimeContextFromUsage,
+  mergeOrphanedTrailingUserPrompt,
+  prependSystemPromptAddition,
+  resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
+} from "./attempt.prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+import {
+  decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
+} from "./attempt.tool-call-argument-repair.js";
+import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
-  testing as attemptTesting,
-} from "./attempt.js";
+} from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 type FakeWrappedStream = {
@@ -82,10 +78,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireContentItem(
-  content: Array<{ type?: string; text?: string; name?: string }> | unknown[],
-  index = 0,
-) {
+function requireContentItem(content: unknown[], index = 0) {
   return requireRecord(content[index], `content item ${index}`);
 }
 
@@ -93,20 +86,14 @@ function wrappedPluginSystemContext(text: string): string {
   return wrapPluginSystemContextSection(text) ?? "";
 }
 
-function expectSingleTextContent(
-  content: Array<{ type?: string; text?: string }> | unknown[],
-  textFragment: string,
-) {
+function expectSingleTextContent(content: unknown[], textFragment: string) {
   expect(content).toHaveLength(1);
   const item = requireContentItem(content);
   expect(item.type).toBe("text");
   expect(item.text).toContain(textFragment);
 }
 
-function expectSingleToolCallContent(
-  content: Array<{ type?: string; name?: string }> | unknown[],
-  name: string,
-) {
+function expectSingleToolCallContent(content: unknown[], name: string) {
   expect(content).toHaveLength(1);
   const item = requireContentItem(content);
   expect(item.type).toBe("toolCall");
@@ -133,509 +120,6 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.jobId).toBe("job-1");
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
-  });
-});
-
-describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
-  it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
-    const options = attemptTesting.resolveEmbeddedAttemptSessionWriteLockOptions({
-      config: {},
-      compactionTimeoutMs: 600_000,
-      env: {},
-    });
-
-    expect(options.maxHoldMs).toBe(720_000);
-  });
-});
-
-describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
-  it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
-    expect(
-      buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: ["tool_search_code"],
-        autoAddedToolSearchControlNames: new Set(["tool_search_code"]),
-        toolSearchCatalogToolCount: 0,
-      }),
-    ).toEqual([]);
-  });
-
-  it("counts cataloged tools hidden behind auto-added Tool Search controls", () => {
-    expect(
-      buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: ["tool_search_code"],
-        autoAddedToolSearchControlNames: new Set(["tool_search_code"]),
-        toolSearchCatalogToolCount: 1,
-      }),
-    ).toEqual(["tool-search:0"]);
-  });
-
-  it("keeps explicitly requested Tool Search controls callable", () => {
-    expect(
-      buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: ["tool_search_code"],
-        autoAddedToolSearchControlNames: new Set(),
-        toolSearchCatalogToolCount: 0,
-      }),
-    ).toEqual(["tool_search_code"]);
-  });
-});
-
-describe("buildAutoAddedToolSearchControlNamesForAllowlistCheck", () => {
-  it("treats controls as auto-added unless any explicit allowlist requested them", () => {
-    expect(
-      buildAutoAddedToolSearchControlNamesForAllowlistCheck({
-        toolSearchControlsEnabled: true,
-        explicitAllowlistSources: [{ entries: ["missing_tool"] }],
-        controlNames: ["tool_search_code", "tool_search"],
-      }),
-    ).toEqual(new Set(["tool_search_code", "tool_search"]));
-
-    expect(
-      buildAutoAddedToolSearchControlNamesForAllowlistCheck({
-        toolSearchControlsEnabled: true,
-        explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
-        controlNames: ["tool_search_code", "tool_search"],
-      }),
-    ).toEqual(new Set(["tool_search"]));
-  });
-});
-
-describe("buildToolSearchRunPlan", () => {
-  it("keeps compact visible names separate from replay-safe names", () => {
-    const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [
-        { name: "tool_search_code" },
-        { name: "exec" },
-        { name: "fake_plugin_tool" },
-      ] as never,
-      clientTools: [
-        {
-          type: "function",
-          function: {
-            name: "client_pick_file",
-            parameters: { type: "object", properties: {} },
-          },
-        },
-      ],
-      catalogRegistered: true,
-      catalogToolCount: 2,
-      controlsEnabled: true,
-      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
-    });
-
-    expect([...plan.visibleAllowedToolNames]).toEqual(["tool_search_code"]);
-    expect([...plan.replayAllowedToolNames]).toEqual([
-      "tool_search_code",
-      "exec",
-      "fake_plugin_tool",
-      "client_pick_file",
-    ]);
-    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0", "tool-search:1"]);
-  });
-
-  it("counts explicitly allowlisted client tools before they are cataloged later", () => {
-    const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
-      clientTools: [
-        {
-          type: "function",
-          function: {
-            name: "client_pick_file",
-            parameters: { type: "object", properties: {} },
-          },
-        },
-      ],
-      catalogRegistered: true,
-      catalogToolCount: 0,
-      controlsEnabled: true,
-      explicitAllowlistSources: [{ entries: ["client_pick_file"] }],
-    });
-
-    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search-client:client_pick_file"]);
-  });
-
-  it("keeps code-mode control tools in replay-safe names", () => {
-    const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "exec" }, { name: "wait" }] as never,
-      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
-      clientTools: [],
-      catalogRegistered: true,
-      catalogToolCount: 1,
-      controlsEnabled: true,
-      controlNames: ["exec", "wait"],
-      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
-    });
-
-    expect([...plan.visibleAllowedToolNames]).toEqual(["exec", "wait"]);
-    expect([...plan.replayAllowedToolNames]).toEqual(["fake_plugin_tool", "exec", "wait"]);
-    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0"]);
-  });
-
-  it("does not let unrelated client tools mask a bad explicit allowlist", () => {
-    const plan = buildToolSearchRunPlan({
-      visibleTools: [{ name: "tool_search_code" }] as never,
-      uncompactedTools: [{ name: "tool_search_code" }] as never,
-      clientTools: [
-        {
-          type: "function",
-          function: {
-            name: "client_pick_file",
-            parameters: { type: "object", properties: {} },
-          },
-        },
-      ],
-      catalogRegistered: true,
-      catalogToolCount: 0,
-      controlsEnabled: true,
-      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
-    });
-
-    expect(plan.emptyAllowlistCallableNames).toEqual([]);
-  });
-});
-
-describe("normalizeMessagesForLlmBoundary", () => {
-  it("strips inbound metadata from historical user turns before model replay", () => {
-    const historicalEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
-    const input = [
-      {
-        role: "user",
-        content: [{ type: "text", text: historicalEnvelope }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
-
-    expect(output[0]?.content?.[0]?.text).toBe("Actual historical ask");
-    expect(JSON.stringify(output)).not.toContain("Conversation info");
-    expect(JSON.stringify(output)).not.toContain("Sender (untrusted metadata)");
-    expect(JSON.stringify(input)).toContain("Conversation info");
-  });
-
-  it("strips inbound metadata from string historical user turns", () => {
-    const input = [
-      {
-        role: "user",
-        content:
-          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<{ content?: string }>;
-
-    expect(output[0]?.content).toBe("Plain historical ask");
-  });
-
-  it("preserves inbound metadata on the current user turn", () => {
-    const historicalEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
-    const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
-    const input = [
-      {
-        role: "user",
-        content: [{ type: "text", text: historicalEnvelope }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Historical answer" }],
-        timestamp: 2,
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: currentEnvelope }],
-        timestamp: 3,
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
-
-    expect(output[0]?.content?.[0]?.text).toBe("Old ask");
-    expect(output[2]?.content?.[0]?.text).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
-    expect(output[2]?.content?.[0]?.text).toContain("quoted status body");
-  });
-
-  it("preserves current user inbound metadata through tool-result continuation", () => {
-    const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
-    const input = [
-      {
-        role: "user",
-        content: [{ type: "text", text: currentEnvelope }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "tool output" }],
-        timestamp: 3,
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
-
-    expect(output[0]?.content?.[0]?.text).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
-    expect(output[0]?.content?.[0]?.text).toContain("quoted status body");
-  });
-
-  it("strips tool result details before provider conversion", () => {
-    const input = [
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "exec",
-        content: [{ type: "text", text: "visible output" }],
-        details: { aggregated: "hidden diagnostics" },
-        isError: false,
-        timestamp: 1,
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<Record<string, unknown>>;
-
-    expect(output[0]).not.toHaveProperty("details");
-    expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
-    expect(input[0]).toHaveProperty("details");
-  });
-
-  it("keeps only pre-user current-turn runtime context at the LLM boundary", () => {
-    const input = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "old ask" }],
-        timestamp: 0,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "current secret runtime context",
-        display: false,
-        timestamp: 2,
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "visible ask" }],
-        timestamp: 3,
-      },
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "post-user stale runtime context",
-        display: false,
-        timestamp: 4,
-      },
-      {
-        role: "custom",
-        customType: "other-extension-context",
-        content: "normal custom context",
-        display: false,
-        timestamp: 5,
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<Record<string, unknown>>;
-
-    expect(output).toHaveLength(5);
-    expect(output.some((item) => item.content === "current secret runtime context")).toBe(true);
-    expect(output.some((item) => item.content === "post-user stale runtime context")).toBe(false);
-    expect(output.some((item) => item.customType === "other-extension-context")).toBe(true);
-  });
-
-  it("keeps overflow retry runtime context immediately before the active user", () => {
-    const rebuiltAfterOverflow = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "old ask" }],
-        timestamp: 0,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry ask" }],
-        timestamp: 2,
-      },
-    ];
-    const runtimeContext = {
-      role: "custom",
-      customType: "openclaw.runtime-context",
-      content: "retry runtime context",
-      display: false,
-      timestamp: 3,
-    };
-
-    const retryMessages = attemptTesting.insertRuntimeContextMessageForPrompt({
-      message: runtimeContext as Parameters<
-        typeof attemptTesting.insertRuntimeContextMessageForPrompt
-      >[0]["message"],
-      messages: rebuiltAfterOverflow as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    });
-    const retryInput = normalizeMessagesForLlmBoundary(retryMessages) as unknown as Array<
-      Record<string, unknown>
-    >;
-
-    expect(retryInput.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "custom",
-      "user",
-    ]);
-    expect(retryInput[2]).toMatchObject({
-      customType: "openclaw.runtime-context",
-      content: "retry runtime context",
-    });
-    expect(retryInput[3]?.content).toEqual([{ type: "text", text: "retry ask" }]);
-  });
-
-  it("keeps prompt-local runtime context before the active user in existing sessions", () => {
-    const promptInput = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "old ask" }],
-        timestamp: 0,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "old answer" }],
-        timestamp: 1,
-      },
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "current runtime context",
-        display: false,
-        timestamp: 2,
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "visible ask" }],
-        timestamp: 3,
-      },
-    ];
-
-    const modelInput = normalizeMessagesForLlmBoundary(
-      promptInput as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<Record<string, unknown>>;
-
-    expect(modelInput.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "custom",
-      "user",
-    ]);
-    expect(modelInput[2]).toMatchObject({
-      customType: "openclaw.runtime-context",
-      content: "current runtime context",
-    });
-    expect(modelInput[3]?.content).toEqual([{ type: "text", text: "visible ask" }]);
-  });
-
-  it("keeps only safe blocked metadata at the LLM boundary", () => {
-    const input = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-          },
-        ],
-        timestamp: 1,
-        __openclaw: {
-          beforeAgentRunBlocked: {
-            blockedBy: "policy-plugin",
-            blockedAt: 1,
-          },
-        },
-      },
-    ];
-
-    const output = normalizeMessagesForLlmBoundary(
-      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as unknown as Array<Record<string, unknown>>;
-
-    expect(output[0]?.content).toEqual([
-      {
-        type: "text",
-        text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
-      },
-    ]);
-    expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
-    expect(output[0]).not.toHaveProperty("__openclaw.beforeAgentRunBlocked.reason");
-    expect(JSON.stringify(output)).not.toContain("secret prompt");
-    expect(JSON.stringify(output)).not.toContain("matched secret prompt");
-    expect(input[0]).toHaveProperty("__openclaw");
-  });
-});
-
-describe("resolveAttemptToolPolicyMessageProvider", () => {
-  it("prefers explicit tool-policy provider over transport channel", () => {
-    expect(
-      resolveAttemptToolPolicyMessageProvider({
-        messageChannel: "discord",
-        messageProvider: "discord-voice",
-      }),
-    ).toBe("discord-voice");
-  });
-
-  it("falls back to message channel when provider is omitted", () => {
-    expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
-  });
-});
-
-describe("shouldRunLlmOutputHooksForAttempt", () => {
-  it("skips llm_output after before_agent_run blocks before model submission", () => {
-    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "hook:before_agent_run" })).toBe(
-      false,
-    );
-    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "prompt" })).toBe(true);
-    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: null })).toBe(true);
   });
 });
 
@@ -855,63 +339,6 @@ describe("resolveBootstrapContextTargets", () => {
       includeBootstrapInSystemContext: false,
       includeBootstrapInRuntimeContext: false,
     });
-  });
-});
-
-describe("isPrimaryBootstrapRun", () => {
-  it("treats regular sessions as primary bootstrap runs", () => {
-    expect(isPrimaryBootstrapRun("agent:main:main")).toBe(true);
-  });
-
-  it("suppresses bootstrap ownership for subagent and ACP/helper sessions", () => {
-    expect(isPrimaryBootstrapRun("agent:main:subagent:worker")).toBe(false);
-    expect(isPrimaryBootstrapRun("agent:main:acp:worker")).toBe(false);
-  });
-});
-
-describe("remapInjectedContextFilesToWorkspace", () => {
-  it("rewrites injected file paths onto the effective workspace when the tool root changes", () => {
-    expect(
-      remapInjectedContextFilesToWorkspace({
-        files: [
-          {
-            path: "/real/workspace/AGENTS.md",
-            content: "agents",
-          },
-          {
-            path: "/real/workspace/nested/TOOLS.md",
-            content: "tools",
-          },
-          {
-            path: "/real/workspace/..context/USER.md",
-            content: "dot-prefixed context",
-          },
-          {
-            path: "/outside/README.md",
-            content: "outside",
-          },
-        ],
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual([
-      {
-        path: "/sandbox/workspace/AGENTS.md",
-        content: "agents",
-      },
-      {
-        path: "/sandbox/workspace/nested/TOOLS.md",
-        content: "tools",
-      },
-      {
-        path: "/sandbox/workspace/..context/USER.md",
-        content: "dot-prefixed context",
-      },
-      {
-        path: "/outside/README.md",
-        content: "outside",
-      },
-    ]);
   });
 });
 
@@ -1136,28 +563,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
-  it("uses only the runtime-forwarded auth profile for stream provenance", () => {
-    expect(
-      attemptTesting.resolveAttemptStreamAuthProfileId({
-        authProfileId: "openai-codex:raw-session-profile",
-        runtimePlan: {
-          auth: {
-            forwardedAuthProfileId: "openai-codex:forwarded-profile",
-          },
-        } as never,
-      }),
-    ).toBe("openai-codex:forwarded-profile");
-
-    expect(
-      attemptTesting.resolveAttemptStreamAuthProfileId({
-        authProfileId: "openai:non-forwarded-profile",
-        runtimePlan: {
-          auth: {},
-        } as never,
-      }),
-    ).toBeUndefined();
-  });
-
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
     const providerStreamFn = vi.fn(async (_model, context) => context);
     const streamFn = resolveEmbeddedAgentStreamFn({
@@ -1273,35 +678,6 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         sessionAgentId: "main",
       }),
     ).toBe(false);
-  });
-});
-
-describe("resolveUnknownToolGuardThreshold", () => {
-  it("returns the default threshold when no loop-detection config is provided", () => {
-    expect(resolveUnknownToolGuardThreshold(undefined)).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({})).toBe(10);
-  });
-
-  it("stays on even when tools.loopDetection.enabled is false (safety net)", () => {
-    // The unknown-tool guard has no false-positive surface — the tool is
-    // objectively not registered — so it is always on regardless of the
-    // opt-in genericRepeat/pingPong/pollNoProgress detectors.
-    expect(resolveUnknownToolGuardThreshold({ enabled: false })).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 3 })).toBe(3);
-  });
-
-  it("uses the configured threshold override when provided", () => {
-    expect(resolveUnknownToolGuardThreshold({ enabled: true, unknownToolThreshold: 4 })).toBe(4);
-  });
-
-  it("falls back to the default threshold when the override is non-positive", () => {
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 0 })).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: -5 })).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN })).toBe(10);
-  });
-
-  it("floors fractional overrides", () => {
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 3.7 })).toBe(3);
   });
 });
 
@@ -1566,7 +942,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1601,7 +978,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1648,7 +1026,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1698,7 +1077,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1762,7 +1142,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     await secondStream.result();
@@ -3906,7 +3287,7 @@ describe("buildAfterTurnRuntimeContext", () => {
           sessionId: "session-123",
           config: {} as OpenClawConfig,
           skillsSnapshot: undefined,
-          provider: "openai-codex",
+          provider: "openai",
           modelId: "gpt-5.4",
           thinkLevel: "off",
           reasoningLevel: "on",
@@ -3944,7 +3325,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3956,7 +3337,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
   });
 
@@ -3978,7 +3359,7 @@ describe("buildAfterTurnRuntimeContext", () => {
           },
         } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3995,7 +3376,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     // compaction model in the runtime context.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    // Auth profile dropped because provider changed from openai-codex to openrouter.
+    // Auth profile dropped because provider changed from openai to openrouter.
     expect(legacy.authProfileId).toBeUndefined();
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -4017,7 +3398,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -4033,7 +3414,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
 
     expect(legacy.authProfileId).toBe("openai:p1");
-    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
     expect(legacy.workspaceDir).toBe("/tmp/workspace");
     expect(legacy.cwd).toBe("/tmp/task-repo");
@@ -4061,7 +3442,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -4093,7 +3474,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         senderId: "user-123",
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",

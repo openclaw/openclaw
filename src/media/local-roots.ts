@@ -1,4 +1,7 @@
 import path from "node:path";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
@@ -8,10 +11,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;

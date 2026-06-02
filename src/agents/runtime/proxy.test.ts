@@ -78,10 +78,41 @@ describe("streamProxy", () => {
     expect(typeof rawBody).toBe("string");
     const body = JSON.parse(rawBody as string) as {
       model?: { headers?: unknown };
-      options?: { headers?: unknown };
+      options?: { headers?: unknown; promptCacheKey?: string };
     };
     expect(body.options).not.toHaveProperty("headers");
+    expect(body.options?.promptCacheKey).toBeUndefined();
     expect(body.model).not.toHaveProperty("headers");
+  });
+
+  it("forwards prompt cache affinity separately from session identity", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      responseFromText(
+        `data: ${JSON.stringify({
+          type: "done",
+          reason: "stop",
+          usage,
+        })}`,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+      sessionId: "run-session",
+      promptCacheKey: "stable-cache-key",
+    }).result();
+
+    const rawBody = fetchMock.mock.calls[0]?.[1]?.body;
+    expect(typeof rawBody).toBe("string");
+    const body = JSON.parse(rawBody as string) as {
+      options?: { promptCacheKey?: string; sessionId?: string };
+    };
+    expect(body.options).toMatchObject({
+      sessionId: "run-session",
+      promptCacheKey: "stable-cache-key",
+    });
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {

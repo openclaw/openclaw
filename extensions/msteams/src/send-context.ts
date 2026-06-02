@@ -12,31 +12,38 @@ import {
   isAllowedBotFrameworkServiceUrl,
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import {
+  resolveMSTeamsSdkCloudOptions,
+  validateMSTeamsProactiveServiceUrlBoundary,
+  type MSTeamsSdkCloudOptions,
+} from "./cloud.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
 } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { resolveGraphChatId } from "./graph-upload.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsAdapter, createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import type { MSTeamsApp } from "./sdk.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-type MSTeamsConversationType = "personal" | "groupChat" | "channel";
+export type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
 export type MSTeamsProactiveContext = {
   appId: string;
   conversationId: string;
   ref: StoredConversationReference;
-  adapter: MSTeamsAdapter;
+  app: MSTeamsApp;
   log: ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
   /** The type of conversation: personal (1:1), groupChat, or channel */
   conversationType: MSTeamsConversationType;
   /** Reply style resolved for proactive text/media sends. */
   replyStyle: MSTeamsReplyStyle;
+  /** Teams SDK cloud/service endpoint used to validate proactive sends. */
+  sdkCloudOptions: MSTeamsSdkCloudOptions;
   /** Token provider for Graph API / OneDrive operations */
   tokenProvider: MSTeamsAccessTokenProvider;
   /** SharePoint site ID for file uploads in group chats/channels */
@@ -152,7 +159,7 @@ export async function resolveMSTeamsSendContext(params: {
     throw new Error("msteams credentials not configured");
   }
 
-  const store = createMSTeamsConversationStoreFs();
+  const store = createMSTeamsConversationStoreState();
 
   // Parse recipient and find conversation reference
   const recipient = parseRecipient(params.to);
@@ -203,9 +210,14 @@ export async function resolveMSTeamsSendContext(params: {
       );
     }
   }
-
-  const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
-  const adapter = createMSTeamsAdapter(app, sdk);
+  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
+  validateMSTeamsProactiveServiceUrlBoundary({
+    cloud: sdkCloudOptions.cloud,
+    conversationId,
+    storedServiceUrl: safeRef.serviceUrl,
+    configuredServiceUrl: sdkCloudOptions.serviceUrl,
+  });
 
   // Create token provider adapter for Graph API / OneDrive operations
   const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);
@@ -282,10 +294,11 @@ export async function resolveMSTeamsSendContext(params: {
     appId: creds.appId,
     conversationId,
     ref: safeRef,
-    adapter: adapter as unknown as MSTeamsAdapter,
+    app,
     log,
     conversationType,
     replyStyle,
+    sdkCloudOptions,
     tokenProvider,
     sharePointSiteId,
     mediaMaxBytes,

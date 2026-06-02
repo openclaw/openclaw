@@ -1,10 +1,13 @@
 import type { TSchema } from "typebox";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -169,10 +172,16 @@ export type ChannelLegacyStateMigrationPlan =
       scopeKey: string;
       stateDir?: string;
       cleanupSource?: "rename";
+      cleanupWhenEmpty?: boolean;
       preview?: string;
+      shouldReplaceExistingEntry?: (params: {
+        key: string;
+        existingValue: unknown;
+        incomingValue: unknown;
+      }) => boolean | Promise<boolean>;
       readEntries: () =>
-        | Array<{ key: string; value: unknown }>
-        | Promise<Array<{ key: string; value: unknown }>>;
+        | Array<{ key: string; value: unknown; ttlMs?: number }>
+        | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
     };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
@@ -535,6 +544,7 @@ export type ChannelMessagingAdapter = {
     to?: string;
     conversationId?: string;
     threadId?: string | number;
+    threadParentId?: string | number;
     isGroup: boolean;
   }) => {
     conversationId?: string;

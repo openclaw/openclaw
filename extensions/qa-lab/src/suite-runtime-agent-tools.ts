@@ -3,6 +3,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  appendQaChildOutputTail,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+} from "./child-output.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import type {
@@ -51,14 +56,14 @@ async function callPluginToolsMcp(params: {
       path.join(params.env.repoRoot, "src/mcp/plugin-tools-serve.ts"),
     ],
     stderr: "pipe",
-    cwd: params.env.gateway.tempRoot,
+    cwd: params.env.repoRoot,
     env: transportEnv,
   });
-  let stderrTail = "";
+  const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
   const stderr = transport.stderr;
   if (stderr && typeof stderr.on === "function") {
     stderr.on("data", (chunk: unknown) => {
-      stderrTail = `${stderrTail}${String(chunk)}`.slice(-MCP_STDERR_TAIL_LIMIT);
+      appendQaChildOutputTail(stderrTail, chunk);
     });
   }
   const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
@@ -75,22 +80,20 @@ async function callPluginToolsMcp(params: {
         `MCP tool missing: ${params.toolName}; available tools: ${availableTools.join(", ") || "<none>"}`,
       );
     }
-    try {
-      return await client.callTool(
-        {
-          name: params.toolName,
-          arguments: params.args,
-        },
-        undefined,
-        { timeout: MCP_REQUEST_TIMEOUT_MS },
-      );
-    } catch (error) {
-      const tail = stderrTail.trim();
-      if (!tail || !(error instanceof Error)) {
-        throw error;
-      }
-      throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
+    return await client.callTool(
+      {
+        name: params.toolName,
+        arguments: params.args,
+      },
+      undefined,
+      { timeout: MCP_REQUEST_TIMEOUT_MS },
+    );
+  } catch (error) {
+    const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();
+    if (!tail || !(error instanceof Error)) {
+      throw error;
     }
+    throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
   } finally {
     await client.close().catch(() => {});
   }

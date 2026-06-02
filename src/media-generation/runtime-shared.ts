@@ -1,3 +1,7 @@
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
+import type { MediaGenerationNormalizationMetadataInput } from "../../packages/media-generation-core/src/normalization.js";
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -12,24 +16,17 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveCapabilityModelRefForProviders } from "./capability-model-ref.js";
-import type {
+export type {
   MediaGenerationNormalizationMetadataInput,
   MediaNormalizationEntry,
   MediaNormalizationValue,
-} from "./normalization.types.js";
+} from "../../packages/media-generation-core/src/normalization.js";
+export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
-export type {
-  MediaGenerationNormalizationMetadataInput,
-  MediaNormalizationEntry,
-  MediaNormalizationValue,
-} from "./normalization.types.js";
-
 export function recordCapabilityCandidateFailure(params: {
   attempts: FallbackAttempt[];
   provider: string;
@@ -47,25 +44,13 @@ export function recordCapabilityCandidateFailure(params: {
   });
 }
 
-export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
-  entry: MediaNormalizationEntry<TValue> | undefined,
-): entry is MediaNormalizationEntry<TValue> {
-  return Boolean(
-    entry &&
-    (entry.requested !== undefined ||
-      entry.applied !== undefined ||
-      entry.derivedFrom !== undefined ||
-      (entry.supportedValues?.length ?? 0) > 0),
-  );
-}
-
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 export function resolveMediaProviderDefaultTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
+    ? clampTimerTimeoutMs(timeoutMs)
     : undefined;
 }
 
@@ -73,7 +58,10 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
   timeoutMs?: number;
   providerDefaultTimeoutMs?: number;
 }): number | undefined {
-  return params.timeoutMs ?? resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs);
+  return (
+    resolveMediaProviderDefaultTimeoutMs(params.timeoutMs) ??
+    resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs)
+  );
 }
 
 type CapabilityProviderCandidate = {
@@ -309,6 +297,9 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
 function parseSizeValue(raw?: string | null): ParsedSize | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
   if (!pair) {
+    return null;
+  }
+  if (!Number.isSafeInteger(pair.width) || !Number.isSafeInteger(pair.height)) {
     return null;
   }
   return {
@@ -572,7 +563,7 @@ export function throwCapabilityGenerationFailure(params: {
   lastError: unknown;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
+    throw toLintErrorObject(params.lastError, "Non-Error thrown");
   }
   const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
@@ -651,4 +642,18 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
       ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
       : "If you want a specific provider, also configure that provider's auth/API key first.",
   ].join(" ");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

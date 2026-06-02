@@ -40,12 +40,17 @@ function findDelimitedTokenIndex(text: string, token: string, from: number): num
   return match.index + prefixLength;
 }
 
-function stripDelimitedBlock(text: string, begin: string, end: string): string {
+function extractDelimitedBlocks(
+  text: string,
+  begin: string,
+  end: string,
+): { text: string; blocks: string[] } {
   let next = text;
+  const blocks: string[] = [];
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
-      return next;
+      return { text: next, blocks };
     }
 
     let cursor = start + begin.length;
@@ -69,11 +74,17 @@ function stripDelimitedBlock(text: string, begin: string, end: string): string {
 
     const before = next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return before;
+      return { text: before, blocks };
     }
-    const after = next.slice(finish + end.length).trimStart();
+    const blockEnd = finish + end.length;
+    blocks.push(next.slice(start, blockEnd).trim());
+    const after = next.slice(blockEnd).trimStart();
     next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
   }
+}
+
+function stripDelimitedBlock(text: string, begin: string, end: string): string {
+  return extractDelimitedBlocks(text, begin, end).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -205,6 +216,21 @@ export function stripInternalRuntimeContext(text: string): string {
   return stripRuntimeContextPromptPreface(
     stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
   );
+}
+
+export function extractInternalRuntimeContext(text: string): {
+  text: string;
+  runtimeContext?: string;
+} {
+  const extracted = extractDelimitedBlocks(
+    text,
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+  );
+  return {
+    text: extracted.text,
+    ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
+  };
 }
 
 export function hasInternalRuntimeContext(text: string): boolean {

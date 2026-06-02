@@ -15,6 +15,7 @@ export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export {
   formatEmbeddedAgentQueueFailureSummary,
   isEmbeddedAgentRunActive,
+  isEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "./embedded-agent-runner/runs.js";

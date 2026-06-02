@@ -4,14 +4,14 @@
  */
 
 // Internal import for JSON parsing utility
-import {
-  type AssistantMessage,
-  type AssistantMessageEvent,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-  type StopReason,
-  type ToolCall,
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StopReason,
+  ToolCall,
 } from "../../llm/types.js";
 import { EventStream } from "../../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../../llm/utils/json-parse.js";
@@ -69,6 +69,7 @@ type ProxySerializableStreamOptions = Pick<
   | "reasoning"
   | "cacheRetention"
   | "sessionId"
+  | "promptCacheKey"
   | "metadata"
   | "transport"
   | "thinkingBudgets"
@@ -110,6 +111,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
     reasoning: options.reasoning,
     cacheRetention: options.cacheRetention,
     sessionId: options.sessionId,
+    promptCacheKey: options.promptCacheKey,
     metadata: options.metadata,
     transport: options.transport,
     thinkingBudgets: options.thinkingBudgets,

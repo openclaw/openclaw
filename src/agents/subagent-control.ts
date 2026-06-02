@@ -1,11 +1,6 @@
 import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
-import {
-  resolveSubagentLabel,
-  resolveSubagentTargetFromRuns,
-  sortSubagentRuns,
-  type SubagentTargetResolution,
-} from "../auto-reply/reply/subagents-utils.js";
+import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -41,7 +36,6 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
-export const MAX_STEER_MESSAGE_CHARS = 4_000;
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
@@ -152,6 +146,10 @@ function ensureControllerOwnsRun(params: {
     return undefined;
   }
   return "Subagents can only control runs spawned from their own session.";
+}
+
+function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
+  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
 }
 
 async function killSubagentRun(params: {
@@ -470,7 +468,7 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const targetHasPendingDescendants = countPendingDescendantRuns(params.entry.childSessionKey) > 0;
-  if (params.entry.endedAt && !targetHasPendingDescendants) {
+  if (isFinishedForSteerControl(params.entry, targetHasPendingDescendants)) {
     return {
       status: "done",
       runId: params.entry.runId,
@@ -487,12 +485,13 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  const currentHasPendingDescendants =
-    currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
+  const currentHasPendingDescendants = currentEntry
+    ? countPendingDescendantRuns(currentEntry.childSessionKey) > 0
+    : false;
   if (
     !currentEntry ||
     currentEntry.runId !== params.entry.runId ||
-    (currentEntry.endedAt && !currentHasPendingDescendants)
+    isFinishedForSteerControl(currentEntry, currentHasPendingDescendants)
   ) {
     return {
       status: "done",
@@ -528,6 +527,7 @@ export async function steerControlledSubagentRun(params: {
     typeof targetSession.entry?.sessionId === "string" && targetSession.entry.sessionId.trim()
       ? targetSession.entry.sessionId.trim()
       : undefined;
+  const restartSessionId = sessionId ? crypto.randomUUID() : undefined;
 
   if (sessionId) {
     const runtime = await resolveSubagentControlRuntime();
@@ -562,7 +562,7 @@ export async function steerControlledSubagentRun(params: {
       params: {
         message: params.message,
         sessionKey: params.entry.childSessionKey,
-        sessionId,
+        sessionId: restartSessionId,
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
@@ -581,7 +581,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error,
     };
   }
@@ -598,7 +598,7 @@ export async function steerControlledSubagentRun(params: {
       status: "error",
       runId,
       sessionKey: params.entry.childSessionKey,
-      sessionId,
+      sessionId: restartSessionId,
       error: "failed to replace steered subagent run",
     };
   }
@@ -607,7 +607,7 @@ export async function steerControlledSubagentRun(params: {
     status: "accepted",
     runId,
     sessionKey: params.entry.childSessionKey,
-    sessionId,
+    sessionId: restartSessionId,
     mode: "restart",
     label: resolveSubagentLabel(params.entry),
     text: `steered ${resolveSubagentLabel(params.entry)}.`,
@@ -703,30 +703,6 @@ export async function sendControlledSubagentMessage(params: {
     const error = formatErrorMessage(err);
     return { status: "error" as const, runId, error };
   }
-}
-
-export function resolveControlledSubagentTarget(
-  runs: SubagentRunRecord[],
-  token: string | undefined,
-  options?: { recentMinutes?: number; isActive?: (entry: SubagentRunRecord) => boolean },
-): SubagentTargetResolution {
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
-    label: (entry) => resolveSubagentLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    isActive: options?.isActive,
-    errors: {
-      missingTarget: "Missing subagent target.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous subagent run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent target: ${value}`,
-    },
-  });
 }
 
 export const testing = {

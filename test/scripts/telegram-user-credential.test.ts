@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { win32 } from "node:path";
@@ -16,6 +16,41 @@ function makeTempDir(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(filePath)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error(`timeout waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error(`process still alive: ${pid}`);
 }
 
 afterEach(() => {
@@ -73,6 +108,82 @@ describe("telegram user credential IO", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "waits for timed-out child processes to exit before rejecting",
+    async () => {
+      const dir = makeTempDir("openclaw-telegram-credential-timeout-");
+      const terminatedPath = path.join(dir, "terminated.txt");
+      const scriptPath = path.join(dir, "ignore-term.cjs");
+      writeFileSync(
+        scriptPath,
+        `
+const fs = require("node:fs");
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(process.argv[2], "terminated");
+    process.exit(0);
+  }, 75);
+});
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      const runPromise = runCommand(process.execPath, [scriptPath, terminatedPath], undefined, {
+        timeoutKillGraceMs: 1_000,
+        timeoutMs: 100,
+      });
+      const runError = runPromise.catch((error: unknown) => error);
+
+      try {
+        const error = (await runError) as Error & { code?: string };
+        expect(error).toBeInstanceOf(Error);
+        expect(error.code).toBe("ETIMEDOUT");
+        expect(error.message).toContain("timed out after 100ms");
+        expect(existsSync(terminatedPath)).toBe(true);
+      } finally {
+        await runPromise.catch(() => {});
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out child process groups",
+    async () => {
+      const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
+      const childPidPath = path.join(dir, "child.pid");
+      let childPid: number | undefined;
+
+      try {
+        const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          "const fs = require('node:fs');",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+          "setInterval(() => {}, 1000);",
+        ].join("");
+
+        const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
+          timeoutKillGraceMs: 25,
+          timeoutMs: 100,
+        });
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+
+        await expect(runPromise).rejects.toMatchObject({
+          code: "ETIMEDOUT",
+          message: expect.stringContaining("timed out after 100ms"),
+        });
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it("aborts broker fetches that never return", async () => {
     let signal: AbortSignal | undefined;
     await expect(
@@ -101,15 +212,32 @@ describe("telegram user credential IO", () => {
         timeoutMs: 25,
         init: { method: "POST" },
         fetchImpl: async () =>
-          ({
-            ok: true,
+          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
             status: 200,
-            json: () => new Promise<unknown>(() => {}),
-          }) as Response,
+          }),
       }),
     ).rejects.toMatchObject({
       code: "ETIMEDOUT",
       message: "credential broker payload-chunk timed out after 25ms",
+    });
+  });
+
+  it("bounds broker JSON response bodies", async () => {
+    await expect(
+      fetchJsonWithTimeout({
+        url: "https://qa.example.invalid/qa-credentials/v1/acquire",
+        label: "credential broker acquire",
+        timeoutMs: 1000,
+        maxBodyBytes: 16,
+        init: { method: "POST" },
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ status: "ok", padding: "x".repeat(64) }), {
+            status: 200,
+          }),
+      }),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "credential broker acquire response body exceeded 16 bytes",
     });
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -76,6 +76,10 @@ describe("server-runtime-services", () => {
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("skips model pricing bootstrap import when pricing is disabled", async () => {
     activateGatewayScheduledServices({
       minimalTestGateway: false,
@@ -106,7 +110,6 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
-    await vi.dynamicImportSettled();
     expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
     expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();

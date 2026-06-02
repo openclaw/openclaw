@@ -6,6 +6,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   readSessionStoreReadOnly: vi.fn(() => ({})),
+  configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
     active: 0,
@@ -27,6 +28,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
       cron: 0,
     },
   } as TaskRegistrySummary,
+  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
   taskAuditFindings: [
     {
       severity: "warn",
@@ -46,6 +48,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
       },
     },
   ] as TaskAuditFinding[],
+  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -114,22 +117,9 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  configureTaskRegistryMaintenance: vi.fn(),
-  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
-  getInspectableTaskAuditSummary: vi.fn(() => ({
-    total: 1,
-    warnings: 1,
-    errors: 0,
-    byCode: {
-      stale_queued: 0,
-      stale_running: 0,
-      lost: 0,
-      delivery_failed: 1,
-      missing_cleanup: 0,
-      inconsistent_timestamps: 0,
-    },
-  })),
-  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
+  configureTaskRegistryMaintenance: statusSummaryMocks.configureTaskRegistryMaintenance,
+  getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
+  getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -448,14 +438,14 @@ describe("getStatusSummary", () => {
       model: "gpt-5.5-codex",
     });
     vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5-codex",
     });
     statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
       "agent:main:main": {
         sessionId: "session-1",
         updatedAt: Date.now(),
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.5-codex",
         modelOverrideSource: "user",
       },
@@ -464,7 +454,7 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
-    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai-codex/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai/gpt-5.5-codex");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 });

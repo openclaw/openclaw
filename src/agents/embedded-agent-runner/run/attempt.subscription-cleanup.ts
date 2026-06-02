@@ -1,8 +1,8 @@
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
-export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
-  process.env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
+export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;
@@ -26,7 +26,7 @@ async function waitForEmbeddedAbortSettle(params: {
   const outcome = await Promise.race([
     params.promise
       .then(() => "settled" as const)
-      .catch((err) => {
+      .catch((err: unknown) => {
         log.warn(
           `embedded abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
@@ -70,6 +70,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
+  let sessionLockReleaseError: unknown;
   try {
     try {
       params.removeToolResultContextGuard?.();
@@ -97,22 +98,45 @@ export async function cleanupEmbeddedAttemptResources(params: {
         /* best-effort */
       }
     }
-    try {
-      params.session?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
   } finally {
-    await params.sessionLock.release();
+    try {
+      await params.sessionLock.release();
+    } catch (err) {
+      sessionLockReleaseError = err;
+    }
   }
+
+  try {
+    params.session?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleMcpRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleLspRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+
+  if (sessionLockReleaseError) {
+    throw toLintErrorObject(sessionLockReleaseError, "Non-Error thrown");
+  }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

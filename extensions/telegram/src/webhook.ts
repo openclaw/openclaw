@@ -12,6 +12,7 @@ import {
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/logging-core";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { BackoffPolicy, RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   computeBackoff,
@@ -155,22 +156,12 @@ function isTrustedProxyAddress(
     }
     if (trimmed.includes("/")) {
       const [address, prefix] = trimmed.split("/", 2);
-      const parsedPrefix = Number.parseInt(prefix ?? "", 10);
+      const parsedPrefix = parseStrictNonNegativeInteger(prefix);
       const family = net.isIP(address);
-      if (
-        family === 4 &&
-        Number.isInteger(parsedPrefix) &&
-        parsedPrefix >= 0 &&
-        parsedPrefix <= 32
-      ) {
+      if (family === 4 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 32) {
         blockList.addSubnet(address, parsedPrefix, "ipv4");
       }
-      if (
-        family === 6 &&
-        Number.isInteger(parsedPrefix) &&
-        parsedPrefix >= 0 &&
-        parsedPrefix <= 128
-      ) {
+      if (family === 6 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 128) {
         blockList.addSubnet(address, parsedPrefix, "ipv6");
       }
       continue;
@@ -375,7 +366,7 @@ export async function startTelegramWebhook(opts: {
             durationMs: Date.now() - startTime,
           });
         }
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         const errMsg = formatErrorMessage(err);
         if (diagnosticsEnabled) {
           logWebhookError({
@@ -386,7 +377,7 @@ export async function startTelegramWebhook(opts: {
         }
         runtime.log?.(`webhook update processing failed after ack: ${errMsg}`);
       });
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       const errMsg = formatErrorMessage(err);
       if (diagnosticsEnabled) {
         logWebhookError({

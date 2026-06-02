@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { testing, type EmbeddedAgentActiveSessionSteerTarget } from "./attempt.js";
+import {
+  cancelQueuedSteeringMessage,
+  steerAndWaitForTranscriptCommit,
+  type EmbeddedAgentActiveSessionSteerTarget,
+} from "./attempt.queue-message.js";
 
 describe("embedded OpenClaw queued steering cancellation", () => {
   it("waits for the queued user message_end transcript boundary", async () => {
@@ -12,11 +16,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         return () => {};
       },
     };
-    const wait = testing.steerAndWaitForTranscriptCommit(
-      activeSession,
-      "queued completion",
-      10_000,
-    );
+    const wait = steerAndWaitForTranscriptCommit(activeSession, "queued completion", 10_000);
     let settled = false;
     void wait.then(() => {
       settled = true;
@@ -79,7 +79,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     };
 
     await expect(
-      testing.cancelQueuedSteeringMessage(activeSession, "timed-out completion announce"),
+      cancelQueuedSteeringMessage(activeSession, "timed-out completion announce"),
     ).resolves.toBe(true);
 
     expect(queueMessages).toEqual([unrelatedMessage, trailingMessage]);
@@ -121,7 +121,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       },
     };
 
-    const wait = testing.steerAndWaitForTranscriptCommit(
+    const wait = steerAndWaitForTranscriptCommit(
       activeSession,
       "completion after parent stopped",
       10_000,
@@ -168,7 +168,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         },
       };
 
-      const wait = testing.steerAndWaitForTranscriptCommit(
+      const wait = steerAndWaitForTranscriptCommit(
         activeSession,
         "completion survives retry",
         10_000,
@@ -220,7 +220,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         },
       };
 
-      const wait = testing.steerAndWaitForTranscriptCommit(
+      const wait = steerAndWaitForTranscriptCommit(
         activeSession,
         "completion survives compaction",
         10_000,

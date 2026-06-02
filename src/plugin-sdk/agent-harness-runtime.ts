@@ -8,15 +8,20 @@ import type {
 } from "../agents/codex-mcp-config.types.js";
 import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import {
+  abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
+  type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
@@ -130,13 +135,27 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
+export {
+  buildSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/skill-workshop-prompt.js";
+export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
 export {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+} from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+export { getPluginToolMeta } from "../plugins/tools.js";
+export {
+  abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
+};
+export type {
+  AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult,
 };
 
 /**
@@ -158,6 +177,7 @@ export {
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
 export {
+  filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,
@@ -170,6 +190,43 @@ export type {
 } from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
 
+export async function detectAndLoadAgentHarnessPromptImages(params: {
+  prompt: string;
+  workspaceDir: string;
+  model: { input?: string[] };
+  existingImages?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  config?: import("../config/types.openclaw.js").OpenClawConfig;
+  workspaceOnly?: boolean;
+  localRoots?: readonly string[];
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+}): Promise<{
+  images: ImageContent[];
+  detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
+  loadedCount: number;
+  skippedCount: number;
+}> {
+  const [{ resolveImageSanitizationLimits }, { detectAndLoadPromptImages }, { MAX_IMAGE_BYTES }] =
+    await Promise.all([
+      import("../agents/image-sanitization.js"),
+      import("../agents/embedded-agent-runner/run/images.js"),
+      import("@openclaw/media-core/constants"),
+    ]);
+
+  return detectAndLoadPromptImages({
+    prompt: params.prompt,
+    workspaceDir: params.workspaceDir,
+    model: params.model,
+    existingImages: params.existingImages,
+    imageOrder: params.imageOrder,
+    maxBytes: MAX_IMAGE_BYTES,
+    maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+    workspaceOnly: params.workspaceOnly,
+    localRoots: params.localRoots,
+    sandbox: params.sandbox,
+  });
+}
+
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
@@ -177,6 +234,7 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 export { resolveSandboxContext } from "../agents/sandbox.js";
+export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
 export {
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
@@ -201,10 +259,12 @@ export {
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
@@ -232,6 +292,7 @@ export {
 // timeout the built-in embedded-agent runner uses — one shared implementation, no
 // copy-pasted watchdog.
 export {
+  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
@@ -260,6 +321,7 @@ export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
   testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";

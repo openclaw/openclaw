@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
@@ -28,6 +28,7 @@ import {
   createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 import {
@@ -41,6 +42,10 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+
+beforeAll(async () => {
+  await preloadRunEmbeddedAttemptForTests();
+});
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
 type ToolResultGuardInstallParams = {
@@ -64,6 +69,32 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
   expect(value, label).toBeInstanceOf(Array);
   return value as Array<Record<string, unknown>>;
+}
+
+function sumToolResultTextChars(messages: AgentMessage[]): number {
+  return messages.reduce((sum, message) => {
+    if (message.role !== "toolResult") {
+      return sum;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      return sum;
+    }
+    return (
+      sum +
+      content.reduce((blockSum, block) => {
+        if (
+          block &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+        ) {
+          return blockSum + (block as { text: string }).text.length;
+        }
+        return blockSum;
+      }, 0)
+    );
+  }, 0);
 }
 
 function findRecord(
@@ -198,6 +229,43 @@ async function finalizeTurn(
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
+  let toolSearchControlsCase: Record<string, unknown>;
+
+  beforeAll(async () => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+    hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+    hoisted.detectAndLoadPromptImagesMock.mockClear();
+    const setupTempPaths: string[] = [];
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: {
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+        },
+        sessionKey,
+        tempPaths: setupTempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          config: {
+            tools: {
+              toolSearch: true,
+            },
+          } as OpenClawConfig,
+        },
+      });
+
+      toolSearchControlsCase = mockParams(
+        hoisted.createOpenClawCodingToolsMock,
+        0,
+        "createOpenClawCodingTools options",
+      );
+    } finally {
+      await cleanupTempPaths(setupTempPaths);
+      clearMemoryPluginState();
+      vi.restoreAllMocks();
+    }
+  });
+
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -212,30 +280,80 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+    expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
+    expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
+  });
+
+  it("quarantines unsupported tool schemas before creating the model session", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "healthy_lookup",
+        label: "Healthy Lookup",
+        description: "Look up safe data.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "ok" }),
       },
+      {
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
+        description: "Move robot joints.",
+        parameters: {
+          type: "object",
+          properties: {
+            target: { $dynamicRef: "#target" },
+          },
+        },
+        execute: async () => ({ text: "bad" }),
+      },
+    ]);
+
+    const activeToolNames: string[][] = [];
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
       attemptOverrides: {
         disableTools: false,
         config: {
           tools: {
-            toolSearch: true,
+            codeMode: { enabled: false },
+            toolSearch: false,
           },
         } as OpenClawConfig,
       },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession();
+        session.setActiveToolsByName = (toolNames) => {
+          activeToolNames.push([...toolNames]);
+        };
+        return session;
+      },
     });
 
-    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
-    const options = mockParams(
-      hoisted.createOpenClawCodingToolsMock,
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
       0,
-      "createOpenClawCodingTools options",
+      "createAgentSession options",
     );
-    expect(options.includeToolSearchControls).toBe(true);
-    expect(options.toolSearchCatalogRef).toEqual({});
+    const customTools = requireRecords(sessionOptions.customTools, "customTools");
+    expect(customTools.map((tool) => tool.name)).toEqual(["healthy_lookup"]);
+    expect(activeToolNames).toEqual([["healthy_lookup"]]);
+  });
+
+  it("keeps the embedded system prompt after active tool selection", async () => {
+    let seenSystemPrompt: string | undefined;
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [seedMessage],
+      sessionPrompt: async (activeSession) => {
+        seenSystemPrompt = activeSession.agent.state.systemPrompt;
+      },
+    });
+
+    expect(seenSystemPrompt).toBe("system prompt");
   });
 
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
@@ -258,7 +376,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
         model: {
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           provider: "gateway",
           id: "gpt-5.5",
           contextWindow: 8192,
@@ -361,9 +479,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     );
     expect(seen.systemPrompt).not.toContain("secret runtime context");
-    expect(JSON.stringify(seen.messages)).not.toContain(
-      "visible ask",
-    );
+    expect(JSON.stringify(seen.messages)).not.toContain("visible ask");
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -730,14 +846,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps before_prompt_build prependContext out of post-user transcript messages", async () => {
-    const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "dynamic hook context" }));
+  it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
+    const runBeforePromptBuild = vi.fn(async () => ({
+      prependContext: "dynamic hook context",
+      appendContext: "dynamic hook tail",
+    }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
       runBeforePromptBuild,
       runBeforeAgentStart: vi.fn(),
     });
-    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+    const seen: {
+      modelMessages?: unknown[];
+      preprocessedModelMessages?: unknown[];
+      prompt?: string;
+      messages?: unknown[];
+      systemPrompt?: string;
+    } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -751,6 +876,21 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         seen.prompt = prompt;
         seen.messages = [...session.messages];
         seen.systemPrompt = session.agent.state.systemPrompt;
+        const transformContext = (
+          session.agent as {
+            transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+          }
+        ).transformContext;
+        seen.modelMessages = await transformContext?.([
+          { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
+        ]);
+        seen.preprocessedModelMessages = await transformContext?.([
+          {
+            role: "user",
+            content: [{ type: "text", text: `session preprocessed\n\n${prompt}` }],
+            timestamp: 1,
+          },
+        ]);
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -760,25 +900,120 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("visible ask");
     expect(result.finalPromptText).toBe("visible ask");
+    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
+    expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("session preprocessed");
+    expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook tail");
     expect(seen.systemPrompt).not.toContain("dynamic hook context");
-    expectFields(
-      findRecord(
-        requireRecords(seen.messages, "seen messages"),
-        (message) => message.customType === "openclaw.runtime-context",
-        "hook runtime context message",
-      ),
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        display: false,
-        content: [
-          "OpenClaw runtime context for the immediately preceding user message.",
-          "This context is runtime-generated, not user-authored. Keep internal details private.",
-          "",
-          "dynamic hook context",
-        ].join("\n"),
+    expect(seen.systemPrompt).not.toContain("dynamic hook tail");
+    expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
+    expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook tail");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
+  });
+
+  it("keeps hook context model-only when orphan repair merges the prompt", async () => {
+    const runBeforePromptBuild = vi.fn(async () => ({
+      prependContext: "dynamic hook context",
+      appendContext: "dynamic hook tail",
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(),
+    });
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+      id: "orphan-leaf",
+      parentId: "parent-leaf",
+      type: "message",
+      message: { role: "user", content: "orphaned ask", timestamp: 1 },
+    });
+    const seen: { modelMessages?: unknown[]; prompt?: string; messages?: unknown[] } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "visible ask",
       },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        const transformContext = (
+          session.agent as {
+            transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+          }
+        ).transformContext;
+        seen.modelMessages = await transformContext?.([
+          { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
+        ]);
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toContain("orphaned ask");
+    expect(seen.prompt).toContain("visible ask");
+    expect(seen.prompt).not.toContain("dynamic hook context");
+    expect(seen.prompt).not.toContain("dynamic hook tail");
+    expect(result.finalPromptText).toBe(seen.prompt);
+    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seen.modelMessages)).toContain("orphaned ask");
+    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
+    expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
+    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+  });
+
+  it("keeps hidden runtime context hidden when orphan repair merges a transcript prompt", async () => {
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+      id: "orphan-leaf",
+      parentId: "parent-leaf",
+      type: "message",
+      message: { role: "user", content: "orphaned ask", timestamp: 1 },
+    });
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: [
+          "visible ask",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret runtime context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        transcriptPrompt: "visible ask",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toContain("orphaned ask");
+    expect(seen.prompt).toContain("visible ask");
+    expect(seen.prompt).not.toContain("secret runtime context");
+    expect(result.finalPromptText).toBe(seen.prompt);
+    const runtimeContext = findRecord(
+      requireRecords(seen.messages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
     );
+    expect(runtimeContext.content).toContain("secret runtime context");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("secret runtime context");
+    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
   });
 
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
@@ -828,7 +1063,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("bootstrapMaxChars");
   });
 
-  it("preserves bootstrap system context when system prompt override is configured", async () => {
+  it("preserves bootstrap system context in the assembled system prompt", async () => {
     const seen: { prompt?: string; messages?: unknown[] } = {};
     hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValueOnce(true);
     hoisted.createOpenClawCodingToolsMock.mockImplementationOnce(() => [
@@ -838,14 +1073,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       bootstrapFiles: [
         {
           name: "BOOTSTRAP.md",
-          path: "/tmp/openclaw-override-workspace/BOOTSTRAP.md",
+          path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
           content: "Ask who I am.",
           missing: false,
         },
       ],
       contextFiles: [
         {
-          path: "/tmp/openclaw-override-workspace/BOOTSTRAP.md",
+          path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
           content: "Ask who I am.",
         },
       ],
@@ -856,13 +1091,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              systemPromptOverride: "Custom override prompt.",
-            },
-          },
-        } as OpenClawConfig,
         disableTools: false,
         prompt: "visible ask",
         transcriptPrompt: "visible ask",
@@ -880,15 +1108,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("visible ask");
     expect(JSON.stringify(seen.messages)).not.toContain("Ask who I am.");
-    const systemPrompt =
-      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
-      "";
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      bootstrapMode?: string;
+      contextFiles?: Array<{ path: string; content: string }>;
+    };
 
-    expect(systemPrompt).toContain("Custom override prompt.");
-    expect(systemPrompt).toContain("## Bootstrap Pending");
-    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
-    expect(systemPrompt).toContain("## /tmp/openclaw-override-workspace/BOOTSTRAP.md");
-    expect(systemPrompt).toContain("Ask who I am.");
+    expect(promptInput.bootstrapMode).toBe("full");
+    expect(promptInput.contextFiles).toEqual([
+      {
+        path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
+        content: "Ask who I am.",
+      },
+    ]);
   });
 
   it("includes hook-adjusted bootstrap files preloaded before routing", async () => {
@@ -907,13 +1138,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              systemPromptOverride: "Custom override prompt.",
-            },
-          },
-        } as OpenClawConfig,
         prompt: "visible ask",
         transcriptPrompt: "visible ask",
         trigger: "user",
@@ -929,14 +1153,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(hoisted.resolveBootstrapFilesForRunMock).toHaveBeenCalledOnce();
     expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
-    const systemPrompt =
-      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
-      "";
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      bootstrapMode?: string;
+      contextFiles?: Array<{ path: string; content: string }>;
+    };
 
-    expect(systemPrompt).toContain("## Bootstrap Pending");
-    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
-    expect(systemPrompt).toContain(`## ${workspaceDir}/BOOTSTRAP.md`);
-    expect(systemPrompt).toContain("Ask who I am before continuing.");
+    expect(promptInput.bootstrapMode).toBe("full");
+    expect(promptInput.contextFiles).toEqual([
+      {
+        path: `${workspaceDir}/BOOTSTRAP.md`,
+        content: "Ask who I am before continuing.",
+      },
+    ]);
   });
 
   it("skips bootstrap preload on completed continuation-skip turns", async () => {
@@ -1035,8 +1263,22 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
   });
 
-  it("keeps inter-session provenance hidden while submitting the visible prompt", async () => {
-    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+  it("keeps hook prompt context visible while hiding inter-session provenance", async () => {
+    const runBeforePromptBuild = vi.fn(async () => ({
+      prependContext: "dynamic hook context",
+      appendContext: "dynamic hook tail",
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(),
+    });
+    const seen: {
+      modelMessages?: unknown[];
+      prompt?: string;
+      messages?: unknown[];
+      systemPrompt?: string;
+    } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1061,6 +1303,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         seen.prompt = prompt;
         seen.messages = [...session.messages];
         seen.systemPrompt = session.agent.state.systemPrompt;
+        const transformContext = (
+          session.agent as {
+            transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+          }
+        ).transformContext;
+        seen.modelMessages = await transformContext?.([
+          { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
+        ]);
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -1070,9 +1320,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("visible ask");
     expect(result.finalPromptText).toBe("visible ask");
+    expect(seen.prompt).not.toContain("[Inter-session message]");
+    expect(seen.prompt).not.toContain("secret runtime context");
+    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
+    expect(JSON.stringify(seen.modelMessages)).not.toContain("[Inter-session message]");
+    expect(JSON.stringify(seen.modelMessages)).not.toContain("secret runtime context");
     const runtimeContext = findRecord(
       requireRecords(seen.messages, "seen messages"),
-        (message) => message.customType === "openclaw.runtime-context",
+      (message) => message.customType === "openclaw.runtime-context",
       "runtime context message",
     );
     expect(seen.systemPrompt).not.toContain("[Inter-session message]");
@@ -1080,10 +1336,24 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runtimeContext.content).toContain("isUser=false");
     expect(runtimeContext.content).not.toContain("visible ask");
     expect(runtimeContext.content).toContain("secret runtime context");
+    expect(runtimeContext.content).not.toContain("dynamic hook context");
+    expect(runtimeContext.content).not.toContain("dynamic hook tail");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
   });
 
   it("submits runtime-only context through system prompt without visible prompt", async () => {
     let seenPrompt: string | undefined;
+    let seenModelMessages: unknown[] | undefined;
+    const runBeforePromptBuild = vi.fn(async () => ({
+      prependContext: "dynamic hook context",
+      appendContext: "dynamic hook tail",
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(),
+    });
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1096,6 +1366,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       sessionPrompt: async (session, prompt) => {
         seenPrompt = prompt;
+        const transformContext = (
+          session.agent as {
+            transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+          }
+        ).transformContext;
+        seenModelMessages = await transformContext?.([
+          { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
+        ]);
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -1105,6 +1383,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seenPrompt).toBe("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe("Continue the OpenClaw runtime event.");
+    expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seenModelMessages)).toContain("internal heartbeat event");
+    expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook tail");
     expect(
       requireRecords(result.messagesSnapshot, "messages snapshot").some(
         (message) =>
@@ -1118,8 +1399,62 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
-    expect(contextCompiled?.data?.prompt).toBe("Continue the OpenClaw runtime event.");
+    expect(contextCompiled?.data?.prompt).toContain("dynamic hook context");
+    expect(contextCompiled?.data?.prompt).toContain("internal heartbeat event");
+    expect(contextCompiled?.data?.prompt).toContain("dynamic hook tail");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("dynamic hook context");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("dynamic hook tail");
+  });
+
+  it("keeps runtime-only context hidden when orphan repair merges an empty transcript", async () => {
+    let seenPrompt: string | undefined;
+    let seenMessages: unknown[] | undefined;
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+      id: "orphan-leaf",
+      parentId: "parent-leaf",
+      type: "message",
+      message: { role: "user", content: "orphaned ask", timestamp: 1 },
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      trajectory: true,
+      attemptOverrides: {
+        prompt: "internal heartbeat event",
+        transcriptPrompt: "",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        seenMessages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toContain("orphaned ask");
+    expect(seenPrompt).not.toContain("internal heartbeat event");
+    expect(result.finalPromptText).toBe(seenPrompt);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    const runtimeContext = findRecord(
+      requireRecords(seenMessages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(runtimeContext.content).toContain("internal heartbeat event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("internal heartbeat event");
+    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
   });
 
   it("keeps current inbound context visible on runtime-only turns", async () => {
@@ -1172,6 +1507,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   it("submits suppressed room event context as the model prompt", async () => {
     let seenPrompt: string | undefined;
+    let seenModelMessages: unknown[] | undefined;
+    const runBeforePromptBuild = vi.fn(async () => ({
+      prependContext: "dynamic hook context",
+      appendContext: "dynamic hook tail",
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(),
+    });
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1196,6 +1541,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       sessionPrompt: async (session, prompt) => {
         seenPrompt = prompt;
+        const transformContext = (
+          session.agent as {
+            transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+          }
+        ).transformContext;
+        seenModelMessages = await transformContext?.([
+          { role: "user", content: [{ type: "text", text: prompt }], timestamp: 1 },
+        ]);
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -1209,6 +1562,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("Current event:\n#2003 Bob: hey claw summarize the plan");
     expect(seenPrompt?.trim().endsWith("[OpenClaw room event]")).toBe(true);
     expect(seenPrompt).not.toBe("Continue the OpenClaw runtime event.");
+    expect(seenPrompt).not.toContain("dynamic hook context");
+    expect(seenPrompt).not.toContain("dynamic hook tail");
+    expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook context");
+    expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook tail");
     expect(result.finalPromptText).toBe(seenPrompt);
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
@@ -1704,6 +2061,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(params.sessionKey).toBe(sessionKey);
   });
 
+  it("forwards the normalized message channel to the embedded subscription", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        messageChannel: "TELEGRAM",
+      },
+    });
+
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.messageChannel).toBe("telegram");
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
@@ -2073,5 +2447,85 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+    const toolText = "process output ".repeat(70);
+    const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
+    for (let index = 0; index < 8; index += 1) {
+      const toolCallId = `call_${index}`;
+      sessionMessages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: toolCallId, name: "process", input: {} }],
+        timestamp: 2 + index * 2,
+      } as unknown as AgentMessage);
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId,
+        toolName: "process",
+        content: [{ type: "text", text: `${index}: ${toolText}` }],
+        isError: false,
+        timestamp: 3 + index * 2,
+      } as AgentMessage);
+    }
+    let submittedMessages: AgentMessage[] = [];
+    let promptHandlerMessages: AgentMessage[] = [];
+    let afterTurnMessages: AgentMessage[] = [];
+    const afterTurn = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => {
+      afterTurnMessages = messages;
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        afterTurn,
+      },
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 128_000,
+        config: {
+          agents: {
+            defaults: {
+              contextLimits: {
+                toolResultMaxChars: 1_000,
+              },
+            },
+            list: [{ id: "main" }],
+          },
+        } as OpenClawConfig,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
+        session.agent.streamFn = async (_model, context) => {
+          const providerMessages = (context as { messages?: AgentMessage[] } | undefined)?.messages;
+          submittedMessages = providerMessages ?? [];
+          return {
+            async result() {
+              return doneMessage;
+            },
+            [Symbol.asyncIterator]() {
+              return (async function* () {})();
+            },
+          };
+        };
+        session.prompt = async (_prompt, options) => {
+          promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
+          options?.preflightResult?.(true);
+          await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
+          session.messages = [...session.messages, doneMessage];
+        };
+        return session;
+      },
+    });
+
+    expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
+    expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
+    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
+    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
+    expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
   });
 });
