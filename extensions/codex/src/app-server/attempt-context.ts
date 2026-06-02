@@ -69,13 +69,16 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   heartbeatCollaborationInstructions?: string;
 };
 
-export async function readMirroredSessionHistoryMessages(
-  sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+export async function readMirroredSessionHistoryMessages(params: {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(params);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile,
+      sessionFile: params.sessionFile,
     });
   }
   return messages;

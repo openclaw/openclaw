@@ -561,8 +561,9 @@ export async function runCopilotAttempt(
   // extension. Identity-tagged so re-emits dedupe. Errors are
   // swallowed so a mirror failure cannot break the attempt.
   const sessionFileForMirror = readString(input.sessionFile);
-  const sessionIdForScope = sessionIdUsed ?? readString(input.sessionId);
-  if (sessionFileForMirror && messagesSnapshot.length > 0) {
+  const openClawSessionIdForMirror = readString(input.sessionId);
+  const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
+  if (sessionFileForMirror && openClawSessionIdForMirror && messagesSnapshot.length > 0) {
     const taggedMessages = messagesSnapshot.map((message, index) => {
       if (
         message.role !== "user" &&
@@ -583,15 +584,16 @@ export async function runCopilotAttempt(
       if (hasMirrorIdentity(message)) {
         return message;
       }
-      const identityScope = sdkSessionId ?? sessionIdForScope ?? "attempt";
+      const identityScope = sdkSessionId ?? mirrorScopeSessionId ?? "attempt";
       return attachCopilotMirrorIdentity(message, `${identityScope}:${message.role}:${index}`);
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionFile: sessionFileForMirror,
+      sessionId: openClawSessionIdForMirror,
       sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
       agentId: readString(input.agentId),
       messages: taggedMessages,
-      idempotencyScope: sessionIdForScope ? `copilot:${sessionIdForScope}` : undefined,
+      idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
       config: (input as { config?: unknown }).config as never,
     }).catch((mirrorError: unknown) => {
       // Defense-in-depth: the best-effort wrapper already swallows

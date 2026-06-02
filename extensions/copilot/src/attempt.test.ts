@@ -1681,11 +1681,13 @@ describe("runCopilotAttempt", () => {
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
         sessionFile: string;
+        sessionId: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
       };
       expect(args.sessionFile).toBe("session.json");
-      expect(args.idempotencyScope).toMatch(/^copilot:/u);
+      expect(args.sessionId).toBe("session-1");
+      expect(args.idempotencyScope).toBe("copilot:sess-1");
       expect(args.messages.length).toBeGreaterThan(0);
       const roles = args.messages.map((m) => m.role);
       expect(roles).toContain("user");

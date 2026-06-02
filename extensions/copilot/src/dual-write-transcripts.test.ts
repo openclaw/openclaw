@@ -85,6 +85,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "copilot:session-1",
@@ -112,6 +113,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -142,12 +144,14 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "copilot:session-1",
     });
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "copilot:session-1",
@@ -184,6 +188,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "copilot:session-1",
@@ -209,6 +214,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -227,6 +233,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [],
       idempotencyScope: "copilot:session-1",
@@ -244,6 +251,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [message],
       idempotencyScope: "scope-fp",
     });
@@ -262,6 +270,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [tagged],
       idempotencyScope: "copilot:openclaw-session-1",
     });
@@ -278,6 +287,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "no scope" }],
@@ -305,6 +315,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [userMessage, systemLike],
       idempotencyScope: "scope",
     });
@@ -325,6 +336,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [second],
       idempotencyScope: "scope",
     });
@@ -341,6 +353,7 @@ describe("dualWriteCopilotTranscriptBestEffort", () => {
     await expect(
       dualWriteCopilotTranscriptBestEffort({
         sessionFile,
+        sessionId: "session-1",
         messages: [
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "ok" }],
@@ -363,6 +376,7 @@ describe("dualWriteCopilotTranscriptBestEffort", () => {
     await expect(
       dualWriteCopilotTranscriptBestEffort({
         sessionFile: "" as unknown as string,
+        sessionId: "session-1",
         messages: [
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "should-not-throw" }],
