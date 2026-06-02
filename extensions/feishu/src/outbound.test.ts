@@ -72,6 +72,7 @@ vi.mock("./comment-reaction.js", () => ({
   cleanupAmbientCommentTypingReaction: cleanupAmbientCommentTypingReactionMock,
 }));
 
+import { FeishuSecretRefUnavailableError } from "./accounts.js";
 import { feishuPlugin } from "./channel.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
@@ -338,6 +339,30 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       expect(sendMessageCall()?.to).toBe("chat_1");
       expect(sendMessageCall()?.text).toBe(file);
       expect(sendMessageCall()?.accountId).toBe("main");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates FeishuSecretRefUnavailableError from local-image path instead of silently falling back", async () => {
+    const { dir, file } = await createTmpImage();
+    const secretRefError = new FeishuSecretRefUnavailableError(
+      "channels.feishu.accounts.main.appSecret",
+      { source: "exec", provider: "keychain_feishu_main", id: "value" },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(secretRefError);
+    try {
+      await expect(
+        sendText({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: file,
+          accountId: "main",
+        }),
+      ).rejects.toBeInstanceOf(FeishuSecretRefUnavailableError);
+
+      // Must NOT have silently fallen back to a text send.
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -1205,6 +1230,30 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     });
 
     expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  it("propagates FeishuSecretRefUnavailableError from sendMedia instead of silently falling back", async () => {
+    // Simulate an unresolved SecretRef reaching the media upload path.
+    // This happens when the gateway has not pre-resolved an exec/file/keychain
+    // SecretRef at action dispatch time (issue #89338).
+    const secretRefError = new FeishuSecretRefUnavailableError(
+      "channels.feishu.accounts.main.appSecret",
+      { source: "exec", provider: "keychain_feishu_main", id: "value" },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(secretRefError);
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "here is the image",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+      }),
+    ).rejects.toBeInstanceOf(FeishuSecretRefUnavailableError);
+
+    // Must NOT have silently fallen back to a text send.
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 });
 
