@@ -634,7 +634,7 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 - `slashCommandDeploy` controls gateway startup reconcile when native Discord commands stay enabled. Set it directly (`"always" | "changed-only" | "disabled"`) or use `{ mode: "..." }`. Default: `changed-only`.
   - `always`: reconcile on each restart (prior behavior).
 
-  - `changed-only`: persist successful command-set fingerprints in Discord plugin state and skip deploy REST unless the serialized command registrations change since the last recorded successful deploy. Run `openclaw doctor --fix` to migrate legacy `discord/slash-command-deploy-hashes.json` files.
+  - `changed-only`: persist successful command-set fingerprints in Discord plugin state and skip deploy REST unless the serialized command registrations change since the last recorded successful deploy. Run `openclaw doctor --fix` to migrate legacy `discord/command-deploy-cache.json` (v2026.5.28 and earlier) and `discord/slash-command-deploy-hashes.json` files.
 
   - `disabled`: skip automatic background deploy (useful when an external registrar owns commands). `commands.native=false` also skips deploy but does not clear Discord-side commands.
 
