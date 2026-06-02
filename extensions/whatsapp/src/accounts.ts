@@ -46,6 +46,7 @@ export type ResolvedWhatsAppAccount = {
   direct?: WhatsAppAccountConfig["direct"];
   debounceMs?: number;
   replyToMode?: ReplyToMode;
+  watchdog?: WhatsAppAccountConfig["watchdog"];
 };
 
 export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
@@ -154,6 +155,7 @@ export function resolveWhatsAppAccount(params: {
     direct: merged.direct,
     debounceMs: merged.debounceMs,
     replyToMode: merged.replyToMode,
+    watchdog: merged.watchdog,
   };
 }
 
