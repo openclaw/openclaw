@@ -63,7 +63,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -374,19 +373,6 @@ function legacyInstalledPluginIndexMatches(
   );
 }
 
-function readInstallRecordNpmName(
-  record: InstalledPluginIndex["installRecords"][string],
-): string | undefined {
-  const resolvedName = readInstallRecordStringField(record, "resolvedName");
-  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
-  const spec = readInstallRecordStringField(record, "spec");
-  return (
-    resolvedName ??
-    (resolvedSpec ? parseRegistryNpmSpec(resolvedSpec)?.name : undefined) ??
-    (spec ? parseRegistryNpmSpec(spec)?.name : undefined)
-  );
-}
-
 function readInstallRecordField(
   record: InstalledPluginIndex["installRecords"][string],
   key: string,
@@ -400,19 +386,6 @@ function readInstallRecordStringField(
 ): string | undefined {
   const value = readInstallRecordField(record, key);
   return typeof value === "string" ? value : undefined;
-}
-
-function installRecordSpecPinsCurrentVersion(
-  record: InstalledPluginIndex["installRecords"][string],
-): boolean {
-  const spec = readInstallRecordStringField(record, "spec");
-  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
-  const version =
-    readInstallRecordStringField(record, "resolvedVersion") ??
-    readInstallRecordStringField(record, "version");
-  return Boolean(
-    parsed?.selectorKind === "exact-version" && version && parsed.selector === version,
-  );
 }
 
 function legacyInstallRecordHasCurrentResolvedIdentity(params: {
@@ -429,26 +402,7 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   if (legacySpec && currentResolvedSpec === legacySpec) {
     return true;
   }
-  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
-    return false;
-  }
-  const currentNpmName = readInstallRecordNpmName(params.currentRecord);
-  const legacyNpmName = readInstallRecordNpmName(params.legacyRecord);
-  if (!currentNpmName || currentNpmName !== legacyNpmName) {
-    return false;
-  }
-  const currentVersion =
-    readInstallRecordStringField(currentRecord, "resolvedVersion") ??
-    readInstallRecordStringField(currentRecord, "version");
-  const legacyVersion =
-    readInstallRecordStringField(legacyRecord, "resolvedVersion") ??
-    readInstallRecordStringField(legacyRecord, "version");
-  return Boolean(
-    currentVersion &&
-    legacyVersion &&
-    currentVersion === legacyVersion &&
-    installRecordSpecPinsCurrentVersion(currentRecord),
-  );
+  return false;
 }
 
 function legacyInstallRecordCoveredByCurrent(

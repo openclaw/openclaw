@@ -1372,7 +1372,7 @@ describe("doctor legacy state migrations", () => {
     await writeExistingPluginInstallIndex(root, {
       demo: {
         source: "npm",
-        spec: "demo@1.0.0",
+        spec: "demo@latest",
         version: "1.0.0",
         resolvedName: "demo",
         resolvedVersion: "1.0.0",
@@ -1385,7 +1385,7 @@ describe("doctor legacy state migrations", () => {
     const sourcePath = writeLegacyPluginInstallIndex(root, {
       demo: {
         source: "npm",
-        spec: "demo@beta",
+        spec: "demo@1.0.0",
         version: "1.0.0",
       },
     });
@@ -1399,7 +1399,7 @@ describe("doctor legacy state migrations", () => {
       installRecords: {
         demo: {
           source: "npm",
-          spec: "demo@1.0.0",
+          spec: "demo@latest",
           resolvedVersion: "1.0.0",
           integrity: "sha512-current",
         },
@@ -1435,6 +1435,22 @@ describe("doctor legacy state migrations", () => {
       legacy: {
         source: "npm",
         spec: "file:../legacy-demo",
+        version: "1.0.0",
+      },
+    },
+    {
+      label: "would pin a legacy floating selector to an exact version",
+      current: {
+        source: "npm",
+        spec: "demo@1.0.0",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+      },
+      legacy: {
+        source: "npm",
+        spec: "demo@beta",
         version: "1.0.0",
       },
     },
