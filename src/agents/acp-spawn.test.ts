@@ -948,6 +948,98 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
+  it('rejects explicit model="inherit" for ACP runtime spawns', async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "inherit",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectRecordFields(result, {
+      status: "error",
+      errorCode: "runtime_policy",
+    });
+    expect(result).toHaveProperty(
+      "error",
+      'sessions_spawn model="inherit" is only supported for runtime="subagent". For runtime="acp", pass a concrete ACP model id or omit model to use the ACP harness default.',
+    );
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    expectGatewayMethodNotCalled("agent");
+  });
+
+  it('keeps model alias="inherit" available for ACP model overrides', async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              alias: "inherit",
+            },
+          },
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        model: "inherit",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.4",
+        thinking: "off",
+      },
+    });
+  });
+
+  it('does not treat configured subagents.model="inherit" as an ACP model override', async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            model: "inherit",
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
+  });
+
   it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),

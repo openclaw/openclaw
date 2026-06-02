@@ -108,7 +108,7 @@ whether a user-facing update is needed.
     - Use `info`/`log` to inspect details and output after completion.
     - For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
     - If the requester channel does not support thread bindings, use `mode: "run"` instead of retrying impossible thread-bound combinations.
-    - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.
+    - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. ACP model overrides must be concrete backend model ids; `model: "inherit"` is native-only and is rejected for ACP. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.
     - OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
 
   </Accordion>
@@ -151,6 +151,8 @@ session to confirm the effective tool list.
   a model alias named `"inherit"` is configured; aliases keep their
   concrete-model meaning. ACP runtime spawns use the same configured concrete
   subagent model when present; otherwise the ACP harness keeps its own default.
+  ACP rejects explicit `model: "inherit"` because native requester-model
+  inheritance is not available inside an ACP harness.
 - **Thinking:** native sub-agents inherit the caller unless you set
   `agents.defaults.subagents.thinking` (or per-agent
   `agents.list[].subagents.thinking`). ACP runtime spawns also apply
@@ -220,7 +222,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="model" type="string">
-  Override the child run model. For native sub-agent spawns, use `"inherit"` to follow the requester session's active model unless `"inherit"` is a configured model alias. For `runtime: "acp"`, pass a model id supported by the ACP backend; OpenClaw does not interpret `"inherit"` for ACP. Invalid native sub-agent values are skipped and the sub-agent runs on the default model with a warning in the tool result.
+  Override the child run model. For native sub-agent spawns, use `"inherit"` to follow the requester session's active model unless `"inherit"` is a configured model alias. For `runtime: "acp"`, pass a model id supported by the ACP backend; explicit `"inherit"` is rejected for ACP unless `"inherit"` is a configured model alias. Invalid native sub-agent values are skipped and the sub-agent runs on the default model with a warning in the tool result.
 </ParamField>
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run.

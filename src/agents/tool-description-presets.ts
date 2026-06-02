@@ -57,6 +57,7 @@ export function describeSessionsSpawnTool(options?: {
     ...baseDescription.slice(0, 3),
     '`runtime="acp"` for ACP harness ids: codex, claude, gemini, opencode, or agent ACP runtime config.',
     ...baseDescription.slice(3),
+    'ACP requires a concrete model id; `model="inherit"` is native-only.',
   ].join(" ");
 }
 

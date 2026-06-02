@@ -85,6 +85,7 @@ import {
 } from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import {
+  normalizeModelSelection,
   resolveConfiguredSubagentSpawnModelSelection,
   resolveThinkingDefault,
 } from "./model-selection.js";
@@ -1001,6 +1002,32 @@ type AcpSpawnRuntimeOptions = {
   timeoutSeconds?: number;
 };
 
+type AcpSpawnRuntimeOptionsResult =
+  | { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions }
+  | { ok: false; error: string; errorCode?: SpawnAcpErrorCode };
+
+const ACP_UNSUPPORTED_MODEL_INHERIT_SENTINEL =
+  "__openclaw_internal_acp_unsupported_model_inherit__";
+
+function isExplicitAcpModelInheritSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  model?: string;
+}): boolean {
+  const modelOverride = normalizeModelSelection(params.model);
+  if (!modelOverride) {
+    return false;
+  }
+  return (
+    resolveConfiguredSubagentSpawnModelSelection({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      modelOverride,
+      inheritedModel: ACP_UNSUPPORTED_MODEL_INHERIT_SENTINEL,
+    }) === ACP_UNSUPPORTED_MODEL_INHERIT_SENTINEL
+  );
+}
+
 function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
   if (!runTimeoutSeconds) {
     return undefined;
@@ -1015,8 +1042,22 @@ function resolveAcpSpawnRuntimeOptions(params: {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
-}): { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions } | { ok: false; error: string } {
+}): AcpSpawnRuntimeOptionsResult {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
+  if (
+    isExplicitAcpModelInheritSelection({
+      cfg: params.cfg,
+      agentId: policyAgentId,
+      model: params.model,
+    })
+  ) {
+    return {
+      ok: false,
+      error:
+        'sessions_spawn model="inherit" is only supported for runtime="subagent". For runtime="acp", pass a concrete ACP model id or omit model to use the ACP harness default.',
+      errorCode: "runtime_policy",
+    };
+  }
   const model = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: policyAgentId,
@@ -1411,7 +1452,7 @@ export async function spawnAcpDirect(
   if (!runtimeOptionsResult.ok) {
     return createAcpSpawnFailure({
       status: "error",
-      errorCode: "spawn_failed",
+      errorCode: runtimeOptionsResult.errorCode ?? "spawn_failed",
       error: runtimeOptionsResult.error,
     });
   }
