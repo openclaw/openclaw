@@ -138,7 +138,7 @@ function telegramWorkTargetCandidates(ctx: Parameters<CommandHandler>[0]["ctx"])
   ];
   const expanded = new Set<string>();
   for (const candidate of candidates) {
-    const normalized = normalizeOptionalString(candidate == null ? undefined : String(candidate));
+    const normalized = normalizeOptionalString(candidate);
     if (!normalized) {
       continue;
     }
@@ -153,7 +153,9 @@ function telegramWorkTargetCandidates(ctx: Parameters<CommandHandler>[0]["ctx"])
 
 function telegramSessionKeyChatCandidates(sessionKey: string | null | undefined): string[] {
   const normalized = normalizeOptionalString(sessionKey);
-  if (!normalized) return [];
+  if (!normalized) {
+    return [];
+  }
   const match = /:telegram:(?:direct|group|supergroup|chat):([^:]+)/.exec(normalized);
   const chatId = match?.[1];
   return chatId ? [chatId] : [];

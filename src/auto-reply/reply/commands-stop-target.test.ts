@@ -206,7 +206,7 @@ describe("handleStopCommand target fallback", () => {
 
   it("requires Telegram stop commands to be replies", async () => {
     const params = buildStopParams();
-    delete (params.ctx as MsgContext).ReplyToId;
+    delete params.ctx.ReplyToId;
 
     const result = await handleStopCommand(params, true);
 

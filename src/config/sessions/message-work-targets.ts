@@ -9,7 +9,10 @@ const MESSAGE_WORK_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_MESSAGE_WORK_TARGETS = 50;
 
 function normalizeKeyPart(value: unknown): string | undefined {
-  return normalizeOptionalString(value == null ? undefined : String(value));
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return normalizeOptionalString(value);
+  }
+  return undefined;
 }
 
 function normalizeTargets(targets: unknown, now = Date.now()): SessionMessageWorkTarget[] {
