@@ -389,9 +389,33 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
       throw new Error("Embedding dimensions must be a positive integer");
     }
 
+    try {
+      const response = await this.postEmbedding(text, { includeDimensions: true, options });
+      return normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    } catch (error) {
+      if (typeof this.dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
+        throw error;
+      }
+    }
+
+    const response = await this.postEmbedding(text, { includeDimensions: false, options });
+    const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    return this.trimEmbedding(embedding);
+  }
+
+  private async postEmbedding(
+    text: string,
+    request: {
+      includeDimensions: boolean;
+      options?: { timeoutMs?: number };
+    },
+  ): Promise<EmbeddingCreateResponse> {
     const params: Record<string, unknown> = {
       model: this.model,
       input: text,
+      ...(request.includeDimensions && typeof this.dimensions === "number"
+        ? { dimensions: this.dimensions }
+        : {}),
     };
 
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -399,15 +423,12 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     // omitted, then decodes the response. Several compatible providers either
     // reject encoding_format or always return float arrays, so use the generic
     // transport and normalize the response ourselves.
-    const response = await (
+    return await (
       await this.clientPromise
     ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
-      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+      ...(request.options?.timeoutMs ? { timeout: request.options.timeoutMs, maxRetries: 0 } : {}),
     });
-
-    const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
-    return this.trimEmbedding(embedding);
   }
 
   private trimEmbedding(embedding: number[]): number[] {
@@ -421,6 +442,40 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     }
     return embedding.slice(0, this.dimensions);
   }
+}
+
+function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
+  const message = stringifyErrorLike(error).toLowerCase();
+  return (
+    message.includes("dimensions") &&
+    (message.includes("extra_forbidden") ||
+      message.includes("extra inputs") ||
+      message.includes("not permitted") ||
+      message.includes("unknown parameter") ||
+      message.includes("unrecognized") ||
+      message.includes("unsupported") ||
+      message.includes("unexpected"))
+  );
+}
+
+function stringifyErrorLike(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return String(value);
+  }
+  const parts: string[] = value instanceof Error ? [value.message] : [];
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "type", "code", "param", "error"]) {
+    const item = record[key];
+    if (typeof item === "string" || typeof item === "number") {
+      parts.push(String(item));
+    } else if (item && typeof item === "object") {
+      parts.push(stringifyErrorLike(item));
+    }
+  }
+  return parts.join("\n");
 }
 
 class ProviderAdapterEmbeddings implements Embeddings {

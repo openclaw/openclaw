@@ -2329,8 +2329,8 @@ describe("memory plugin e2e", () => {
     }
   });
 
-  test("truncates OpenAI embeddings locally when dimensions are configured", async () => {
-    const embedding = Array.from({ length: 8 }, (_, index) => index + 1);
+  test("sends OpenAI embedding dimensions upstream when accepted", async () => {
+    const embedding = Array.from({ length: 4 }, (_, index) => index + 1);
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding }],
     }));
@@ -2414,6 +2414,110 @@ describe("memory plugin e2e", () => {
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
         input: "hello dimensions",
+        dimensions: 4,
+      });
+      expect(vectorSearch).toHaveBeenCalledWith([1, 2, 3, 4]);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
+  test("retries without OpenAI embedding dimensions and truncates locally when rejected", async () => {
+    const embedding = Array.from({ length: 8 }, (_, index) => index + 1);
+    const embeddingsCreate = vi.fn(async (body: unknown) => {
+      const request = body as Record<string, unknown>;
+      if (request.dimensions === 4) {
+        throw new Error("400 Extra inputs are not permitted: body.dimensions");
+      }
+      return {
+        data: [{ embedding }],
+      };
+    });
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: memoryPluginWithRejectedDimensions } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+            dimensions: 4,
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      memoryPluginWithRejectedDimensions.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
+      await recallTool.execute("test-call-dims", { query: "hello dimensions" });
+
+      expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
+      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledTimes(2);
+      expect(embeddingsCreate).toHaveBeenNthCalledWith(1, {
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
+        dimensions: 4,
+      });
+      expect(embeddingsCreate).toHaveBeenNthCalledWith(2, {
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
       });
       // Should search with the truncated vector [1, 2, 3, 4]
       expect(vectorSearch).toHaveBeenCalledWith([1, 2, 3, 4]);
@@ -2425,10 +2529,16 @@ describe("memory plugin e2e", () => {
     }
   });
 
-  test("fails when the embedding is shorter than the configured dimensions", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
+  test("returns unavailable when fallback embedding is shorter than the configured dimensions", async () => {
+    const embeddingsCreate = vi.fn(async (body: unknown) => {
+      const request = body as Record<string, unknown>;
+      if (request.dimensions === 4) {
+        throw new Error("400 Extra inputs are not permitted: body.dimensions");
+      }
+      return {
+        data: [{ embedding: [0.1, 0.2, 0.3] }],
+      };
+    });
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
@@ -2463,6 +2573,12 @@ describe("memory plugin e2e", () => {
     try {
       const { default: memoryPluginItem } = await import("./index.js");
       const registeredTools: any[] = [];
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
       const mockApi = {
         id: "memory-lancedb",
         name: "Memory (LanceDB)",
@@ -2479,12 +2595,7 @@ describe("memory plugin e2e", () => {
           autoRecall: false,
         },
         runtime: {},
-        logger: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        },
+        logger,
         registerTool: (tool: any, opts: any) => {
           registeredTools.push({ tool, opts });
         },
@@ -2500,9 +2611,31 @@ describe("memory plugin e2e", () => {
         throw new Error("memory_recall tool was not registered");
       }
 
-      await expect(
-        recallTool.execute("test-call-dims", { query: "hello dimensions" }),
-      ).rejects.toThrow(
+      const result = await recallTool.execute("test-call-dims", { query: "hello dimensions" });
+
+      expect(result.details).toMatchObject({
+        count: 0,
+        disabled: true,
+        unavailable: true,
+        error:
+          "Embedding model text-embedding-3-small returned 3 dimensions, need at least 4 for local truncation",
+      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        "memory-lancedb: memory_recall failed: Embedding model text-embedding-3-small returned 3 dimensions, need at least 4 for local truncation; returning unavailable memory result",
+      );
+      expect(embeddingsCreate).toHaveBeenNthCalledWith(1, {
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
+        dimensions: 4,
+      });
+      expect(embeddingsCreate).toHaveBeenNthCalledWith(2, {
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
+      });
+      expect(result.content).toEqual([
+        { type: "text", text: "Memory recall is unavailable right now." },
+      ]);
+      expect(String(result.details.error)).toContain(
         "Embedding model text-embedding-3-small returned 3 dimensions, need at least 4 for local truncation",
       );
       expect(vectorSearch).not.toHaveBeenCalled();
