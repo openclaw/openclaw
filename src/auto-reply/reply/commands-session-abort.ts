@@ -131,6 +131,7 @@ function telegramWorkTargetCandidates(ctx: Parameters<CommandHandler>[0]["ctx"])
     ctx.From,
     ctx.To,
     ctx.NativeChannelId,
+    ...telegramSessionKeyChatCandidates(ctx.CommandTargetSessionKey),
     ctx.MessageThreadId != null && ctx.From
       ? `${ctx.From}:topic:${ctx.MessageThreadId}`
       : undefined,
@@ -148,6 +149,14 @@ function telegramWorkTargetCandidates(ctx: Parameters<CommandHandler>[0]["ctx"])
     }
   }
   return [...expanded];
+}
+
+function telegramSessionKeyChatCandidates(sessionKey: string | null | undefined): string[] {
+  const normalized = normalizeOptionalString(sessionKey);
+  if (!normalized) return [];
+  const match = /:telegram:(?:direct|group|supergroup|chat):([^:]+)/.exec(normalized);
+  const chatId = match?.[1];
+  return chatId ? [chatId] : [];
 }
 
 export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
