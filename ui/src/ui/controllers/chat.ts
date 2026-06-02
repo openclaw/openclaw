@@ -304,14 +304,19 @@ function trimAccumulatedVisibleStreamText(text: string, previousText: string | n
   return text.slice(previousText.length).trimStart();
 }
 
+type VisibleAssistantStreamPart = {
+  text: string;
+  replacementText: string;
+};
+
 function visibleAssistantStreamParts(
   state: ChatState,
   opts?: { includeCurrent?: boolean },
-): string[] {
+): VisibleAssistantStreamPart[] {
   const streamHost = state as ChatState & {
     chatStreamSegments?: Array<{ text?: unknown; ts?: unknown }>;
   };
-  const parts: string[] = [];
+  const parts: VisibleAssistantStreamPart[] = [];
   let previousText: string | null = null;
   for (const segment of Array.isArray(streamHost.chatStreamSegments)
     ? streamHost.chatStreamSegments
@@ -323,7 +328,7 @@ function visibleAssistantStreamParts(
       trimAccumulatedVisibleStreamText(segment.text, previousText),
     );
     if (visible) {
-      parts.push(visible);
+      parts.push({ text: visible, replacementText: segment.text });
     }
     if (segment.text.trim()) {
       previousText = segment.text;
@@ -334,10 +339,20 @@ function visibleAssistantStreamParts(
       trimAccumulatedVisibleStreamText(state.chatStream, previousText),
     );
     if (visible) {
-      parts.push(visible);
+      parts.push({ text: visible, replacementText: state.chatStream });
     }
   }
   return parts;
+}
+
+function hasAssistantStreamPartReplacement(
+  messages: unknown[],
+  part: VisibleAssistantStreamPart,
+): boolean {
+  return (
+    hasAssistantStreamReplacement(messages, part.replacementText) ||
+    hasAssistantStreamReplacement(messages, part.text)
+  );
 }
 
 function appendVisibleStreamStateMessages(
@@ -348,10 +363,13 @@ function appendVisibleStreamStateMessages(
 ): unknown[] {
   let nextMessages = messages;
   for (const part of visibleAssistantStreamParts(state, opts)) {
-    if (hasAssistantStreamReplacement([...nextMessages, ...replacementMessages], part)) {
+    if (hasAssistantStreamPartReplacement([...nextMessages, ...replacementMessages], part)) {
       continue;
     }
-    nextMessages = appendDisplayMessageIfMissing(nextMessages, buildAssistantStreamMessage(part));
+    nextMessages = appendDisplayMessageIfMissing(
+      nextMessages,
+      buildAssistantStreamMessage(part.text),
+    );
   }
   return nextMessages;
 }

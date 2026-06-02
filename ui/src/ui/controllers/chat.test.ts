@@ -1172,6 +1172,31 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[1]).toEqual(message);
   });
 
+  it("does not duplicate post-tool stream tail when error payload has full text", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "First thought. After tool. Final detail." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "First thought. After tool.",
+      chatStreamStartedAt: 100,
+    }) as ChatState & { chatStreamSegments: Array<{ text: string; ts: number }> };
+    state.chatStreamSegments = [{ text: "First thought.", ts: 90 }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "gateway disconnected",
+      message,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([message]);
+  });
+
   it("prefers server-provided assistant error messages", () => {
     const state = createState({
       sessionKey: "main",
