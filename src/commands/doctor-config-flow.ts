@@ -81,7 +81,17 @@ function emitDoctorChangesPanel(
   note(message, title);
 }
 
-async function refreshGatewayModelAuthStatusAfterRepair(): Promise<void> {
+async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
+  try {
+    await callGateway({
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running
+    // or the live gateway cannot reload unrelated secret-backed channels.
+  }
   try {
     await callGateway({
       method: "models.authStatus",
@@ -258,7 +268,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
     if (repairSequence.authProfilesRepaired) {
-      await refreshGatewayModelAuthStatusAfterRepair();
+      await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
     emitDoctorNotes({
       note,

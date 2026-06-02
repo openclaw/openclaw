@@ -1523,7 +1523,7 @@ describe("doctor config flow", () => {
     });
   });
 
-  it("refreshes gateway model auth status after auth profile repairs", async () => {
+  it("reloads gateway secrets and refreshes auth status after auth profile repairs", async () => {
     runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
       state: params.state,
       changeNotes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
@@ -1537,14 +1537,19 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(callGatewayMock).toHaveBeenCalledWith({
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "models.authStatus",
       params: { refresh: true },
       timeoutMs: 3000,
     });
   });
 
-  it("keeps doctor repair silent when gateway auth status refresh fails", async () => {
+  it("keeps doctor repair silent when gateway secrets reload fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
     runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
       state: params.state,
@@ -1561,7 +1566,12 @@ describe("doctor config flow", () => {
       }),
     ).resolves.toBeTruthy();
 
-    expect(callGatewayMock).toHaveBeenCalledWith({
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "models.authStatus",
       params: { refresh: true },
       timeoutMs: 3000,
