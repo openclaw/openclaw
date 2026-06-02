@@ -449,11 +449,8 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
       agentId: "work",
     });
     expect(resetTarget.storePath).toBe(globalConfig.workStorePath);
-    expectStringWithPrefix(
-      reset.entry.sessionFile,
-      path.join(dir, "work"),
-      "selected global session file",
-    );
+    const workStoreDir = await fs.realpath(path.dirname(globalConfig.workStorePath));
+    expectStringWithPrefix(reset.entry.sessionFile, workStoreDir, "selected global session file");
     const mainStore = JSON.parse(await fs.readFile(globalConfig.mainStorePath, "utf-8")) as {
       global?: { sessionId?: string };
     };
