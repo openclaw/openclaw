@@ -36,10 +36,6 @@ function resolveFileIdentity(stats) {
   return Number.isFinite(stats.birthtimeMs) ? `birth:${stats.birthtimeMs}` : undefined;
 }
 
-function resolveFileVersion(stats) {
-  return `${stats.mtimeMs}:${stats.ctimeMs}`;
-}
-
 function readTailFingerprint(filePath, stats, maxReadBytes) {
   const length = Math.min(stats.size, maxReadBytes);
   const start = Math.max(0, stats.size - length);
@@ -55,7 +51,6 @@ export function resolvePositiveInteger(value, fallback) {
 export function createIncrementalLineReader(filePath, options = {}) {
   const maxReadBytes = resolvePositiveInteger(options.maxReadBytes, 256 * 1024);
   let fileIdentity;
-  let fileVersion;
   let contentFingerprint;
   let offset = 0;
   let pending = "";
@@ -73,7 +68,6 @@ export function createIncrementalLineReader(filePath, options = {}) {
 
       let reset = false;
       const nextFileIdentity = resolveFileIdentity(stats);
-      const nextFileVersion = resolveFileVersion(stats);
       if (
         fileIdentity !== undefined &&
         nextFileIdentity !== undefined &&
@@ -85,20 +79,14 @@ export function createIncrementalLineReader(filePath, options = {}) {
       }
       fileIdentity = nextFileIdentity;
 
-      if (
-        !reset &&
-        stats.size === offset &&
-        fileVersion !== undefined &&
-        fileVersion !== nextFileVersion
-      ) {
+      if (!reset && stats.size === offset && contentFingerprint !== undefined) {
         const nextContentFingerprint = readTailFingerprint(filePath, stats, maxReadBytes);
-        if (contentFingerprint !== undefined && contentFingerprint !== nextContentFingerprint) {
+        if (contentFingerprint !== nextContentFingerprint) {
           offset = 0;
           pending = "";
           reset = true;
         } else {
           contentFingerprint = nextContentFingerprint;
-          fileVersion = nextFileVersion;
           return { lines: [], reset: false };
         }
       }
@@ -109,7 +97,6 @@ export function createIncrementalLineReader(filePath, options = {}) {
         reset = true;
       }
       if (stats.size === offset) {
-        fileVersion = nextFileVersion;
         return { lines: [], reset };
       }
 
@@ -131,7 +118,6 @@ export function createIncrementalLineReader(filePath, options = {}) {
 
       const text = readSlice(filePath, start, stats.size - start);
       offset = stats.size;
-      fileVersion = nextFileVersion;
       contentFingerprint = readTailFingerprint(filePath, stats, maxReadBytes);
       if (!text) {
         return { lines: [], reset };
