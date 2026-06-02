@@ -12,10 +12,14 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES = [
 ] as const;
 export type RealtimeVoiceAgentConsultToolPolicy =
   (typeof REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES)[number];
+export const REALTIME_VOICE_AGENT_CONSULT_DELIVERY_PREFERENCES = ["voice", "email"] as const;
+export type RealtimeVoiceAgentConsultDeliveryPreference =
+  (typeof REALTIME_VOICE_AGENT_CONSULT_DELIVERY_PREFERENCES)[number];
 export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
   responseStyle?: string;
+  deliveryPreference?: RealtimeVoiceAgentConsultDeliveryPreference;
 };
 export type RealtimeVoiceAgentConsultTranscriptEntry = {
   role: "user" | "assistant";
@@ -42,6 +46,12 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
         type: "string",
         description: "Optional style hint for the spoken answer.",
       },
+      deliveryPreference: {
+        type: "string",
+        enum: ["voice", "email"],
+        description:
+          "How to deliver the answer. Use 'email' when the caller explicitly asks to receive the answer by email instead of waiting on the line. Defaults to 'voice'.",
+      },
     },
     required: ["question"],
   },
@@ -54,6 +64,16 @@ export function buildRealtimeVoiceAgentConsultWorkingResponse(
     status: "working",
     tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
     message: `Tell the ${audienceLabel} briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.`,
+  };
+}
+
+export function buildRealtimeVoiceAgentConsultEmailAckResponse(
+  audienceLabel = "person",
+): Record<string, unknown> {
+  return {
+    status: "deferred_to_email",
+    tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+    message: `Tell the ${audienceLabel} that you will research this and email the answer shortly. Do NOT ask for their email address and do NOT say any email address out loud — the system already knows where to send it.`,
   };
 }
 
@@ -145,10 +165,16 @@ export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoice
   if (!question) {
     throw new Error("question required");
   }
+  const rawDelivery = normalizeOptionalLowercaseString(
+    readConsultStringArg(args, "deliveryPreference"),
+  );
+  const deliveryPreference: RealtimeVoiceAgentConsultDeliveryPreference | undefined =
+    rawDelivery === "email" ? "email" : rawDelivery === "voice" ? "voice" : undefined;
   return {
     question,
     context: readConsultStringArg(args, "context"),
     responseStyle: readConsultStringArg(args, "responseStyle"),
+    deliveryPreference,
   };
 }
 

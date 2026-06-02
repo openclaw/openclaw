@@ -215,6 +215,7 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  abortSignal?: AbortSignal;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   const agentId = params.agentId ?? "main";
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
@@ -288,6 +289,7 @@ export async function consultRealtimeVoiceAgent(params: {
       params.extraSystemPrompt ??
       "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
     agentDir,
+    abortSignal: params.abortSignal,
   });
 
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);

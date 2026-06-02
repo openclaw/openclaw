@@ -328,6 +328,14 @@ const VoiceCallRealtimeConfigSchema = z
     agentContext: VoiceCallRealtimeAgentContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
+    /** Enable background email delivery for voice consults (email-first and timeout paths). Defaults to false. */
+    backgroundEmailDeliveryEnabled: z.boolean().optional().default(false),
+    /** When set, if the consult agent takes longer than this (ms), return an ack and continue in background with email delivery. Requires backgroundEmailDeliveryEnabled. */
+    backgroundConsultTimeoutMs: z.number().int().positive().optional(),
+    /** Extra system prompt for the background email delivery agent. */
+    backgroundEmailPrompt: z.string().optional(),
+    /** Pre-configured recipient email for background email delivery. When set, the voice agent won't ask for or mention the email address. */
+    recipientEmail: z.string().email().optional(),
   })
   .strict()
   .default({

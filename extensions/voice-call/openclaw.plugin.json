@@ -211,6 +211,26 @@
       "label": "Realtime Provider Config",
       "advanced": true
     },
+    "realtime.backgroundEmailDeliveryEnabled": {
+      "label": "Background Email Delivery",
+      "help": "Enable background email delivery for voice consults (email-first and timeout paths).",
+      "advanced": true
+    },
+    "realtime.backgroundConsultTimeoutMs": {
+      "label": "Background Consult Timeout (ms)",
+      "help": "If the consult agent takes longer than this, return an ack and email the result. Requires Background Email Delivery enabled.",
+      "advanced": true
+    },
+    "realtime.backgroundEmailPrompt": {
+      "label": "Background Email Prompt",
+      "help": "Custom system prompt for the background email delivery agent.",
+      "advanced": true
+    },
+    "realtime.recipientEmail": {
+      "label": "Recipient Email",
+      "help": "Pre-configured email address for background delivery. The voice agent won't ask for or say the email.",
+      "advanced": true
+    },
     "tts.provider": {
       "label": "TTS Provider Override",
       "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
@@ -631,6 +651,21 @@
               "type": "object",
               "additionalProperties": true
             }
+          },
+          "backgroundEmailDeliveryEnabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "backgroundConsultTimeoutMs": {
+            "type": "number",
+            "minimum": 1
+          },
+          "backgroundEmailPrompt": {
+            "type": "string"
+          },
+          "recipientEmail": {
+            "type": "string",
+            "format": "email"
           }
         }
       },
