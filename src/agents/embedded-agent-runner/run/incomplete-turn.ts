@@ -911,6 +911,7 @@ function isSingleActionThenNarrativePattern(params: {
   );
 }
 
+/** Retry budget for plan-only recovery, higher for strict-agentic models. */
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedAgentExecutionContract,
 ): number {
@@ -919,6 +920,11 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Builds the retry instruction for assistant turns that only promised a plan
+ * instead of taking concrete action. The guard excludes real side effects,
+ * non-actionable prompts, explicit completions, and multi-tool progress.
+ */
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
