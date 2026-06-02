@@ -32,14 +32,16 @@ assert_cascade_worktree() {
 
   # Accept lane-A worktrees ending in a numeric pid and lane-b/c/d worktrees
   # ending in lane-<letter>, including sibling repo names in the middle.
-  if [[ "$resolved" =~ ^/(private/)?tmp/rockie-cascade-[0-9]+(-(platform|rockie)-[a-z0-9]+)*-([0-9]+|lane-[a-z]+)(/.*)?$ ]]; then
+  local tmp_pattern='^/(private/)?tmp/rockie-cascade-[0-9]+(-(platform|rockie)-[a-z0-9]+)*-([0-9]+|lane-[a-z]+)(/.*)?$'
+  local ssd_pattern='^/Volumes/[^/]+/rockie-fleet/cascade-worktrees/rockie-cascade-[0-9]+(-(platform|rockie)-[a-z0-9]+)*-[0-9]+(/.*)?$'
+  if [[ "$resolved" =~ $tmp_pattern || "$resolved" =~ $ssd_pattern ]]; then
     return 0
   fi
 
   printf '\n!!! WORKTREE CONTRACT VIOLATION !!!\n' >&2
-  printf 'pwd -P is not a per-cascade /tmp worktree:\n' >&2
+  printf 'pwd -P is not a per-cascade /tmp or SSD worktree:\n' >&2
   printf '  pwd: %s\n' "$resolved" >&2
-  printf 'Expected /tmp/rockie-cascade-<issue>-(<pid>|lane-<x>) or /tmp/rockie-cascade-<issue>-<repo>-(<pid>|lane-<x>).\n\n' >&2
+  printf 'Expected /tmp/rockie-cascade-<issue>-(<pid>|lane-<x>), /tmp/rockie-cascade-<issue>-<repo>-(<pid>|lane-<x>), or /Volumes/<disk>/rockie-fleet/cascade-worktrees/rockie-cascade-<issue>[-<repo>]-<pid>.\n\n' >&2
   return 1
 }
 
