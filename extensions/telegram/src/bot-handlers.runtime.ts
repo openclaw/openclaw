@@ -1524,6 +1524,93 @@ export const registerTelegramHandlers = ({
       const senderUsername = user?.username ?? "";
       const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
       const isForum = reaction.chat.is_forum === true;
+      const runtimeCfg = telegramDeps.getRuntimeConfig();
+
+      // Detect added reactions.
+      const oldEmojis = new Set(
+        reaction.old_reaction
+          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+          .map((r) => r.emoji),
+      );
+      const addedReactions = reaction.new_reaction
+        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+        .filter((r) => !oldEmojis.has(r.emoji));
+
+      if (addedReactions.length === 0) {
+        return;
+      }
+
+      const genericReactions: ReactionTypeEmoji[] = [];
+      for (const added of addedReactions) {
+        const approvalReaction = await resolveTelegramApprovalReactionTargetWithPersistence({
+          accountId,
+          chatId,
+          messageId,
+          reactionKey: added.emoji,
+        });
+        if (!approvalReaction) {
+          genericReactions.push(added);
+          continue;
+        }
+
+        const isPluginApproval = approvalReaction.approvalId.startsWith("plugin:");
+        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const authorizedApprovalSender = isPluginApproval
+          ? pluginApprovalAuthorizedSender
+          : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+        if (!authorizedApprovalSender) {
+          logVerbose(
+            `telegram: approval reaction denied id=${approvalReaction.approvalId} sender=${senderId || "unknown"}`,
+          );
+          continue;
+        }
+
+        try {
+          await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
+            cfg: runtimeCfg,
+            approvalId: approvalReaction.approvalId,
+            decision: approvalReaction.decision,
+            senderId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
+          });
+          unregisterTelegramApprovalReactionTarget({
+            accountId,
+            chatId,
+            messageId,
+          });
+          logVerbose(
+            `telegram: approval reaction resolved id=${approvalReaction.approvalId} sender=${senderId || "unknown"} decision=${approvalReaction.decision}`,
+          );
+        } catch (resolveErr) {
+          if (isApprovalNotFoundError(resolveErr)) {
+            unregisterTelegramApprovalReactionTarget({
+              accountId,
+              chatId,
+              messageId,
+            });
+            logVerbose(
+              `telegram: approval reaction ignored for expired approval id=${approvalReaction.approvalId} sender=${senderId || "unknown"}`,
+            );
+            continue;
+          }
+          logVerbose(
+            `telegram: approval reaction failed id=${approvalReaction.approvalId} sender=${senderId || "unknown"}: ${String(resolveErr)}`,
+          );
+        }
+      }
+
+      if (genericReactions.length === 0) {
+        return;
+      }
 
       // Resolve reaction notification mode (default: "own").
       const reactionMode = telegramCfg.reactionNotifications ?? "own";
@@ -1573,20 +1660,6 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      // Detect added reactions.
-      const oldEmojis = new Set(
-        reaction.old_reaction
-          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-          .map((r) => r.emoji),
-      );
-      const addedReactions = reaction.new_reaction
-        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-        .filter((r) => !oldEmojis.has(r.emoji));
-
-      if (addedReactions.length === 0) {
-        return;
-      }
-
       // Build sender label.
       const senderName = user
         ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
@@ -1620,77 +1693,14 @@ export const registerTelegramHandlers = ({
         parentPeer,
       });
       const sessionKey = route.sessionKey;
-      const runtimeCfg = telegramDeps.getRuntimeConfig();
 
-      // Enqueue system event for each added reaction unless the reaction resolves
-      // a bound approval prompt for this Telegram message.
-      for (const r of addedReactions) {
-        const emoji = r.emoji;
-        const approvalReaction = await resolveTelegramApprovalReactionTargetWithPersistence({
-          accountId,
-          chatId,
-          messageId,
-          reactionKey: emoji,
-        });
-        if (approvalReaction) {
-          const isPluginApproval = approvalReaction.approvalId.startsWith("plugin:");
-          const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
-            cfg: runtimeCfg,
-            accountId,
-            senderId,
-          });
-          const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
-            cfg: runtimeCfg,
-            accountId,
-            senderId,
-          });
-          const authorizedApprovalSender = isPluginApproval
-            ? pluginApprovalAuthorizedSender
-            : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
-          if (!authorizedApprovalSender) {
-            logVerbose(
-              `telegram: approval reaction denied id=${approvalReaction.approvalId} sender=${senderId || "unknown"}`,
-            );
-            continue;
-          }
-          try {
-            await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
-              cfg: runtimeCfg,
-              approvalId: approvalReaction.approvalId,
-              decision: approvalReaction.decision,
-              senderId,
-              allowPluginFallback: pluginApprovalAuthorizedSender,
-            });
-            unregisterTelegramApprovalReactionTarget({
-              accountId,
-              chatId,
-              messageId,
-            });
-            logVerbose(
-              `telegram: approval reaction resolved id=${approvalReaction.approvalId} sender=${senderId || "unknown"} decision=${approvalReaction.decision}`,
-            );
-          } catch (resolveErr) {
-            if (isApprovalNotFoundError(resolveErr)) {
-              unregisterTelegramApprovalReactionTarget({
-                accountId,
-                chatId,
-                messageId,
-              });
-              logVerbose(
-                `telegram: approval reaction ignored for expired approval id=${approvalReaction.approvalId} sender=${senderId || "unknown"}`,
-              );
-              continue;
-            }
-            logVerbose(
-              `telegram: approval reaction failed id=${approvalReaction.approvalId} sender=${senderId || "unknown"}: ${String(resolveErr)}`,
-            );
-          }
-          continue;
-        }
-        const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
+      // Enqueue system events for non-approval reactions after generic reaction
+      // notification and authorization gates.
+      for (const r of genericReactions) {
+        const text = `Telegram reaction added: ${r.emoji} by ${senderLabel} on msg ${messageId}`;
         telegramDeps.enqueueSystemEvent(text, {
           sessionKey,
-          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${r.emoji}`,
         });
         logVerbose(`telegram: reaction event enqueued: ${text}`);
       }

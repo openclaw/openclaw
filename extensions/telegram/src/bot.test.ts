@@ -3428,6 +3428,108 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
+  it("resolves a bound approval reaction even when reactionNotifications is off", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    registerTelegramApprovalReactionTarget({
+      accountId: "default",
+      chatId: 1234,
+      messageId: 42,
+      approvalId: "138e9b8c",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          reactionNotifications: "off",
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 512 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada", username: "ada_bot" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+    });
+
+    const approvalCall = execApprovalCall();
+    expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.decision).toBe("allow-once");
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves a bound approval reaction for an approver who is not allowed as a generic reaction sender", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    registerTelegramApprovalReactionTarget({
+      accountId: "default",
+      chatId: 1234,
+      messageId: 42,
+      approvalId: "138e9b8c",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "allowlist",
+          allowFrom: ["12345"],
+          reactionNotifications: "all",
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 513 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada", username: "ada_bot" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+    });
+
+    const approvalCall = execApprovalCall();
+    expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.decision).toBe("allow-once");
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
   it("does not resolve bound approval reactions from unauthorized senders", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
