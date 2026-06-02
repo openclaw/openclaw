@@ -276,6 +276,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    Group history context defaults to `mention-only`: prior group messages are
+    included only when they were addressed to the bot, are replies to the bot,
+    or are the bot's own messages. Set `includeGroupHistoryContext: "recent"` to
+    include recent room history for trusted groups. Set
+    `includeGroupHistoryContext: "none"` to send no prior Telegram group history
+    with the next turn.
+
+```json5
+{
+  channels: {
+    telegram: {
+      includeGroupHistoryContext: "recent",
+    },
+  },
+}
+```
+
     Getting the group chat ID:
 
     - forward a group message to `@userinfobot` / `@getidsbot`

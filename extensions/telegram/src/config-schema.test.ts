@@ -54,6 +54,23 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts group history context mode overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      includeGroupHistoryContext: "mention-only",
+      accounts: { ops: { includeGroupHistoryContext: "recent" } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.includeGroupHistoryContext).toBe("mention-only");
+      expect(res.data.accounts?.ops?.includeGroupHistoryContext).toBe("recent");
+    }
+  });
+
+  it("rejects unsupported group history context modes", () => {
+    expectTelegramConfigIssue({ includeGroupHistoryContext: "all" }, "includeGroupHistoryContext");
+  });
+
   it("accepts pollingStallThresholdMs overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
       pollingStallThresholdMs: 120_000,

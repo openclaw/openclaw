@@ -886,6 +886,7 @@ export async function buildTelegramConversationContext(params: {
   recentLimit: number;
   replyTargetWindowSize: number;
   minTimestampMs?: number;
+  includeNode?: (node: TelegramCachedMessageNode) => boolean;
 }): Promise<TelegramConversationContextNode[]> {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
@@ -893,13 +894,16 @@ export async function buildTelegramConversationContext(params: {
   const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
-      return;
+      return false;
     }
     if (!isAfterSessionBoundary(node, sessionBoundary)) {
-      return;
+      return false;
     }
     if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
-      return;
+      return false;
+    }
+    if (params.includeNode && !params.includeNode(node)) {
+      return false;
     }
     const existing = selected.get(node.messageId);
     const isReplyTarget = existing?.isReplyTarget === true || flags?.replyTarget === true;
@@ -907,6 +911,7 @@ export async function buildTelegramConversationContext(params: {
       node: existing?.node ?? node,
       isReplyTarget: isReplyTarget ? true : undefined,
     });
+    return true;
   };
   const addReplyTargetWindow = async (messageId: string) => {
     replyTargetIds.add(messageId);
@@ -930,18 +935,18 @@ export async function buildTelegramConversationContext(params: {
     limit: params.recentLimit,
   });
   for (const node of currentWindow) {
-    addNode(node);
-    if (node.replyToId) {
+    const added = addNode(node);
+    if (added && node.replyToId) {
       await addReplyTargetWindow(node.replyToId);
     }
   }
 
   for (const [index, node] of params.replyChainNodes.entries()) {
-    addNode(node, { replyTarget: index === 0 });
-    if (index === 0 && node.messageId) {
+    const added = addNode(node, { replyTarget: index === 0 });
+    if (added && index === 0 && node.messageId) {
       await addReplyTargetWindow(node.messageId);
     }
-    if (node.replyToId) {
+    if (added && node.replyToId) {
       replyTargetIds.add(node.replyToId);
     }
   }
