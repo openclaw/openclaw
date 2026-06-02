@@ -399,3 +399,63 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 });
+
+describe("JSON string array coercion", () => {
+  it("coerces a whole-value ${VAR} to a string array when the env value is a JSON string array", () => {
+    const result = resolveConfigEnvVars(
+      { allowFrom: "${ALLOW_FROM}" },
+      { ALLOW_FROM: '["alice@example.com", "bob@example.com"]' },
+    );
+    expect(result).toEqual({
+      allowFrom: ["alice@example.com", "bob@example.com"],
+    });
+  });
+
+  it("ignores surrounding whitespace around the ${VAR} placeholder", () => {
+    const result = resolveConfigEnvVars(
+      { allowFrom: "  ${ALLOW_FROM}  " },
+      { ALLOW_FROM: '["alice"]' },
+    );
+    expect(result).toEqual({ allowFrom: ["alice"] });
+  });
+
+  it("does not coerce when the placeholder is not the entire value", () => {
+    const result = resolveConfigEnvVars(
+      { note: "allow=${ALLOW_FROM}" },
+      { ALLOW_FROM: '["alice"]' },
+    );
+    expect(result).toEqual({ note: 'allow=["alice"]' });
+  });
+
+  it("does not coerce when the env value is not a JSON array literal", () => {
+    const result = resolveConfigEnvVars({ value: "${PLAIN}" }, { PLAIN: "hello" });
+    expect(result).toEqual({ value: "hello" });
+  });
+
+  it("does not coerce when the array contains non-string items", () => {
+    const mixed = resolveConfigEnvVars({ value: "${MIXED}" }, { MIXED: '["a", 1, true]' });
+    // Array had non-strings → leave the substituted string alone.
+    expect(mixed).toEqual({ value: '["a", 1, true]' });
+
+    const nested = resolveConfigEnvVars({ value: "${NESTED}" }, { NESTED: '[["a"], ["b"]]' });
+    expect(nested).toEqual({ value: '[["a"], ["b"]]' });
+  });
+
+  it("does not coerce when the env value is malformed JSON", () => {
+    const result = resolveConfigEnvVars({ value: "${BAD}" }, { BAD: "[not, valid, json]" });
+    expect(result).toEqual({ value: "[not, valid, json]" });
+  });
+
+  it("accepts an empty JSON array", () => {
+    const result = resolveConfigEnvVars({ allowFrom: "${EMPTY}" }, { EMPTY: "[]" });
+    expect(result).toEqual({ allowFrom: [] });
+  });
+
+  it("does not coerce when the placeholder uses the escape form $${VAR}", () => {
+    const result = resolveConfigEnvVars(
+      { value: "$${ESCAPED}" },
+      { ESCAPED: '["should", "not", "apply"]' },
+    );
+    expect(result).toEqual({ value: "${ESCAPED}" });
+  });
+});
