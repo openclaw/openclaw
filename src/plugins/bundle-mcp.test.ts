@@ -310,6 +310,107 @@ describe("loadEnabledBundleMcpConfig", () => {
     );
   });
 
+  it("preserves Codex bundle MCP tool filters and relative data roots", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-filtered-mcp",
+      async ({ homeDir, workspaceDir }) => {
+        const safeTools = [
+          "capsule.*",
+          "vision_map.snapshot",
+          "vision_map.list_apps",
+          "vision_map.list_workflows",
+          "vision_map.describe_workflow",
+          "vision_map.describe",
+          "vision_map.detect_state",
+          "vision_map.list_actions",
+          "vision_map.describe_action",
+          "vision_map.perform_action",
+          "vision_map.run_workflow",
+          "vision_map.verify",
+          "vision_map.repair_minimal",
+          "vision_map.export_trace",
+        ];
+        const pluginRoot = resolveBundlePluginRoot(homeDir, "vision-mcp");
+        const appsRoot = path.join(pluginRoot, "apps");
+        await writeBundleTextFiles(pluginRoot, {
+          ".codex-plugin/plugin.json": `${JSON.stringify(
+            {
+              name: "vision-mcp",
+              skills: "./skills/",
+              mcpServers: "./.mcp.json",
+            },
+            null,
+            2,
+          )}\n`,
+          ".mcp.json": `${JSON.stringify(
+            {
+              mcpServers: {
+                "vision-mcp": {
+                  command: "npx",
+                  args: ["-y", "@vision-mcp/cli@latest", "serve", "--apps-root", "./apps"],
+                  toolFilter: {
+                    include: safeTools,
+                    exclude: [
+                      "vision_map.click_at",
+                      "vision_map.type_text",
+                      "vision_map.press_key",
+                      "vision_map.scroll",
+                      "vision_map.init",
+                      "vision_map.apply_patch",
+                      "vision_map.add_control",
+                      "vision_map.commit_*",
+                      "vision_map.harvest_session",
+                    ],
+                  },
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+        });
+        await fs.mkdir(appsRoot, { recursive: true });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["vision-mcp"]),
+        });
+        const loadedServer = loaded.config.mcpServers["vision-mcp"];
+        const loadedArgs = getServerArgs(loadedServer);
+        const loadedToolFilter = isRecord(loadedServer) ? loadedServer.toolFilter : undefined;
+
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("npx");
+        expect(loadedArgs?.slice(0, 4)).toEqual([
+          "-y",
+          "@vision-mcp/cli@latest",
+          "serve",
+          "--apps-root",
+        ]);
+        await expectResolvedPathEqual(loadedArgs?.[4], appsRoot);
+        expect(isRecord(loadedToolFilter) ? loadedToolFilter.include : undefined).toEqual(
+          safeTools,
+        );
+        expect(isRecord(loadedToolFilter) ? loadedToolFilter.exclude : undefined).toEqual([
+          "vision_map.click_at",
+          "vision_map.type_text",
+          "vision_map.press_key",
+          "vision_map.scroll",
+          "vision_map.init",
+          "vision_map.apply_patch",
+          "vision_map.add_control",
+          "vision_map.commit_*",
+          "vision_map.harvest_session",
+        ]);
+        await expectResolvedPathEqual(
+          isRecord(loadedServer) ? loadedServer.cwd : undefined,
+          pluginRoot,
+        );
+      },
+    );
+  });
+
   it("reports malformed file-backed MCP configs instead of silently dropping servers", async () => {
     await withBundleHomeEnv(
       tempHarness,
