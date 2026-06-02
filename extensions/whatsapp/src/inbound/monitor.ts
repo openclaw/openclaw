@@ -632,7 +632,7 @@ export async function attachWebInboxToSocket(
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await resolveInboundJid(remoteJid);
     if (!from) {
-      if (!group && !Boolean(msg.key?.fromMe)) {
+      if (!group && !msg.key?.fromMe) {
         emitWhatsAppMessagePreAuthHooks({
           accountId: options.accountId,
           from: remoteJid,

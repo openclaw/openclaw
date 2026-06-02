@@ -330,6 +330,24 @@ describe("telegram doctor", () => {
     expect(result.changes[0]).toContain("@testuser");
   });
 
+  it("preserves access groups while repairing @username entries", async () => {
+    lookupTelegramChatIdMock.mockResolvedValue("111");
+
+    const result = await maybeRepairTelegramAllowFromUsernames({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          allowFrom: [{ number: "@testuser", group: "friends" }],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.config.channels?.telegram?.allowFrom).toEqual([
+      { number: "111", group: "friends" },
+    ]);
+    expect(result.changes[0]).toContain("@testuser");
+  });
+
   it("surfaces negative chat ids as invalid allowFrom sender entries", async () => {
     const result = await maybeRepairTelegramAllowFromUsernames({
       channels: {

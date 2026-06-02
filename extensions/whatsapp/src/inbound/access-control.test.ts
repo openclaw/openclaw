@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -16,6 +17,10 @@ let resolveWhatsAppCommandAuthorized: typeof import("../inbound-policy.js").reso
 beforeAll(async () => {
   ({ checkInboundAccessControl } = await import("./access-control.js"));
   ({ resolveWhatsAppCommandAuthorized } = await import("../inbound-policy.js"));
+});
+
+afterEach(() => {
+  clearInternalHooks();
 });
 
 async function checkUnauthorizedWorkDmSender() {
@@ -236,6 +241,42 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(runMessagePreAuthMock).not.toHaveBeenCalled();
   });
 
+  it("does not emit pre-auth hooks for disabled DMs", async () => {
+    const internalPreAuthHandler = vi.fn(async () => undefined);
+    registerInternalHook("message:pre-auth", internalPreAuthHandler);
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "disabled",
+          allowFrom: ["+15559999999"],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      content: "Let me in",
+      group: false,
+      pushName: "Requester",
+      isFromMe: false,
+      messagePreAuthHookRunner: {
+        hasHooks: (hookName) => hookName === "message_pre_auth",
+        runMessagePreAuth: runMessagePreAuthMock as never,
+      },
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "sender@s.whatsapp.net",
+    });
+    await flushPreAuthHooks();
+
+    expectSilentlyBlocked(result);
+    expect(runMessagePreAuthMock).not.toHaveBeenCalled();
+    expect(internalPreAuthHandler).not.toHaveBeenCalled();
+  });
   it("allows grouped allowFrom entries for DM allowlist access", async () => {
     const cfg = {
       channels: {

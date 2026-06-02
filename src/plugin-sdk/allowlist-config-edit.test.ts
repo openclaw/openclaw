@@ -10,6 +10,14 @@ import {
   readConfiguredAllowlistEntries,
 } from "./allowlist-config-edit.js";
 
+function readStringField(entry: unknown, key: string): string | undefined {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const value = (entry as Record<string, unknown>)[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+}
+
 describe("readConfiguredAllowlistEntries", () => {
   it("coerces mixed entries to non-empty strings", () => {
     expect(readConfiguredAllowlistEntries(["owner", 42, ""])).toEqual(["owner", "42"]);
@@ -217,14 +225,9 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
         if (typeof entry === "string") {
           return entry;
         }
-        return entry && typeof entry === "object" && !Array.isArray(entry)
-          ? String((entry as { number?: unknown }).number ?? "")
-          : undefined;
+        return readStringField(entry, "number");
       },
-      readConfigEntryAccessGroup: (entry) =>
-        entry && typeof entry === "object" && !Array.isArray(entry)
-          ? String((entry as { group?: unknown }).group ?? "")
-          : undefined,
+      readConfigEntryAccessGroup: (entry) => readStringField(entry, "group"),
       formatConfigEntry: ({ entry, accessGroup }) => ({ number: entry, group: accessGroup }),
     });
     const parsedConfig = {
@@ -264,14 +267,8 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
       normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
       resolveDmAllowFrom: (account) => account.dmAllowFrom,
       resolveGroupAllowFrom: (account) => account.groupAllowFrom,
-      readConfigEntry: (entry) =>
-        entry && typeof entry === "object" && !Array.isArray(entry)
-          ? String((entry as { number?: unknown }).number ?? "")
-          : undefined,
-      readConfigEntryAccessGroup: (entry) =>
-        entry && typeof entry === "object" && !Array.isArray(entry)
-          ? String((entry as { group?: unknown }).group ?? "")
-          : undefined,
+      readConfigEntry: (entry) => readStringField(entry, "number"),
+      readConfigEntryAccessGroup: (entry) => readStringField(entry, "group"),
       formatConfigEntry: ({ entry, accessGroup }) => ({ number: entry, group: accessGroup }),
     });
     const parsedConfig = {

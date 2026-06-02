@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeWhatsAppAllowFromEntryNumbers } from "../../extensions/whatsapp/src/allow-from-groups.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -52,6 +51,31 @@ function normalizeWhatsAppTargetForTest(raw: string): string | null {
   const digits = trimmed.replace(/\D/gu, "");
   const normalized = digits ? `+${digits}` : "";
   return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
+}
+
+function readAllowFromEntryNumberForTest(entry: unknown): string | undefined {
+  if (typeof entry === "string" || typeof entry === "number") {
+    return String(entry);
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const number = (entry as Record<string, unknown>)["number"];
+  return typeof number === "string" || typeof number === "number" ? String(number) : undefined;
+}
+
+function normalizeWhatsAppAllowFromEntryNumbersForTest(entries: readonly unknown[]): string[] {
+  return entries.flatMap((entry) => {
+    const raw = readAllowFromEntryNumberForTest(entry);
+    if (!raw) {
+      return [];
+    }
+    if (raw === "*") {
+      return [raw];
+    }
+    const normalized = normalizeWhatsAppTargetForTest(raw);
+    return normalized ? [normalized] : [];
+  });
 }
 
 function isWhatsAppGroupJidForTest(raw: string): boolean {
@@ -247,7 +271,7 @@ beforeAll(async () => {
   whatsappPlugin.config = {
     ...whatsappPlugin.config,
     resolveAllowFrom: ({ cfg }) =>
-      normalizeWhatsAppAllowFromEntryNumbers(cfg.channels?.whatsapp?.allowFrom ?? []),
+      normalizeWhatsAppAllowFromEntryNumbersForTest(cfg.channels?.whatsapp?.allowFrom ?? []),
   };
 
   const telegramPlugin = createOutboundTestPlugin({
@@ -285,9 +309,17 @@ beforeAll(async () => {
       const channel = cfg.channels?.telegram;
       const normalized = accountId?.trim();
       if (normalized && channel?.accounts?.[normalized]?.allowFrom) {
-        return channel.accounts[normalized].allowFrom?.map((entry) => String(entry)) ?? [];
+        return (
+          channel.accounts[normalized].allowFrom
+            ?.map(readAllowFromEntryNumberForTest)
+            .filter((entry): entry is string => entry !== undefined) ?? []
+        );
       }
-      return channel?.allowFrom?.map((entry) => String(entry)) ?? [];
+      return (
+        channel?.allowFrom
+          ?.map(readAllowFromEntryNumberForTest)
+          .filter((entry): entry is string => entry !== undefined) ?? []
+      );
     },
   };
 

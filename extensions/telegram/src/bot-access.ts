@@ -1,18 +1,12 @@
-import {
-  firstDefined,
-  isSenderIdAllowed,
-} from "openclaw/plugin-sdk/allow-from";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import type {
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeTelegramAllowFromEntries,
-  type TelegramAllowFromEntry,
-} from "./allow-from.js";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeTelegramAllowFromEntries, type TelegramAllowFromEntry } from "./allow-from.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -45,7 +39,9 @@ function warnInvalidAllowFromEntries(entries: string[]) {
   }
 }
 
-export const normalizeAllowFrom = (list?: readonly TelegramAllowFromEntry[]): NormalizedAllowFrom => {
+export const normalizeAllowFrom = (
+  list?: readonly TelegramAllowFromEntry[],
+): NormalizedAllowFrom => {
   const entries = normalizeTelegramAllowFromEntries(list ?? []);
   const hasWildcard = entries.includes("*");
   const normalized = entries.filter((value) => value !== "*");

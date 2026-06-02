@@ -7,8 +7,7 @@ export const TELEGRAM_ALLOW_FROM_GROUPS = [
   "restricted",
 ] as const;
 
-export const DEFAULT_TELEGRAM_ALLOW_FROM_GROUP =
-  "restricted" satisfies TelegramAllowFromGroup;
+export const DEFAULT_TELEGRAM_ALLOW_FROM_GROUP = "restricted" satisfies TelegramAllowFromGroup;
 
 export type TelegramAllowFromGroup = (typeof TELEGRAM_ALLOW_FROM_GROUPS)[number];
 
@@ -47,9 +46,7 @@ export function readTelegramAllowFromEntryNumber(raw: unknown): string | undefin
   return readStringField(raw as Record<string, unknown>, "number");
 }
 
-export function readTelegramAllowFromEntryGroup(
-  raw: unknown,
-): TelegramAllowFromGroup | undefined {
+export function readTelegramAllowFromEntryGroup(raw: unknown): TelegramAllowFromGroup | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
   }
@@ -77,6 +74,23 @@ export function normalizeTelegramAllowFromEntries(entries: readonly unknown[]): 
     normalized.push(value);
   }
   return normalized;
+}
+
+export function mergeTelegramAllowFromEntries(params: {
+  existing?: readonly TelegramAllowFromEntry[];
+  additions: readonly string[];
+}): TelegramAllowFromEntry[] {
+  const seen = new Set<string>();
+  const merged: TelegramAllowFromEntry[] = [];
+  for (const entry of [...(params.existing ?? []), ...params.additions]) {
+    const normalized = normalizeTelegramAllowFromEntry(entry);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    merged.push(entry);
+  }
+  return merged;
 }
 
 export function createTelegramAllowFromEntry(params: {

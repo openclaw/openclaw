@@ -10,7 +10,11 @@ import {
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { isNumericTelegramSenderUserId } from "./allow-from.js";
+import {
+  isNumericTelegramSenderUserId,
+  mergeTelegramAllowFromEntries,
+  normalizeTelegramAllowFromEntries,
+} from "./allow-from.js";
 
 const t = createSetupTranslator();
 
@@ -61,13 +65,14 @@ export async function promptTelegramAllowFromForAccount(params: {
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId });
+  const existing = resolved.config.allowFrom ?? [];
   await params.prompter.note(
     getTelegramUserIdHelpLines().join("\n"),
     t("wizard.telegram.userIdTitle"),
   );
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
-    existing: resolved.config.allowFrom ?? [],
+    existing: normalizeTelegramAllowFromEntries(existing),
     message: t("wizard.telegram.allowFromPrompt"),
     placeholder: "123456789",
     label: t("wizard.telegram.allowlistTitle"),
@@ -84,7 +89,10 @@ export async function promptTelegramAllowFromForAccount(params: {
     cfg: params.cfg,
     channel,
     accountId,
-    patch: { dmPolicy: "allowlist", allowFrom: unique },
+    patch: {
+      dmPolicy: "allowlist",
+      allowFrom: mergeTelegramAllowFromEntries({ existing, additions: unique }),
+    },
   });
 }
 

@@ -627,7 +627,7 @@ async function resolveTelegramCommandAuth(params: {
     cfg,
     telegramCfg,
     topicConfig,
-    groupConfig,
+    groupConfig: isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
     effectiveGroupAllow,
     senderId,
     senderUsername,

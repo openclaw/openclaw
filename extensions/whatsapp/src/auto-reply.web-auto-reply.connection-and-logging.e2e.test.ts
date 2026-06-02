@@ -903,7 +903,7 @@ describe("web auto-reply connection", () => {
 
   it("preserves grouped allowFrom entries in the live monitor config snapshot", async () => {
     const capture = createWebListenerFactoryCapture();
-    const allowFrom = [{ number: "+111", group: "friends" }] as const;
+    const allowFrom = [{ number: "+111", group: "friends" as const }];
 
     setLoadConfigMock({
       channels: {
@@ -914,15 +914,14 @@ describe("web auto-reply connection", () => {
       },
     } as OpenClawConfig);
 
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-    );
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
 
     expect(capture.getLastOptions()?.cfg?.channels?.whatsapp?.allowFrom).toEqual(allowFrom);
-    expect(capture.getLastOptions()?.loadConfig?.().channels?.whatsapp?.allowFrom).toEqual(allowFrom);
+    expect(capture.getLastOptions()?.loadConfig?.().channels?.whatsapp?.allowFrom).toEqual(
+      allowFrom,
+    );
     resetLoadConfigMock();
   });
 

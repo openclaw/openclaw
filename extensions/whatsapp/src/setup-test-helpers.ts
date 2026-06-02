@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import type { WhatsAppAllowFromEntry } from "../../../src/config/types.whatsapp.js";
+import type { WhatsAppAllowFromEntry } from "./allow-from-groups.js";
 
 type WhatsAppSetupConfig = {
   channels?: {

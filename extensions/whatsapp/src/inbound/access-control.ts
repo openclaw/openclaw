@@ -152,7 +152,12 @@ export async function checkInboundAccessControl(params: {
     dmSenderId: params.from,
   });
   const { senderAccess } = access;
-  if (!params.group && !params.isFromMe && senderAccess.decision !== "allow") {
+  if (
+    !params.group &&
+    !params.isFromMe &&
+    senderAccess.decision !== "allow" &&
+    senderAccess.reasonCode !== "dm_policy_disabled"
+  ) {
     emitWhatsAppMessagePreAuthHooks({
       accountId: policy.account.accountId,
       from: params.from,

@@ -125,7 +125,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
   inspectAccount: adaptScopedAccountAccessor(inspectTelegramAccount),
   defaultAccountId: resolveDefaultTelegramAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
-  resolveAllowFrom: (account) => account.config.allowFrom,
+  resolveAllowFrom: (account) => normalizeTelegramAllowFromEntries(account.config.allowFrom ?? []),
   formatAllowFrom: (allowFrom) => normalizeTelegramAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
