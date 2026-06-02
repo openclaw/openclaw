@@ -18,6 +18,7 @@ import {
   type MessagePresentation,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -65,18 +66,27 @@ function buildMattermostPresentationButtons(presentation: MessagePresentation) {
   return presentation.blocks
     .filter((block) => block.type === "buttons")
     .map((block) =>
-      block.buttons.flatMap((button) =>
-        button.value
+      block.buttons.flatMap((button) => {
+        if (button.action) {
+          return [];
+        }
+        const value = resolveMessagePresentationControlValue(button);
+        return value
           ? [
               {
+                id: value,
                 text: button.label,
-                callback_data: button.value,
+                callback_data: value,
+                context: {
+                  callback_data: value,
+                },
                 style: button.style,
               },
             ]
-          : [],
-      ),
-    );
+          : [];
+      }),
+    )
+    .filter((row) => row.length > 0);
 }
 
 const MATTERMOST_PRESENTATION_CAPABILITIES = {
@@ -328,7 +338,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: presentation ? buildMattermostPresentationButtons(presentation) : undefined,
+      buttons: buttons.length > 0 ? buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
       mediaLocalRoots,
@@ -376,6 +386,104 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     postId,
     emojiName,
     remove: params.remove === true,
+  };
+}
+
+function collectNonBlankStrings(values: Array<string | undefined>): string[] {
+  const collected: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      collected.push(trimmed);
+    }
+  }
+  return collected;
+}
+
+function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+function readMattermostParam(params: Record<string, unknown>, key: string): unknown {
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = toSnakeCaseKey(key);
+  return snakeKey === key || !Object.hasOwn(params, snakeKey) ? undefined : params[snakeKey];
+}
+
+function readMattermostStringParam(
+  params: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const raw = readMattermostParam(params, key);
+  return typeof raw === "string" ? normalizeOptionalString(raw) : undefined;
+}
+
+function readMattermostStringArrayParam(params: Record<string, unknown>, key: string): string[] {
+  const raw = readMattermostParam(params, key);
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((entry): entry is string => typeof entry === "string")
+      .flatMap((entry) => {
+        const normalized = normalizeOptionalString(entry);
+        return normalized ? [normalized] : [];
+      });
+  }
+  if (typeof raw === "string") {
+    const normalized = normalizeOptionalString(raw);
+    return normalized ? [normalized] : [];
+  }
+  return [];
+}
+
+function requiresMattermostMediaUpload(mediaUrl: string | undefined): boolean {
+  const normalized = normalizeOptionalString(mediaUrl);
+  return Boolean(normalized && !/^https?:\/\//i.test(normalized));
+}
+
+function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
+  mediaUrls: string[];
+  hasUnsupportedAttachmentPayload: boolean;
+} {
+  const mediaUrlCandidates: Array<string | undefined> = [
+    readMattermostStringParam(params, "media"),
+    readMattermostStringParam(params, "mediaUrl"),
+    readMattermostStringParam(params, "path"),
+    readMattermostStringParam(params, "filePath"),
+    readMattermostStringParam(params, "fileUrl"),
+  ];
+  mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
+
+  let hasUnsupportedAttachmentPayload =
+    typeof params.buffer === "string" || typeof params.base64 === "string";
+  if (Array.isArray(params.attachments)) {
+    for (const attachment of params.attachments) {
+      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+        continue;
+      }
+      const record = attachment as Record<string, unknown>;
+      mediaUrlCandidates.push(
+        readMattermostStringParam(record, "media"),
+        readMattermostStringParam(record, "mediaUrl"),
+        readMattermostStringParam(record, "path"),
+        readMattermostStringParam(record, "filePath"),
+        readMattermostStringParam(record, "fileUrl"),
+        readMattermostStringParam(record, "url"),
+      );
+      hasUnsupportedAttachmentPayload ||= typeof record.buffer === "string";
+      hasUnsupportedAttachmentPayload ||= typeof record.base64 === "string";
+    }
+  }
+
+  return {
+    mediaUrls: collectNonBlankStrings(mediaUrlCandidates),
+    hasUnsupportedAttachmentPayload,
   };
 }
 
@@ -430,8 +538,10 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
         mediaUrl,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
+        mediaLocalRoots: ctx.mediaLocalRoots ?? ctx.mediaAccess?.localRoots,
+        mediaReadFile: ctx.mediaReadFile ?? ctx.mediaAccess?.readFile,
+        ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),
+        requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
         replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
         buttons,
       });
@@ -466,6 +576,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       to,
       text,
       mediaUrl,
+      mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
       accountId,

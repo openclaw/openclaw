@@ -10,11 +10,19 @@ import {
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
+const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
+const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
+const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
+const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"];
+const ACTIVE_SHARD_CHILDREN = new Set();
+let parentTerminationSignal = null;
+let parentTerminationForceKill = null;
+let parentSignalForwardingInstalled = false;
 
 const CORE_SHARD = {
   name: "core",
@@ -121,11 +129,13 @@ export function shouldRunOxlintShardsSerial({
     return false;
   }
   const localCheckMode = env.OPENCLAW_LOCAL_CHECK_MODE?.trim().toLowerCase();
-  if (localCheckMode === "full" || localCheckMode === "fast") {
-    return false;
-  }
-  if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
-    return true;
+  if (!isRemoteChangedGateEnv(env)) {
+    if (localCheckMode === "full" || localCheckMode === "fast") {
+      return false;
+    }
+    if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
+      return true;
+    }
   }
   const resources = resolveHostResources(hostResources);
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
@@ -137,6 +147,13 @@ export function shouldRunOxlintShardsSerial({
   return (
     resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+  );
+}
+
+function isRemoteChangedGateEnv(env) {
+  return (
+    env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD === "1" ||
+    env.OPENCLAW_CHANGED_LANES_RAW_SYNC === "1"
   );
 }
 
@@ -234,24 +251,25 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
     if ((prepareResult.status ?? 1) !== 0) {
       process.exitCode = prepareResult.status ?? 1;
     } else {
-      const runSerial =
-        shardArgs.splitCore ||
-        shouldRunOxlintShardsSerial({
-          env,
-          platform: process.platform,
-        });
-      const results = runSerial
+      const shardConcurrency = resolveOxlintShardConcurrency({
+        env,
+        platform: process.platform,
+        splitCore: shardArgs.splitCore,
+      });
+      const results = shardConcurrency <= 1
         ? await runShardsSerial({
             entries: selectedShards,
             env,
             extraArgs: shardArgs.oxlintArgs,
             runner,
           })
-        : await Promise.all(
-            selectedShards.map((shard) =>
-              runShard({ env, extraArgs: shardArgs.oxlintArgs, runner, shard }),
-            ),
-          );
+        : await runShardsParallel({
+            concurrency: Math.min(shardConcurrency, selectedShards.length),
+            entries: selectedShards,
+            env,
+            extraArgs: shardArgs.oxlintArgs,
+            runner,
+          });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
     }
   } finally {
@@ -315,28 +333,89 @@ export function filterOxlintShards(shards, only) {
   return shards.filter((shard) => only.has(shard.name) || only.has(shard.name.split(":")[0]));
 }
 
+export function resolveOxlintShardConcurrency({
+  env = process.env,
+  platform = process.platform,
+  hostResources,
+  splitCore = false,
+} = {}) {
+  if (shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
+    return 1;
+  }
+
+  const explicitConcurrency = resolvePositiveEnvInt(env, "OPENCLAW_OXLINT_SHARD_CONCURRENCY");
+  if (explicitConcurrency !== null) {
+    return explicitConcurrency;
+  }
+
+  if (!splitCore) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const resources = resolveHostResources(hostResources);
+  return Math.max(
+    1,
+    Math.min(DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY, Math.floor(resources.logicalCpuCount / 4)),
+  );
+}
+
 async function runShardsSerial({ entries, env, extraArgs, runner }) {
   const results = [];
   for (const shard of entries) {
     results.push(await runShard({ env, extraArgs, runner, shard }));
+    if (isParentTerminationRequested()) {
+      break;
+    }
   }
   return results;
 }
 
-async function runShard({ env, extraArgs, runner, shard }) {
+async function runShardsParallel({ concurrency, entries, env, extraArgs, runner }) {
+  const results = [];
+  results.length = entries.length;
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      if (isParentTerminationRequested()) {
+        return;
+      }
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      const shard = entries[currentIndex];
+      if (!shard) {
+        return;
+      }
+      results[currentIndex] = await runShard({ env, extraArgs, runner, shard });
+    }
+  });
+
+  await Promise.all(workers);
+  return results.filter((status) => status !== undefined);
+}
+
+export async function runShard({ env, extraArgs, runner, shard }) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
+  const timeoutMs = resolveShardTimeoutMs(env);
+  const killGraceMs = resolveShardKillGraceMs(env);
+  const useProcessGroup = process.platform !== "win32";
   const child = spawn(process.execPath, [runner, ...shard.args, ...extraArgs], {
     stdio: "inherit",
+    detached: useProcessGroup,
     env: {
       ...env,
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_OXLINT_SKIP_PREPARE: "1",
     },
   });
+  const unregisterShardChild = registerShardChild({ child, killGraceMs, useProcessGroup });
 
   return await new Promise((resolve) => {
+    let finished = false;
+    let timedOut = false;
+    let forceKill = null;
     const heartbeat =
       heartbeatMs > 0
         ? setInterval(() => {
@@ -345,10 +424,42 @@ async function runShard({ env, extraArgs, runner, shard }) {
           }, heartbeatMs)
         : null;
     heartbeat?.unref();
+    const timeout =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+            console.error(
+              `[oxlint:${shard.name}] timed out after ${elapsedSeconds}s; terminating shard`,
+            );
+            signalChildProcess({ child, signal: "SIGTERM", useProcessGroup });
+            if (killGraceMs > 0) {
+              forceKill = setTimeout(() => {
+                console.error(`[oxlint:${shard.name}] did not exit cleanly; killing shard`);
+                signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
+              }, killGraceMs);
+              forceKill.unref();
+            } else {
+              signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
+            }
+          }, timeoutMs)
+        : null;
+    timeout?.unref();
     const finish = (status) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
       if (heartbeat) {
         clearInterval(heartbeat);
       }
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (forceKill) {
+        clearTimeout(forceKill);
+      }
+      unregisterShardChild();
       console.error(`[oxlint:${shard.name}] finished`);
       resolve(status);
     };
@@ -357,19 +468,141 @@ async function runShard({ env, extraArgs, runner, shard }) {
       finish(1);
     });
     child.once("close", (status) => {
-      finish(status ?? 1);
+      finish(
+        parentTerminationSignal
+          ? getSignalExitCode(parentTerminationSignal)
+          : timedOut
+            ? 124
+            : (status ?? 1),
+      );
     });
   });
 }
 
 export function resolveShardHeartbeatMs(env) {
-  const rawValue = env.OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS;
+  return resolveNonNegativeEnvInt(
+    env,
+    "OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS",
+    DEFAULT_SHARD_HEARTBEAT_MS,
+  );
+}
+
+export function resolveShardTimeoutMs(env) {
+  return resolveNonNegativeEnvInt(
+    env,
+    "OPENCLAW_OXLINT_SHARD_TIMEOUT_MS",
+    DEFAULT_SHARD_TIMEOUT_MS,
+  );
+}
+
+export function resolveShardKillGraceMs(env) {
+  return resolveNonNegativeEnvInt(
+    env,
+    "OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS",
+    DEFAULT_SHARD_KILL_GRACE_MS,
+  );
+}
+
+function resolveNonNegativeEnvInt(env, key, defaultValue) {
+  const rawValue = env[key];
   if (rawValue === undefined) {
-    return DEFAULT_SHARD_HEARTBEAT_MS;
+    return defaultValue;
   }
 
   const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsedValue) && parsedValue >= 0
-    ? parsedValue
-    : DEFAULT_SHARD_HEARTBEAT_MS;
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : defaultValue;
+}
+
+function resolvePositiveEnvInt(env, key) {
+  const rawValue = env[key];
+  if (rawValue === undefined) {
+    return null;
+  }
+
+  const parsedValue = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null;
+}
+
+function signalChildProcess({ child, signal, useProcessGroup }) {
+  if (!child.pid) {
+    return;
+  }
+
+  try {
+    if (useProcessGroup) {
+      process.kill(-child.pid, signal);
+    } else {
+      child.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      console.error(error);
+    }
+  }
+}
+
+function registerShardChild(entry) {
+  installParentSignalForwarding();
+  ACTIVE_SHARD_CHILDREN.add(entry);
+  return () => {
+    ACTIVE_SHARD_CHILDREN.delete(entry);
+    if (ACTIVE_SHARD_CHILDREN.size === 0 && parentTerminationForceKill) {
+      clearTimeout(parentTerminationForceKill);
+      parentTerminationForceKill = null;
+    }
+  };
+}
+
+function installParentSignalForwarding() {
+  if (parentSignalForwardingInstalled) {
+    return;
+  }
+  parentSignalForwardingInstalled = true;
+  for (const signal of PARENT_TERMINATION_SIGNALS) {
+    process.on(signal, () => {
+      parentTerminationSignal = signal;
+      process.exitCode = getSignalExitCode(signal);
+      if (ACTIVE_SHARD_CHILDREN.size === 0) {
+        process.exit(process.exitCode);
+      }
+      signalActiveShardChildren(signal);
+      scheduleParentTerminationForceKill();
+    });
+  }
+  process.once("exit", () => {
+    signalActiveShardChildren("SIGTERM");
+  });
+}
+
+function isParentTerminationRequested() {
+  return parentTerminationSignal !== null;
+}
+
+function signalActiveShardChildren(signal) {
+  for (const entry of ACTIVE_SHARD_CHILDREN) {
+    signalChildProcess({ ...entry, signal });
+  }
+}
+
+function scheduleParentTerminationForceKill() {
+  if (parentTerminationForceKill) {
+    return;
+  }
+  const killGraceMs = Math.max(
+    0,
+    ...Array.from(ACTIVE_SHARD_CHILDREN, (entry) => entry.killGraceMs),
+  );
+  if (killGraceMs === 0) {
+    signalActiveShardChildren("SIGKILL");
+    return;
+  }
+  parentTerminationForceKill = setTimeout(() => {
+    parentTerminationForceKill = null;
+    signalActiveShardChildren("SIGKILL");
+  }, killGraceMs);
+  parentTerminationForceKill.unref();
+}
+
+function getSignalExitCode(signal) {
+  return signal === "SIGINT" ? 130 : 143;
 }

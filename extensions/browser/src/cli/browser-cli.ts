@@ -53,8 +53,8 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("tabs", "List open tabs"),
       command("tab", "Tab shortcuts (index-based)"),
       command("open", "Open a URL in a new tab"),
-      command("focus", "Focus a tab by target id, tab id, label, or unique target id prefix"),
-      command("close", "Close a tab (target id optional)"),
+      command("focus", "Focus a tab by tab reference"),
+      command("close", "Close a tab (tab reference optional)"),
       command("profiles", "List all browser profiles"),
       command("create-profile", "Create a new browser profile"),
       command("delete-profile", "Delete a browser profile"),
@@ -69,7 +69,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
-      command("screenshot", "Capture a screenshot (MEDIA:<path>)"),
+      command("screenshot", "Capture a screenshot (prints the saved path)"),
       command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
     ],
     register: async (args) => {

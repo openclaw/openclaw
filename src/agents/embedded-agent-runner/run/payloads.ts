@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
@@ -18,14 +22,12 @@ import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
+import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
@@ -294,20 +296,27 @@ export function buildEmbeddedRunPayloads(params: {
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
   const runAborted = params.runAborted === true || lastAssistantAborted;
   const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
+  const rawErrorMessage = lastAssistantNeedsErrorSurface
+    ? normalizeOptionalString(assistantForPayload?.errorMessage)
+    : undefined;
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
-        : formatAssistantErrorText(assistantForPayload, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.provider,
-            model: params.model,
-          })
+        : lastAssistantErrored || rawErrorMessage
+          ? formatUserFacingAssistantErrorText(assistantForPayload, {
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              provider: params.provider,
+              model: params.model,
+            })
+          : formatAssistantErrorText(assistantForPayload, {
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              provider: params.provider,
+              model: params.model,
+            })
       : undefined;
-  const rawErrorMessage = lastAssistantNeedsErrorSurface
-    ? normalizeOptionalString(assistantForPayload?.errorMessage)
-    : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
     : null;
@@ -334,22 +343,18 @@ export function buildEmbeddedRunPayloads(params: {
       const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
         markdown: useMarkdown,
       });
-      const {
-        text: cleanedText,
-        mediaUrls,
-        audioAsVoice,
-        replyToId,
-        replyToTag,
-        replyToCurrent,
-      } = parseReplyDirectives(agg);
+      const parsedAggregate = parseInlineDirectives(agg, {
+        stripAudioTag: true,
+        stripReplyTags: true,
+      });
+      const cleanedText = parsedAggregate.text;
       if (cleanedText) {
         replyItems.push({
           text: cleanedText,
-          media: mediaUrls,
-          audioAsVoice,
-          replyToId,
-          replyToTag,
-          replyToCurrent,
+          audioAsVoice: parsedAggregate.audioAsVoice,
+          replyToId: parsedAggregate.replyToId,
+          replyToTag: parsedAggregate.hasReplyTag,
+          replyToCurrent: parsedAggregate.replyToCurrent,
         });
       }
     }

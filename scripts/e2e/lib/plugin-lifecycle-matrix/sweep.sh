@@ -20,6 +20,25 @@ package_name="@openclaw/lifecycle-claw"
 probe="scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs"
 measure="scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs"
 resource_dir="/tmp/openclaw-plugin-lifecycle-matrix"
+pack_root=""
+registry_root=""
+
+cleanup() {
+  openclaw_plugins_cleanup_fixture_servers
+  rm -rf "$resource_dir"
+  if [ -n "$pack_root" ]; then
+    rm -rf "$pack_root"
+  fi
+  if [ -n "$registry_root" ]; then
+    rm -rf "$registry_root"
+  fi
+  rm -f \
+    /tmp/lifecycle-claw-1.0.0.tgz \
+    /tmp/lifecycle-claw-2.0.0.tgz \
+    /tmp/plugin-lifecycle-inspect-v1.json
+}
+trap cleanup EXIT
+
 mkdir -p "$resource_dir"
 summary_tsv="$resource_dir/resource-summary.tsv"
 printf "phase\tmax_rss_kb\tcpu_seconds\twall_ms\tcpu_core_ratio\tsignal\n" >"$summary_tsv"
@@ -37,12 +56,14 @@ registry_root="$(mktemp -d "/tmp/openclaw-plugin-lifecycle-registry.XXXXXX")"
 pack_fixture_plugin "$pack_root/v1" /tmp/lifecycle-claw-1.0.0.tgz "$plugin_id" 1.0.0 lifecycle.v1 "Lifecycle Claw"
 pack_fixture_plugin "$pack_root/v2" /tmp/lifecycle-claw-2.0.0.tgz "$plugin_id" 2.0.0 lifecycle.v2 "Lifecycle Claw"
 start_npm_fixture_registry "$package_name" 1.0.0 /tmp/lifecycle-claw-1.0.0.tgz "$registry_root" "$package_name" 2.0.0 /tmp/lifecycle-claw-2.0.0.tgz
+trap cleanup EXIT
 
 run_measured install-v1 node "$entry" plugins install "npm:$package_name@1.0.0"
 node "$probe" assert-version "$plugin_id" 1.0.0
 node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
 
 run_measured inspect-v1 bash -c 'node "$1" plugins inspect "$2" --runtime --json >/tmp/plugin-lifecycle-inspect-v1.json' bash "$entry" "$plugin_id"
+node "$probe" assert-inspect-loaded "$plugin_id" /tmp/plugin-lifecycle-inspect-v1.json
 
 run_measured disable node "$entry" plugins disable "$plugin_id"
 node "$probe" assert-enabled "$plugin_id" false

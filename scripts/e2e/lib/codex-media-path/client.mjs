@@ -3,9 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
+import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
 import { readPositiveIntEnv } from "./limits.mjs";
-import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -114,7 +114,7 @@ async function connectGateway() {
         },
         reject: (error) => {
           clearTimeout(timer);
-          reject(error);
+          reject(toLintErrorObject(error, "Non-Error rejection"));
         },
       });
       ws.send(JSON.stringify({ type: "req", id, method, params: params ?? {} }));
@@ -235,4 +235,18 @@ try {
   );
 } finally {
   await gateway.close();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

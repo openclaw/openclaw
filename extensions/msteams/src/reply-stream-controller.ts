@@ -151,7 +151,6 @@ export function createTeamsReplyStreamController(params: {
       // Starting a reply is not enough to decide that native streaming should
       // own delivery. Wait for text tokens or explicit progress work so
       // no-token replies keep the normal block-delivery path.
-      return;
     },
 
     onPartialReply(payload: { text?: string }): void {
@@ -216,10 +215,10 @@ export function createTeamsReplyStreamController(params: {
         return;
       }
       const hadStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
+      const progressActive = await progressDraftGate.noteWork();
       // If the gate was already started, the call above is a no-op — refresh
       // the informative line manually so the latest progress lines render.
-      if (hadStarted && progressDraftGate.hasStarted) {
+      if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
         renderInformativeUpdate();
       }
     },
@@ -253,8 +252,8 @@ export function createTeamsReplyStreamController(params: {
         }
       }
       const hadStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
-      if (hadStarted && progressDraftGate.hasStarted) {
+      const progressActive = await progressDraftGate.noteWork();
+      if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
         renderInformativeUpdate();
       }
     },

@@ -52,6 +52,9 @@ export type MattermostSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  workspaceDir?: string;
+  /** Fail the send if media cannot be loaded/uploaded instead of posting text-only. */
+  requireMediaUpload?: boolean;
   replyToId?: string;
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
@@ -487,6 +490,7 @@ export async function sendMessageMattermost(
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
+        workspaceDir: opts.workspaceDir,
       });
       pendingUploads.push({
         buffer: media.buffer,
@@ -495,6 +499,11 @@ export async function sendMessageMattermost(
       });
     } catch (err) {
       uploadError = err instanceof Error ? err : new Error(String(err));
+      if (opts.requireMediaUpload) {
+        throw new Error(`Mattermost media upload failed: ${uploadError.message}`, {
+          cause: err,
+        });
+      }
       if (core.logging.shouldLogVerbose()) {
         logger.debug?.(
           `mattermost send: media upload failed, falling back to URL text: ${String(err)}`,
@@ -605,7 +614,9 @@ export async function sendMessageMattermost(
 
   if (!message && (!fileIds || fileIds.length === 0)) {
     if (uploadError) {
-      throw new Error(`Mattermost media upload failed: ${uploadError.message}`);
+      throw new Error(`Mattermost media upload failed: ${uploadError.message}`, {
+        cause: uploadError,
+      });
     }
     throw new Error("Mattermost message is empty");
   }

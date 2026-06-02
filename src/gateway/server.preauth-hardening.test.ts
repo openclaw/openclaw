@@ -26,7 +26,7 @@ await import("./server.js");
 
 const PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS = 5_000;
 
-let cleanupEnv: Array<() => void> = [];
+const cleanupEnv: Array<() => void> = [];
 
 afterEach(async () => {
   while (cleanupEnv.length > 0) {
@@ -86,6 +86,27 @@ async function requestUpgradeRejection(port: number): Promise<{ status: number; 
   });
 }
 
+async function expectIdlePreauthSocketClose() {
+  const harness = await createGatewaySuiteHarness({
+    serverOptions: { auth: { mode: "none" } },
+  });
+  try {
+    const ws = await harness.openWs();
+    await readConnectChallengeNonce(ws);
+    const close = await new Promise<{ code: number; elapsedMs: number }>((resolve) => {
+      const startedAt = Date.now();
+      ws.once("close", (code) => {
+        resolve({ code, elapsedMs: Date.now() - startedAt });
+      });
+    });
+    expect(close.code).toBe(1000);
+    expect(close.elapsedMs).toBeGreaterThan(0);
+    expect(close.elapsedMs).toBeLessThan(PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS);
+  } finally {
+    await harness.close();
+  }
+}
+
 describe("gateway pre-auth hardening", () => {
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
     const clients = new Set<GatewayWsClient>();
@@ -108,7 +129,9 @@ describe("gateway pre-auth hardening", () => {
       resolvedAuth,
     });
 
-    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
     const address = httpServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
 
@@ -123,33 +146,16 @@ describe("gateway pre-auth hardening", () => {
       });
     } finally {
       wss.close();
-      await new Promise<void>((resolve, reject) =>
-        httpServer.close((err) => (err ? reject(err) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
     }
   });
 
   it("closes idle unauthenticated sockets after the handshake timeout", async () => {
     setEnvForTest("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", "200");
 
-    const harness = await createGatewaySuiteHarness({
-      serverOptions: { auth: { mode: "none" } },
-    });
-    try {
-      const ws = await harness.openWs();
-      await readConnectChallengeNonce(ws);
-      const close = await new Promise<{ code: number; elapsedMs: number }>((resolve) => {
-        const startedAt = Date.now();
-        ws.once("close", (code) => {
-          resolve({ code, elapsedMs: Date.now() - startedAt });
-        });
-      });
-      expect(close.code).toBe(1000);
-      expect(close.elapsedMs).toBeGreaterThan(0);
-      expect(close.elapsedMs).toBeLessThan(PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS);
-    } finally {
-      await harness.close();
-    }
+    await expectIdlePreauthSocketClose();
   });
 
   it("uses gateway.handshakeTimeoutMs for idle unauthenticated sockets", async () => {
@@ -171,24 +177,7 @@ describe("gateway pre-auth hardening", () => {
       "utf-8",
     );
     try {
-      const harness = await createGatewaySuiteHarness({
-        serverOptions: { auth: { mode: "none" } },
-      });
-      try {
-        const ws = await harness.openWs();
-        await readConnectChallengeNonce(ws);
-        const close = await new Promise<{ code: number; elapsedMs: number }>((resolve) => {
-          const startedAt = Date.now();
-          ws.once("close", (code) => {
-            resolve({ code, elapsedMs: Date.now() - startedAt });
-          });
-        });
-        expect(close.code).toBe(1000);
-        expect(close.elapsedMs).toBeGreaterThan(0);
-        expect(close.elapsedMs).toBeLessThan(PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS);
-      } finally {
-        await harness.close();
-      }
+      await expectIdlePreauthSocketClose();
     } finally {
       await writeFile(configPath, "{}\n", "utf-8");
     }
@@ -249,32 +238,8 @@ describe("gateway pre-auth hardening", () => {
       const firstWs = await harness.openWs();
       await readConnectChallengeNonce(firstWs);
 
-      const rejectedStatus = await new Promise<number>((resolve, reject) => {
-        const req = http.request({
-          host: "127.0.0.1",
-          port: harness.port,
-          path: "/",
-          headers: {
-            Connection: "Upgrade",
-            Upgrade: "websocket",
-            "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
-            "Sec-WebSocket-Version": "13",
-          },
-        });
-        req.once("upgrade", (_res, socket) => {
-          socket.destroy();
-          reject(new Error("expected websocket upgrade to be rejected"));
-        });
-        req.once("response", (res) => {
-          res.resume();
-          res.once("end", () => {
-            resolve(res.statusCode ?? 0);
-          });
-        });
-        req.once("error", reject);
-        req.end();
-      });
-      expect(rejectedStatus).toBe(503);
+      const rejected = await requestUpgradeRejection(harness.port);
+      expect(rejected.status).toBe(503);
 
       firstWs.close();
     } finally {

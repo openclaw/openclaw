@@ -23,11 +23,10 @@ export {
   type LazyPluginServiceHandle,
 } from "openclaw/plugin-sdk/plugin-runtime";
 export { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? Math.max(1, Math.floor(timeoutMs))
-    : undefined;
+  return clampTimerTimeoutMs(timeoutMs);
 }
 
 function createTimeoutAbortSignal(timeoutMs: number, label: string | undefined) {
@@ -38,16 +37,22 @@ function createTimeoutAbortSignal(timeoutMs: number, label: string | undefined) 
   return { controller, error, timer };
 }
 
-function waitForAbort(signal: AbortSignal, fallback: Error): {
+function waitForAbort(
+  signal: AbortSignal,
+  fallback: Error,
+): {
   promise: Promise<never>;
   cleanup: () => void;
 } {
   if (signal.aborted) {
-    return { promise: Promise.reject(signal.reason ?? fallback), cleanup: () => undefined };
+    return {
+      promise: Promise.reject(toLintErrorObject(signal.reason ?? fallback, "Non-Error rejection")),
+      cleanup: () => undefined,
+    };
   }
   let listener: (() => void) | undefined;
   const promise = new Promise<never>((_, reject) => {
-    listener = () => reject(signal.reason ?? fallback);
+    listener = () => reject(toLintErrorObject(signal.reason ?? fallback, "Non-Error rejection"));
     signal.addEventListener("abort", listener, { once: true });
   });
   return {
@@ -79,4 +84,18 @@ export async function withTimeout<T>(
     clearTimeout(timeout.timer);
     abort.cleanup();
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,8 +1,15 @@
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
-import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
-import { decorativeEmoji, decorativePrefix } from "../terminal/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
+import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import {
+  resolveSkillStatusEntry,
+  type SkillStatusEntry,
+  type SkillStatusReport,
+} from "../skills/discovery/status.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -103,59 +110,6 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
-function normalizeSkillLookupToken(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_/]+/g, "-")
-    .replace(/[^a-z0-9-]+/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function resolveSkillByName(
-  report: SkillStatusReport,
-  requestedName: string,
-): SkillStatusEntry | null {
-  const raw = requestedName.trim();
-  if (!raw) {
-    return null;
-  }
-
-  const direct = report.skills.find((s) => s.name === raw || s.skillKey === raw);
-  if (direct) {
-    return direct;
-  }
-
-  const lower = raw.toLowerCase();
-  const caseInsensitiveMatches = report.skills.filter(
-    (s) => s.name.toLowerCase() === lower || s.skillKey.toLowerCase() === lower,
-  );
-  if (caseInsensitiveMatches.length === 1) {
-    return caseInsensitiveMatches[0] ?? null;
-  }
-  if (caseInsensitiveMatches.length > 1) {
-    return null;
-  }
-
-  const normalized = normalizeSkillLookupToken(raw);
-  if (!normalized) {
-    return null;
-  }
-
-  const normalizedMatches = report.skills.filter(
-    (s) =>
-      normalizeSkillLookupToken(s.name) === normalized ||
-      normalizeSkillLookupToken(s.skillKey) === normalized,
-  );
-
-  if (normalizedMatches.length !== 1) {
-    return null;
-  }
-
-  return normalizedMatches[0] ?? null;
-}
-
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
     skill.eligible && !skill.blockedByAgentFilter;
@@ -238,7 +192,7 @@ export function formatSkillInfo(
 ): string {
   const requestedName = skillName.trim();
   const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
-  const skill = resolveSkillByName(report, requestedName);
+  const skill = resolveSkillStatusEntry(report.skills, requestedName);
 
   if (!skill) {
     if (opts.json) {

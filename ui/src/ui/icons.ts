@@ -127,6 +127,7 @@ export const icons = {
     </svg>
   `,
   check: html` <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg> `,
+  play: html` <svg viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg> `,
   arrowDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 5v14" />
@@ -493,9 +494,9 @@ export function renderEmojiIcon(
   return html`<span class=${className} aria-hidden="true">${iconContent}</span>`;
 }
 
-export function setEmojiIcon(target: HTMLElement | null, icon: string): void {
+export function setEmojiIcon(target: HTMLElement | null, iconLocal: string): void {
   if (!target) {
     return;
   }
-  target.textContent = icon;
+  target.textContent = iconLocal;
 }

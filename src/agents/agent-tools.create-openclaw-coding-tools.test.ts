@@ -371,6 +371,81 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("preserves runtime-allowed message through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      runtimeToolAllowlist: ["message"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves forced message through local model lean filtering without runtime allowlist", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      forceMessageTool: true,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves message-tool-only replies through local model lean filtering without runtime allowlist", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: { profile: "minimal" },
+      },
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
   it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
     for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
       const tools = createOpenClawCodingTools({
@@ -698,7 +773,7 @@ describe("createOpenClawCodingTools", () => {
 
     const codexTools = createOpenClawCodingTools({
       config: testConfig,
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       modelId: "gpt-5.4",
     });
     expect(toolNameList(codexTools)).toContain("apply_patch");
@@ -1048,6 +1123,14 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(toolNameList(tools)).toContain("heartbeat_respond");
+  });
+
+  it("keeps skill_workshop available under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(toolNameList(tools)).toContain("skill_workshop");
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

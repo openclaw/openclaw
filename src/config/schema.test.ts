@@ -143,6 +143,14 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("timeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectTimeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("auth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("sslVerify");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("clientCert");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
   });
 
@@ -186,6 +194,44 @@ describe("config schema", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("validates MCP OAuth client metadata URLs against the SDK contract", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                clientMetadataUrl: "https://client.example.com/openclaw-mcp.json",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+    for (const clientMetadataUrl of [
+      "http://client.example.com/openclaw-mcp.json",
+      "https://client.example.com/",
+    ]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              docs: {
+                url: "https://mcp.example.com/mcp",
+                transport: "streamable-http",
+                auth: "oauth",
+                oauth: { clientMetadataUrl },
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
   });
 
   it("merges plugin ui hints", () => {
@@ -491,6 +537,69 @@ describe("config schema", () => {
       },
     });
     expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
+  });
+
+  it("accepts exec reviewer model config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      exec: {
+        reviewer: {
+          model: {
+            primary: "openrouter/anthropic/claude-sonnet-4-6",
+          },
+          timeoutMs: 15_000,
+        },
+      },
+    });
+    expect(tools?.exec?.reviewer?.model).toEqual({
+      primary: "openrouter/anthropic/claude-sonnet-4-6",
+    });
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                reviewer: {
+                  model: "openai/gpt-5.5",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("rejects mixed normalized and legacy exec policy config", () => {
+    expect(
+      ToolsSchema.safeParse({
+        exec: {
+          mode: "auto",
+          ask: "always",
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      OpenClawSchema.safeParse({
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: {
+                exec: {
+                  mode: "full",
+                  security: "deny",
+                },
+              },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts experimental tool flags in the runtime zod schema", () => {

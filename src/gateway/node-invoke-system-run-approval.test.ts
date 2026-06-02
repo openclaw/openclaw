@@ -8,6 +8,16 @@ import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-a
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
   const now = Date.now();
+  const echoSafeArgv = ["echo", "SAFE"];
+  const echoSafeCommand = "echo SAFE";
+  const defaultChatContext = {
+    agentId: "main",
+    sessionKey: "agent:main:telegram:direct:12345",
+    turnSourceChannel: "telegram",
+    turnSourceTo: "telegram:12345",
+    turnSourceAccountId: "work",
+    turnSourceThreadId: "42",
+  };
   const client = {
     connId: "conn-1",
     connect: {
@@ -24,6 +34,48 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       device: null,
     },
   };
+  type SanitizerOptions = Parameters<typeof sanitizeSystemRunParamsForForwarding>[0];
+  type ApprovedRunParamOverrides = {
+    command: string[];
+    rawCommand?: string;
+    env?: Record<string, string>;
+    cwd?: string;
+    agentId?: string;
+    sessionKey?: string;
+    turnSourceChannel?: string;
+    turnSourceTo?: string | null;
+    turnSourceAccountId?: string | null;
+    turnSourceThreadId?: string | null;
+    runId?: string;
+  };
+
+  function approvedRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {
+    return {
+      runId: "approval-1",
+      approved: true,
+      approvalDecision: "allow-once",
+      ...overrides,
+    };
+  }
+
+  function sanitizeApprovedRun(opts: {
+    rawParams: ApprovedRunParamOverrides;
+    record?: ExecApprovalRecord;
+    execApprovalManager?: SanitizerOptions["execApprovalManager"];
+    client?: SanitizerOptions["client"];
+    nodeId?: string;
+    nowMs?: number;
+  }) {
+    return sanitizeSystemRunParamsForForwarding({
+      rawParams: approvedRunParams(opts.rawParams),
+      nodeId: opts.nodeId ?? "node-1",
+      client: opts.client ?? client,
+      execApprovalManager:
+        opts.execApprovalManager ??
+        manager(opts.record ?? makeRecord(echoSafeCommand, echoSafeArgv)),
+      nowMs: opts.nowMs ?? now,
+    });
+  }
 
   function makeRecord(
     command: string,
@@ -103,50 +155,77 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   }
 
   function makeChatRecord(overrides: Partial<ExecApprovalRecord["request"]> = {}) {
-    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    const agentId =
+      typeof overrides.agentId === "string" ? overrides.agentId : defaultChatContext.agentId;
+    const sessionKey =
+      typeof overrides.sessionKey === "string"
+        ? overrides.sessionKey
+        : defaultChatContext.sessionKey;
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.requestedByConnId = "chat-agent-conn";
     record.requestedByDeviceId = null;
     record.requestedByClientId = "gateway-client";
     record.requestedByDeviceTokenAuth = false;
     record.request = {
       ...record.request,
-      agentId: "main",
-      sessionKey: "agent:main:telegram:direct:12345",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "telegram:12345",
-      turnSourceAccountId: "work",
-      turnSourceThreadId: "42",
+      ...defaultChatContext,
+      agentId,
+      sessionKey,
       systemRunPlan: {
-        argv: ["echo", "SAFE"],
+        argv: echoSafeArgv,
         cwd: null,
-        commandText: "echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
+        commandText: echoSafeCommand,
+        agentId,
+        sessionKey,
       },
       systemRunBinding: buildSystemRunApprovalBinding({
-        argv: ["echo", "SAFE"],
+        argv: echoSafeArgv,
         cwd: null,
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
+        agentId,
+        sessionKey,
       }).binding,
       ...overrides,
     };
     return record;
   }
 
+  function makeNoDeviceUiRecord(
+    overrides: Partial<
+      Pick<
+        ExecApprovalRecord,
+        | "requestedByConnId"
+        | "requestedByDeviceId"
+        | "requestedByClientId"
+        | "requestedByDeviceTokenAuth"
+      >
+    > = {},
+  ) {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.requestedByConnId = overrides.requestedByConnId ?? "control-ui-conn";
+    record.requestedByDeviceId = overrides.requestedByDeviceId ?? null;
+    record.requestedByClientId = overrides.requestedByClientId ?? "openclaw-control-ui";
+    record.requestedByDeviceTokenAuth = overrides.requestedByDeviceTokenAuth ?? false;
+    return record;
+  }
+
+  function approvedChatReplayParams(
+    overrides: Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand"> = {},
+  ) {
+    return approvedRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+      ...defaultChatContext,
+      ...overrides,
+    });
+  }
+
   test("rejects cmd.exe /c trailing-arg mismatch against rawCommand", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
         rawCommand: "echo",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(makeRecord("echo")),
-      nowMs: now,
+      record: makeRecord("echo"),
     });
     expectRejectedForwardingResult(
       result,
@@ -156,43 +235,29 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("accepts matching cmd.exe /c command text for approval binding", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
         rawCommand: "echo SAFE&&whoami",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(
-        makeRecord("echo SAFE&&whoami", undefined, [
-          "cmd.exe",
-          "/d",
-          "/s",
-          "/c",
-          "echo",
-          "SAFE&&whoami",
-        ]),
-      ),
-      nowMs: now,
+      record: makeRecord("echo SAFE&&whoami", undefined, [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "echo",
+        "SAFE&&whoami",
+      ]),
     });
     expectAllowOnceForwardingResult(result);
   });
 
   test("rejects env-assignment shell wrapper when approval command omits env prelude", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(makeRecord("echo SAFE")),
-      nowMs: now,
+      record: makeRecord(echoSafeCommand),
     });
     expectRejectedForwardingResult(
       result,
@@ -202,41 +267,27 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("accepts env-assignment shell wrapper only when approval command matches full argv text", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(
-        makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"', undefined, [
-          "/usr/bin/env",
-          "BASH_ENV=/tmp/payload.sh",
-          "bash",
-          "-lc",
-          "echo SAFE",
-        ]),
-      ),
-      nowMs: now,
+      record: makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"', undefined, [
+        "/usr/bin/env",
+        "BASH_ENV=/tmp/payload.sh",
+        "bash",
+        "-lc",
+        "echo SAFE",
+      ]),
     });
     expectAllowOnceForwardingResult(result);
   });
 
   test("rejects trailing-space argv mismatch against legacy command-only approval", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["runner "],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(makeRecord("runner")),
-      nowMs: now,
+      record: makeRecord("runner"),
     });
     expectRejectedForwardingResult(
       result,
@@ -246,17 +297,11 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("enforces commandArgv identity when approval includes argv binding", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
-        command: ["echo", "SAFE"],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
+        command: echoSafeArgv,
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(makeRecord("echo SAFE", ["echo SAFE"])),
-      nowMs: now,
+      record: makeRecord(echoSafeCommand, [echoSafeCommand]),
     });
     expectRejectedForwardingResult(
       result,
@@ -266,23 +311,17 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("accepts matching commandArgv binding for trailing-space argv", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["runner "],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(makeRecord('"runner "', ["runner "])),
-      nowMs: now,
+      record: makeRecord('"runner "', ["runner "]),
     });
     expectAllowOnceForwardingResult(result);
   });
 
   test("uses systemRunPlan for forwarded command context and ignores caller tampering", () => {
-    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.request.systemRunPlan = {
       argv: ["/usr/bin/echo", "SAFE"],
       cwd: "/real/cwd",
@@ -296,21 +335,15 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       agentId: "main",
       sessionKey: "agent:main:main",
     }).binding;
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["echo", "PWNED"],
         rawCommand: "echo PWNED",
         cwd: "/tmp/attacker-link/sub",
         agentId: "attacker",
         sessionKey: "agent:attacker:main",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(record),
-      nowMs: now,
+      record,
     });
     expectAllowOnceForwardingResult(result);
     if (!result.ok) {
@@ -339,19 +372,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("rejects env overrides when approval record lacks env binding", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["git", "diff"],
         rawCommand: "git diff",
         env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(makeRecord("git diff", ["git", "diff"])),
-      nowMs: now,
+      record: makeRecord("git diff", ["git", "diff"]),
     });
     expectRejectedForwardingResult(result, "APPROVAL_ENV_BINDING_MISSING");
   });
@@ -365,19 +392,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       sessionKey: null,
       envHash: buildSystemRunApprovalEnvBinding({ SAFE: "1" }).envHash,
     };
-    const result = sanitizeSystemRunParamsForForwarding({
+    const result = sanitizeApprovedRun({
       rawParams: {
         command: ["git", "diff"],
         rawCommand: "git diff",
         env: { SAFE: "2" },
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
       },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(record),
-      nowMs: now,
+      record,
     });
     expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
   });
@@ -389,10 +410,10 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       {
         host: "node",
         nodeId: "node-1",
-        command: "echo SAFE",
-        commandArgv: ["echo", "SAFE"],
+        command: echoSafeCommand,
+        commandArgv: echoSafeArgv,
         systemRunBinding: buildSystemRunApprovalBinding({
-          argv: ["echo", "SAFE"],
+          argv: echoSafeArgv,
           cwd: null,
           agentId: null,
           sessionKey: null,
@@ -413,13 +434,11 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     approvalManager.resolve(runId, "allow-once", "operator");
     await expect(decisionPromise).resolves.toBe("allow-once");
 
-    const params = {
-      command: ["echo", "SAFE"],
-      rawCommand: "echo SAFE",
+    const params = approvedRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
       runId,
-      approved: true,
-      approvalDecision: "allow-once",
-    };
+    });
 
     const first = sanitizeSystemRunParamsForForwarding({
       nodeId: "node-1",
@@ -441,48 +460,27 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("rejects approval ids that do not bind a nodeId", () => {
-    const record = makeRecord("echo SAFE");
+    const record = makeRecord(echoSafeCommand);
     record.request.nodeId = null;
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(record),
-      nowMs: now,
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv },
+      record,
     });
     expectRejectedForwardingResult(result, "APPROVAL_NODE_BINDING_MISSING", "missing node binding");
   });
 
   test("rejects approval ids replayed against a different nodeId", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv },
       nodeId: "node-2",
-      client,
-      execApprovalManager: manager(makeRecord("echo SAFE")),
-      nowMs: now,
+      record: makeRecord(echoSafeCommand),
     });
     expectRejectedForwardingResult(result, "APPROVAL_NODE_MISMATCH", "not valid for this node");
   });
 
   test("rejects approval ids replayed from a different device token binding", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv },
       client: {
         ...client,
         connect: {
@@ -490,53 +488,25 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           device: { id: "dev-2" },
         },
       },
-      execApprovalManager: manager(makeRecord("echo SAFE")),
-      nowMs: now,
+      record: makeRecord(echoSafeCommand),
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_DEVICE_MISMATCH", "not valid for this device");
   });
 
   test("accepts trusted backend replay for no-device approval after the request connection changes", () => {
-    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
-    record.requestedByConnId = "control-ui-conn";
-    record.requestedByDeviceId = null;
-    record.requestedByClientId = "openclaw-control-ui";
-    record.requestedByDeviceTokenAuth = false;
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: trustedBackendClient,
-      execApprovalManager: manager(record),
-      nowMs: now,
+      record: makeNoDeviceUiRecord(),
     });
 
     expectAllowOnceForwardingResult(result);
   });
 
   test("rejects no-device approval replay from a backend client without approval scope", () => {
-    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
-    record.requestedByConnId = "control-ui-conn";
-    record.requestedByDeviceId = null;
-    record.requestedByClientId = "openclaw-control-ui";
-    record.requestedByDeviceTokenAuth = false;
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: {
         ...trustedBackendClient,
         connect: {
@@ -544,29 +514,15 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           scopes: ["operator.write"],
         },
       },
-      execApprovalManager: manager(record),
-      nowMs: now,
+      record: makeNoDeviceUiRecord(),
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
   test("rejects no-device approval replay from a non-backend client on a different connection", () => {
-    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
-    record.requestedByConnId = "control-ui-conn";
-    record.requestedByDeviceId = null;
-    record.requestedByClientId = "openclaw-control-ui";
-    record.requestedByDeviceTokenAuth = false;
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: {
         connId: "other-control-ui-conn",
         connect: {
@@ -575,8 +531,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           device: null,
         },
       },
-      execApprovalManager: manager(record),
-      nowMs: now,
+      record: makeNoDeviceUiRecord(),
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
@@ -586,19 +541,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const record = makeChatRecord();
 
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      rawParams: approvedChatReplayParams(),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(record),
@@ -621,19 +564,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     record.requestedByClientId = "chat-agent";
 
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      rawParams: approvedChatReplayParams(),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(record),
@@ -651,35 +582,16 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       turnSourceTo: "wecom:corp-42:conversation-7",
       turnSourceAccountId: "corp-42",
       turnSourceThreadId: "conversation-7",
-      systemRunPlan: {
-        argv: ["echo", "SAFE"],
-        cwd: null,
-        commandText: "echo SAFE",
-        agentId: "main",
-        sessionKey,
-      },
-      systemRunBinding: buildSystemRunApprovalBinding({
-        argv: ["echo", "SAFE"],
-        cwd: null,
-        agentId: "main",
-        sessionKey,
-      }).binding,
     });
 
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
+      rawParams: approvedChatReplayParams({
         sessionKey,
         turnSourceChannel: "wecom",
         turnSourceTo: "wecom:corp-42:conversation-7",
         turnSourceAccountId: "corp-42",
         turnSourceThreadId: "conversation-7",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      }),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(record),
@@ -697,35 +609,16 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       turnSourceTo: null,
       turnSourceAccountId: null,
       turnSourceThreadId: null,
-      systemRunPlan: {
-        argv: ["echo", "SAFE"],
-        cwd: null,
-        commandText: "echo SAFE",
-        agentId: "main",
-        sessionKey,
-      },
-      systemRunBinding: buildSystemRunApprovalBinding({
-        argv: ["echo", "SAFE"],
-        cwd: null,
-        agentId: "main",
-        sessionKey,
-      }).binding,
     });
 
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
+      rawParams: approvedChatReplayParams({
         sessionKey,
         turnSourceChannel: "webchat",
         turnSourceTo: null,
         turnSourceAccountId: null,
         turnSourceThreadId: null,
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      }),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(record),
@@ -737,19 +630,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects trusted backend chat replay when session binding changes", () => {
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
+      rawParams: approvedChatReplayParams({
         sessionKey: "agent:main:telegram:direct:99999",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      }),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(makeChatRecord()),
@@ -761,19 +644,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects trusted backend chat replay when session binding casing changes", () => {
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
+      rawParams: approvedChatReplayParams({
         sessionKey: "agent:MAIN:telegram:direct:12345",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      }),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(makeChatRecord()),
@@ -785,19 +658,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects trusted backend chat replay when agent binding casing changes", () => {
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
+      rawParams: approvedChatReplayParams({
         agentId: "Main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      }),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(makeChatRecord()),
@@ -809,19 +672,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects trusted backend chat replay when channel target changes", () => {
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        turnSourceChannel: "telegram",
+      rawParams: approvedChatReplayParams({
         turnSourceTo: "telegram:67890",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      }),
       nodeId: "node-1",
       client: trustedBackendClient,
       execApprovalManager: manager(makeChatRecord()),
@@ -833,19 +686,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects trusted backend chat replay without matching approval scope", () => {
     const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "telegram:12345",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "42",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
+      rawParams: approvedChatReplayParams(),
       nodeId: "node-1",
       client: {
         ...trustedBackendClient,
@@ -862,24 +703,10 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("rejects no-device approval replay when the original request used device-token auth", () => {
-    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
-    record.requestedByConnId = "control-ui-conn";
-    record.requestedByDeviceId = null;
-    record.requestedByClientId = "openclaw-control-ui";
-    record.requestedByDeviceTokenAuth = true;
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["echo", "SAFE"],
-        rawCommand: "echo SAFE",
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: trustedBackendClient,
-      execApprovalManager: manager(record),
-      nowMs: now,
+      record: makeNoDeviceUiRecord({ requestedByDeviceTokenAuth: true }),
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");

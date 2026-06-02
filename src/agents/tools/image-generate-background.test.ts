@@ -21,25 +21,6 @@ const {
   wakeImageGenerationTaskCompletion,
 } = await import("./image-generate-background.js");
 
-function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
-    | { internalEvents?: unknown }
-    | undefined;
-  if (!Array.isArray(params?.internalEvents)) {
-    throw new Error("Expected delivered internal events");
-  }
-  return params.internalEvents as Array<Record<string, unknown>>;
-}
-
-function expectReplyInstructionContains(text: string) {
-  const event = getDeliveredInternalEvents().find(
-    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
-  );
-  if (!event) {
-    throw new Error(`Expected reply instruction containing ${text}`);
-  }
-}
-
 describe("image generate background helpers", () => {
   beforeEach(() => {
     resetMediaBackgroundMocks({
@@ -128,7 +109,8 @@ describe("image generate background helpers", () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
+      reason: "generated_media_missing",
+      error: "completion agent did not deliver generated media",
     });
     const completion = createMediaCompletionFixture({
       runId: "tool:image_generate:abc",

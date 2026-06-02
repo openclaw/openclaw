@@ -59,6 +59,7 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolInboundRoots,
   resolveMediaToolLocalRoots,
   resolveRemoteMediaSsrfPolicy,
@@ -90,6 +91,7 @@ type ImageToolLoadWebMediaOptions = {
   localRoots?: readonly string[] | "any";
   inboundRoots?: readonly string[];
   ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
+  readIdleTimeoutMs?: number;
 };
 
 type ImageWebMediaRuntime = {
@@ -384,7 +386,7 @@ function resolveBundledStaticCompressionModelPolicy(params: {
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
   });
-  return (model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
+  return model?.mediaInput?.image ?? {};
 }
 
 function providerUsesRuntimeModelAugment(params: {
@@ -974,6 +976,7 @@ export function createImageTool(options?: {
                 localRoots: mediaLocalRoots,
                 inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
+                ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
                 imageCompression,
               });
         if (media.kind !== "image") {

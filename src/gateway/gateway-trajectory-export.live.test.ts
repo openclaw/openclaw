@@ -131,7 +131,9 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
       await fs.stat(filePath);
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
     }
   }
   throw new Error(`timed out waiting for ${filePath}`);
@@ -165,7 +167,7 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
 }
 
 describeLive("gateway live trajectory export", () => {
-  let cleanup: Array<() => Promise<void>> = [];
+  const cleanup: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
     for (const step of cleanup.splice(0).toReversed()) {

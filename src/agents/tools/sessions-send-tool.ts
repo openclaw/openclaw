@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
+import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
+import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +17,7 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
@@ -60,6 +63,29 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
+
+function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> {
+  const params =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? { ...(args as Record<string, unknown>) }
+      : {};
+
+  if (typeof params.message !== "string" || !params.message.trim()) {
+    for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
+      const value = readStringParam(params, alias);
+      if (value) {
+        params.message = stripFormattedReasoningMessage(value);
+        break;
+      }
+    }
+  }
+
+  for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
+    delete params[alias];
+  }
+  return params;
+}
 
 function resolveRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
   const match = /^(agent:[^:]+:.+):run:[^:]+$/.exec(sessionKey.trim());
@@ -142,10 +168,16 @@ type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "s
 
 function isRequesterParentOfNativeSubagentSession(params: {
   entry: SessionsSendRouteEntry | null | undefined;
+  acpMeta?: unknown;
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (!params.entry || params.entry.acp || !isSubagentSessionKey(params.targetSessionKey)) {
+  if (
+    !params.entry ||
+    params.acpMeta ||
+    params.entry.acp ||
+    !isSubagentSessionKey(params.targetSessionKey)
+  ) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
@@ -194,11 +226,17 @@ async function startAgentRun(params: {
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && fallbackSessionKey && messageText) {
+      const sourceReplyDeliveryMode =
+        params.sendParams.sourceReplyDeliveryMode === "automatic" ||
+        params.sendParams.sourceReplyDeliveryMode === "message_tool_only"
+          ? params.sendParams.sourceReplyDeliveryMode
+          : undefined;
       const queueOptions: EmbeddedAgentQueueMessageOptions = {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
+        ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       };
       let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
         activeRunSessionId,
@@ -279,8 +317,9 @@ export function createSessionsSendTool(opts?: {
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSendTool(),
     parameters: SessionsSendToolSchema,
+    prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
@@ -357,7 +396,7 @@ export function createSessionsSendTool(opts?: {
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
-        let resolvedKey = "";
+        let resolvedKey;
         try {
           const resolved = await gatewayCall<{ key: string }>({
             method: "sessions.resolve",
@@ -436,7 +475,10 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutMs = timeoutSeconds * 1000;
+      const timeoutMs =
+        finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
+          floorSeconds: true,
+        }) ?? 0;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
@@ -480,18 +522,30 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterChannel = opts?.agentChannel;
+      const sameSessionA2A = requesterSessionKey === resolvedKey;
+
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
       // before we reach the post-run read, which would otherwise make the new
       // reply look like the baseline and hide it from the caller.
+      // Fire-and-forget same-session sends still need this baseline because the
+      // A2A follow-up may deliver directly to the source channel.
       const baselineReply =
-        timeoutSeconds === 0
-          ? undefined
-          : await readLatestAssistantReplySnapshot({
+        timeoutSeconds !== 0
+          ? await readLatestAssistantReplySnapshot({
               sessionKey: resolvedKey,
               limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
               callGateway: gatewayCall,
-            });
+            })
+          : sameSessionA2A
+            ? await readLatestAssistantReplySnapshot({
+                sessionKey: resolvedKey,
+                limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+                callGateway: gatewayCall,
+              }).catch(() => undefined)
+            : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
@@ -509,13 +563,12 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
+        sourceReplyDeliveryMode: "message_tool_only" as const,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: resolveNestedAgentLaneForSession(resolvedKey),
         extraSystemPrompt: agentMessageContext,
         inputProvenance,
       };
-      const requesterSessionKey = opts?.agentSessionKey;
-      const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       // Skip the A2A ping-pong + announce flow when the current caller is the
@@ -535,14 +588,20 @@ export function createSessionsSendTool(opts?: {
       // `tools.sessions.visibility=all`) must still go through the normal A2A
       // path so it actually receives a follow-up delivery.
       const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
+      const targetAcpMeta = readAcpSessionMeta({ sessionKey: resolvedKey });
+      const targetSessionEntryWithAcp =
+        targetAcpMeta && targetSessionEntry
+          ? { ...targetSessionEntry, acp: targetAcpMeta }
+          : targetSessionEntry;
       const skipAcpA2AFlow = isRequesterParentOfBackgroundAcpSession(
-        targetSessionEntry,
+        targetSessionEntryWithAcp,
         effectiveRequesterKey,
       );
       const skipNativeParentA2AFlow =
         timeoutSeconds !== 0 &&
         isRequesterParentOfNativeSubagentSession({
           entry: targetSessionEntry,
+          acpMeta: targetAcpMeta,
           requesterSessionKey: effectiveRequesterKey,
           targetSessionKey: resolvedKey,
         });

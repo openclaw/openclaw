@@ -84,7 +84,7 @@ if (!isMain) {
 }
 
 if (isMain) {
-  const { restoreTerminalState } = await import("./terminal/restore.js");
+  const { restoreTerminalState } = await import("../packages/terminal-core/src/restore.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -115,7 +115,7 @@ if (isMain) {
     process.exit(1);
   });
 
-  void runLegacyCliEntry(process.argv).catch((err) => {
+  void runLegacyCliEntry(process.argv).catch((err: unknown) => {
     for (const line of formatCliFailureLines({
       title: "The CLI command failed.",
       error: err,

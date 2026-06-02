@@ -1,6 +1,6 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
-import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
@@ -23,6 +23,27 @@ function normalizePositiveInt(value: unknown): number | null {
   return int > 0 ? int : null;
 }
 
+function modelIdMatchesProviderScope(params: {
+  configuredId?: string;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const configuredId = params.configuredId?.trim();
+  if (!configuredId) {
+    return false;
+  }
+  if (configuredId === params.modelId) {
+    return true;
+  }
+  const providerPrefix = params.provider ? `${params.provider}/` : "";
+  if (!providerPrefix) {
+    return false;
+  }
+  const stripProvider = (id: string) =>
+    id.startsWith(providerPrefix) ? id.slice(providerPrefix.length) : id;
+  return stripProvider(configuredId) === stripProvider(params.modelId);
+}
+
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -40,7 +61,13 @@ export function resolveContextWindowInfo(params: {
       | undefined;
     const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
-    const match = models.find((m) => m?.id === params.modelId);
+    const match = models.find((model) =>
+      modelIdMatchesProviderScope({
+        configuredId: model?.id,
+        provider: params.provider,
+        modelId: params.modelId,
+      }),
+    );
     return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
   })();
   const fromModel =

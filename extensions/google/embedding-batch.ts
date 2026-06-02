@@ -267,7 +267,9 @@ async function waitForGeminiBatch(params: {
       throw new Error(`gemini batch ${params.batchName} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`gemini batch ${params.batchName} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, params.pollIntervalMs);
+    });
     current = undefined;
   }
 }
@@ -284,7 +286,7 @@ export async function runGeminiEmbeddingBatches(
       maxRequests: GEMINI_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: gemini batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitGeminiBatch({
         gemini: params.gemini,
         requests: group,
@@ -326,8 +328,8 @@ export async function runGeminiEmbeddingBatches(
               gemini: params.gemini,
               batchName,
               wait: params.wait,
-              pollIntervalMs: params.pollIntervalMs,
-              timeoutMs: params.timeoutMs,
+              pollIntervalMs,
+              timeoutMs,
               debug: params.debug,
               initial: batchInfo,
             });

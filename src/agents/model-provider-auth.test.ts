@@ -21,6 +21,7 @@ const modelAuthMocks = vi.hoisted(() => ({
     syntheticAuthProviderRefs: [],
     syntheticAuthProviderRefsComplete: true,
   })),
+  hasAvailableAuthForProvider: vi.fn(() => true),
   hasRuntimeAvailableProviderAuth:
     vi.fn<
       (params: {
@@ -49,6 +50,7 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   createRuntimeProviderAuthLookup: modelAuthMocks.createRuntimeProviderAuthLookup,
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth: modelAuthMocks.hasRuntimeAvailableProviderAuth,
 }));
 
@@ -576,7 +578,9 @@ describe("prepared provider auth state", () => {
       await Promise.resolve();
       cancelled = true;
       await warmPromise;
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
 
       await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

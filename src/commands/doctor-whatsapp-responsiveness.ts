@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { note } from "../terminal/note.js";
 import type { StatusSummary } from "./status.types.js";
 
 export type LocalTuiProcess = {
@@ -101,7 +101,9 @@ function isProcessAlive(controller: ProcessController, pid: number): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export async function terminateLocalTuiProcesses(params: {

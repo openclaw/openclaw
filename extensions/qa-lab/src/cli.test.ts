@@ -539,7 +539,7 @@ describe("qa cli registration", () => {
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
-    const [{ registration }] = listQaRunnerCliContributions.mock.results[0]?.value;
+    const [{ registration }] = listQaRunnerCliContributions.mock.results[0].value;
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
@@ -560,6 +560,15 @@ describe("qa cli registration", () => {
     expect(commandNames).toContain("aimock");
 
     await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "44080"]);
+
+    expect(runQaProviderServerCommand).toHaveBeenCalledWith("aimock", {
+      host: "127.0.0.1",
+      port: 44080,
+    });
+  });
+
+  it("normalizes signed decimal QA numeric option values through the shared parser", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "+044080"]);
 
     expect(runQaProviderServerCommand).toHaveBeenCalledWith("aimock", {
       host: "127.0.0.1",
