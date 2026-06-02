@@ -190,7 +190,9 @@ export async function runDoctorRepairSequence(params: {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
   const authProfilesRepaired =
-    legacyOAuthSidecarRepair.changes.length > 0 || staleOAuthShadowRepair.changes.length > 0;
+    legacyOAuthSidecarRepair.changes.length > 0 ||
+    openAIAuthProviderRepair.changes.length > 0 ||
+    staleOAuthShadowRepair.changes.length > 0;
 
   const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
     cfg: state.candidate,

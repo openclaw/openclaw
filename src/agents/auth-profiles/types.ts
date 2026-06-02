@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
-import type { LegacyOAuthRef } from "../../commands/doctor/shared/legacy-oauth-sidecar.js";
+import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 export type OAuthProvider = string;
 
