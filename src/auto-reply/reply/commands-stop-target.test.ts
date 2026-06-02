@@ -257,6 +257,30 @@ describe("handleStopCommand target fallback", () => {
     });
   });
 
+  it("does not treat non-Telegram /cancel as a shared stop alias", async () => {
+    const params = buildStopParams();
+    params.ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "text",
+      CommandTargetSessionKey: "agent:target:discord:channel:123",
+    } as MsgContext;
+    params.command.commandBodyNormalized = "/cancel";
+    params.command.rawBodyNormalized = "/cancel";
+    params.command.channel = "discord";
+    params.command.channelId = "discord";
+    params.command.surface = "discord";
+
+    const result = await handleStopCommand(params, true);
+
+    expect(result).toBeNull();
+    expect(abortSessionRunTargetMock).not.toHaveBeenCalled();
+    expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+    expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+    expect(createInternalHookEventMock).not.toHaveBeenCalled();
+    expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();
+  });
+
   it("does not clear queues when the replied-to target has already finished", async () => {
     const params = buildStopParams();
     abortSessionRunTargetMock.mockReturnValue(false);

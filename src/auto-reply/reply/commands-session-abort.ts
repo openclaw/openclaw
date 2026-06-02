@@ -171,6 +171,9 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   }
   const isTelegramReplyScopedStop =
     params.ctx.Provider === "telegram" || params.ctx.Surface === "telegram";
+  if (commandBody === "/cancel" && !isTelegramReplyScopedStop) {
+    return null;
+  }
   const replyToId = normalizeOptionalString(params.ctx.ReplyToId);
   if (isTelegramReplyScopedStop && !replyToId) {
     return {
