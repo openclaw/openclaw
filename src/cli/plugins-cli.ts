@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
@@ -32,6 +32,10 @@ export type PluginRegistryOptions = {
   json?: boolean;
   refresh?: boolean;
 };
+
+function createLegacyForceUnsafeInstallOption(): Option {
+  return new Option("--dangerously-force-unsafe-install").hideHelp().default(false);
+}
 
 export type PluginAuthoringBuildOptions = {
   root?: string;
@@ -148,6 +152,7 @@ export function registerPluginsCli(program: Command) {
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--force", "Overwrite an existing installed plugin or hook pack", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .addOption(createLegacyForceUnsafeInstallOption())
     .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
@@ -173,6 +178,7 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .addOption(createLegacyForceUnsafeInstallOption())
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       await runPluginUpdateCommand({ id, opts });

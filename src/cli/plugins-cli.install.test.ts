@@ -1165,7 +1165,7 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().spec).toBe("demo");
   });
 
-  it("passes npm: prefix installs through npm options without ClawHub lookup", async () => {
+  it("accepts legacy force-unsafe flag for npm installs without forwarding it", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("demo");
 
@@ -1174,7 +1174,13 @@ describe("plugins cli install", () => {
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
 
-    await runPluginsCommand(["plugins", "install", "npm:demo", "--force"]);
+    await runPluginsCommand([
+      "plugins",
+      "install",
+      "npm:demo",
+      "--force",
+      "--dangerously-force-unsafe-install",
+    ]);
 
     expect(npmInstallCall().spec).toBe("demo");
     expect(npmInstallCall().mode).toBe("update");
