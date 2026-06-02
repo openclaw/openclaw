@@ -11,7 +11,10 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
-function finalAnswerAttempt(text: string): EmbeddedRunAttemptResult {
+function finalAnswerAttempt(
+  text: string,
+  overrides?: Partial<EmbeddedRunAttemptResult>,
+): EmbeddedRunAttemptResult {
   return makeAttemptResult({
     assistantTexts: [text],
     lastAssistant: {
@@ -26,6 +29,7 @@ function finalAnswerAttempt(text: string): EmbeddedRunAttemptResult {
         content: [{ type: "text", text }],
       } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
     ],
+    ...overrides,
   });
 }
 
@@ -52,7 +56,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     );
   });
 
-  it("runs the hook before accepting a normal embedded final answer", async () => {
+  it("passes the finalize revision budget to embedded attempts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(finalAnswerAttempt("First answer."));
 
     await runEmbeddedAgent({
@@ -62,41 +66,22 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       runId: "run-before-finalize-continue",
     });
 
-    expect(mockedGlobalHookRunner.runBeforeAgentFinalize).toHaveBeenCalledTimes(1);
-    expect(mockedGlobalHookRunner.runBeforeAgentFinalize).toHaveBeenCalledWith(
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run-before-finalize-continue",
-        sessionId: "test-session",
-        sessionKey: "test-key",
-        provider: "openai",
-        model: "gpt-5.5",
-        stopHookActive: false,
-        lastAssistantMessage: "First answer.",
-      }),
-      expect.objectContaining({
-        runId: "run-before-finalize-continue",
-        sessionId: "test-session",
-        sessionKey: "test-key",
-        modelProviderId: "openai",
-        modelId: "gpt-5.5",
+        beforeAgentFinalizeRevisionAttempts: 0,
+        maxBeforeAgentFinalizeRevisions: 3,
       }),
     );
   });
 
   it("turns a revise decision into one more hidden continuation", async () => {
-    mockedGlobalHookRunner.runBeforeAgentFinalize
-      .mockResolvedValueOnce({
-        action: "revise",
-        reason: "Tighten the final wording.",
-        retry: {
-          instruction: "Mention the validated behavior.",
-          idempotencyKey: "wording",
-          maxAttempts: 1,
-        },
-      })
-      .mockResolvedValueOnce({ action: "continue" });
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(finalAnswerAttempt("First answer."))
+      .mockResolvedValueOnce(
+        finalAnswerAttempt("First answer.", {
+          beforeAgentFinalizeRevisionReason:
+            "Tighten the final wording.\n\nMention the validated behavior.",
+        }),
+      )
       .mockResolvedValueOnce(finalAnswerAttempt("Revised answer."));
 
     await runEmbeddedAgent({
@@ -113,11 +98,7 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     expect(attemptCall(1).suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("does not retry a revise decision after potential side effects", async () => {
-    mockedGlobalHookRunner.runBeforeAgentFinalize.mockResolvedValueOnce({
-      action: "revise",
-      reason: "Please revise.",
-    });
+  it("keeps finalizing when the attempt accepted a side-effecting revise decision", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Sent."],
@@ -138,7 +119,31 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       runId: "run-before-finalize-side-effect",
     });
 
-    expect(mockedGlobalHookRunner.runBeforeAgentFinalize).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry finalize revisions after a timed-out attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      finalAnswerAttempt("Late answer.", {
+        timedOut: true,
+        beforeAgentFinalizeRevisionReason: "Revise the late answer.",
+        promptTimeoutOutcome: {
+          message: "Request timed out.",
+          replayInvalid: true,
+          livenessState: "blocked",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-before-finalize-timeout",
+    });
+
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 });

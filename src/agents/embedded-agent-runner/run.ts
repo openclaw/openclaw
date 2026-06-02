@@ -72,7 +72,6 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import { runAgentHarnessBeforeAgentFinalizeHook } from "../harness/lifecycle-hook-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
@@ -1683,6 +1682,8 @@ export async function runEmbeddedAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
+            beforeAgentFinalizeRevisionAttempts,
+            maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
@@ -3490,81 +3491,30 @@ export async function runEmbeddedAgent(
             };
           }
 
-          const beforeAgentFinalizeLastAssistantMessage =
-            normalizeOptionalString(finalAssistantVisibleText) ??
-            normalizeOptionalString(finalAssistantRawText) ??
-            normalizeOptionalString((attempt.assistantTexts ?? []).join("\n\n"));
-          if (
-            beforeAgentFinalizeLastAssistantMessage &&
+          const beforeAgentFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
+          const shouldHonorBeforeAgentFinalizeRevision =
             !aborted &&
             !promptError &&
             !timedOut &&
             !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
-            !emptyAssistantReplyIsSilent &&
-            hookRunner?.hasHooks("before_agent_finalize")
-          ) {
-            const finalizeOutcome = await runAgentHarnessBeforeAgentFinalizeHook({
-              event: {
-                runId: params.runId,
-                sessionId: sessionIdUsed,
-                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                provider: reportedModelRef.provider,
-                model: reportedModelRef.model,
-                ...((params.cwd ?? resolvedWorkspace)
-                  ? { cwd: params.cwd ?? resolvedWorkspace }
-                  : {}),
-                ...(activeSessionFile ? { transcriptPath: activeSessionFile } : {}),
-                stopHookActive: false,
-                lastAssistantMessage: beforeAgentFinalizeLastAssistantMessage,
-                messages: attempt.messagesSnapshot,
-              },
-              ctx: {
-                runId: params.runId,
-                agentId: workspaceResolution.agentId,
-                sessionKey: params.sessionKey,
-                sessionId: sessionIdUsed,
-                workspaceDir: resolvedWorkspace,
-                modelProviderId: reportedModelRef.provider,
-                modelId: reportedModelRef.model,
-                trigger: params.trigger,
-                ...buildAgentHookContextChannelFields(params),
-              },
-              hookRunner,
-            });
-            if (finalizeOutcome.action === "revise") {
-              const replayMetadataForFinalize = resolveAttemptReplayMetadata(attempt);
-              if (replayMetadataForFinalize.hadPotentialSideEffects) {
-                log.warn(
-                  `before_agent_finalize requested revision after potential side effects; finalizing ` +
-                    `runId=${params.runId} sessionId=${params.sessionId}`,
-                );
-              } else if (
-                beforeAgentFinalizeRevisionAttempts >= MAX_BEFORE_AGENT_FINALIZE_REVISIONS
-              ) {
-                log.warn(
-                  `before_agent_finalize revision limit reached; finalizing ` +
-                    `runId=${params.runId} sessionId=${params.sessionId} ` +
-                    `attempts=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
-                );
-              } else {
-                beforeAgentFinalizeRevisionAttempts += 1;
-                nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
-                  finalizeOutcome.reason,
-                );
-                suppressNextUserMessagePersistence = true;
-                planningOnlyRetryInstruction = null;
-                reasoningOnlyRetryInstruction = null;
-                emptyResponseRetryInstruction = null;
-                compactionContinuationRetryInstruction = null;
-                log.warn(
-                  `before_agent_finalize requested one more pass: ` +
-                    `runId=${params.runId} sessionId=${params.sessionId} ` +
-                    `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
-                );
-                continue;
-              }
-            }
+            !emptyAssistantReplyIsSilent;
+          if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
+            beforeAgentFinalizeRevisionAttempts += 1;
+            nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
+              beforeAgentFinalizeRevisionReason,
+            );
+            suppressNextUserMessagePersistence = true;
+            planningOnlyRetryInstruction = null;
+            reasoningOnlyRetryInstruction = null;
+            emptyResponseRetryInstruction = null;
+            compactionContinuationRetryInstruction = null;
+            log.warn(
+              `before_agent_finalize requested one more pass: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+            );
+            continue;
           }
 
           log.debug(
