@@ -2647,6 +2647,114 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("does not retry without dimensions when the provider rejects the dimension value", async () => {
+    const providerError =
+      "400 Unsupported dimensions value: 4 is not supported for model text-embedding-3-small";
+    const embeddingsCreate = vi.fn(async () => {
+      throw new Error(providerError);
+    });
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: memoryPluginItem } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+            dimensions: 4,
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger,
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      memoryPluginItem.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
+
+      const result = await recallTool.execute("test-call-dims", { query: "hello dimensions" });
+
+      expect(result.details).toMatchObject({
+        count: 0,
+        disabled: true,
+        unavailable: true,
+        error: providerError,
+      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        `memory-lancedb: memory_recall failed: ${providerError}; returning unavailable memory result`,
+      );
+      expect(embeddingsCreate).toHaveBeenCalledOnce();
+      expect(embeddingsCreate).toHaveBeenCalledWith({
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
+        dimensions: 4,
+      });
+      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+      expect(result.content).toEqual([
+        { type: "text", text: "Memory recall is unavailable right now." },
+      ]);
+      expect(vectorSearch).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   test("rejects non-positive embedding dimensions before truncation", async () => {
     const { default: memoryPluginWithInvalidDimensions } = await import("./index.js");
     const registeredTools: any[] = [];

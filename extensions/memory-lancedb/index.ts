@@ -446,15 +446,30 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
 
 function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
   const message = stringifyErrorLike(error).toLowerCase();
+  if (!mentionsEmbeddingDimensionsField(message)) {
+    return false;
+  }
   return (
-    message.includes("dimensions") &&
-    (message.includes("extra_forbidden") ||
-      message.includes("extra inputs") ||
-      message.includes("not permitted") ||
-      message.includes("unknown parameter") ||
-      message.includes("unrecognized") ||
-      message.includes("unsupported") ||
-      message.includes("unexpected"))
+    message.includes("extra_forbidden") ||
+    message.includes("extra inputs") ||
+    message.includes("not permitted") ||
+    message.includes("not allowed") ||
+    message.includes("unknown parameter") ||
+    message.includes("unknown field") ||
+    message.includes("unrecognized parameter") ||
+    message.includes("unrecognized field") ||
+    message.includes("unexpected parameter") ||
+    message.includes("unexpected field")
+  );
+}
+
+function mentionsEmbeddingDimensionsField(message: string): boolean {
+  return (
+    /\bbody\.dimensions\b/.test(message) ||
+    /\binput\.dimensions\b/.test(message) ||
+    /\bparam(?:eter)?\s*[:=]\s*["'`]?dimensions["'`]?\b/.test(message) ||
+    /\b(?:param(?:eter)?|field|argument)\s+["'`]?dimensions["'`]?\b/.test(message) ||
+    /\b["'`]?dimensions["'`]?\s+(?:param(?:eter)?|field|argument)\b/.test(message)
   );
 }
 
