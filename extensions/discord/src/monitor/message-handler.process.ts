@@ -625,7 +625,7 @@ async function processDiscordMessageInner(
   ) => {
     if (isProcessAborted(abortSignal)) {
       // Surface so operators don't chase missing replies when an abort
-      // drops a model-produced text payload (see PR for the incident).
+      // drops a model-produced text payload.
       logVerbose(
         formatDiscordReplySkip({
           kind: info.kind,
