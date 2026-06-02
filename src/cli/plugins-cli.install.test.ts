@@ -194,22 +194,6 @@ function primeNpmPluginFallback(pluginId = "demo") {
   return { cfg, enabledCfg };
 }
 
-function createPathHookPackInstalledConfig(tmpRoot: string): OpenClawConfig {
-  return {
-    hooks: {
-      internal: {
-        installs: {
-          "demo-hooks": {
-            source: "path",
-            sourcePath: tmpRoot,
-            installPath: tmpRoot,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
 function createNpmHookPackInstalledConfig(): OpenClawConfig {
   return {
     hooks: {
@@ -277,23 +261,6 @@ function primeBlockedNpmPluginInstall(params: {
     error: `Plugin "${params.pluginId}" installation blocked: dangerous code patterns detected: finding details`,
     code: params.code ?? "security_scan_blocked",
   });
-}
-
-function primeHookPackPathFallback(params: {
-  tmpRoot: string;
-  pluginInstallError: string;
-}): OpenClawConfig {
-  const installedCfg = createPathHookPackInstalledConfig(params.tmpRoot);
-
-  loadConfig.mockReturnValue({} as OpenClawConfig);
-  installPluginFromPath.mockResolvedValueOnce({
-    ok: false,
-    error: params.pluginInstallError,
-  });
-  installHooksFromPath.mockResolvedValueOnce(createHookPackInstallResult(params.tmpRoot));
-  recordHookInstall.mockReturnValue(installedCfg);
-
-  return installedCfg;
 }
 
 type MockWithCalls = {

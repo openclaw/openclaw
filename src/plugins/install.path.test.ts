@@ -3,11 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resetGlobalHookRunner } from "./hook-runner-global.js";
-import {
-  installPluginFromFile,
-  installPluginFromPath,
-  PLUGIN_INSTALL_ERROR_CODE,
-} from "./install.js";
+import { installPluginFromFile, installPluginFromPath } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
