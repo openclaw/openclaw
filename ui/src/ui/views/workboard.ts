@@ -200,11 +200,20 @@ function focusWorkboardDialog(root: HTMLElement, initialFocusSelector?: string) 
 
 function syncWorkboardDialog(element: Element | undefined, initialFocusSelector?: string) {
   if (!(element instanceof HTMLElement)) {
-    if (activeWorkboardDialog && !activeWorkboardDialog.isConnected) {
-      restoreWorkboardFocus();
+    const previousDialog = activeWorkboardDialog;
+    if (!previousDialog) {
+      return;
     }
+    if (!previousDialog.isConnected) {
+      restoreWorkboardFocus();
+      return;
+    }
+    queueMicrotask(() => {
+      if (activeWorkboardDialog === previousDialog && !previousDialog.isConnected) {
+        restoreWorkboardFocus();
+      }
+    });
     return;
-  }
   }
   if (activeWorkboardDialog !== element) {
     rememberWorkboardReturnFocus(null);
