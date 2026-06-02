@@ -97,6 +97,7 @@ let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
 let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = defaultResolvePinnedHostnameImpl;
 
+/** Overrides network dependencies for media-store tests and restores defaults when omitted. */
 export function setMediaStoreNetworkDepsForTest(deps?: {
   httpRequest?: RequestImpl;
   httpsRequest?: RequestImpl;
@@ -147,10 +148,12 @@ export function extractOriginalFilename(filePath: string): string {
   return basename; // Fallback: use as-is
 }
 
+/** Returns the configured absolute media-store root without creating it. */
 export function getMediaDir() {
   return resolveMediaDir();
 }
 
+/** Creates the configured media-store root with private directory permissions. */
 export async function ensureMediaDir() {
   const mediaDir = resolveMediaDir();
   await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
@@ -189,6 +192,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   }
 }
 
+/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await openMediaStore().pruneExpired({
     maxDepth: options.recursive ? undefined : 1,
@@ -299,6 +303,7 @@ async function downloadToFile(
   });
 }
 
+/** Media-store file metadata returned after bytes are persisted under a safe media ID. */
 export type SavedMedia = {
   id: string;
   path: string;
@@ -464,6 +469,7 @@ async function writeMediaStreamToFile(params: {
   }
 }
 
+/** Stable error categories for unsafe or failed source-file ingestion. */
 export type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
@@ -471,6 +477,7 @@ export type SaveMediaSourceErrorCode =
   | "path-mismatch"
   | "too-large";
 
+/** Error raised when saveMediaSource cannot safely read or persist a source path. */
 export class SaveMediaSourceError extends Error {
   code: SaveMediaSourceErrorCode;
 
@@ -512,6 +519,7 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
   }
 }
 
+/** Saves a local path or HTTP(S) source into the media store after MIME/size validation. */
 export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
@@ -560,6 +568,7 @@ export async function saveMediaSource(
   }
 }
 
+/** Saves an in-memory media buffer under a UUID-backed media ID. */
 export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
@@ -591,6 +600,7 @@ export async function saveMediaBuffer(
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }
 
+/** Streams media into a sibling temp file before atomically publishing the final media ID. */
 export async function saveMediaStream(
   stream: AsyncIterable<unknown>,
   contentType?: string,
@@ -670,6 +680,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
   }
 }
 
+/** Read result for callers that need media bytes plus the resolved file path. */
 export type ReadMediaBufferResult = {
   id: string;
   path: string;
@@ -677,6 +688,7 @@ export type ReadMediaBufferResult = {
   size: number;
 };
 
+/** Reads a stored media ID with the same path guards and byte limit used by writers. */
 export async function readMediaBuffer(
   id: string,
   subdir = "inbound",
