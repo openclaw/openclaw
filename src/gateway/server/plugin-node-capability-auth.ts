@@ -41,6 +41,8 @@ export async function authorizePluginNodeCapabilityRequest(params: {
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
+    // Explicit bearer auth wins when valid, but failures are preserved so a
+    // missing live node capability can return the concrete auth failure.
     const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
       connectAuth: { token, password: token },
@@ -64,6 +66,8 @@ export async function authorizePluginNodeCapabilityRequest(params: {
       capability,
     })
   ) {
+    // Node capability auth is a live websocket grant; it only authorizes the
+    // requested capability and never broadens the caller's operator scopes.
     return { ok: true };
   }
 

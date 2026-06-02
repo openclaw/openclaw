@@ -73,8 +73,11 @@ export type GatewayClientRequestOptions = {
 };
 
 export type GatewayReconnectPausedInfo = {
+  /** WebSocket close code that paused reconnect attempts. */
   code: number;
+  /** Raw close reason, kept for diagnostics before detail-code normalization. */
   reason: string;
+  /** Structured connect-error detail when the pause came from a gateway policy close. */
   detailCode: string | null;
 };
 
@@ -89,6 +92,7 @@ type GatewayClientErrorShape = {
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> =
   BASE_GATEWAY_CLOSE_CODE_HINTS;
 
+/** Error wrapper for failed gateway requests and connect handshakes. */
 export const GatewayClientRequestError = BaseGatewayClientRequestError as unknown as {
   new (error: GatewayClientErrorShape): Error & {
     readonly gatewayCode: string;
@@ -100,6 +104,7 @@ export const GatewayClientRequestError = BaseGatewayClientRequestError as unknow
 
 export type GatewayClientRequestError = InstanceType<typeof GatewayClientRequestError>;
 
+/** Returns a stable operator-facing hint for common WebSocket close codes. */
 export function describeGatewayCloseCode(code: number): string | undefined {
   return baseDescribeGatewayCloseCode(code);
 }
@@ -184,6 +189,8 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
     "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
+  // Mirror the package resolver exactly; core callers pass gateway-derived
+  // budgets through this wrapper so package code stays OpenClaw-runtime free.
   return baseResolveGatewayClientConnectChallengeTimeoutMs(opts);
 }
 

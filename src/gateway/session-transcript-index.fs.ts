@@ -9,6 +9,7 @@ const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message
 
 type ParsedTranscriptRecord = Record<string, unknown>;
 
+/** One visible transcript record with byte offsets for targeted indexed reads. */
 export type IndexedTranscriptEntry = {
   seq: number;
   id?: string;
@@ -119,6 +120,7 @@ function setCachedIndex(filePath: string, entry: CacheEntry): void {
   }
 }
 
+/** Clears transcript index caches for tests that rewrite transcript files in place. */
 export function clearSessionTranscriptIndexCache(): void {
   transcriptIndexCache.clear();
   transcriptIndexBuilds.clear();
@@ -141,6 +143,9 @@ function buildOversizedIndexedRawEntry(params: {
   offset: number;
   byteLength: number;
 }): IndexedRawEntry | null {
+  // Oversized transcript lines cannot be fully parsed without risking large
+  // allocations, but history pagination still needs id/parent metadata and a
+  // visible placeholder so the sequence remains stable.
   const prefix = params.line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
@@ -218,6 +223,9 @@ function buildActiveTreeEntries(params: {
   byId: Map<string, IndexedRawEntry>;
   leafId?: string;
 }): IndexedRawEntry[] {
+  // Tree-style transcripts keep many branches; history views should follow only
+  // the active leaf chain. Cycles indicate corrupt metadata, so fall back to an
+  // empty active path instead of looping forever.
   const out: IndexedRawEntry[] = [];
   const seen = new Set<string>();
   let currentId = params.leafId;
@@ -323,6 +331,7 @@ async function buildSessionTranscriptIndex(
   };
 }
 
+/** Builds or reuses the transcript index for full/history/message-id reads. */
 export async function readSessionTranscriptIndex(
   filePath: string,
   opts: ReadSessionTranscriptIndexOptions = {},
@@ -347,6 +356,8 @@ export async function readSessionTranscriptIndex(
   }
   const inFlight = transcriptIndexBuilds.get(filePath);
   if (inFlight && inFlight.mtimeMs === stat.mtimeMs && inFlight.size === stat.size) {
+    // Share concurrent index builds for the same file snapshot; repeated history
+    // requests can otherwise fan out identical chunk scans.
     return await inFlight.promise;
   }
   const promise = buildSessionTranscriptIndex(filePath, stat);

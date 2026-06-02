@@ -70,6 +70,7 @@ import { assertValidParams } from "./validation.js";
 
 type ManagedRoomTalkSession = Extract<UnifiedTalkSessionRecord, { kind: "managed-room" }>;
 
+/** Resolves Talk mode from old transport-first callers and newer mode-first callers. */
 function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
   const mode = normalizeOptionalLowercaseString(params.mode) as TalkMode | undefined;
   if (mode) {
@@ -80,6 +81,7 @@ function normalizeTalkSessionMode(params: { mode?: string; transport?: string })
     : "realtime";
 }
 
+/** Maps Talk mode to the Gateway-owned transport used by unified session handlers. */
 function normalizeTalkSessionTransport(params: {
   mode: TalkMode;
   transport?: string;
@@ -91,6 +93,7 @@ function normalizeTalkSessionTransport(params: {
   return params.mode === "stt-tts" ? "managed-room" : "gateway-relay";
 }
 
+/** Selects whether Talk drives an agent, direct tools, or transcription-only behavior. */
 function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: string }): TalkBrain {
   const brain = normalizeOptionalLowercaseString(params.brain) as TalkBrain | undefined;
   if (brain) {
@@ -143,6 +146,7 @@ function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
   respond(true, payload, undefined);
 }
 
+/** Runs a managed-room turn mutation only for the active room client and broadcasts room deltas. */
 function respondManagedRoomTurn(params: {
   session: UnifiedTalkSessionRecord;
   connId?: string;
@@ -211,6 +215,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const spawnedBy = normalizeOptionalString(params.spawnedBy);
+        // Unscoped managed rooms can steer existing sessions, so only spawned
+        // rooms or admin-scoped Gateway callers may bind an arbitrary key.
         if (
           normalizeOptionalString(params.sessionKey) &&
           !spawnedBy &&
@@ -275,6 +281,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       }
 
       if (mode === "realtime") {
+        // Gateway relay owns the provider socket and forwards only the current
+        // browser connection's audio/control messages into the realtime session.
         if (transport !== "gateway-relay" || brain !== "agent-consult") {
           respondInvalidRequest(
             respond,
@@ -325,6 +333,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       }
 
       if (mode === "transcription") {
+        // Transcription sessions are intentionally brainless; agent steering is
+        // exposed through realtime or managed-room sessions instead.
         if (transport !== "gateway-relay" || brain !== "none") {
           respondInvalidRequest(
             respond,
@@ -394,6 +404,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         roomId: result.record.roomId,
         events: result.replacementEvents,
       });
+      // The replaced client receives removal events, then the joining client
+      // receives the active room view keyed to its connection id.
       broadcastTalkRoomEvents(context, client?.connId, {
         handoffId: result.record.id,
         roomId: result.record.roomId,
@@ -642,6 +654,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+      // Managed rooms carry their bound session key in the handoff record; a
+      // caller-supplied different key would steer a room the caller did not join.
       if (requestedSessionKey && requestedSessionKey !== sessionKey) {
         respondInvalidRequest(
           respond,

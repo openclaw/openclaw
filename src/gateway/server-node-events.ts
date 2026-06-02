@@ -66,6 +66,8 @@ export type NodeEventHandleResult = {
   reason?: string;
 };
 
+// Node event payloads arrive from several app versions; accept the strongest
+// stable identifier first so retries dedupe without collapsing distinct text.
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
 }
@@ -118,6 +120,8 @@ function shouldDropDuplicateVoiceTranscript(params: {
     ts: params.now,
   });
 
+  // The map is process-local dedupe, not history. Prune by age first, then
+  // insertion order, so one noisy session cannot grow gateway memory forever.
   if (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
     const cutoff = params.now - VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS * 2;
     for (const [key, value] of recentVoiceTranscripts) {
@@ -252,6 +256,8 @@ async function touchSessionStore(params: {
     return;
   }
   await updateSessionStore(storePath, (store) => {
+    // Session rows may be addressed by legacy or canonical keys. Migrate before
+    // touching so voice/node activity preserves the row visible to chat APIs.
     const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg: params.cfg,
       key: params.sessionKey,
@@ -285,6 +291,8 @@ function queueSessionStoreTouch(params: {
   sessionId: string;
   now: number;
 }) {
+  // Voice transcripts should not block on a best-effort store timestamp update;
+  // the agent run can proceed even if persistence is temporarily unavailable.
   void touchSessionStore({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -393,6 +401,8 @@ export const handleNodeEvent = async (
       if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
         return undefined;
       }
+      // Reuse the stored session id when present so node-originated voice turns
+      // append to the visible chat thread instead of creating detached runs.
       const sessionId = entry?.sessionId ?? randomUUID();
       queueSessionStoreTouch({
         ctx,
@@ -545,6 +555,8 @@ export const handleNodeEvent = async (
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
 
       if (deliverRequested && (!channel || !to)) {
+        // Share-sheet requests often omit an explicit reply route. Fall back to
+        // the last durable channel only when delivery was explicitly requested.
         const entryChannel =
           typeof entry?.lastChannel === "string"
             ? normalizeChannelId(entry.lastChannel)
@@ -756,6 +768,8 @@ export const handleNodeEvent = async (
         if (!shouldNotify) {
           return undefined;
         }
+        // Nodes can retry terminal exec events after reconnect. Deduping by
+        // runId keeps system notifications idempotent while preserving failures.
         if (
           runId &&
           shouldDropDuplicateExecFinished({
@@ -862,6 +876,8 @@ export const handleNodeEvent = async (
 
       const lastSeenReason = normalizeNodePresenceAliveReason(obj.trigger);
       try {
+        // Persist node and device presence together because pairing can be
+        // repaired through either record; success on either side is meaningful.
         const [nodeUpdated, deviceUpdated] = await Promise.all([
           updatePairedNodeMetadata(nodeId, {
             lastSeenAtMs: now,

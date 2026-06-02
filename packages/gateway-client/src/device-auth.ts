@@ -1,14 +1,3 @@
-export function normalizeDeviceMetadataForAuth(value?: string | null): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
-}
-
 type DeviceAuthPayloadParams = {
   deviceId: string;
   clientId: string;
@@ -25,6 +14,19 @@ type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   deviceFamily?: string | null;
 };
 
+/** Normalizes optional device metadata for byte-stable auth payload signatures. */
+export function normalizeDeviceMetadataForAuth(value?: string | null): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+}
+
+/** Builds the legacy v2 device-auth signing payload accepted by older gateways. */
 export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
@@ -41,6 +43,7 @@ export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string 
   ].join("|");
 }
 
+/** Builds the v3 device-auth signing payload with normalized platform metadata. */
 export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";

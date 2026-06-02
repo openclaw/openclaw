@@ -275,6 +275,8 @@ function shouldQueueAsPendingForegroundAction(params: {
 function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeAction[] {
   const queue = pendingNodeActionsById.get(nodeId) ?? [];
   const minTimestampMs = nowMs - NODE_PENDING_ACTION_TTL_MS;
+  // Pending actions are only a reconnect bridge for foreground-only commands;
+  // stale entries must not survive long enough to replay old user intent.
   const live = queue.filter((entry) => entry.enqueuedAtMs >= minTimestampMs);
   if (live.length === 0) {
     pendingNodeActionsById.delete(nodeId);
@@ -403,6 +405,8 @@ function toPendingParamsJSON(params: unknown): string | undefined {
     return undefined;
   }
   try {
+    // Persist the original params as JSON because pending actions may outlive
+    // the request object and are later exposed through node.pending.list.
     return JSON.stringify(params);
   } catch {
     return undefined;
@@ -426,6 +430,8 @@ function emitTalkPttNodeEvent(params: {
   const sessionId = `node:${params.nodeId}:talk:${captureId}`;
   const seq = (talkPttEventSeqBySessionId.get(sessionId) ?? 0) + 1;
   talkPttEventSeqBySessionId.set(sessionId, seq);
+  // Talk events need stable monotonic ids per capture for UI ordering, but this
+  // is only live presence state; bound the map by old capture ids.
   while (talkPttEventSeqBySessionId.size > 2048) {
     const oldest = talkPttEventSeqBySessionId.keys().next().value;
     if (oldest === undefined) {

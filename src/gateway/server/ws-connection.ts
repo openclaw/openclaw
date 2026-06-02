@@ -178,6 +178,8 @@ function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerPa
   const queued: RawData[] = [];
   const queueMessage = (data: RawData) => {
     if (queued.length >= MAX_QUEUED_MESSAGE_HANDLER_FRAMES) {
+      // Bound pre-handshake buffering while the heavy message handler module is
+      // loading; unbounded frames here would bypass normal parsed-frame limits.
       params.setCloseCause("message-handler-loading-overflow", {
         queuedFrames: queued.length,
       });
@@ -194,6 +196,8 @@ function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerPa
         return;
       }
       attachGatewayWsMessageHandler(params);
+      // Replay through the socket emitter so the real handler observes the same
+      // message event shape as live websocket frames.
       for (const data of queued) {
         params.socket.emit("message", data);
       }
@@ -302,6 +306,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return;
       }
       holdsPreauthBudget = false;
+      // The claimed key is set during upgrade acceptance; release it exactly
+      // once whether the socket authenticates, times out, or closes early.
       preauthConnectionBudget.release(preauthBudgetKey);
     };
 
@@ -446,6 +452,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         client?.presenceKey &&
         (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
       ) {
+        // Node presence is cleared only for the currently registered connection;
+        // stale sockets that lose a reconnect race must not mark the node offline.
         upsertPresence(client.presenceKey, { reason: "disconnect" });
         broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
@@ -523,6 +531,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         if (closed) {
           return false;
         }
+        // Authentication succeeded; from here normal frame limits apply and the
+        // preauth budget slot must be freed before long-lived pings start.
         releasePreauthBudget();
         client = next;
         clients.add(next);

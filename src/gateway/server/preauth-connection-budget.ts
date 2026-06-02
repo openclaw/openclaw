@@ -20,6 +20,7 @@ function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.e
   return parsed;
 }
 
+/** Per-IP cap for websocket upgrades that have not completed authentication yet. */
 export type PreauthConnectionBudget = {
   acquire(clientIp: string | undefined): boolean;
   release(clientIp: string | undefined): void;
@@ -45,6 +46,8 @@ export function createPreauthConnectionBudget(
       const ip = normalizeBudgetKey(clientIp);
       const next = (counts.get(ip) ?? 0) + 1;
       if (next > maxConnectionsPerIp) {
+        // Failed acquires do not mutate counts; the caller may reject the socket
+        // without needing to release a budget slot it never owned.
         return false;
       }
       counts.set(ip, next);

@@ -191,6 +191,8 @@ function getCachedPluginGatewayAuthBypassPaths(
   if (cached) {
     return cached;
   }
+  // Runtime config objects are immutable snapshots in normal operation, so the
+  // WeakMap avoids recomputing bundled callback bypasses without stale global state.
   const resolved = resolvePluginGatewayAuthBypassPaths(configSnapshot).catch((error: unknown) => {
     pluginGatewayAuthBypassPathsCache.delete(configSnapshot);
     throw error;
@@ -306,6 +308,8 @@ async function handleGatewayProbeRequest(
     try {
       const result = getReadiness();
       statusCode = result.ready ? 200 : 503;
+      // Remote unauthenticated probes get only the boolean; subsystem names are
+      // operator diagnostics and require local/direct or authenticated access.
       body = JSON.stringify(includeDetails ? result : { ready: result.ready });
     } catch {
       statusCode = 503;
@@ -381,6 +385,8 @@ export async function runGatewayHttpRequestStages(
 ): Promise<boolean> {
   for (const stage of stages) {
     try {
+      // Stages claim by returning true; false keeps walking the ordered router
+      // so plugin, compat, Control UI, and fallback routes can share one server.
       if (await stage.run()) {
         return true;
       }
@@ -465,6 +471,8 @@ function buildPluginRequestStages(params: {
       run: () => {
         const pathContext =
           params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
+        // Reuse the auth-stage context so plugin handlers see the exact gateway
+        // auth result that authorized the overlapping protected path.
         return (
           params.handlePluginRequest?.(params.req, params.res, pathContext, {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
@@ -553,6 +561,8 @@ export function createGatewayHttpServer(opts: {
         return;
       }
       if (GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live") {
+        // Liveness probes stay shallow and unauthenticated so orchestration can
+        // check process health before config, plugin, or auth state is loaded.
         await handleGatewayProbeRequest(
           req,
           res,

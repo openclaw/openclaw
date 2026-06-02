@@ -355,11 +355,15 @@ const DEFAULT_GATEWAY_CLIENT_URL = "ws://127.0.0.1:18789";
 const DEFAULT_CLIENT_VERSION = "0.0.0";
 
 export type GatewayReconnectPausedInfo = {
+  /** WebSocket close code that paused reconnect attempts. */
   code: number;
+  /** Raw close reason, kept for diagnostics before detail-code normalization. */
   reason: string;
+  /** Structured connect-error detail when the pause came from a gateway policy close. */
   detailCode: string | null;
 };
 
+/** Error wrapper for failed gateway requests and connect handshakes. */
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -450,6 +454,7 @@ export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
   1013: "try again later",
 };
 
+/** Returns a stable operator-facing hint for common WebSocket close codes. */
 export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
@@ -490,6 +495,8 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
     "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
   >,
 ): number {
+  // Keep the client watchdog at or below the gateway's pre-auth budget so the
+  // caller sees a client-side timeout before the server closes the socket.
   return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
     configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
   });

@@ -1041,6 +1041,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const sessionSharedGatewaySessionGeneration =
           sharedGatewaySessionGeneration ?? deviceTokenSharedGatewaySessionGeneration;
         if (sessionUsesSharedGatewayAuth) {
+          // Shared-auth sessions are tied to the current secret/proxy generation;
+          // reject stale handshakes before they become long-lived websocket clients.
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
@@ -1067,6 +1069,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authMethod,
         });
         if (trustedProxyAuthOk) {
+          // Trusted proxies can narrow requested scopes through a header, but
+          // they cannot grant scopes the client did not already request.
           scopes = resolveTrustedProxyControlUiScopes({
             requestedScopes: scopes,
             upgradeReq,
@@ -1238,6 +1242,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             let resolvedByConcurrentApproval = false;
             let recoveryRequestId: string | undefined;
             const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
+              // Pairing requests are supersedable; use the live request id for
+              // the response so reconnecting clients wait on the active approval.
               const pendingList = await listDevicePairing();
               const exactPending = pendingList.pending.find(
                 (pending) => pending.requestId === pairing.request.requestId,
@@ -1281,6 +1287,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   { dropIfSlow: true },
                 );
               } else {
+                // A failed silent approval can still be okay if another socket
+                // approved the same device between request creation and approval.
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
                 );

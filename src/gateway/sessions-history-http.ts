@@ -41,6 +41,7 @@ const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
+/** Returns the decoded session key for `/sessions/:key/history`, or null for other paths. */
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
   const url = new URL(req.url ?? "/", "http://localhost");
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
@@ -63,6 +64,7 @@ function getRequestUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", "http://localhost");
 }
 
+/** Resolves a client-requested history limit while bounding transcript work. */
 function resolveLimit(req: IncomingMessage): number | undefined {
   const raw = getRequestUrl(req).searchParams.get("limit");
   if (raw == null || raw.trim() === "") {
@@ -81,6 +83,7 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Handles JSON and SSE session history reads for the Gateway HTTP surface. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -139,6 +142,8 @@ export async function handleSessionHistoryHttpRequest(
   const limit = resolveLimit(req);
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  // First-page reads can use the transcript tail directly; cursor pagination
+  // still needs the full transcript so offsets remain stable across pages.
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
@@ -252,6 +257,8 @@ export async function handleSessionHistoryHttpRequest(
   };
 
   const isStreamStillAuthorized = async (): Promise<boolean> => {
+    // SSE streams are long-lived, so each heartbeat/update rechecks current auth
+    // and closes the stream if the token or scopes were revoked after connect.
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       req,

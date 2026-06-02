@@ -161,6 +161,7 @@ function filterSessionStoreToConfiguredAgents(
   );
 }
 
+/** Copies runtime/model choices from a parent session into a newly spawned child session. */
 function inheritSessionRuntimeSelection(
   parentEntry: SessionEntry | undefined,
 ): Partial<SessionEntry> {
@@ -205,6 +206,7 @@ function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   return sessionsRuntimeModulePromise;
 }
 
+/** Normalizes loose RPC keys while preserving the Gateway error shape for missing keys. */
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
     typeof key === "string"
@@ -272,6 +274,7 @@ function resolveOptionalInitialSessionMessage(params: {
   return undefined;
 }
 
+/** Detects fresh chat-send acknowledgements where clients can optimistically place the row. */
 function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: boolean }): boolean {
   if (params.cached) {
     return false;
@@ -306,6 +309,8 @@ function emitSessionsChanged(
       )
     : null;
   const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
+  // A bare global notification fans out to multiple agent views, so omit goal
+  // text unless the caller already selected the exact global-agent store.
   const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
   context.broadcastToConnIds(
     "sessions.changed",
@@ -399,6 +404,7 @@ function emitSessionOperation(
   );
 }
 
+/** Blocks WebChat clients from mutating sessions outside the chat.send command path. */
 function rejectWebchatSessionMutation(params: {
   action: "patch" | "delete" | "compact" | "restore";
   client: GatewayClient | null;
@@ -467,6 +473,7 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
+/** Chooses the checkpoint transcript and token baseline for branch/restore operations. */
 function resolveCheckpointForkSource(
   checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
@@ -575,6 +582,7 @@ async function createAgentMainSessionForSend(params: {
   };
 }
 
+/** Ensures a newly-created store row has a JSONL transcript before clients can use it. */
 function ensureSessionTranscriptFile(params: {
   sessionId: string;
   storePath: string;
@@ -624,6 +632,8 @@ function resolveAbortSessionKey(params: {
     return params.activeRunSessionKey;
   }
   const candidates = [params.canonicalKey, params.requestedKey, ...(params.aliasKeys ?? [])];
+  // Active runs may still be keyed by a pre-canonical alias, so prefer the
+  // visible controller key over the resolved store key when aborting.
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.controlUiVisible === false) {
       continue;
@@ -687,6 +697,7 @@ function resolveScopedAbortKey(params: {
   if (ownerAgentId && ownerAgentId !== scopedAgentId) {
     return undefined;
   }
+  // Return the store-local key only after proving the requested agent owns it.
   return resolveStoredSessionKeyForAgentStore({
     cfg: params.cfg,
     agentId: scopedAgentId,
@@ -749,6 +760,8 @@ function resolveRequestedGlobalAgentId(
     }
     return { ok: true, agentId };
   }
+  // Agent-prefixed global aliases select an agent store; ordinary keys keep the
+  // legacy no-agent behavior so existing global callers are not retargeted.
   if (!parsed?.agentId) {
     return { ok: true };
   }
@@ -950,6 +963,8 @@ async function handleSessionSend(params: {
     typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
       ? rawIdempotencyKey.trim()
       : randomUUID();
+  // sessions.send/steer delegate to chat.send so transcript persistence,
+  // dedupe, and provider routing stay in one command path.
   await chatHandlers["chat.send"]({
     req: params.req,
     params: {
@@ -1260,6 +1275,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     for (const key of keys) {
       try {
+        // Batch previews can point at the same per-agent store, so reuse loaded
+        // stores while still resolving each key through the canonical target path.
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
@@ -1488,6 +1505,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       !resolveOptionalInitialSessionMessage(p) &&
       cfg.session?.dmScope === "main"
     ) {
+      // In main-DM scope, "new chat" from a main session is a reset of that
+      // session rather than a child dashboard session.
       const parentAgentId = normalizeAgentId(
         parentSelectedAgentId ??
           resolveAgentIdFromSessionKey(canonicalParentSessionKey) ??
@@ -1528,6 +1547,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
     if (canonicalParentSessionKey && p.emitCommandHooks === true) {
+      // Plugin and command hooks observe the parent before child creation so
+      // integrations can snapshot the outgoing session state.
       const { entry: parentEntry } = loadSessionEntry(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -1596,6 +1617,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const inheritedSelection = normalizeOptionalString(p.model)
         ? {}
         : inheritSessionRuntimeSelection(parentSessionEntry);
+      // Explicit model selection wins; otherwise child sessions inherit runtime
+      // choices so sub-sessions do not silently fall back to defaults.
       const nextEntry: SessionEntry = {
         ...patched.entry,
         ...inheritedSelection,
@@ -1661,6 +1684,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : undefined;
 
     if (initialMessage) {
+      // Create can optionally start the first run through chat.send; the session
+      // row is already durable before provider work begins.
       await chatHandlers["chat.send"]({
         req,
         params: {
@@ -1717,6 +1742,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
     if (canonicalParentSessionKey && p.emitCommandHooks === true) {
+      // Emit lifecycle hooks after the new row exists so listeners can link the
+      // previous and next transcript identities.
       const { entry: parentEntry } = loadSessionEntry(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -1820,6 +1847,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const nextKey = buildDashboardSessionKey(target.agentId);
     const label = entry.label?.trim() ? `${entry.label.trim()} (checkpoint)` : "Checkpoint branch";
+    // Branching creates a new dashboard session and points back to the source
+    // session; restore below replaces the source row in-place.
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
       nextSessionId: branchedSession.sessionId,

@@ -60,6 +60,7 @@ export type ExecApprovalIdLookupResult =
 export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   private pending = new Map<string, PendingEntry<TPayload>>();
 
+  /** Builds an approval record without registering it, so callers can publish first. */
   create(request: TPayload, timeoutMs: number, id?: string | null): ExecApprovalRecord<TPayload> {
     const now = Date.now();
     const resolvedTimeoutMs = resolveApprovalTimeoutMs(timeoutMs);
@@ -101,7 +102,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       resolvePromise = resolve;
       rejectPromise = reject;
     });
-    // Create entry first so we can capture it in the closure (not re-fetch from map)
+    // Capture the entry object in timeout/cleanup closures; map lookups can see
+    // a newer record with the same id during the resolved-entry grace window.
     const entry: PendingEntry<TPayload> = {
       record,
       resolve: resolvePromise!,
@@ -132,16 +134,17 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (!pending) {
       return false;
     }
-    // Prevent double-resolve (e.g., if called after timeout already resolved)
     if (pending.record.resolvedAtMs !== undefined) {
+      // Timeout and operator resolution can race; only the first transition is
+      // allowed to publish a decision.
       return false;
     }
     clearTimeout(pending.timer);
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = decision;
     pending.record.resolvedBy = resolvedBy ?? null;
-    // Resolve the promise first, then delete after a grace period.
-    // This allows in-flight awaitDecision calls to find the resolved entry.
+    // Resolve first, then keep the record briefly so late awaitDecision calls
+    // and replay guards can still inspect the authoritative decision.
     pending.resolve(decision);
     scheduleResolvedEntryCleanup(() => {
       // Only delete if the entry hasn't been replaced
@@ -178,6 +181,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return entry?.record ?? null;
   }
 
+  /** Returns unresolved records that should still be visible to operators. */
   listPendingRecords(): ExecApprovalRecord<TPayload>[] {
     return Array.from(this.pending.values())
       .map((entry) => entry.record)
@@ -200,10 +204,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return true;
   }
 
-  /**
-   * Wait for decision on an already-registered approval.
-   * Returns the decision promise if the ID is pending, null otherwise.
-   */
+  /** Returns the decision promise for an already-registered approval id. */
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
@@ -239,6 +240,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         continue;
       }
       if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
+        // Prefix lookup is operator-facing convenience only; ambiguity is
+        // surfaced instead of picking a record.
         matches.push(id);
       }
     }

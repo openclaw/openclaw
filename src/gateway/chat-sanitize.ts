@@ -64,6 +64,7 @@ function stripEnvelopeFromContentWithRole(
   return { content: next, changed };
 }
 
+/** Removes display-only chat envelopes from one gateway chat message. */
 export function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
@@ -75,6 +76,8 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   let changed = false;
   const next: Record<string, unknown> = { ...entry };
   const senderLabel = stripUserEnvelope ? extractMessageSenderLabel(entry) : null;
+  // Preserve the parsed human/channel label before removing the user envelope
+  // text that carried it, so display callers keep attribution without markup.
   if (senderLabel && entry.senderLabel !== senderLabel) {
     next.senderLabel = senderLabel;
     changed = true;
@@ -107,6 +110,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+/** Removes display-only chat envelopes from a message list without needless cloning. */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;

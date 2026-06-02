@@ -12,6 +12,7 @@ export function matchedPluginRoutesRequireGatewayAuth(
   return routes.some((route) => route.auth === "gateway");
 }
 
+/** Decides whether a plugin HTTP path must pass gateway auth before route dispatch. */
 export function shouldEnforceGatewayAuthForPluginPath(
   registry: PluginRegistry,
   pathnameOrContext: string | PluginRoutePathContext,
@@ -21,6 +22,8 @@ export function shouldEnforceGatewayAuthForPluginPath(
       ? resolvePluginRoutePathContext(pathnameOrContext)
       : pathnameOrContext;
   if (pathContext.malformedEncoding || pathContext.decodePassLimitReached) {
+    // Ambiguous paths fail closed so encoded protected prefixes cannot bypass
+    // gateway auth through a plugin route match.
     return true;
   }
   if (isProtectedPluginRoutePathFromContext(pathContext)) {

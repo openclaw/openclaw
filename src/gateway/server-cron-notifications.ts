@@ -138,6 +138,7 @@ async function postCronWebhook(params: {
   }
 }
 
+/** Sends the configured immediate failure alert for a cron job through webhook or announce. */
 export async function sendGatewayCronFailureAlert(params: {
   deps: CliDeps;
   logger: CronLogger;
@@ -206,6 +207,7 @@ export async function sendGatewayCronFailureAlert(params: {
   });
 }
 
+/** Dispatches completion webhooks and best-effort failure notifications for a finished run. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
@@ -255,6 +257,8 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   if (params.evt.summary) {
     for (const webhookTarget of webhookTargets) {
+      // Completion notifications must not block the cron scheduler loop; failures are
+      // contained in postCronWebhook logging so the job finish path can continue.
       void (async () => {
         await postCronWebhook({
           webhookUrl: webhookTarget.url,

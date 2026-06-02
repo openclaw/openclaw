@@ -19,6 +19,7 @@ export function doesPluginRouteMatchPath(
   return context.candidates.some((candidate) => candidate === routeCanonicalPath);
 }
 
+/** Returns deterministic route precedence: longest exact routes, then longest prefixes. */
 export function findMatchingPluginHttpRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
@@ -44,6 +45,7 @@ export function findMatchingPluginHttpRoutes(
   return [...exactMatches, ...prefixMatches];
 }
 
+/** Finds the first registered plugin HTTP route after canonical path normalization. */
 export function findRegisteredPluginHttpRoute(
   registry: PluginRegistry,
   pathname: string,

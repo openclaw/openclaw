@@ -19,6 +19,7 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
+/** Reads a usable MCP tool name without trusting provider/tool getters. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -146,6 +147,8 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     if (!raw) {
       return [];
     }
+    // MCP clients expect one object schema per tool. Flatten local unions into a
+    // conservative object shape instead of exposing provider-specific anyOf/oneOf.
     if (raw.anyOf || raw.oneOf) {
       raw = flattenUnionSchema(raw);
     }

@@ -7,6 +7,8 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+// Keep user-facing auth hints client-aware: CLI users need config keys, while
+// browser clients need Control UI instructions rather than daemon config text.
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;
@@ -61,6 +63,8 @@ export function formatGatewayAuthFailureMessage(params: {
       break;
   }
 
+  // Fall back from explicit reason codes to mode/auth-shape combinations so
+  // older auth failures still produce actionable retry guidance.
   if (authMode === "token" && authProvided === "none") {
     return `unauthorized: gateway token missing (${tokenHint})`;
   }

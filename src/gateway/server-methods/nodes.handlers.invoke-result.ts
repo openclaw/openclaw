@@ -12,6 +12,8 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
   }
   const raw = params as Record<string, unknown>;
   const normalized: Record<string, unknown> = { ...raw };
+  // Older nodes sometimes send structured payloads in payloadJSON. Promote
+  // those values before validation so the registry handles one result shape.
   if (normalized.payloadJSON === null) {
     delete normalized.payloadJSON;
   } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
@@ -51,6 +53,8 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   };
   const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
   if (callerNodeId && callerNodeId !== p.nodeId) {
+    // Invoke results are authority-bearing: a connected node may only settle
+    // its own pending invocation, even if it guesses another invoke id.
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
     return;
   }

@@ -24,6 +24,7 @@ export type ActiveSessionForShutdown = {
 
 const trackedSessions = new Map<string, ActiveSessionForShutdown>();
 
+/** Records a started session so shutdown/restart can emit a matching `session_end`. */
 export function noteActiveSessionForShutdown(entry: ActiveSessionForShutdown): void {
   if (!entry.sessionId) {
     return;
@@ -31,6 +32,7 @@ export function noteActiveSessionForShutdown(entry: ActiveSessionForShutdown): v
   trackedSessions.set(entry.sessionId, entry);
 }
 
+/** Removes sessions already finalized by reset/delete/compaction from shutdown drain. */
 export function forgetActiveSessionForShutdown(sessionId: string | undefined): void {
   if (!sessionId) {
     return;
@@ -38,10 +40,12 @@ export function forgetActiveSessionForShutdown(sessionId: string | undefined): v
   trackedSessions.delete(sessionId);
 }
 
+/** Returns the current shutdown-finalization snapshot without mutating tracker state. */
 export function listActiveSessionsForShutdown(): ActiveSessionForShutdown[] {
   return Array.from(trackedSessions.values());
 }
 
+/** Clears process-local tracker state for isolated tests. */
 export function clearActiveSessionsForShutdownTracker(): void {
   trackedSessions.clear();
 }

@@ -3,6 +3,7 @@ import { resolveGatewayConnectionAuth } from "./connection-auth.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
 import type { ExplicitGatewayAuth } from "./credentials.js";
 
+/** Maps connection-detail provenance into auth resolver override provenance. */
 export function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env" | undefined {
   if (urlSource === "cli --url") {
     return "cli";
@@ -13,6 +14,7 @@ export function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env
   return undefined;
 }
 
+/** Builds the resolved URL, auth, and preauth settings for GatewayClient callers. */
 export async function resolveGatewayClientBootstrap(params: {
   config: OpenClawConfig;
   gatewayUrl?: string;
@@ -32,6 +34,8 @@ export async function resolveGatewayClientBootstrap(params: {
     url: params.gatewayUrl,
   });
   const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
+  // Only explicit CLI/env URLs should alter auth source selection. Config and
+  // local defaults keep normal config/env credential precedence.
   const auth = await resolveGatewayConnectionAuth({
     config: params.config,
     explicitAuth: params.explicitAuth,

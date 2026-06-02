@@ -121,6 +121,7 @@ async function yieldTranscriptScan(): Promise<void> {
   });
 }
 
+/** Adds OpenClaw-only metadata to object messages without mutating the original value. */
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
@@ -144,6 +145,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+/** Reads all parsed transcript messages from the first matching session transcript. */
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -159,12 +161,14 @@ export function readSessionMessages(
   return transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
 }
 
+/** Bounds tail transcript reads by message count plus optional byte/line caps. */
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
   maxLines?: number;
 };
 
+/** Selects between full indexed transcript reads and bounded recent tail reads. */
 export type ReadSessionMessagesAsyncOptions =
   | {
       mode: "full";
@@ -198,6 +202,7 @@ function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessa
   return { maxMessages, maxBytes, maxLines };
 }
 
+/** Reads a bounded tail window of transcript messages without parsing the whole file. */
 export function readRecentSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -528,6 +533,7 @@ async function visitTranscriptLinesAsync(
   }
 }
 
+/** Visits all parsed transcript messages in sequence order and returns the count. */
 export function visitSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -546,6 +552,7 @@ export function visitSessionMessages(
   return messages.length;
 }
 
+/** Counts transcript messages, using file-stat cache when available. */
 export function readSessionMessageCount(
   sessionId: string,
   storePath: string | undefined,
@@ -572,6 +579,7 @@ export function readSessionMessageCount(
   return count;
 }
 
+/** Async transcript reader backed by the transcript index for full reads. */
 export async function readSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -590,6 +598,7 @@ export async function readSessionMessagesAsync(
   return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
 }
 
+/** Looks up one indexed transcript message by id without parsing oversized lines. */
 export async function readSessionMessageByIdAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -615,6 +624,7 @@ export async function readSessionMessageByIdAsync(
   return { message, seq: entry.seq, oversized: false, found: true };
 }
 
+/** Async indexed message visitor with optional index-cache control. */
 export async function visitSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -639,6 +649,7 @@ export async function visitSessionMessagesAsync(
   return index.entries.length;
 }
 
+/** Async message count reader that reuses transcript-index metadata when possible. */
 export async function readSessionMessageCountAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -666,6 +677,7 @@ export async function readSessionMessageCountAsync(
   return count;
 }
 
+/** Reads recent messages and annotates each object message with its transcript sequence. */
 export function readRecentSessionMessagesWithStats(
   sessionId: string,
   storePath: string | undefined,
@@ -681,6 +693,7 @@ export function readRecentSessionMessagesWithStats(
   return { messages: messagesWithSeq, totalMessages };
 }
 
+/** Async bounded tail reader for recent transcript messages. */
 export async function readRecentSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -713,6 +726,7 @@ export async function readRecentSessionMessagesAsync(
   return parseRecentTranscriptTailMessages(lines, maxMessages);
 }
 
+/** Async recent-message reader that also returns total transcript message count. */
 export async function readRecentSessionMessagesWithStatsAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -728,6 +742,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
   return { messages: messagesWithSeq, totalMessages };
 }
 
+/** Reads the last transcript lines and reports total line count for diagnostics/previews. */
 export function readRecentSessionTranscriptLines(params: {
   sessionId: string;
   storePath: string | undefined;
@@ -818,6 +833,7 @@ export {
   resolveSessionTranscriptCandidates,
 } from "./session-transcript-files.fs.js";
 
+/** Keeps the newest array items that fit within a JSON byte budget. */
 export function capArrayByJsonBytes<T>(
   items: T[],
   maxBytes: number,
@@ -844,6 +860,7 @@ type TranscriptMessage = {
   provenance?: unknown;
 };
 
+/** Extracts title/source fields from transcript content without loading session store rows. */
 export function readSessionTitleFieldsFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -916,6 +933,7 @@ export function readSessionTitleFieldsFromTranscript(
   }
 }
 
+/** Async title/source extractor for indexed transcript scans. */
 export async function readSessionTitleFieldsFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1079,6 +1097,7 @@ function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | nul
   return null;
 }
 
+/** Returns the first user-visible transcript message for derived session titles. */
 export function readFirstUserMessageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1477,6 +1496,7 @@ function extractAggregateUsageFromTranscriptChunk(
   );
 }
 
+/** Reads aggregate usage from the full transcript for the latest list row snapshot. */
 export function readLatestSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1498,6 +1518,7 @@ export function readLatestSessionUsageFromTranscript(
   });
 }
 
+/** Async full-transcript usage reader for callers already on async paths. */
 export async function readLatestSessionUsageFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1526,6 +1547,7 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   }
 }
 
+/** Async tail usage reader that aggregates usage from a bounded byte window. */
 export async function readRecentSessionUsageFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1554,6 +1576,7 @@ export async function readRecentSessionUsageFromTranscriptAsync(
   }
 }
 
+/** Async tail usage reader that returns the latest usage record in the bounded window. */
 export async function readLatestRecentSessionUsageFromTranscriptAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -1582,6 +1605,7 @@ export async function readLatestRecentSessionUsageFromTranscriptAsync(
   }
 }
 
+/** Sync tail usage reader used by lightweight session listing. */
 export function readRecentSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1806,6 +1830,7 @@ function readRecentMessagesFromTranscript(
   }
 }
 
+/** Builds redacted preview items from recent transcript messages for sessions.preview. */
 export function readSessionPreviewItemsFromTranscript(
   sessionId: string,
   storePath: string | undefined,

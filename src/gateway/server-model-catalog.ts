@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../config/io.js";
 
+/** Gateway-facing model entries shared by the HTTP/TUI catalog endpoints. */
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
@@ -73,6 +74,8 @@ function startGatewayModelCatalogRefresh(
   const refresh = resolveLoadModelCatalog(params)
     .then((loadModelCatalog) => loadModelCatalog({ config, readOnly }))
     .then((catalog) => {
+      // Only the refresh that belongs to the current stale generation may publish
+      // results; a newer reload invalidation should keep serving the previous cache.
       if ((readOnly || catalog.length > 0) && refreshGeneration === cache.staleGeneration) {
         cache.lastSuccessfulCatalog = catalog;
         cache.appliedGeneration = cache.staleGeneration;
@@ -88,6 +91,7 @@ function startGatewayModelCatalogRefresh(
   return refresh;
 }
 
+/** Invalidates both model-catalog cache views after provider/plugin reloads. */
 export function markGatewayModelCatalogStaleForReload(): void {
   readOnlyModelCatalogCache.staleGeneration += 1;
   fullModelCatalogCache.staleGeneration += 1;
@@ -103,6 +107,7 @@ export async function resetModelCatalogCacheForTest(): Promise<void> {
   resetModelCatalogCacheForTestLocal();
 }
 
+/** Loads the Gateway model catalog, serving the last good value during stale refreshes. */
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {

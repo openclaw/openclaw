@@ -20,6 +20,7 @@ export type ChatRunRegistry = {
   clear: () => void;
 };
 
+/** Maintains FIFO client-run ownership for agent sessions that can overlap by sessionId. */
 export function createChatRunRegistry(): ChatRunRegistry {
   const chatRunSessions = new Map<string, ChatRunEntry[]>();
 
@@ -102,6 +103,8 @@ export function createChatRunState(): ChatRunState {
   const abortedRuns = new Map<string, number>();
 
   const clearRun = (runId: string) => {
+    // Agent streaming keeps separate visible/raw/thinking buffers keyed from
+    // the run id; clear all derived keys when the run ends or aborts.
     rawBuffers.delete(runId);
     buffers.delete(runId);
     bufferUpdatedAt.delete(runId);
@@ -173,6 +176,7 @@ type ToolRecipientEntry = {
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
+/** Tracks control connections that want coarse sessions.changed broadcasts. */
 export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -199,6 +203,7 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
   };
 }
 
+/** Tracks per-session message subscribers with reverse lookup for connection cleanup. */
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
@@ -217,6 +222,8 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       connIds.add(normalizedConnId);
       sessionToConnIds.set(normalizedSessionKey, connIds);
 
+      // The reverse map lets disconnect cleanup remove a connection from every
+      // session bucket without scanning all sessions.
       const sessionKeys = connToSessionKeys.get(normalizedConnId) ?? new Set<string>();
       sessionKeys.add(normalizedSessionKey);
       connToSessionKeys.set(normalizedConnId, sessionKeys);
@@ -251,6 +258,8 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!sessionKeys) {
         return;
       }
+      // Walk the reverse index first, then drop it, to keep both maps symmetric
+      // when a websocket closes without individual unsubscribe calls.
       for (const sessionKey of sessionKeys) {
         const connIds = sessionToConnIds.get(sessionKey);
         if (!connIds) {
@@ -277,6 +286,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
   };
 }
 
+/** Remembers which websocket connections should receive late tool events for a run. */
 export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
 
@@ -289,6 +299,8 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
       const cutoff = entry.finalizedAt
         ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
         : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
+      // Finalized runs keep a short grace period for trailing tool events; live
+      // runs use a longer idle TTL refreshed by add/get.
       if (now >= cutoff) {
         recipients.delete(runId);
       }

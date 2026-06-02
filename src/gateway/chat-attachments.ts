@@ -8,6 +8,7 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 
+/** Raw Gateway chat attachment accepted from RPC callers. */
 export type ChatAttachment = {
   type?: string;
   mimeType?: string;
@@ -15,12 +16,14 @@ export type ChatAttachment = {
   content?: unknown;
 };
 
+/** Inline image payload passed directly to image-capable agent providers. */
 export type ChatImageContent = {
   type: "image";
   data: string;
   mimeType: string;
 };
 
+/** Media-store reference for attachments staged outside inline model input. */
 export type OffloadedRef = {
   mediaRef: string;
   id: string;
@@ -58,6 +61,7 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+/** Resolves the configured per-agent attachment limit in bytes. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =
@@ -73,6 +77,7 @@ type UnsupportedAttachmentReason =
   | "unsupported-non-image"
   | "non-image-too-large-for-sandbox";
 
+/** Typed attachment rejection that callers can convert into client-facing errors. */
 export class UnsupportedAttachmentError extends Error {
   readonly reason: UnsupportedAttachmentReason;
   constructor(reason: UnsupportedAttachmentReason, message: string) {
@@ -82,6 +87,7 @@ export class UnsupportedAttachmentError extends Error {
   }
 }
 
+/** Wraps media-store failures after an attachment must be offloaded. */
 export class MediaOffloadError extends Error {
   override readonly cause: unknown;
   constructor(message: string, options?: ErrorOptions) {
@@ -235,6 +241,7 @@ function validateAttachmentBase64OrThrow(
   return sizeBytes;
 }
 
+/** Normalizes, validates, and routes chat attachments into inline images or media refs. */
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
@@ -428,6 +435,7 @@ export async function parseMessageWithAttachments(
   };
 }
 
+/** Sniffs the same MIME signals as parsing to preflight image-only attachment paths. */
 export async function resolveChatAttachmentLooksLikeImage(
   attachment: ChatAttachment,
   index = 0,
@@ -447,7 +455,7 @@ export async function resolveChatAttachmentLooksLikeImage(
 
 /**
  * @deprecated Use parseMessageWithAttachments instead.
- * This function converts images to markdown data URLs which Claude API cannot process as images.
+ * This legacy helper converts images to markdown data URLs instead of provider-native image blocks.
  */
 export function buildMessageWithAttachments(
   message: string,

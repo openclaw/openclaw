@@ -116,6 +116,7 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
+/** Archives transcripts for reset/delete callers that only need destination paths. */
 export function archiveSessionTranscriptsForSession(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -127,6 +128,7 @@ export function archiveSessionTranscriptsForSession(params: {
   return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
 }
 
+/** Archives the stable transcript set and preserves source/destination metadata for hooks. */
 export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionId: string | undefined;
   storePath: string;
@@ -148,6 +150,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   });
 }
 
+/** Emits best-effort `session_end` plugin hooks and forgets the shutdown drain entry. */
 export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -202,6 +205,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   });
 }
 
+/** Emits best-effort `session_start` hooks and registers the session for shutdown finalization. */
 export function emitGatewaySessionStartPluginHook(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -333,6 +337,7 @@ export async function drainActiveSessionsForShutdown(params: {
   }
 }
 
+/** Unbinds a session target and optionally emits the matching child-session lifecycle hook. */
 export async function emitSessionUnboundLifecycleEvent(params: {
   targetSessionKey: string;
   reason: "session-reset" | "session-delete";
@@ -645,6 +650,7 @@ async function closeChildAcpRuntimesForParent(params: {
   );
 }
 
+/** Clears runtime resources that must be stopped before a reset/delete mutates persisted state. */
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -691,6 +697,7 @@ export async function cleanupSessionBeforeMutation(params: {
   return parentAcpError;
 }
 
+/** Fires the legacy before-reset plugin hook with a best-effort full transcript snapshot. */
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -742,6 +749,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     });
 }
 
+/** Resolves, cleans, rotates, and announces a Gateway session reset/new-session mutation. */
 export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
@@ -755,6 +763,8 @@ export async function performGatewaySessionReset(params: {
     const cfg = getRuntimeConfig();
     const explicitAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const parsedKey = parseAgentSessionKey(params.key);
+    // Global stores can still receive agent-prefixed session keys; infer the
+    // agent from the key only when the caller did not already pin `agentId`.
     const inferredGlobalAgentId =
       !explicitAgentId &&
       parsedKey &&
@@ -946,6 +956,8 @@ export async function performGatewaySessionReset(params: {
     return nextEntry;
   });
   if (pendingAcpResetMeta) {
+    // ACP reset creates fresh pending metadata for the logical session key; move
+    // it under the newly rotated session id before hooks observe the new entry.
     writeAcpSessionMetaForMigration({
       sessionKey: pendingAcpResetMeta.sessionKey,
       sessionId: next.sessionId,
@@ -968,6 +980,8 @@ export async function performGatewaySessionReset(params: {
     agentId: target.agentId,
     reason: "reset",
   });
+  // Create the replacement transcript before start/end hooks so plugin payloads
+  // can reference both the archived old transcript and the fresh destination.
   fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
   if (!fs.existsSync(next.sessionFile as string)) {
     const header = {

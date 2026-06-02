@@ -52,19 +52,23 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
   return snapshot;
 }
 
+/** Returns the last public health snapshot published to gateway clients. */
 export function getHealthCache(): HealthSummary | null {
   return healthCache;
 }
 
+/** Monotonic health version used by clients to detect snapshot changes. */
 export function getHealthVersion(): number {
   return healthVersion;
 }
 
+/** Advances the presence version without coupling presence changes to health refreshes. */
 export function incrementPresenceVersion(): number {
   presenceVersion += 1;
   return presenceVersion;
 }
 
+/** Monotonic presence version included in gateway protocol snapshots. */
 export function getPresenceVersion(): number {
   return presenceVersion;
 }
@@ -82,6 +86,8 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const includeSensitive = opts?.includeSensitive === true;
   let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
   if (!refresh) {
+    // Public and sensitive refreshes are deduped separately so an admin probe
+    // cannot poison the client cache with path/auth metadata.
     refresh = (async () => {
       let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
       try {

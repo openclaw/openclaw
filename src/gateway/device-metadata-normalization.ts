@@ -10,6 +10,7 @@ function toLowerAscii(input: string): string {
   return input.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
 }
 
+/** Normalizes metadata exactly as device-auth payload verification expects it. */
 export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   const trimmed = normalizeTrimmedMetadata(value);
   if (!trimmed) {
@@ -20,6 +21,7 @@ export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   return toLowerAscii(trimmed);
 }
 
+/** Normalizes metadata for policy matching, where Unicode accents should collapse. */
 export function normalizeDeviceMetadataForPolicy(value?: string | null): string {
   const trimmed = normalizeTrimmedMetadata(value);
   if (!trimmed) {

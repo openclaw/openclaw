@@ -118,6 +118,8 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
   if (!fallbackToken) {
     return {};
   }
+  // Older clients sent the device token in auth.token. Keep it as a fallback
+  // candidate but remember the source so failures can guide a device-token retry.
   return { token: fallbackToken, source: "shared-token-fallback" };
 }
 
@@ -281,6 +283,8 @@ async function resolveConnectAuthDecisionCore(
 
   let deviceTokenRateLimited = false;
   if (params.rateLimiter) {
+    // Device-token checks have their own bucket because shared-secret failures
+    // can legitimately fall through into this legacy-token retry path.
     const deviceRateCheck = params.rateLimiter.check(
       params.clientIp,
       AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -306,6 +310,8 @@ async function resolveConnectAuthDecisionCore(
       authOk = true;
       authMethod = "device-token";
       if (tokenCheck.issuer?.kind === "shared-gateway-auth") {
+        // Shared-gateway-auth issued device tokens carry the generation they
+        // belong to; the websocket layer closes stale generation clients later.
         deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
       }
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);

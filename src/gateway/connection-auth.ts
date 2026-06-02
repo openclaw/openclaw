@@ -24,6 +24,7 @@ export type GatewayConnectionAuthOptions = {
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
+/** Converts connection-auth options into the shared credential resolver shape. */
 function toGatewayCredentialOptions(
   params: Omit<GatewayConnectionAuthOptions, "config"> & { cfg: OpenClawConfig },
 ) {
@@ -43,6 +44,7 @@ function toGatewayCredentialOptions(
   };
 }
 
+/** Resolves gateway connection credentials, including async SecretRef materialization. */
 export async function resolveGatewayConnectionAuth(
   params: GatewayConnectionAuthOptions,
 ): Promise<{ token?: string; password?: string }> {
@@ -52,6 +54,7 @@ export async function resolveGatewayConnectionAuth(
   });
 }
 
+/** Resolves gateway connection credentials from already-materialized config values only. */
 export function resolveGatewayConnectionAuthFromConfig(
   params: Omit<GatewayConnectionAuthOptions, "config"> & { cfg: OpenClawConfig },
 ): { token?: string; password?: string } {

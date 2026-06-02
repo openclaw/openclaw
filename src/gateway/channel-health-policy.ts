@@ -27,11 +27,13 @@ type ChannelHealthEvaluationReason =
   | "disconnected"
   | "stale-socket";
 
+/** Result shared by health commands, readiness probes, and restart monitor logic. */
 export type ChannelHealthEvaluation = {
   healthy: boolean;
   reason: ChannelHealthEvaluationReason;
 };
 
+/** Time-window policy used to evaluate one channel status snapshot. */
 export type ChannelHealthPolicy = {
   channelId: ChannelId;
   now: number;
@@ -51,6 +53,7 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
+/** Evaluates whether a channel snapshot is healthy enough to keep running. */
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
@@ -112,6 +115,9 @@ export function evaluateChannelHealth(
   // go idle while their upstream clients maintain heartbeats internally.
   const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
   if (shouldCheckStaleSocket) {
+    // Patch-merged status can carry the previous lifecycle's transport timestamp;
+    // give the new lifecycle one stale window before treating that inherited value
+    // as proof that the socket is no longer alive.
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {
@@ -127,6 +133,7 @@ export function evaluateChannelHealth(
   return { healthy: true, reason: "healthy" };
 }
 
+/** Converts an unhealthy evaluation into the restart reason reported to channels. */
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,

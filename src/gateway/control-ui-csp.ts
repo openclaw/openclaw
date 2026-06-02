@@ -27,11 +27,14 @@ export function computeInlineScriptHashes(html: string): string[] {
 }
 
 function hasScriptSrcAttribute(openTag: string): boolean {
+  // Parse only attribute names so src/data-src-like values in quoted text cannot
+  // make an external script look inline or vice versa.
   return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
     (match) => normalizeLowercaseStringOrEmpty(match[1]) === "src",
   );
 }
 
+/** Builds the restrictive Control UI CSP header, optionally allowing hashed inline scripts. */
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptSrc = hashes?.length

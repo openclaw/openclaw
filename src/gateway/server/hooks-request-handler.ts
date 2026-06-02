@@ -103,6 +103,8 @@ export function createHooksRequestHandler(
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
     const clientIpConfig = getClientIpConfig?.();
+    // Hook auth is internet-facing, so rate-limit on the same proxy-aware client
+    // identity used by gateway auth instead of trusting raw remoteAddress alone.
     const clientIp =
       resolveRequestClientIp(
         req,
@@ -146,6 +148,8 @@ export function createHooksRequestHandler(
         "utf8",
       )
       .digest("hex");
+    // Scope the idempotency key by token and normalized dispatch input so the
+    // same upstream key cannot replay a different hook target or payload.
     return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
   };
 
@@ -254,6 +258,8 @@ export function createHooksRequestHandler(
       sessionKeyValue: string,
       targetAgentId: string,
     ): string | null => {
+      // Session policy is enforced after agent fallback resolution so prefix
+      // checks match the actual per-agent session that will receive the run.
       const dispatchSessionKey = normalizeHookDispatchSessionKey({
         sessionKey: sessionKeyValue,
         targetAgentId,
@@ -354,6 +360,8 @@ export function createHooksRequestHandler(
           path: subPath,
         });
         if (mapped) {
+          // A mapping returning null intentionally consumes the request without
+          // dispatching; callers use this for filters and allowlist misses.
           if (!mapped.ok) {
             sendJson(res, 400, { ok: false, error: mapped.error });
             return true;

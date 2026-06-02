@@ -18,6 +18,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
+/** Canonical session-key resolution result shared by Gateway methods and agent tools. */
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
@@ -90,6 +91,7 @@ function findVisibleSessionIdMatches(params: {
   );
 }
 
+/** Resolves key/sessionId/label selectors to one visible canonical session key. */
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;

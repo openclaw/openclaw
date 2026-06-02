@@ -34,6 +34,7 @@ async function resolveGatewayCredential(params: {
   return resolved;
 }
 
+/** Attaches unresolved SecretRef diagnostics only when a caller can surface them. */
 function withDiagnostics<T extends object>(params: {
   diagnostics: string[];
   result: T;
@@ -43,6 +44,7 @@ function withDiagnostics<T extends object>(params: {
     : params.result;
 }
 
+/** Resolves credentials for non-interactive probe flows without forcing fallback failures. */
 export async function resolveGatewayProbeSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -60,6 +62,8 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
       path: "gateway.remote.token",
       value: params.config.gateway?.remote?.token,
     });
+    // Remote probes prefer token auth; only resolve password if no token is
+    // available so unresolved password refs do not mask a valid token.
     const remotePassword = remoteToken.value
       ? { value: undefined }
       : await resolveGatewayCredential({
@@ -76,6 +80,8 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   }
 
   if (authMode === "none" || authMode === "trusted-proxy") {
+    // Local probes do not synthesize credentials for modes where shared-secret
+    // auth is not the active authorization boundary.
     return {};
   }
 
@@ -126,6 +132,8 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
     return { token: envToken };
   }
   if (envPassword) {
+    // Auto mode allows env password as a compatibility fallback only after
+    // config/env token resolution has failed.
     return withDiagnostics({ diagnostics, result: { password: envPassword } });
   }
   const password = await resolveGatewayCredential({
@@ -141,6 +149,7 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   });
 }
 
+/** Resolves credentials for interactive/local client flows with actionable failure text. */
 export async function resolveGatewayInteractiveSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -185,6 +194,8 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
           });
     const token = explicitToken ?? remoteToken.value ?? envToken;
     const password = explicitPassword ?? envPassword ?? remotePassword.value;
+    // Interactive remote mode can report why SecretRefs failed when no explicit,
+    // remote, or env fallback credential remains.
     return token || password
       ? { token, password }
       : {
@@ -197,6 +208,8 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
 
   const authMode = params.config.gateway?.auth?.mode;
   if (authMode === "none" || authMode === "trusted-proxy") {
+    // These modes do not require shared-secret auth, but explicit/env values are
+    // still returned so manual client overrides can target mixed deployments.
     return {
       token: explicitToken ?? envToken,
       password: explicitPassword ?? envPassword,
@@ -272,6 +285,8 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   const shouldUsePassword =
     Boolean(explicitPassword ?? envPassword) || (hasConfiguredPassword && !hasConfiguredToken);
   if (shouldUsePassword) {
+    // In auto mode, an explicit/env password or password-only config means the
+    // client should prompt/report password errors instead of token errors.
     const password = await resolvePassword();
     return {
       token: explicitToken ?? envToken,

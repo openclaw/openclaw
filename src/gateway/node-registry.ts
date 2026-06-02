@@ -87,6 +87,7 @@ export type SerializedEventPayload = {
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
 };
 
+/** Serializes a node event payload once so fanout paths can reuse identical JSON bytes. */
 export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
   if (payload === undefined) {
     return null;
@@ -153,15 +154,19 @@ function withSystemRunEventRunId(params: { command: string; params?: unknown }):
   if (normalizeString(obj.runId)) {
     return params.params;
   }
+  // Gateway-originated system.run calls need a stable run id so later node
+  // system-run events can be tied back to the invoke authorization.
   return { ...obj, runId: randomUUID() };
 }
 
+/** Tracks connected node sessions, pending invokes, and authorized system.run events. */
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
+  /** Registers or replaces a node connection and snapshots its declared/effective surface. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
@@ -229,6 +234,8 @@ export class NodeRegistry {
     if (unregistersCurrentNode) {
       this.nodesById.delete(nodeId);
     }
+    // Reject only invokes tied to the closing websocket; a newer reconnect with
+    // the same node id remains registered and can continue receiving commands.
     for (const [id, pending] of this.pendingInvokes.entries()) {
       if (pending.connId !== connId) {
         continue;
@@ -253,6 +260,7 @@ export class NodeRegistry {
     return this.nodesById.get(nodeId);
   }
 
+  /** Probes a node websocket with ping/pong when the socket implementation supports it. */
   async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
     const node = this.nodesById.get(nodeId);
     if (!node) {
@@ -344,6 +352,7 @@ export class NodeRegistry {
     return this.updateSurface(nodeId, { commands });
   }
 
+  /** Narrows a node's live capabilities/commands/permissions to its declared surface. */
   updateSurface(
     nodeId: string,
     surface: {
@@ -378,6 +387,8 @@ export class NodeRegistry {
       const declared = node.declaredPermissions ?? {};
       const nextEntries: Array<[string, boolean]> = [];
       for (const [key, declaredValue] of Object.entries(declared)) {
+        // A denied declared permission stays visible as false so clients can
+        // explain why it cannot be elevated at runtime.
         if (!declaredValue) {
           nextEntries.push([key, false]);
           continue;
@@ -400,6 +411,7 @@ export class NodeRegistry {
     return node;
   }
 
+  /** Sends a command invoke to a connected node and resolves when the node reports a result. */
   async invoke(params: {
     nodeId: string;
     command: string;
@@ -440,6 +452,8 @@ export class NodeRegistry {
       params: invokeParams,
     });
     if (systemRunEvent) {
+      // system.run may emit asynchronous agent events before/after the invoke
+      // result; remember this connection/run so those events can be authorized.
       this.rememberAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
         connId: node.connId,
@@ -467,6 +481,7 @@ export class NodeRegistry {
     });
   }
 
+  /** Verifies that a node-emitted system.run event belongs to a Gateway-issued invoke. */
   authorizeSystemRunEvent(params: {
     nodeId: string;
     connId?: string;
@@ -488,6 +503,8 @@ export class NodeRegistry {
         sessionKey: params.sessionKey,
       });
       if (!match && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
+        // Older macOS nodes generated their own runtime run id; allow the
+        // fallback only when exactly one matching pending authorization exists.
         match = this.matchSingleAuthorizedSystemRunEvent({
           nodeId: params.nodeId,
           connId,
@@ -534,6 +551,8 @@ export class NodeRegistry {
     if (typeof timeoutMs !== "number") {
       return null;
     }
+    // Keep authorization alive slightly longer than the command timeout so a
+    // terminal event racing the invoke timeout can still be accepted.
     const durationMs = addTimerTimeoutGraceMs(timeoutMs, AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS);
     return resolveExpiresAtMsFromDurationMs(durationMs) ?? 0;
   }
@@ -572,6 +591,7 @@ export class NodeRegistry {
         continue;
       }
       if (match) {
+        // Ambiguous legacy events must not be attributed to the wrong run.
         return null;
       }
       match = { key, event };
@@ -634,6 +654,7 @@ export class NodeRegistry {
     clearTimeout(pending.timer);
     this.pendingInvokes.delete(params.id);
     if (!params.ok && pending.systemRunEvent) {
+      // Failed invokes never legitimately own follow-up system.run events.
       this.forgetAuthorizedSystemRunEvent({
         nodeId: pending.nodeId,
         connId: pending.connId,
@@ -657,6 +678,7 @@ export class NodeRegistry {
     return this.sendEventToSession(node, event, payload);
   }
 
+  /** Sends a pre-serialized event payload to one node without rebuilding JSON. */
   sendEventRaw(
     nodeId: string,
     event: string,
@@ -703,6 +725,8 @@ export class NodeRegistry {
       return false;
     }
     try {
+      // SerializedEventPayload is branded, so this string concatenation can
+      // embed JSON safely without accepting arbitrary caller-provided fragments.
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       node.client.socket.send(
         `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`,
@@ -728,6 +752,8 @@ export class NodeRegistry {
       reason: "ws_send_buffer_close",
     });
     try {
+      // Close slow consumers before queuing more outbound work; dropping only
+      // this frame would leave the gateway repeatedly serializing doomed sends.
       node.client.socket.close(SLOW_CONSUMER_CLOSE_CODE, "slow consumer");
     } catch {
       /* ignore */

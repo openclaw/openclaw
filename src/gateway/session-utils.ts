@@ -927,6 +927,7 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
+/** Loads a session entry and its canonical/legacy keys from the resolved agent store. */
 export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
@@ -950,6 +951,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
   };
 }
 
+/** Chooses the newest entry among canonical and legacy store keys. */
 export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
@@ -968,6 +970,7 @@ export function resolveFreshestSessionStoreMatchFromStoreKeys(
   return freshest;
 }
 
+/** Returns the newest entry among candidate store keys without exposing the matched key. */
 export function resolveFreshestSessionEntryFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
@@ -1055,6 +1058,7 @@ export function pruneLegacyStoreKeys(params: {
   }
 }
 
+/** Promotes the freshest legacy entry to the canonical key and removes old aliases. */
 export function migrateAndPruneGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1086,6 +1090,7 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
+/** Classifies a stored session key for Control UI/session list grouping. */
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
   if (key === "global") {
     return "global";
@@ -1102,6 +1107,7 @@ export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySe
   return "direct";
 }
 
+/** Parses channel/group session keys, including agent-prefixed keys. */
 export function parseGroupKey(
   key: string,
 ): { channel?: string; kind?: "group" | "channel"; id?: string } | null {
@@ -1467,6 +1473,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   };
 }
 
+/** Resolves canonical key, candidate aliases, owner agent, store path, and loaded store. */
 export function resolveGatewaySessionStoreTargetWithStore(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1538,6 +1545,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   };
 }
 
+/** Resolves the session store target metadata without returning the loaded store object. */
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -1552,6 +1560,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
+/** Resolves the effective thinking-level default for one session model/agent pair. */
 export function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -1573,6 +1582,7 @@ export function resolveGatewaySessionThinkingDefault(params: {
   );
 }
 
+/** Builds default model/thinking metadata included with Gateway sessions.list. */
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
@@ -1604,6 +1614,7 @@ export function getSessionDefaults(
   };
 }
 
+/** Resolves the runtime provider/model pair for a session entry or agent default. */
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -1657,6 +1668,7 @@ export function resolveSessionModelRef(
   return resolved;
 }
 
+/** Checks catalog-backed image support for the model selected by a Gateway session. */
 export async function resolveGatewayModelSupportsImages(params: {
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   provider?: string;
@@ -1730,6 +1742,7 @@ export async function resolveGatewayModelSupportsImages(params: {
   }
 }
 
+/** Resolves the displayable model identity while preserving provider when it is known. */
 export function resolveSessionModelIdentityRef(
   cfg: OpenClawConfig,
   entry?:
@@ -1810,6 +1823,7 @@ function resolveSessionDisplayModelIdentityRefCached(params: {
   return value;
 }
 
+/** Converts CLI-provider display rows back to the underlying configured model identity. */
 export function resolveSessionDisplayModelIdentityRef(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -1849,6 +1863,7 @@ export function resolveSessionDisplayModelIdentityRef(params: {
   };
 }
 
+/** Builds the normalized Gateway session row used by list/info/Control UI callers. */
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;

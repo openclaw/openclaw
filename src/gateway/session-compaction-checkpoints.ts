@@ -21,9 +21,12 @@ import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
+/** Maximum transcript tail bytes scanned to recover the pre-compaction leaf entry. */
 export const MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES = 64 * 1024 * 1024;
+/** Maximum retained snapshot bytes for checkpoint artifacts attached to one session. */
 export const MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
 
+/** Stable pre-compaction transcript identity captured before the compaction rewrite. */
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
   sessionFile?: string;
@@ -117,6 +120,7 @@ async function statCheckpointSnapshotBytes(
   return bytesByPath;
 }
 
+/** Maps compaction trigger metadata into the persisted checkpoint reason enum. */
 export function resolveSessionCompactionCheckpointReason(params: {
   trigger?: "budget" | "overflow" | "manual";
   timedOut?: boolean;
@@ -268,6 +272,7 @@ function trimTranscriptEntriesThroughLeaf(
   return entries.slice(0, leafIndex + 1);
 }
 
+/** Reads the latest transcript entry id using a bounded tail scan. */
 export async function readSessionLeafIdFromTranscriptAsync(
   sessionFile: string,
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
@@ -327,6 +332,7 @@ export async function readSessionLeafIdFromTranscriptAsync(
   return null;
 }
 
+/** Forks a checkpoint transcript, optionally truncating it at the stored source leaf. */
 export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceFile: string;
   sourceLeafId?: string;
@@ -423,6 +429,7 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   };
 }
 
+/** Removes legacy copied checkpoint snapshots when a caller abandons the checkpoint. */
 export async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
@@ -470,6 +477,7 @@ async function cleanupTrimmedCompactionCheckpointFiles(params: {
   }
 }
 
+/** Persists one compaction checkpoint and trims older checkpoint metadata/artifacts. */
 export async function persistSessionCompactionCheckpoint(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -566,12 +574,14 @@ export async function persistSessionCompactionCheckpoint(params: {
   return checkpoint;
 }
 
+/** Lists persisted checkpoints newest-first for session restore/branch APIs. */
 export function listSessionCompactionCheckpoints(
   entry: Pick<SessionEntry, "compactionCheckpoints"> | undefined,
 ): SessionCompactionCheckpoint[] {
   return sessionStoreCheckpoints(entry).toSorted((a, b) => b.createdAt - a.createdAt);
 }
 
+/** Finds one persisted checkpoint by id after normalizing the requested id. */
 export function getSessionCompactionCheckpoint(params: {
   entry: Pick<SessionEntry, "compactionCheckpoints"> | undefined;
   checkpointId: string;

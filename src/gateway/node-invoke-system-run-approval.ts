@@ -93,6 +93,7 @@ function canBridgeNoDeviceApprovalFromBackend(params: {
   );
 }
 
+/** Returns whether an approval is bound to channel turn metadata for replay checks. */
 function hasChatApprovalReplayBinding(request: ExecApprovalRecord["request"]): boolean {
   return (
     normalizeComparableString(request.turnSourceChannel, { lowercase: true }) !== null ||
@@ -155,6 +156,8 @@ function canBridgeNoDeviceChatApprovalFromBackend(params: {
 
   const request = params.snapshot.request;
   const plan = request.systemRunPlan ?? null;
+  // Backend chat replays are allowed only when the replay carries the same
+  // channel/session/agent binding as the original approval request.
   return (
     matchesRequiredString({
       expected: request.turnSourceChannel,
@@ -356,6 +359,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
   if (runtimeContext.plan) {
+    // Rehydrate forwarded params from the approved plan so caller-supplied
+    // command/cwd/session fields cannot drift after approval.
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
     if (runtimeContext.commandText) {
@@ -394,11 +399,12 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }
 
-  // Normal path: enforce the decision recorded by the gateway.
   if (snapshot.decision === "allow-once") {
     if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
       return systemRunApprovalRequired(runId);
     }
+    // allow-once is consumed before forwarding so the same approval cannot be
+    // replayed through the manager's resolved-entry grace period.
     next.approved = true;
     next.approvalDecision = "allow-once";
     return { ok: true, params: next };
@@ -411,7 +417,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   // If the approval request timed out (decision=null), allow askFallback-driven
-  // "allow-once" ONLY for clients that are allowed to use exec approvals.
+  // "allow-once" only for clients that can use exec approvals.
   const timedOut =
     snapshot.resolvedAtMs !== undefined &&
     snapshot.decision === undefined &&

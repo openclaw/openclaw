@@ -17,6 +17,7 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
+/** Default per-field text budget for display-safe chat history projection. */
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
 type RoleContentMessage = {
@@ -32,6 +33,7 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
+/** Resolves the caller override used by chat history sanitizers and display projections. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -52,6 +54,7 @@ function truncateChatHistoryText(
   };
 }
 
+/** Detects provider spellings for tool call/result content blocks that need payload fidelity. */
 export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
@@ -192,6 +195,8 @@ function projectAssistantTextFromMixedToolContent(
     return null;
   }
 
+  // Mixed tool/text assistant entries are commentary transport artifacts; display keeps only
+  // the text blocks users saw while exact tool payloads stay available in raw transcripts.
   const textBlocks: unknown[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
@@ -840,6 +845,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   return !hasAssistantNonTextContent(message);
 }
 
+/** Produces display-safe history without mutating already-clean message arrays. */
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -1191,6 +1197,7 @@ function filterVisibleProjectedHistoryMessages(
   return changed ? visible : messages;
 }
 
+/** Projects raw transcript messages into the canonical Gateway chat-display shape. */
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
@@ -1220,6 +1227,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
   return messages.slice(-Math.floor(maxMessages));
 }
 
+/** Projects chat-display messages, then keeps only the most recent display entries. */
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
@@ -1230,6 +1238,7 @@ export function projectRecentChatDisplayMessages(
   );
 }
 
+/** Projects a single raw transcript message, returning undefined when it is display-hidden. */
 export function projectChatDisplayMessage(
   message: unknown,
   options?: { maxChars?: number; stripEnvelope?: boolean },

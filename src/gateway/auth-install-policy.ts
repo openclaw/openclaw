@@ -5,6 +5,7 @@ import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 
 type GatewayInstallAuthMode = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["mode"];
 
+/** Maps explicit gateway auth modes to whether service install must provide a token. */
 function hasExplicitGatewayInstallAuthMode(
   mode: GatewayInstallAuthMode | undefined,
 ): boolean | undefined {
@@ -21,6 +22,7 @@ function hasConfiguredGatewayPasswordForInstall(cfg: OpenClawConfig): boolean {
   return hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
 }
 
+/** Checks only env values persisted into the managed service runtime. */
 function hasDurableGatewayPasswordEnvForInstall(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -32,6 +34,7 @@ function hasDurableGatewayPasswordEnvForInstall(
   );
 }
 
+/** Decides whether install-time service setup needs a Gateway token available. */
 export function shouldRequireGatewayTokenForInstall(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,

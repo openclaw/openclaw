@@ -23,12 +23,15 @@ import {
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
+/** Returns all subscription keys that should see a transcript update for one session. */
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (sessionKey === "global") {
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
     if (normalizedAgentId) {
       const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
+      // The default agent keeps backward compatibility with bare "global"
+      // subscribers while non-default global stores stay agent-scoped.
       return normalizeAgentId(normalizedAgentId) === defaultAgentId
         ? [scopedKey, sessionKey]
         : [scopedKey];
@@ -38,6 +41,7 @@ function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string
   return [sessionKey];
 }
 
+/** Builds the session fields attached to transcript/lifecycle broadcasts. */
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
@@ -53,6 +57,8 @@ function buildGatewaySessionSnapshot(params: {
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
   const session = params.includeSession ? { ...sessionRow } : undefined;
   if (session && omitUnscopedGlobalGoal) {
+    // A bare global event can be observed by multiple agent views; hide the
+    // selected agent's goal unless the event itself is agent-scoped.
     delete session.goal;
   }
   return {
@@ -111,6 +117,7 @@ function buildGatewaySessionSnapshot(params: {
   };
 }
 
+/** Creates the serialized transcript-update broadcaster used by Gateway startup wiring. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
@@ -118,6 +125,8 @@ export function createTranscriptUpdateBroadcastHandler(params: {
 }) {
   let broadcastQueue = Promise.resolve();
   return (update: SessionTranscriptUpdate): void => {
+    // Preserve transcript event order even when message-count reads or session
+    // snapshots are async; failed broadcasts should not poison future updates.
     broadcastQueue = broadcastQueue
       .then(() => handleTranscriptUpdateBroadcast(params, update))
       .catch(() => undefined);
@@ -158,6 +167,8 @@ async function handleTranscriptUpdateBroadcast(
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
+    // Some transcript writers emit only the file/update; derive the sequence
+    // from the current row so UI subscribers can still order streamed messages.
     const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
@@ -179,6 +190,8 @@ async function handleTranscriptUpdateBroadcast(
   });
   const message = projectChatDisplayMessage(rawMessage);
   if (message) {
+    // Message subscribers get the display-safe message plus the same session
+    // snapshot fields as sessions.changed so lists and transcripts stay in sync.
     params.broadcastToConnIds(
       "session.message",
       {
@@ -199,6 +212,8 @@ async function handleTranscriptUpdateBroadcast(
   if (sessionEventConnIds.size === 0) {
     return;
   }
+  // Non-displayable transcript entries still update session lists with the
+  // message phase so clients can refresh usage, title, or lifecycle metadata.
   params.broadcastToConnIds(
     "sessions.changed",
     {
@@ -215,6 +230,7 @@ async function handleTranscriptUpdateBroadcast(
   );
 }
 
+/** Creates the lifecycle-event broadcaster used for session start/end/reset projections. */
 export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;

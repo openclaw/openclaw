@@ -29,6 +29,7 @@ type SessionKeyPathResolution =
   | { matched: true; sessionKey: string }
   | { error: "invalid-session-key"; matched: true };
 
+/** Parses `/sessions/:key/kill` without claiming unrelated Gateway paths. */
 function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
   if (!match) {
@@ -45,6 +46,7 @@ function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
   }
 }
 
+/** Handles subagent kill requests for local admins or the owning requester session. */
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -103,6 +105,8 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
+  // Requester-scoped kills abort only runs controlled by that requester; local
+  // admin kills use the stronger delete scope and can terminate by child key.
   const requiredOperatorMethod =
     requesterSessionKey && !allowLocalAdminKill ? "sessions.abort" : "sessions.delete";
   const scopeAuth = authorizeOperatorScopesForMethod(requiredOperatorMethod, requestedScopes);

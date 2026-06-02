@@ -8,6 +8,7 @@ import {
   type SessionPatchHookEvent,
 } from "../hooks/internal-hooks.js";
 
+/** Emits cloned session patch context to internal hooks after persisted session updates. */
 export function triggerSessionPatchHook(params: {
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry;
@@ -18,6 +19,8 @@ export function triggerSessionPatchHook(params: {
     return;
   }
 
+  // Clone mutable session/patch data before async hook delivery so listeners see
+  // the persisted patch snapshot, not later in-process mutations of the entry.
   const hookContext: SessionPatchHookContext = structuredClone({
     sessionEntry: params.sessionEntry,
     patch: params.patch,

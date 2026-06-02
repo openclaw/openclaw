@@ -36,6 +36,8 @@ function shouldAnnounceHookRunResult(params: {
   if (params.result.status !== "ok") {
     return true;
   }
+  // Successful hooks stay quiet when delivery is disabled or the channel
+  // already attempted delivery; non-ok results still surface as system events.
   return (
     params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
   );
@@ -143,6 +145,8 @@ export function createGatewayHooksRequestHandler(params: {
     let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
+        // Resolve config inside the async turn so hooks use the live gateway
+        // state at dispatch time without blocking the HTTP acknowledgement.
         const cfg = getRuntimeConfig();
         hookEventSessionKey = resolveHookEventSessionKey({
           cfg,
@@ -162,6 +166,8 @@ export function createGatewayHooksRequestHandler(params: {
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
         const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
         if (result.status !== "ok") {
+          // Console-facing logs are sanitized separately from structured fields
+          // so diagnostics remain useful without leaking control characters.
           logHooks.warn("hook agent run returned non-ok status", {
             sourcePath: value.sourcePath,
             name: safeName,

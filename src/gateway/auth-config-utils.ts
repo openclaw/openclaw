@@ -132,6 +132,8 @@ async function resolveGatewayAuthSecretRef(params: {
   if (!value) {
     return params.cfg;
   }
+  // Materialization is caller-local: pairing/setup/startup need resolved values for
+  // auth decisions, but the canonical config must keep its SecretRef shape.
   const nextConfig = structuredClone(params.cfg);
   nextConfig.gateway ??= {};
   nextConfig.gateway.auth ??= {};
@@ -162,6 +164,8 @@ async function resolveGatewayPasswordSecretRef(params: {
 export async function materializeGatewayAuthSecretRefs(
   params: GatewayAuthSecretRefResolutionParams,
 ): Promise<OpenClawConfig> {
+  // Resolve token first so implicit-mode password refs are skipped when a token
+  // ref already satisfies Gateway auth; this avoids loading unrelated secret providers.
   const cfgWithToken = await resolveGatewayAuthSecretRef({
     cfg: params.cfg,
     env: params.env,

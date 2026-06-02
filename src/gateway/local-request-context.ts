@@ -22,6 +22,8 @@ function cronUnavailable(): never {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
 
+// Embedded local dispatch shares Gateway method code but not daemon services;
+// keep unavailable subsystems fail-closed instead of silently no-oping writes.
 const unavailableCron: CronServiceContract = {
   start: async () => {
     cronUnavailable();
@@ -54,6 +56,8 @@ export function createLocalGatewayRequestContext(
   const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
   const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
   const clearChatRunState = (runId: string) => {
+    // Mirror daemon cleanup keys so in-process chat tests exercise the same
+    // assistant/thinking buffer lifecycle without needing a websocket server.
     chatRunBuffers.delete(runId);
     chatDeltaSentAt.delete(runId);
     chatDeltaLastBroadcastLen.delete(runId);
@@ -147,6 +151,8 @@ export function createLocalGatewayRequestContext(
 export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context) {
+    // Nested plugin calls should inherit the outer request context; replacing it
+    // would lose auth/session metadata captured by the caller's gateway scope.
     return run();
   }
   const context = createLocalGatewayRequestContext(params);

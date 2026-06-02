@@ -37,6 +37,8 @@ function resolvePluginRoutePathContextForRequest(
   providedPathContext: PluginRoutePathContext | undefined,
 ): PluginRoutePathContext {
   if (providedPathContext) {
+    // Upstream auth probes pass the exact path context they checked; reuse it so
+    // dispatch cannot canonicalize a subtly different encoded path.
     return providedPathContext;
   }
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -46,6 +48,8 @@ function resolvePluginRoutePathContextForRequest(
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
 ): GatewayRequestOptions["client"] {
+  // Plugin HTTP handlers call gateway methods through the same runtime scope
+  // shape as websocket clients, but with a fixed internal backend identity.
   return {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -85,6 +89,7 @@ function getMissingPluginRouteRuntimeContext(
   return context.gatewayRequestOperatorScopes === undefined ? "caller scope context" : undefined;
 }
 
+/** Builds the gateway runtime scope visible while a plugin HTTP route handler runs. */
 function createPluginRouteRuntimeScope(params: {
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
@@ -121,6 +126,7 @@ export type PluginRouteDispatchContext = {
   gatewayRequestOperatorScopes?: readonly string[];
 };
 
+/** Dispatches registered plugin HTTP routes and returns whether the request was claimed. */
 export type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
@@ -128,6 +134,7 @@ export type PluginHttpRequestHandler = (
   dispatchContext?: PluginRouteDispatchContext,
 ) => Promise<boolean>;
 
+/** Dispatches registered plugin HTTP upgrade routes and returns whether the socket was claimed. */
 export type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
   socket: Duplex,
@@ -144,6 +151,8 @@ export function createGatewayPluginRequestHandler(params: {
 }): PluginHttpRequestHandler {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
+    // Prefer the server-local route registry when available; plugins can
+    // register routes after startup while older handler closures still exist.
     const registry = params.getRouteRegistry?.() ?? params.registry;
     const gatewayRequestContext = params.getGatewayRequestContext?.();
     const routes = registry.httpRoutes ?? [];
@@ -158,6 +167,8 @@ export function createGatewayPluginRequestHandler(params: {
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
     if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
+      // Do not run plugin-auth exact routes when an overlapping gateway-auth
+      // prefix also matched; the preauth layer must satisfy the whole set first.
       log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
       return false;
     }
@@ -181,6 +192,8 @@ export function createGatewayPluginRequestHandler(params: {
 
     for (const route of matchedRoutes) {
       try {
+        // Handlers may return false to delegate to the next matching route; any
+        // other result claims the request, including void handlers that wrote.
         const handled = await withPluginRuntimeGatewayRequestScope(
           createPluginRouteRuntimeScope({
             route,
@@ -216,6 +229,8 @@ export function createGatewayPluginUpgradeHandler(params: {
 }): PluginHttpUpgradeHandler {
   const { log } = params;
   return async (req, socket, head, providedPathContext, dispatchContext) => {
+    // Upgrade dispatch follows the same route registry and path context rules as
+    // normal HTTP requests, but must write/destroy the socket itself on failure.
     const registry = params.getRouteRegistry?.() ?? params.registry;
     const gatewayRequestContext = params.getGatewayRequestContext?.();
     const routes = registry.httpRoutes ?? [];
@@ -232,6 +247,8 @@ export function createGatewayPluginUpgradeHandler(params: {
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
     if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
+      // Matched upgrades are claimed before rejection so the caller does not
+      // hand an unauthenticated socket to another route family.
       log.warn(`plugin http upgrade blocked without gateway auth (${pathContext.canonicalPath})`);
       writeUpgradeUnauthorized(socket);
       return true;

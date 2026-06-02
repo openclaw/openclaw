@@ -4,6 +4,7 @@ import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isSecureWebSocketUrl } from "./net.js";
 
+/** Resolved Gateway target plus the operator-facing explanation of how it was chosen. */
 export type GatewayConnectionDetails = {
   url: string;
   urlSource: string;
@@ -18,6 +19,7 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
+/** Builds CLI/status Gateway connection details with injectable resolvers for tests. */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;

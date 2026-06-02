@@ -10,6 +10,8 @@ type GatewayRequestContextClient = GatewayClient & {
   invalidatedReason?: string;
 };
 
+// Server startup owns the concrete state containers; handlers receive this
+// narrow façade so hot-reloaded services can be swapped without rebuilding RPCs.
 export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
@@ -118,6 +120,8 @@ export function createGatewayRequestContext(
     getApprovalClientConnIds: (opts = {}) => {
       const connIds = new Set<string>();
       for (const gatewayClient of params.clients) {
+        // Approval fanout must use the live client set because browser clients
+        // can connect/disconnect while a tool approval request is being routed.
         if (!gatewayClient.connId) {
           continue;
         }
@@ -143,6 +147,8 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
+        // Mark-only invalidation lets already-open sockets finish the close path
+        // naturally while per-request dispatch rejects any later pipelined RPCs.
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }

@@ -8,6 +8,7 @@ type ControlUiRequestClassification =
 
 const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
 
+/** Classifies an HTTP request before the Control UI static handler claims it. */
 export function classifyControlUiRequest(params: {
   basePath: string;
   pathname: string;

@@ -6,14 +6,17 @@ type McpLoopbackRuntime = {
 
 let activeRuntime: McpLoopbackRuntime | undefined;
 
+/** Returns a snapshot of the active MCP loopback runtime, if the Gateway owns one. */
 export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
   return activeRuntime ? { ...activeRuntime } : undefined;
 }
 
+/** Publishes the current MCP loopback runtime for agent CLI preparation. */
 export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
   activeRuntime = { ...runtime };
 }
 
+/** Selects the bearer token that matches whether the spawned CLI owns the session. */
 export function resolveMcpLoopbackBearerToken(
   runtime: McpLoopbackRuntime,
   senderIsOwner: boolean,
@@ -21,12 +24,14 @@ export function resolveMcpLoopbackBearerToken(
   return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
 }
 
+/** Clears the active runtime only when the closing server still owns the token. */
 export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {
   if (activeRuntime?.ownerToken === ownerToken) {
     activeRuntime = undefined;
   }
 }
 
+/** Builds the CLI MCP server config with env placeholders expanded by the spawned process. */
 export function createMcpLoopbackServerConfig(port: number) {
   return {
     mcpServers: {

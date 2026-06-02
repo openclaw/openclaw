@@ -13,6 +13,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Handles shared POST+JSON Gateway HTTP plumbing; false means the path belongs elsewhere. */
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
@@ -66,6 +67,8 @@ export async function handleGatewayPostJsonEndpoint(
     }
   }
 
+  // Read the body only after auth and scope checks so rejected callers cannot
+  // force endpoint-specific JSON work or large-body diagnostics.
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);
   if (body === undefined) {
     return undefined;

@@ -73,6 +73,8 @@ export function classifyGatewayEventLoopHealthReasons(
     return reasons;
   }
 
+  // Utilization and CPU counters are noisy over tiny windows; require delay
+  // co-evidence so frequent async wakeups do not make readiness flap.
   const hasDelayCoEvidence =
     metrics.delayP99Ms >= LOAD_DEGRADATION_DELAY_COEVIDENCE_MS ||
     metrics.delayMaxMs >= LOAD_DEGRADATION_DELAY_COEVIDENCE_MS;
@@ -127,6 +129,8 @@ export function createGatewayEventLoopHealthMonitor(
       const hasDelayWarning =
         delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS || delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS;
 
+      // Keep rate baselines stable until a full sample exists, except for hard
+      // delay spikes which are already a direct blocking signal.
       if (!hasDelayWarning && intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
         return lastSnapshot;
       }
@@ -156,6 +160,8 @@ export function createGatewayEventLoopHealthMonitor(
         cpuCoreRatio,
       };
 
+      // Reset only after the snapshot is classified so the next interval starts
+      // from the same wall/cpu/ELU boundary used for this published result.
       monitor.reset();
       lastWallAt = now;
       lastCpuUsage = readCpuUsage();

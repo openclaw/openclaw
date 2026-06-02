@@ -47,6 +47,8 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
     return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
   }
   try {
+    // Browser-origin loopback clients otherwise all share 127.0.0.1; key by
+    // normalized origin so one web app cannot exhaust another app's bucket.
     return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(new URL(trimmedOrigin).origin)}`;
   } catch {
     return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
@@ -129,6 +131,8 @@ function isCliContainerLocalEquivalent(params: {
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
     params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // Docker-published CLI traffic can arrive from loopback to a private host.
+  // Treat it as local only when shared-secret auth and no browser/proxy headers agree.
   return (
     isCliClient &&
     params.sharedAuthOk &&
@@ -185,6 +189,8 @@ function isControlUiBrowserContainerLocalEquivalent(params: {
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
     params.connectParams.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT;
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // Browser container locality requires both Host and Origin to stay loopback;
+  // a private remote address alone is not enough to auto-pair a web client.
   return (
     isControlUiBrowser &&
     params.sharedAuthOk &&
@@ -339,6 +345,8 @@ export function resolveDeviceSignaturePayloadVersion(params: {
     return "v3";
   }
 
+  // V2 signatures predate platform/device-family pinning. Accept them for
+  // existing clients, but callers can use the returned version to decide refresh policy.
   const payloadV2 = buildDeviceAuthPayload(basePayload);
   if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
     return "v2";

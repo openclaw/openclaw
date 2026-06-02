@@ -13,6 +13,8 @@ type ValidatorFn = ((value: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
+// Protocol validators keep their last error set on the function object; read it
+// immediately so concurrent handlers cannot accidentally report another method.
 export function respondInvalidParams(params: {
   respond: RespondFn;
   method: string;
@@ -32,6 +34,8 @@ export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Pr
   try {
     await fn();
   } catch (err) {
+    // Node-method handlers expose operational failures as UNAVAILABLE so callers
+    // can distinguish transient runtime errors from invalid request shapes.
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
   }
 }
@@ -50,6 +54,8 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   const nodeCode = normalizeOptionalString(nodeError?.code) ?? "";
   const nodeMessage = normalizeOptionalString(nodeError?.message) ?? "node invoke failed";
   const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
+  // Preserve the original node error in details for UI diagnostics while keeping
+  // the top-level RPC error in Gateway protocol shape.
   respond(
     false,
     undefined,

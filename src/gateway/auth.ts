@@ -316,6 +316,8 @@ function authorizeTrustedProxy(params: {
   }
   const remoteIsLoopback = isLoopbackAddress(remoteAddr);
   if (remoteIsLoopback && trustedProxyConfig.allowLoopback !== true) {
+    // Loopback proxies are common in tests and dev tools, so require explicit
+    // opt-in before trusting identity headers from local processes.
     return { reason: "trusted_proxy_loopback_source" };
   }
   if (!remoteIsLoopback) {
@@ -324,6 +326,8 @@ function authorizeTrustedProxy(params: {
       return { reason: "trusted_proxy_local_interface_check_failed" };
     }
     if (localInterfaceMatch) {
+      // A non-loopback local interface is still same-machine traffic, not an
+      // external reverse proxy boundary.
       return { reason: "trusted_proxy_local_interface_source" };
     }
   }
@@ -370,6 +374,8 @@ function authorizeTrustedProxyBrowserOrigin(params: {
     return null;
   }
 
+  // Trusted-proxy identity can satisfy HTTP auth, but browser-origin checks
+  // still prevent a third-party site from riding that proxy-authenticated user.
   const originCheck = checkBrowserOrigin({
     requestHost: params.browserOriginPolicy?.requestHost,
     origin,
@@ -394,9 +400,8 @@ function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing_config" };
   }
   if (!params.connectToken) {
-    // Don't burn rate-limit slots for missing credentials — the client
-    // simply hasn't provided a token yet (e.g. bare browser open).
-    // Only actual *wrong* credentials should count as failures.
+    // Missing credentials often come from a bare browser open; only wrong
+    // credentials are treated as brute-force attempts.
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
@@ -418,7 +423,7 @@ function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing_config" };
   }
   if (!params.connectPassword) {
-    // Same as token_missing — don't penalize absent credentials.
+    // Same as token_missing: absent credentials are not a failed secret guess.
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
@@ -542,6 +547,8 @@ async function authorizeGatewayConnectCore(
     !localDirect &&
     !hasExplicitSharedSecretAuth(connectAuth)
   ) {
+    // Tailscale forwarded identity is only a tokenless fallback for the Control
+    // UI websocket surface; explicit shared secrets always take precedence.
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,

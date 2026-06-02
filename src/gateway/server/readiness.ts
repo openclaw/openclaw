@@ -16,6 +16,7 @@ export type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
 };
 
+/** Synchronous readiness probe used by HTTP health endpoints and Kubernetes-style checks. */
 export type ReadinessChecker = () => ReadinessResult;
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
@@ -52,12 +53,16 @@ export function createReadinessChecker(deps: {
     const uptimeMs = now - startedAt;
     if (deps.getStartupPending?.()) {
       const reason = deps.getStartupPendingReason?.() ?? "startup-sidecars";
+      // Startup readiness is intentionally uncached so sidecar completion flips
+      // the probe green on the first request after startup settles.
       return withEventLoopHealth(
         { ready: false, failing: [reason], uptimeMs },
         deps.getEventLoopHealth,
       );
     }
     if (deps.shouldSkipChannelReadiness?.()) {
+      // Some deployments use the gateway without managed channels; skip only
+      // channel failures while still attaching event-loop health below.
       return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
     }
     if (cachedState && now - cachedAt < cacheTtlMs) {
@@ -83,6 +88,8 @@ export function createReadinessChecker(deps: {
         };
         const health = evaluateChannelHealth(accountSnapshot, policy);
         if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
+          // Report the channel once even if several accounts are failing; the
+          // detailed account diagnostics live in the health snapshot.
           failing.push(channelId);
           break;
         }

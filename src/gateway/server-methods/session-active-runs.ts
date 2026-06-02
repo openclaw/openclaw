@@ -6,6 +6,7 @@ type TrackedActiveSessionRun = {
   agentId?: string;
 };
 
+/** Extracts visible in-flight runs from the abort-controller registry. */
 function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
 ): TrackedActiveSessionRun[] {
@@ -41,6 +42,8 @@ function isTrackedActiveSessionRunForKey(
   if (key !== "global") {
     return true;
   }
+  // The global session key is shared across agent stores; compare agent ids so
+  // one agent's active run does not block another agent's global session row.
   const requestedAgentId = agentId ?? defaultAgentId;
   if (!requestedAgentId) {
     return true;
@@ -51,6 +54,7 @@ function isTrackedActiveSessionRunForKey(
     : false;
 }
 
+/** Checks whether a requested/canonical session key currently has a visible active run. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;

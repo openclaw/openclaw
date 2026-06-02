@@ -38,10 +38,12 @@ function sessionKeyMatchesTranscriptPath(params: {
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }
 
+/** Clears transcript-file lookup cache between tests that mutate runtime session stores. */
 export function clearSessionTranscriptKeyCacheForTests(): void {
   TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
+/** Resolves a transcript file path back to the freshest unambiguous gateway session key. */
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
   const targetPath = resolveTranscriptPathForComparison(sessionFile);
   if (!targetPath) {
@@ -81,6 +83,9 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
   }
 
   if (matchingEntries.length > 0) {
+    // Multiple store keys can point at the same transcript during migrations or
+    // agent-key aliases. Resolve each sessionId group first, then require one
+    // newest winner so callers do not attach artifacts to an ambiguous session.
     const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
     for (const entry of matchingEntries) {
       const sessionId = entry[1].sessionId;

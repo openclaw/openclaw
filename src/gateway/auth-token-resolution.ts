@@ -9,6 +9,7 @@ import {
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
 
+/** Resolves the token used by non-request Gateway clients without mutating config. */
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -57,6 +58,8 @@ export async function resolveGatewayAuthToken(params: {
     return { secretRefConfigured: false };
   }
 
+  // SecretRef-backed config is authoritative for service/doctor paths; callers opt into
+  // OPENCLAW_GATEWAY_TOKEN fallback only where an unresolved ref should not block probing.
   const resolved = await resolveConfiguredSecretInputString({
     config: params.cfg,
     env: params.env,

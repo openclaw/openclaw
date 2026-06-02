@@ -6,6 +6,7 @@ import {
 
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
+/** Normalizes the configured Control UI mount path into router-ready form. */
 export function normalizeControlUiBasePath(basePath?: string): string {
   if (!basePath) {
     return "";
@@ -26,12 +27,14 @@ export function normalizeControlUiBasePath(basePath?: string): string {
   return normalized;
 }
 
+/** Builds the Control UI avatar endpoint URL for an agent id. */
 export function buildControlUiAvatarUrl(basePath: string, agentId: string): string {
   return basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/${agentId}`
     : `${CONTROL_UI_AVATAR_PREFIX}/${agentId}`;
 }
 
+/** Resolves configured assistant avatar values against the mounted Control UI path. */
 export function resolveAssistantAvatarUrl(params: {
   avatar?: string | null;
   agentId?: string | null;
@@ -49,6 +52,8 @@ export function resolveAssistantAvatarUrl(params: {
   const baseAvatarPrefix = basePath
     ? `${basePath}${CONTROL_UI_AVATAR_PREFIX}/`
     : `${CONTROL_UI_AVATAR_PREFIX}/`;
+  // Preserve already-mounted avatar URLs, but remount legacy root-relative
+  // `/avatar/...` values when the Control UI is served below a base path.
   if (basePath && avatar.startsWith(`${CONTROL_UI_AVATAR_PREFIX}/`)) {
     return `${basePath}${avatar}`;
   }

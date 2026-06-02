@@ -23,6 +23,8 @@ import type { GatewayRequestHandlers } from "./types.js";
 function resolveClientNodeId(
   client: { connect?: { device?: { id?: string }; client?: { id?: string } } } | null,
 ): string | null {
+  // Connected nodes may identify through the newer device field or older client
+  // field; pending drain accepts either but never a caller-supplied node id.
   const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "";
   const trimmed = nodeId.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -83,6 +85,8 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       });
       let wakeTriggered = false;
       if (p.wake !== false && !queued.deduped && !context.nodeRegistry.get(p.nodeId)) {
+        // Only the first enqueue for a work type triggers APNs wake. Duplicate
+        // callers share the queued item and should not amplify push traffic.
         const wakeReqId = queued.item.id;
         context.logGateway.info(
           `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,
@@ -139,6 +143,8 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           }
         }
         if (!context.nodeRegistry.get(p.nodeId)) {
+          // The nudge is a last-mile user-visible alert after background wakes
+          // failed to reconnect the node within both wait windows.
           const nudge = await maybeSendNodeWakeNudge(p.nodeId, { cfg });
           context.logGateway.info(
             `node pending wake nudge node=${p.nodeId} req=${wakeReqId} sent=${nudge.sent} ` +

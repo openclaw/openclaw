@@ -8,6 +8,8 @@ const EADDRINUSE_RETRY_INTERVAL_MS = 500;
 async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
   await new Promise<void>((resolve) => {
     try {
+      // Retrying listen() after EADDRINUSE needs a clean server state even if
+      // Node reports the previous bind failure before a listening callback.
       httpServer.close(() => resolve());
     } catch {
       resolve();
@@ -26,10 +28,14 @@ export async function listenGatewayHttpServer(params: {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {
+          // Remove the paired listener so a late "listening" event from a failed
+          // attempt cannot resolve the next retry's promise.
           httpServer.off("listening", onListening);
           reject(err);
         };
         const onListening = () => {
+          // Symmetric cleanup keeps repeated listen attempts from accumulating
+          // stale error handlers on the shared server instance.
           httpServer.off("error", onError);
           resolve();
         };

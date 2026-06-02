@@ -5,6 +5,7 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { isValidIPv4 } from "./net.js";
 
+/** Resolves operator-facing Control UI HTTP and WebSocket URLs for a Gateway bind mode. */
 export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";

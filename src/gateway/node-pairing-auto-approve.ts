@@ -1,5 +1,6 @@
 import { isTrustedProxyAddress } from "./net.js";
 
+/** Reasons a node pairing request can require approval or re-approval. */
 export type NodePairingAutoApproveReason =
   | "not-paired"
   | "role-upgrade"
@@ -12,6 +13,7 @@ type NodePairingAutoApproveClientIpSource =
   | "loopback-trusted-proxy"
   | "none";
 
+/** Classifies whether a reported client IP is direct or came through trusted proxy headers. */
 export function resolveNodePairingClientIpSource(params: {
   reportedClientIp?: string;
   hasProxyHeaders: boolean;
@@ -27,6 +29,7 @@ export function resolveNodePairingClientIpSource(params: {
   return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
 }
 
+/** Allows only first-time node pairing from configured CIDRs, never browser/control clients. */
 export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
   existingPairedDevice: boolean;
   role: string;
@@ -39,6 +42,8 @@ export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
   reportedClientIp?: string;
   autoApproveCidrs?: readonly string[];
 }): boolean {
+  // Auto-approval is intentionally narrower than normal pairing: it cannot
+  // grant role/scope/metadata upgrades or approve browser-originated clients.
   if (params.existingPairedDevice) {
     return false;
   }

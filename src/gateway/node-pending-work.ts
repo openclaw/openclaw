@@ -69,6 +69,8 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
     return false;
   }
   let changed = false;
+  // Expiry changes the visible revision because nodes poll by revision and need
+  // to observe disappearing work even when no explicit ack happened.
   for (const [id, item] of state.itemsById) {
     if (
       item.expiresAtMs !== null &&
@@ -92,6 +94,8 @@ function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
 
 function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   return [...state.itemsById.values()].toSorted((a, b) => {
+    // Keep ordering deterministic for reconnecting nodes: urgent work first,
+    // FIFO within a priority, then id for same-timestamp inserts.
     const priorityDelta = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
     if (priorityDelta !== 0) {
       return priorityDelta;
@@ -104,6 +108,8 @@ function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
 }
 
 function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
+  // A synthetic status request gives reconnecting nodes a cheap default action
+  // without persisting queue state for every paired-but-idle node.
   return {
     id: DEFAULT_STATUS_ITEM_ID,
     type: "status.request",
@@ -137,6 +143,8 @@ export function enqueueNodePendingWork(params: {
   pruneExpired(state, nowMs);
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
   if (existing) {
+    // Pending work is keyed by type, not caller request id, so repeated nudges
+    // refresh wake behavior without duplicating the same node-side action.
     return { revision: state.revision, item: existing, deduped: true };
   }
   const item: NodePendingWorkItem = {
@@ -177,6 +185,8 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   return {
     revision,
     items,
+    // hasMore accounts for the synthetic baseline too; a full page with no room
+    // for baseline should prompt the node to drain again.
     hasMore: explicitItems.length > explicitReturnedCount || (includeBaseline && !baselineIncluded),
   };
 }
@@ -197,6 +207,7 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   for (const itemId of params.itemIds) {
     const trimmedId = itemId.trim();
     if (!trimmedId || trimmedId === DEFAULT_STATUS_ITEM_ID) {
+      // The baseline item is virtual and must never advance revision on ack.
       continue;
     }
     if (state.itemsById.delete(trimmedId)) {

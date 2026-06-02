@@ -13,6 +13,7 @@ export type PluginRoutePathContext = {
   rawNormalizedPath: string;
 };
 
+/** Normalizes protected path prefixes once for encoded-path security checks. */
 function normalizeProtectedPrefix(prefix: string): string {
   const collapsed = normalizeLowercaseStringOrEmpty(prefix).replace(/\/{2,}/g, "/");
   if (collapsed.length <= 1) {
@@ -22,6 +23,8 @@ function normalizeProtectedPrefix(prefix: string): string {
 }
 
 export function prefixMatchPath(pathname: string, prefix: string): boolean {
+  // `%` keeps partially encoded slash variants in the protected prefix match
+  // until canonicalization can prove they decode to a safe plugin route.
   return (
     pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}%`)
   );
@@ -43,6 +46,8 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
   if (!context.malformedEncoding) {
     return false;
   }
+  // Malformed encodings cannot produce a full candidate list; fall back to the
+  // raw normalized path so protected prefixes still fail closed.
   return NORMALIZED_PROTECTED_PLUGIN_ROUTE_PREFIXES.some((prefix) =>
     prefixMatchPath(context.rawNormalizedPath, prefix),
   );

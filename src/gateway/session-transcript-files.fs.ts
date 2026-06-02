@@ -16,6 +16,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
+/** Archive move result that preserves both the original transcript and archive path. */
 export type ArchivedSessionTranscript = {
   sourcePath: string;
   archivedPath: string;
@@ -69,6 +70,7 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
+/** Returns transcript path candidates ordered from most-specific current path to fallbacks. */
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -125,6 +127,7 @@ export function resolveSessionTranscriptCandidates(
   return uniqueStrings(candidates);
 }
 
+/** Renames one transcript file into an archive suffix and emits the transcript mutation event. */
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
@@ -142,6 +145,7 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   return archived;
 }
 
+/** Archives matching transcript candidates and returns only the archived file paths. */
 export function archiveSessionTranscripts(opts: {
   sessionId: string;
   storePath: string | undefined;
@@ -158,6 +162,7 @@ export function archiveSessionTranscripts(opts: {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
 
+/** Archives matching transcript candidates while preserving source-to-archive mapping. */
 export function archiveSessionTranscriptsDetailed(opts: {
   sessionId: string;
   storePath: string | undefined;
@@ -208,6 +213,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
   return archived;
 }
 
+/** Chooses the transcript path a completed/deleted session should report to downstream code. */
 export function resolveStableSessionEndTranscript(params: {
   sessionId: string;
   storePath: string | undefined;
@@ -247,6 +253,7 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
+/** Removes old archive files for one archive reason and reports scan/removal counts. */
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   olderThanMs: number;

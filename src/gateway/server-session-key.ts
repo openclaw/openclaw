@@ -50,6 +50,8 @@ function setResolvedSessionKeyCache(
   }
   let expiresAt: number | null = null;
   if (sessionKey === null) {
+    // Misses are short-lived so late agent events can still bind a run to a
+    // session soon after the first lookup races ahead of session persistence.
     const missExpiresAt = resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_MISS_TTL_MS);
     if (missExpiresAt === undefined) {
       return;
@@ -69,6 +71,8 @@ function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenCl
   const normalizedAgentId = normalizeAgentId(agentId);
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed && sessionKey.trim().toLowerCase().startsWith("agent:")) {
+    // Malformed agent-prefixed keys should not be treated as legacy bare keys
+    // for another agent store.
     return false;
   }
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
@@ -79,6 +83,7 @@ function resolveRunSessionKeyForCaller(storeKey: string) {
   return toAgentRequestSessionKey(storeKey) ?? storeKey;
 }
 
+/** Resolves an agent run id to the session key visible to gateway callers. */
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
   const explicitAgentId =
@@ -124,6 +129,7 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   return undefined;
 }
 
+/** Clears run-id lookup cache for tests that mutate active run context or stores. */
 export function resetResolvedSessionKeyForRunCacheForTest(): void {
   resolvedSessionKeyByRunId.clear();
 }

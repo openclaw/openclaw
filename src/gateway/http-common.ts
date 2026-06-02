@@ -31,6 +31,7 @@ export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+/** Sends plain-text diagnostics for protocol errors that should not mimic OpenAI JSON. */
 export function sendText(res: ServerResponse, status: number, body: string) {
   res.statusCode = status;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -88,6 +89,7 @@ export function sendMissingScopeForbidden(res: ServerResponse, missingScope: str
   sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
 }
 
+/** Reads a bounded JSON request body and writes the matching HTTP error on failure. */
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
@@ -124,6 +126,7 @@ export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+/** Sets the common Server-Sent Events envelope used by OpenAI-compatible streams. */
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -138,6 +141,8 @@ export function watchClientDisconnect(
   abortController: AbortController,
   onDisconnect?: () => void,
 ) {
+  // HTTP upgrades and streamed responses may expose either request or response
+  // sockets. De-duplicate so one TCP close only aborts the upstream model once.
   const sockets = Array.from(
     new Set(
       [req.socket, res.socket].filter(

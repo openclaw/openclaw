@@ -21,6 +21,8 @@ function resolvePluginNodeCapabilityRouteSurface(
 ): PluginNodeCapabilitySurface {
   const surface = route.nodeCapability.surface.trim();
   const owner = route.pluginId?.trim() || route.source?.trim();
+  // Scope keys include the owning plugin so two plugins can expose the same
+  // surface string without sharing node capability grants.
   return {
     ...route.nodeCapability,
     surface,
@@ -62,6 +64,8 @@ export function listPluginNodeCapabilities(
       const next = resolvePluginNodeCapabilityRouteSurface(route as PluginNodeCapabilityRoute);
       const existing = surfaces.get(surface);
       if (!existing || resolveTtlMs(next) < resolveTtlMs(existing)) {
+        // Advertise the shortest TTL for duplicate surfaces so callers refresh
+        // before any matching route's grant can expire.
         surfaces.set(surface, next);
       }
     }

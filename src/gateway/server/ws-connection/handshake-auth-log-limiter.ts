@@ -32,6 +32,8 @@ export class HandshakeAuthLogLimiter {
     }
 
     if (nowMs - entry.lastLoggedAtMs < this.intervalMs) {
+      // Suppression is per fingerprint so startup retries from one client do
+      // not hide different clients, methods, or auth reasons.
       entry.suppressedSinceLastLog += 1;
       return { shouldLog: false, suppressedSinceLastLog: 0 };
     }
@@ -46,6 +48,8 @@ export class HandshakeAuthLogLimiter {
     if (this.entries.size < this.maxEntries) {
       return;
     }
+    // Map insertion order gives a simple FIFO cap; limiter freshness is best
+    // effort and only controls log volume, not authorization decisions.
     const oldestKey = this.entries.keys().next().value;
     if (oldestKey !== undefined) {
       this.entries.delete(oldestKey);
@@ -60,6 +64,8 @@ export function buildHandshakeAuthLogKey(params: {
   mode?: string;
   authProvided?: string;
 }): string {
+  // Include enough request shape to separate benign dashboard retries from
+  // security-relevant mismatches without logging raw credential material.
   return [
     params.reason ?? "unknown",
     params.remoteAddr ?? "?",

@@ -1,27 +1,5 @@
-/**
- * In-memory sliding-window rate limiter for gateway authentication attempts.
- *
- * Tracks failed auth attempts by {scope, clientIp}. A scope lets callers keep
- * independent counters for different credential classes (for example, shared
- * gateway token/password vs device-token auth) while still sharing one
- * limiter instance.
- *
- * Design decisions:
- * - Pure in-memory Map – no external dependencies; suitable for a single
- *   gateway process.  The Map is periodically pruned to avoid unbounded
- *   growth.
- * - Loopback addresses (127.0.0.1 / ::1) are exempt by default so that local
- *   CLI sessions are never locked out.
- * - The module is side-effect-free: callers create an instance via
- *   {@link createAuthRateLimiter} and pass it where needed.
- */
-
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface RateLimitConfig {
   /** Maximum failed attempts before blocking.  @default 10 */
@@ -80,18 +58,10 @@ export interface AuthRateLimiter {
   dispose(): void;
 }
 
-// ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
-
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
 
 /**
  * Canonicalize client IPs used for auth throttling so all call sites
@@ -99,6 +69,8 @@ const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
  */
 export function normalizeRateLimitClientIp(ip: string | undefined): string {
   if (typeof ip === "string" && ip.startsWith(BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX)) {
+    // Browser-origin probes are synthetic buckets, not network addresses; keep
+    // them out of IP normalization so localhost origins remain distinguishable.
     return ip;
   }
   return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
@@ -147,6 +119,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   } {
     const ip = normalizeIp(rawIp);
     const scope = normalizeScope(rawScope);
+    // Scope is part of the key so device-token, shared-secret, hook, and
+    // bootstrap failures do not lock each other out for the same client.
     return { key: `${scope}:${ip}`, ip };
   }
 
@@ -182,8 +156,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       };
     }
 
-    // Lockout expired – clear it.
     if (entry.lockedUntil && now >= entry.lockedUntil) {
+      // Expired lockouts start with a clean window so stale failures do not
+      // immediately relock the client on the first post-lockout check.
       entry.lockedUntil = undefined;
       entry.attempts = [];
     }
@@ -207,8 +182,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       entries.set(key, entry);
     }
 
-    // If currently locked, do nothing (already blocked).
     if (entry.lockedUntil && now < entry.lockedUntil) {
+      // Do not extend lockouts from extra attempts while already blocked; this
+      // keeps retry-after bounded and predictable for clients.
       return;
     }
 
@@ -228,8 +204,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   function prune(): void {
     const now = Date.now();
     for (const [key, entry] of entries) {
-      // If locked out, keep the entry until the lockout expires.
       if (entry.lockedUntil && now < entry.lockedUntil) {
+        // Keep active lockout entries even after their sliding-window attempts
+        // age out; the lockout deadline is the active state.
         continue;
       }
       slideWindow(entry, now);

@@ -32,6 +32,7 @@ type NodeSubscriptionManager = {
   clear: () => void;
 };
 
+/** Tracks node subscriptions by both node id and session key for targeted Gateway fanout. */
 export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
@@ -55,6 +56,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     }
     nodeSet.add(normalizedSessionKey);
 
+    // Keep the reverse index in lockstep so sendToSession can avoid scanning
+    // every connected node on hot transcript/tool-event paths.
     let sessionSet = sessionSubscribers.get(normalizedSessionKey);
     if (!sessionSet) {
       sessionSet = new Set<string>();
@@ -76,6 +79,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       nodeSubscriptions.delete(normalizedNodeId);
     }
 
+    // Mirror node removal into the reverse index; stale node ids here would
+    // cause future session fanout to target disconnected or unsubscribed nodes.
     const sessionSet = sessionSubscribers.get(normalizedSessionKey);
     sessionSet?.delete(normalizedNodeId);
     if (sessionSet?.size === 0) {
@@ -89,6 +94,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     if (!nodeSet) {
       return;
     }
+    // Copy cleanup through each subscribed session key before deleting the node
+    // side so both maps remain symmetric after disconnect.
     for (const sessionKey of nodeSet) {
       const sessionSet = sessionSubscribers.get(sessionKey);
       sessionSet?.delete(normalizedNodeId);
@@ -115,6 +122,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     }
 
     const payloadJSON = toPayloadJSON(payload);
+    // Serialize once per broadcast; node-registry accepts the already-serialized
+    // payload so each subscriber gets identical bytes without repeated work.
     for (const nodeId of subs) {
       sendEvent({ nodeId, event, payloadJSON });
     }
@@ -129,6 +138,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     const payloadJSON = toPayloadJSON(payload);
+    // Broadcast only to nodes that explicitly subscribed to at least one
+    // session, not every connected node.
     for (const nodeId of nodeSubscriptions.keys()) {
       sendEvent({ nodeId, event, payloadJSON });
     }
@@ -144,6 +155,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     const payloadJSON = toPayloadJSON(payload);
+    // This path intentionally bypasses session subscriptions for node-level
+    // events such as capability or presence updates.
     for (const node of listConnected()) {
       sendEvent({ nodeId: node.nodeId, event, payloadJSON });
     }

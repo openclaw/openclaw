@@ -15,6 +15,7 @@ import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
+/** Reads the first HTTP header value after normalizing caller-provided header names. */
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
   if (typeof raw === "string") {
@@ -26,6 +27,7 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
   return undefined;
 }
 
+/** Extracts a non-empty Bearer token from the Authorization header. */
 export function getBearerToken(req: IncomingMessage): string | undefined {
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
@@ -35,6 +37,7 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
 }
 
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
+/** Auth metadata HTTP endpoints pass forward into scope and owner resolution. */
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
@@ -50,6 +53,7 @@ export type GatewayHttpRequestAuthCheckResult =
       authResult: GatewayAuthResult;
     };
 
+/** Builds the browser-origin policy used by HTTP auth checks from request/config state. */
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
@@ -138,6 +142,7 @@ export async function checkGatewayHttpRequestAuth(params: {
   };
 }
 
+/** Authenticates an HTTP request, resolves operator scopes, and sends authz failures. */
 export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -178,6 +183,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   return { cfg, requestAuth, operatorScopes };
 }
 
+/** Returns true for shared-secret token/password auth carried through Bearer headers. */
 export function isGatewayBearerHttpRequest(
   req: IncomingMessage,
   auth?: SharedSecretGatewayAuth,
@@ -213,6 +219,7 @@ export function resolveTrustedHttpOperatorScopes(
     .filter((scope) => scope.length > 0);
 }
 
+/** Resolves scopes for OpenAI-compatible routes that opt into shared-secret defaults. */
 export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
@@ -220,6 +227,7 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   return resolveSharedSecretHttpOperatorScopes(req, requestAuth);
 }
 
+/** Resolves scopes for direct HTTP routes where shared-secret auth is full operator auth. */
 export function resolveSharedSecretHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,

@@ -33,6 +33,8 @@ export class UnauthorizedFloodGuard {
     const shouldLog = this.count === 1 || this.count % this.logEvery === 0 || shouldClose;
 
     if (!shouldLog) {
+      // Suppressed counts are reported only on the next emitted log entry; the
+      // immediate decision stays zero so callers do not double-count hidden attempts.
       this.suppressedSinceLastLog += 1;
       return {
         shouldClose,
@@ -62,6 +64,8 @@ export function isUnauthorizedRoleError(error?: ErrorShape): boolean {
   if (!error) {
     return false;
   }
+  // Role failures are protocol-level invalid requests, not auth credential
+  // failures; websocket handling uses this to apply flood protection narrowly.
   return (
     error.code === ErrorCodes.INVALID_REQUEST &&
     typeof error.message === "string" &&
