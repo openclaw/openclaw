@@ -2385,6 +2385,7 @@ export async function runEmbeddedAttempt(
                   repairAttemptToolUseResultPairing(messages, isOpenAIResponsesApi),
               }
             : {}),
+          isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
           getPrePromptMessageCount: () => prePromptMessageCount,
           onAfterTurnCheckpoint: (messageCount) => {
             contextEngineAfterTurnCheckpoint = messageCount;
@@ -4670,6 +4671,7 @@ export async function runEmbeddedAttempt(
             promptError: Boolean(promptError),
             aborted,
             yieldAborted,
+            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
             sessionIdUsed,
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,

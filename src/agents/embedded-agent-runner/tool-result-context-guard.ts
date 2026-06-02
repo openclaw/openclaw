@@ -328,6 +328,7 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
+  isHeartbeat?: boolean;
   getPrePromptMessageCount?: () => number;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
@@ -396,6 +397,7 @@ export function installContextEngineLoopHook(params: {
           messages: transcriptMessages,
           prePromptMessageCount,
           tokenBudget,
+          isHeartbeat: params.isHeartbeat,
           runtimeContext: params.getRuntimeContext?.({
             messages: transcriptMessages,
             prePromptMessageCount,
