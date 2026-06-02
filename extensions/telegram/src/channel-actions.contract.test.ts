@@ -36,4 +36,26 @@ describe("telegram actions contract", () => {
 
     expect(capabilities).toContain("richText");
   });
+
+  it("exposes Telegram thread create CLI remapping through the exported plugin", () => {
+    const request = telegramPlugin.actions?.resolveCliActionRequest?.({
+      action: "thread-create",
+      args: {
+        channel: "telegram",
+        target: "-1003894873578",
+        threadName: "Build Updates",
+        message: "hello",
+      },
+    });
+
+    expect(request).toEqual({
+      action: "topic-create",
+      args: {
+        channel: "telegram",
+        target: "-1003894873578",
+        name: "Build Updates",
+        message: "hello",
+      },
+    });
+  });
 });
