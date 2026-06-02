@@ -26,6 +26,7 @@ type ScrollHost = {
   chatProgrammaticScrollTarget: number;
   settings?: {
     chatAutoScroll?: ChatAutoScrollMode;
+    chatFocusMode?: boolean;
   };
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
