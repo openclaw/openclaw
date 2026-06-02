@@ -797,7 +797,7 @@ If active memory is too slow:
 
 - lower `queryMode`
 - lower `timeoutMs`
-- keep the circuit breaker enabled so repeated timeouts skip recall briefly
+- tune `circuitBreakerMaxTimeouts` and `circuitBreakerCooldownMs` so repeated timeouts skip recall briefly
 - reduce recent turn counts
 - reduce per-turn char caps
 
