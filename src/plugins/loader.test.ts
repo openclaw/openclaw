@@ -2796,6 +2796,101 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
+  it("runs consecutive plugin hook handlers on the shared context without config leakage", async () => {
+    useNoBundledPlugins();
+    const firstPlugin = writePlugin({
+      id: "hook-context-first",
+      filename: "hook-context-first.cjs",
+      body: `module.exports = {
+        id: "hook-context-first",
+        register(api) {
+          api.registerHook(
+            "agent:bootstrap",
+            (event) => {
+              event.messages.push("first:" + (event.context.pluginConfig?.marker ?? "missing"));
+              event.context.bootstrapFiles = [
+                { name: "FIRST.md", content: "FIRST_HANDLER_MUTATION" },
+              ];
+              event.context.note = "mutated-by-first-handler";
+              event.context.pluginConfig = { marker: "leaked-first-config" };
+            },
+            { name: "hook-context-first" },
+          );
+        },
+      };`,
+    });
+    const secondPlugin = writePlugin({
+      id: "hook-context-second",
+      filename: "hook-context-second.cjs",
+      body: `module.exports = {
+        id: "hook-context-second",
+        register(api) {
+          api.registerHook(
+            "agent:bootstrap",
+            (event) => {
+              event.messages.push("second:" + (event.context.pluginConfig?.marker ?? "none"));
+              event.messages.push(event.context.bootstrapFiles?.[0]?.name ?? "missing-mutation");
+              event.messages.push(event.context.note ?? "missing-note");
+            },
+            { name: "hook-context-second" },
+          );
+        },
+      };`,
+    });
+    for (const plugin of [firstPlugin, secondPlugin]) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: plugin.id,
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: firstPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [firstPlugin.file, secondPlugin.file] },
+          allow: ["hook-context-first", "hook-context-second"],
+          entries: {
+            "hook-context-first": {
+              config: {
+                marker: "first-config-visible",
+              },
+            },
+          },
+        },
+      },
+      onlyPluginIds: ["hook-context-first", "hook-context-second"],
+    });
+
+    const event = createInternalHookEvent("agent", "bootstrap", "agent:bootstrap", {
+      bootstrapFiles: [{ name: "AGENTS.md", content: "ORIGINAL_CONTEXT" }],
+    });
+    await triggerInternalHook(event);
+    expect(event.messages).toEqual([
+      "first:first-config-visible",
+      "second:none",
+      "FIRST.md",
+      "mutated-by-first-handler",
+    ]);
+    expect(event.context).toStrictEqual({
+      bootstrapFiles: [{ name: "FIRST.md", content: "FIRST_HANDLER_MUTATION" }],
+      note: "mutated-by-first-handler",
+    });
+
+    clearInternalHooks();
+  });
+
   it("injects plugin config into internal hook event context", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
