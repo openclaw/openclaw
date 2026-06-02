@@ -307,6 +307,66 @@ describe("Discord model picker preference migration", () => {
     expect(plan.readEntries()).toEqual([]);
   });
 
+  it("plans legacy command-deploy-cache.json import with per-account keys", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const hash = "b".repeat(64);
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({ hashes: { "global:reconcile": hash, bad: "not-a-hash" } }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: { channels: { discord: { applicationId: "111122223333", token: "tok" } } },
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.find((p) => p.label.includes("command deploy cache"));
+    expect(plan?.kind).toBe("plugin-state-import");
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(plan.namespace).toBe("slash-command-deploy-hashes");
+    expect(
+      plan.shouldReplaceExistingEntry?.({ key: "k", existingValue: {}, incomingValue: {} }),
+    ).toBe(false);
+    const entries = await plan.readEntries();
+    // default account → key "111122223333:default"
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.key).toBe("111122223333:default");
+    expect(entries[0]?.value).toEqual({ version: 1, hashes: { "global:reconcile": hash } });
+  });
+
+  it("skips command-deploy-cache.json import when applicationId is absent", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({ hashes: { "global:reconcile": "a".repeat(64) } }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: { channels: { discord: { token: "tok" } } },
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.find((p) => p.label.includes("command deploy cache"));
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(await plan.readEntries()).toEqual([]);
+  });
+
   it("keeps malformed legacy thread bindings for doctor warning", async () => {
     const stateDir = await makeStateDir();
     const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");

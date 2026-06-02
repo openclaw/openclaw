@@ -6,7 +6,10 @@ import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channe
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { listDiscordAccountIds } from "../accounts.js";
 import {
+  buildDiscordSlashCommandDeployStoreKey,
+  DISCORD_COMMAND_DEPLOY_CACHE_LEGACY_JSON_RELATIVE_PATH,
   DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH,
   DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
   DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
@@ -40,6 +43,7 @@ type LegacyThreadBindingsStore = {
 type LegacySlashCommandDeployStore = {
   version?: unknown;
   entries?: unknown;
+  hashes?: unknown;
 };
 
 function fileExists(filePath: string): boolean {
@@ -147,6 +151,7 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
 
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
+  cfg,
 }) => {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
   const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
@@ -258,6 +263,50 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
           out.push({ key, value: { version: 1, hashes } });
         }
         return out;
+      },
+    });
+  }
+
+  const commandDeployCachePath = path.join(
+    stateDir,
+    DISCORD_COMMAND_DEPLOY_CACHE_LEGACY_JSON_RELATIVE_PATH,
+  );
+  if (fileExists(commandDeployCachePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deploy cache (v2026.5.28 and earlier)",
+      sourcePath: commandDeployCachePath,
+      targetPath: `plugin state:${DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+      maxEntries: DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "rename",
+      // Only import when a newer migration hasn't already written plugin state.
+      shouldReplaceExistingEntry: () => false,
+      readEntries: () => {
+        const store = readLegacySlashCommandDeployStore(commandDeployCachePath);
+        // Shipped schema: { hashes: { "<scopeKey>": "<sha256>" } } — flat map, no appId/accountId.
+        // Fan the same hashes out to every known (applicationId, accountId) pair from config so
+        // changed-only comparisons work on the first restart after upgrade.
+        if (!store?.hashes || typeof store.hashes !== "object") {
+          return [];
+        }
+        const hashes = sanitizeSlashCommandDeployScopeHashes(store.hashes);
+        if (Object.keys(hashes).length === 0) {
+          return [];
+        }
+        const applicationId = (cfg.channels?.discord as Record<string, unknown> | undefined)
+          ?.applicationId;
+        const appId = typeof applicationId === "string" ? applicationId.trim() : "";
+        if (!appId) {
+          return [];
+        }
+        const accountIds = listDiscordAccountIds(cfg);
+        return accountIds.map((accountId) => ({
+          key: buildDiscordSlashCommandDeployStoreKey({ applicationId: appId, accountId }),
+          value: { version: 1, hashes },
+        }));
       },
     });
   }
