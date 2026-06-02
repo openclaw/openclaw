@@ -129,6 +129,32 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(restored!.draining).toBe(false);
   });
 
+  it("round-trips reply-target and input provenance through persist+restore", () => {
+    const run = makeRun();
+    run.inputProvenance = {
+      kind: "external_user",
+      sourceChannel: "telegram",
+      sourceSessionKey: "agent:main:dm:999",
+    };
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({
+      ...makeFollowupRun("thread reply"),
+      originatingReplyToId: "telegram-msg-99",
+      run,
+    });
+    persistFollowupQueues();
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    restoreFollowupQueues();
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(restored?.items[0].originatingReplyToId).toBe("telegram-msg-99");
+    expect(restored?.items[0].run.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "telegram",
+      sourceSessionKey: "agent:main:dm:999",
+    });
+  });
+
   it("does not restore abortSignal (runtime-only field stripped on persist)", () => {
     const controller = new AbortController();
     const run = { ...makeFollowupRun("signal test"), abortSignal: controller.signal };
@@ -270,7 +296,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(fs.statSync(statePath).mode & 0o777).toBe(0o600);
   });
 
-  it("strips secret-bearing runtime fields but persists auth profile selectors", () => {
+  it("strips secret-bearing runtime fields but persists auth and reply context selectors", () => {
     const run = makeRun();
     run.config = {
       defaults: { agent: { provider: "anthropic-secret", model: "claude-secret" } },
@@ -282,9 +308,17 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     run.extraSystemPromptStatic = "static-do-not-leak";
     run.authProfileId = "profile-secret";
     run.authProfileIdSource = "user";
-    run.inputProvenance = { source: "secret" } as unknown as FollowupRun["run"]["inputProvenance"];
+    run.inputProvenance = {
+      kind: "external_user",
+      sourceChannel: "telegram",
+      sourceSessionKey: "agent:main:dm:123",
+    };
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
-    queue.items.push({ ...makeFollowupRun("descriptor"), run });
+    queue.items.push({
+      ...makeFollowupRun("descriptor"),
+      originatingReplyToId: "msg-42",
+      run,
+    });
     queue.lastRun = run;
     persistFollowupQueues();
 
@@ -295,24 +329,34 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       "sensitive",
       "do-not-leak",
       "static-do-not-leak",
-      '"inputProvenance"',
     ]) {
       expect(raw).not.toContain(needle);
     }
     const parsed = JSON.parse(raw);
-    const persistedRun = parsed.entries[0][1].items[0].run;
+    const persistedItem = parsed.entries[0][1].items[0];
+    const persistedRun = persistedItem.run;
+    expect(persistedItem.originatingReplyToId).toBe("msg-42");
     expect(persistedRun.config).toBeUndefined();
     expect(persistedRun.skillsSnapshot).toBeUndefined();
     expect(persistedRun.extraSystemPrompt).toBeUndefined();
     expect(persistedRun.extraSystemPromptStatic).toBeUndefined();
     expect(persistedRun.authProfileId).toBe("profile-secret");
     expect(persistedRun.authProfileIdSource).toBe("user");
-    expect(persistedRun.inputProvenance).toBeUndefined();
+    expect(persistedRun.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "telegram",
+      sourceSessionKey: "agent:main:dm:123",
+    });
     const persistedLastRun = parsed.entries[0][1].lastRun;
     expect(persistedLastRun.config).toBeUndefined();
     expect(persistedLastRun.skillsSnapshot).toBeUndefined();
     expect(persistedLastRun.authProfileId).toBe("profile-secret");
     expect(persistedLastRun.authProfileIdSource).toBe("user");
+    expect(persistedLastRun.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "telegram",
+      sourceSessionKey: "agent:main:dm:123",
+    });
   });
 
   it("round-trips auth profile selection through restore", () => {
@@ -358,6 +402,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     // they're actually needed.
     expect(rerun.skillsSnapshot).toBeUndefined();
     expect(rerun.extraSystemPrompt).toBeUndefined();
+    // inputProvenance is persisted when present on the queued run.
     expect(rerun.inputProvenance).toBeUndefined();
     // Identity / routing / paths / per-message intent survive.
     expect(rerun.agentId).toBe("main");

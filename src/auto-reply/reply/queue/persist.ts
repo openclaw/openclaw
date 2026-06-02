@@ -74,12 +74,11 @@ export function resolveFollowupQueueStatePath(stateDir: string = resolveStateDir
  * Minimal recovery descriptor for FollowupRun["run"]. Persisted fields are the
  * per-message identity, routing, and intent inputs that cannot be recovered any
  * other way after a restart. Bulky or secret-bearing runtime state (config,
- * skillsSnapshot, extraSystemPrompt[Static], inputProvenance) is intentionally
- * excluded — the dispatcher reassigns
- * `run.config` via resolveQueuedReplyExecutionConfig on the next turn, and the
- * other fields are either rebuilt from current runtime state or left undefined.
- * authProfileId[Source] is persisted because it is a non-secret selector needed
- * to keep restored queued turns on the same auth profile they were queued with.
+ * skillsSnapshot, extraSystemPrompt[Static]) is intentionally excluded — the
+ * dispatcher reassigns `run.config` via resolveQueuedReplyExecutionConfig on the
+ * next turn. Routing selectors (authProfileId[Source], inputProvenance,
+ * originatingReplyToId) are persisted because restored turns need the same
+ * reply target and message-context provenance they were queued with.
  *
  * Use Pick (allowlist), not Omit, so new fields added to FollowupRun["run"]
  * default to NOT persisted until explicitly opted in.
@@ -122,6 +121,7 @@ type PersistedRunFields = Pick<
   | "timeoutMs"
   | "blockReplyBreak"
   | "ownerNumbers"
+  | "inputProvenance"
   | "sourceReplyDeliveryMode"
   | "silentReplyPromptMode"
   | "enforceFinalTag"
@@ -150,6 +150,7 @@ type PersistedFollowupRun = Pick<
   | "originatingTo"
   | "originatingAccountId"
   | "originatingThreadId"
+  | "originatingReplyToId"
   | "originatingChatType"
 > & {
   run: PersistedRunFields;
@@ -204,6 +205,7 @@ const PERSISTED_RUN_FIELDS = [
   "timeoutMs",
   "blockReplyBreak",
   "ownerNumbers",
+  "inputProvenance",
   "sourceReplyDeliveryMode",
   "silentReplyPromptMode",
   "enforceFinalTag",
@@ -275,6 +277,9 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
       : {}),
     ...(item.originatingThreadId !== undefined
       ? { originatingThreadId: item.originatingThreadId }
+      : {}),
+    ...(item.originatingReplyToId !== undefined
+      ? { originatingReplyToId: item.originatingReplyToId }
       : {}),
     ...(item.originatingChatType !== undefined
       ? { originatingChatType: item.originatingChatType }
